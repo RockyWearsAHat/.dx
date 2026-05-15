@@ -1,0 +1,9 @@
+@docstub 3
+path: examples/viewer-interaction-test.dx
+artifact: .doc/.repo-docs.bin
+key: examples/viewer-interaction-test.dx
+archive: .doc/.repo-docs.bin
+codec: brotli-docbin-v1
+sha256: 8fb454fff627fcd86abdca47008f11fe0f1a37215e1684854d52a93f636747bd
+packed_bytes: 156
+archive_bytes: 98
