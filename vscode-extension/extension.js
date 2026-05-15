@@ -1,6 +1,6 @@
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
-const { mkdir, writeFile } = require('node:fs/promises');
+const { mkdir, readFile, writeFile } = require('node:fs/promises');
 const vscode = require('vscode');
 
 const THEME_OPTIONS = new Set(['auto', 'light', 'dark']);
@@ -104,6 +104,62 @@ function sanitizeImageStem(value) {
     .replace(/[^a-z0-9_-]+/g, '-')
     .replace(/^-+|-+$/g, '');
   return stem || 'image';
+}
+
+function normalizeDocPath(value) {
+  return String(value || '').replace(/\\/g, '/').replace(/^\/+/, '');
+}
+
+async function persistViewStateSnapshot(relativePath, snapshot) {
+  const workspaceRoot = getWorkspaceRoot();
+
+  if (!workspaceRoot) {
+    return;
+  }
+
+  const rel = normalizeDocPath(relativePath);
+
+  if (!rel || !snapshot || typeof snapshot !== 'object') {
+    return;
+  }
+
+  const viewStatePath = path.join(workspaceRoot, '.doc', 'view-state.json');
+  await mkdir(path.dirname(viewStatePath), { recursive: true });
+
+  let current = { version: 1, documents: {} };
+
+  try {
+    const raw = await readFile(viewStatePath, 'utf8');
+    const parsed = JSON.parse(raw);
+
+    if (parsed && typeof parsed === 'object' && parsed.documents && typeof parsed.documents === 'object') {
+      current = {
+        version: 1,
+        documents: { ...parsed.documents },
+      };
+    }
+  } catch {
+    current = { version: 1, documents: {} };
+  }
+
+  const theme = String(snapshot.theme || 'auto');
+  const resolvedTheme = String(snapshot.resolvedTheme || 'dark');
+  const appearance = snapshot.appearance && typeof snapshot.appearance === 'object' ? snapshot.appearance : {};
+
+  current.documents[rel] = {
+    theme: ['auto', 'light', 'dark'].includes(theme) ? theme : 'auto',
+    resolvedTheme: ['light', 'dark'].includes(resolvedTheme) ? resolvedTheme : 'dark',
+    appearance: {
+      paper: ['white', 'cream', 'slate'].includes(String(appearance.paper || 'white')) ? String(appearance.paper || 'white') : 'white',
+      density: ['comfortable', 'compact'].includes(String(appearance.density || 'comfortable')) ? String(appearance.density || 'comfortable') : 'comfortable',
+      scale: Number.isFinite(Number(appearance.scale)) ? Math.min(115, Math.max(90, Math.round(Number(appearance.scale)))) : 100,
+    },
+    effectiveCss: String(snapshot.effectiveCss || ''),
+    sourceText: String(snapshot.sourceText || ''),
+    updatedAt: new Date().toISOString(),
+  };
+
+  await writeFile(viewStatePath, `${JSON.stringify(current, null, 2)}\n`, 'utf8');
 }
 
 function resetRuntime() {
@@ -479,7 +535,7 @@ function renderEditorHtml(relativePath, sourceText, errorText = '', initialTheme
   </head>
   <body data-theme="${escapeHtml(initialTheme || 'auto')}">
     ${initialMarkup}
-    <script src="${webviewUri}"><\/script>
+    <script type="module" src="${webviewUri}"><\/script>
   </body>
 </html>`;
 }
@@ -786,6 +842,17 @@ class DocDbCustomEditorProvider {
         } catch (error) {
           const messageText = error instanceof Error ? error.message : 'Image upload failed.';
           webviewPanel.webview.postMessage({ type: 'status', text: messageText });
+        }
+        return;
+      }
+
+      if (message.type === 'view-state') {
+        try {
+          const payload = message && message.payload && typeof message.payload === 'object' ? message.payload : {};
+          const payloadPath = String(payload.docPath || relativePath || '');
+          await persistViewStateSnapshot(payloadPath || relativePath, payload);
+        } catch {
+          // Ignore snapshot persistence issues; capture falls back to defaults.
         }
         return;
       }

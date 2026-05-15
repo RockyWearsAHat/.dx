@@ -4,6 +4,6 @@ artifact: .doc/.repo-docs.bin
 key: examples/viewer-interaction-test.dx
 archive: .doc/.repo-docs.bin
 codec: brotli-docbin-v1
-sha256: 8fb454fff627fcd86abdca47008f11fe0f1a37215e1684854d52a93f636747bd
-packed_bytes: 156
-archive_bytes: 98
+sha256: c078ba5bfde478ff4a1cb2093377832abef5c7cf304687017509034d73e09ec3
+packed_bytes: 341
+archive_bytes: 154
