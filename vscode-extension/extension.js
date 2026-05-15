@@ -445,7 +445,9 @@ function renderEditorHtml(relativePath, sourceText, errorText = '', initialTheme
   const initialBlocks = initialModel.blocks.map((block, index) => `
         <div class="block-wrap" data-block-index="${index}">
           <div class="block-view">${renderBlockPreview(block)}</div>
-          <textarea class="block-src" aria-label="Edit block source"></textarea>
+          <div class="block-src-wrapper">
+            <textarea class="block-src" aria-label="Edit block source"></textarea>
+          </div>
         </div>`).join('');
   const initialMarkup = `
     <div class="page" data-edit-mode="true" data-ready="false" aria-busy="true">

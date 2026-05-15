@@ -1,9 +1,0 @@
-@docstub 3
-path: documents/browser-check.dx
-artifact: .doc/.repo-docs.bin
-key: documents/browser-check.dx
-archive: .doc/.repo-docs.bin
-codec: brotli-docbin-v1
-sha256: 6b35fb87c3492190e585bd0ab024f45fd615e8f87193fefec6bcd4b81d357d33
-packed_bytes: 177
-archive_bytes: 112

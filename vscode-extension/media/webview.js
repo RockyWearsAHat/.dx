@@ -650,7 +650,12 @@ function stringifyBlock(block) {
   if (!block) return '';
 
   if (block.rawSource) {
-    return String(block.rawSource).trimEnd();
+    const source = String(block.rawSource).trimEnd();
+    // Ensure ::end is present for blocks that require it (non-paragraph, non-rule)
+    if (block.type !== 'paragraph' && block.type !== 'rule' && !source.endsWith('::end')) {
+      return source + '\n::end';
+    }
+    return source;
   }
 
   const attributes = {};
@@ -1123,7 +1128,9 @@ function autosizeBlockSrc(textarea) {
 }
 
 function getRawSourceForEditor(rawSource) {
-  return String(rawSource || '').replace(/\r\n/g, '\n');
+  return String(rawSource || '')
+    .replace(/\r\n/g, '\n')
+    .replace(/\n::end\s*$/, '');  // Strip implicit ::end tag from editor view
 }
 
 function getRawSourceFromEditor(editorValue) {
