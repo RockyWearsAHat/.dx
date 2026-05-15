@@ -1530,6 +1530,7 @@ function isBlankPageClickTarget(target, pageEl, blocksContainer) {
   if (!target || !pageEl || !blocksContainer) return false;
   if (target.closest('.ui-chrome')) return false;
   if (target.closest('.meta-rendered') || target.closest('.meta-input')) return false;
+  if (target.closest('.block-wrap')) return false;  // Don't close on any click within blocks
   if (target.closest('.block-view') || target.closest('.block-src-wrapper')) return false;
   if (target.closest('button, select, input, textarea, a, label')) return false;
   return target === pageEl || target === blocksContainer;
