@@ -4,6 +4,6 @@ artifact: .doc/.repo-docs.bin
 key: examples/welcome.dx
 archive: .doc/.repo-docs.bin
 codec: brotli-docbin-v1
-sha256: 41335b8bf730d60ac36074dfda3d392210d914a5a506a3e4cff5e8ce9a34123b
-packed_bytes: 2142
-archive_bytes: 811
+sha256: a87b6e2e4fae8c39ccaddd129940ed26ba236e814cac66c4ed69872271a6c9f7
+packed_bytes: 2156
+archive_bytes: 814
