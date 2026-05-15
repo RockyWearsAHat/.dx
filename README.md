@@ -69,10 +69,13 @@ npm run mcp
 - `search-documents` — Full-text search across all documents
 - `create-document` — Create a new document
 - `save-document` — Update an existing document
+- `open-document-viewer` — Open a stateful, built-in document viewer session
+- `interact-document-viewer` — Interact with a viewer session (inspect/click/scroll/edit/save)
 - `ingest-workspace` — Index documents from a workspace directory
 
 **Available Resources:**
-- `doc:///path/to/document.dx` — Virtual resources for each document
+- `doc:///path/to/document.dx` — Raw document source
+- `docview:///path/to/document.dx` — Built-in rendered document view (HTML)
 
 The MCP server reads/writes from the same SQLite database as the VS Code extension, ensuring consistency.
 

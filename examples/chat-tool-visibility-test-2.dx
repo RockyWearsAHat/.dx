@@ -1,0 +1,9 @@
+@docstub 3
+path: examples/chat-tool-visibility-test-2.dx
+artifact: .doc/.repo-docs.bin
+key: examples/chat-tool-visibility-test-2.dx
+archive: .doc/.repo-docs.bin
+codec: brotli-docbin-v1
+sha256: 53c258c9e91e2a22dfe070ea4c7c5d6f847007964e9694338ee141b9d60e328d
+packed_bytes: 169
+archive_bytes: 129

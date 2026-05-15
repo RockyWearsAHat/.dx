@@ -10,7 +10,6 @@ import { mkdir } from 'node:fs/promises';
 import {
   createDatabase,
   migrateLegacyWorkspace,
-  listDocuments,
 } from './database.js';
 import {
   createDocument,
@@ -20,11 +19,14 @@ import {
   listOrSearchDocuments,
   saveDocumentSourceByRelativePath,
 } from './doc-service.js';
-import { buildVisualModel } from './doc-visual.js';
+import { renderDocumentViewHtml } from './doc-view.js';
+import { captureDocumentViewPng } from './doc-view-capture.js';
+import { stringifyDocFile } from './doc-format.js';
 import { resolveDocDbPath } from './global-db-path.js';
 
 const PROTOCOL_VERSION = '2024-11-05';
 const runtimeCache = new Map();
+const viewerSessions = new Map();
 
 const rl = readline.createInterface({
   input: process.stdin,
@@ -146,6 +148,90 @@ const TOOLS = [
     },
   },
   {
+    name: 'open-document-viewer',
+    description: 'Open a built-in interactive viewer session for a document and return current view state.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspacePath: { type: 'string', description: 'Optional workspace root path' },
+        path: { type: 'string', description: 'Workspace-relative .dx path' },
+        id: { type: 'number', description: 'Document ID' },
+      },
+      required: [],
+      oneOf: [
+        { required: ['path'] },
+        { required: ['id'] },
+      ],
+    },
+  },
+  {
+    name: 'interact-document-viewer',
+    description: 'Interact with an active document viewer session: inspect, click, scroll, edit block text, append paragraph, and save.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sessionId: { type: 'string', description: 'Viewer session id returned by open-document-viewer' },
+        action: {
+          type: 'string',
+          enum: ['inspect', 'click-block', 'scroll-to', 'set-block-text', 'append-paragraph', 'save'],
+          description: 'Interaction action to apply',
+        },
+        index: { type: 'number', description: 'Block index for click/set/scroll actions' },
+        text: { type: 'string', description: 'Text payload for set-block-text or append-paragraph' },
+      },
+      required: ['sessionId', 'action'],
+    },
+  },
+  {
+    name: 'capture-document-view',
+    description: 'Capture a real PNG screenshot of the built-in rendered document viewer for a .dx document.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspacePath: { type: 'string', description: 'Optional workspace root path' },
+        path: { type: 'string', description: 'Workspace-relative .dx path' },
+        id: { type: 'number', description: 'Document ID' },
+        size: { type: 'number', description: 'Capture width hint in pixels (default 1400)' },
+      },
+      required: [],
+      oneOf: [
+        { required: ['path'] },
+        { required: ['id'] },
+      ],
+    },
+  },
+  {
+    name: 'use-document-viewer',
+    description: 'Single-call document viewer operation: open or resume a session, apply one or more interactions, optionally save, and return updated state with screenshot.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspacePath: { type: 'string', description: 'Optional workspace root path' },
+        path: { type: 'string', description: 'Workspace-relative .dx path' },
+        id: { type: 'number', description: 'Document ID' },
+        sessionId: { type: 'string', description: 'Existing viewer session id. If omitted, a new session opens from path or id.' },
+        size: { type: 'number', description: 'Screenshot width hint in pixels (default 1400)' },
+        actions: {
+          type: 'array',
+          description: 'Optional list of actions to run in order. If omitted, defaults to inspect.',
+          items: {
+            type: 'object',
+            properties: {
+              action: {
+                type: 'string',
+                enum: ['inspect', 'click-block', 'scroll-to', 'set-block-text', 'append-paragraph', 'save'],
+              },
+              index: { type: 'number' },
+              text: { type: 'string' },
+            },
+            required: ['action'],
+          },
+        },
+      },
+      required: [],
+    },
+  },
+  {
     name: 'ingest-workspace',
     description: 'Scan workspace .dx files and ingest them into SQLite',
     inputSchema: {
@@ -156,29 +242,174 @@ const TOOLS = [
       required: [],
     },
   },
-  {
-    name: 'get-document-visual',
-    description: 'Get the visual surface model for a document: block layout, design quality score, issues, recommendations, headings, media, and estimated geometry. Use this before editing a document to understand its current visual structure and design state.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        workspacePath: { type: 'string', description: 'Optional workspace root path' },
-        path: { type: 'string', description: 'Workspace-relative .dx path (e.g. examples/welcome.dx)' },
-        id: { type: 'number', description: 'Document ID (use list-documents to find IDs)' },
-      },
-      required: [],
-      oneOf: [
-        { required: ['path'] },
-        { required: ['id'] },
-      ],
-      description: 'Provide either path or id.',
-    },
-  },
 ];
+
+function createViewerSessionId() {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function toBlockPreview(block) {
+  const type = String(block?.type || 'paragraph');
+  if (type === 'bulleted-list' || type === 'numbered-list' || type === 'checklist') {
+    const items = Array.isArray(block?.items) ? block.items : [];
+    return items
+      .map((item) => String(item?.text || item || '').trim())
+      .filter(Boolean)
+      .join(' | ')
+      .slice(0, 180);
+  }
+
+  if (type === 'image') {
+    return String(block?.alt || block?.src || '').slice(0, 180);
+  }
+
+  return String(block?.text || '').slice(0, 180);
+}
+
+function buildViewerState(session) {
+  const document = session.document;
+  const blocks = Array.isArray(document?.blocks) ? document.blocks : [];
+
+  return {
+    sessionId: session.sessionId,
+    document: {
+      id: document.id,
+      title: document.title,
+      relativePath: document.relativePath,
+      updatedAt: document.updatedAt,
+    },
+    view: {
+      uri: `docview:///${document.relativePath}`,
+      activeBlockIndex: session.activeBlockIndex,
+      scrollTop: session.scrollTop,
+      blockCount: blocks.length,
+      blocks: blocks.map((block, index) => ({
+        index,
+        id: block.id,
+        type: block.type,
+        preview: toBlockPreview(block),
+      })),
+      html: renderDocumentViewHtml(document),
+    },
+  };
+}
+
+function setBlockText(block, text) {
+  const value = String(text || '');
+  const type = String(block?.type || 'paragraph');
+
+  if (type === 'bulleted-list' || type === 'numbered-list') {
+    block.items = value
+      .split('\n')
+      .map((line) => line.replace(/^\s*(?:[-*]|\d+[.)])\s+/, '').trim())
+      .filter(Boolean);
+    return;
+  }
+
+  if (type === 'checklist') {
+    block.items = value
+      .split('\n')
+      .map((line) => {
+        const match = /^\s*\[(x| )\]\s*(.*)$/i.exec(line.trim());
+        if (match) {
+          return { checked: match[1].toLowerCase() === 'x', text: match[2] };
+        }
+        return { checked: false, text: line.trim() };
+      })
+      .filter((item) => item.text);
+    return;
+  }
+
+  if (type === 'image') {
+    block.alt = value;
+    return;
+  }
+
+  block.text = value;
+}
+
+async function resolveDocumentFromArgs(runtime, args) {
+  if (args.path) {
+    return getDocumentByRelativePath(runtime.workspaceRoot, runtime.db, String(args.path));
+  }
+
+  if (Number.isFinite(Number(args.id))) {
+    return getDocument(runtime.workspaceRoot, runtime.db, Number(args.id));
+  }
+
+  return null;
+}
+
+async function applyViewerAction(session, actionSpec) {
+  const action = String(actionSpec?.action || '').toLowerCase();
+  const blocks = Array.isArray(session.document?.blocks) ? session.document.blocks : [];
+  const index = Number(actionSpec?.index);
+
+  if (action === 'inspect') {
+    return;
+  }
+
+  if (action === 'click-block') {
+    if (!Number.isInteger(index) || index < 0 || index >= blocks.length) {
+      throw new Error('index is required and must reference an existing block');
+    }
+    session.activeBlockIndex = index;
+    return;
+  }
+
+  if (action === 'scroll-to') {
+    if (!Number.isFinite(index)) {
+      throw new Error('index is required for scroll-to');
+    }
+    session.scrollTop = Math.max(0, Math.trunc(index));
+    return;
+  }
+
+  if (action === 'set-block-text') {
+    if (!Number.isInteger(index) || index < 0 || index >= blocks.length) {
+      throw new Error('index is required and must reference an existing block');
+    }
+
+    setBlockText(blocks[index], String(actionSpec?.text || ''));
+    session.document.source = stringifyDocFile(session.document);
+    return;
+  }
+
+  if (action === 'append-paragraph') {
+    const text = String(actionSpec?.text || '').trim();
+    if (!text) {
+      throw new Error('text is required for append-paragraph');
+    }
+
+    blocks.push({
+      id: `paragraph-${blocks.length + 1}`,
+      className: '',
+      type: 'paragraph',
+      text,
+    });
+    session.document.source = stringifyDocFile(session.document);
+    return;
+  }
+
+  if (action === 'save') {
+    const runtime = await getRuntime(session.workspaceRoot);
+    const saved = await saveDocumentSourceByRelativePath(
+      runtime.workspaceRoot,
+      runtime.db,
+      session.document.relativePath,
+      stringifyDocFile(session.document)
+    );
+    session.document = saved;
+    return;
+  }
+
+  throw new Error(`Unknown interaction action: ${action}`);
+}
 
 async function handleTool(id, toolName, args = {}) {
   try {
     let result;
+    let content = null;
 
     switch (toolName) {
       case 'list-documents': {
@@ -258,23 +489,37 @@ async function handleTool(id, toolName, args = {}) {
         break;
       }
 
-      case 'get-document-visual': {
+      case 'open-document-viewer': {
         const runtime = await getRuntime(args.workspacePath);
-
-        let document;
-        if (args.path) {
-          document = await getDocumentByRelativePath(runtime.workspaceRoot, runtime.db, String(args.path));
-        } else if (Number.isFinite(Number(args.id))) {
-          document = await getDocument(runtime.workspaceRoot, runtime.db, Number(args.id));
-        } else {
-          return sendError(id, -32602, 'Either path or id is required');
-        }
+        const document = await resolveDocumentFromArgs(runtime, args);
 
         if (!document) {
-          return sendError(id, -32602, 'Document not found');
+          return sendError(id, -32602, 'Document not found (provide valid path or id)');
         }
 
-        const visualModel = buildVisualModel(document);
+        const sessionId = createViewerSessionId();
+        const session = {
+          sessionId,
+          workspaceRoot: runtime.workspaceRoot,
+          document,
+          activeBlockIndex: 0,
+          scrollTop: 0,
+        };
+
+        viewerSessions.set(sessionId, session);
+        result = buildViewerState(session);
+        break;
+      }
+
+      case 'capture-document-view': {
+        const runtime = await getRuntime(args.workspacePath);
+        const document = await resolveDocumentFromArgs(runtime, args);
+
+        if (!document) {
+          return sendError(id, -32602, 'Document not found (provide valid path or id)');
+        }
+
+        const captured = await captureDocumentViewPng(document, { size: args.size });
 
         result = {
           document: {
@@ -283,8 +528,89 @@ async function handleTool(id, toolName, args = {}) {
             relativePath: document.relativePath,
             updatedAt: document.updatedAt,
           },
-          visualModel,
+          capture: {
+            mimeType: captured.mimeType,
+            bytes: captured.bytes,
+          },
         };
+
+        content = [
+          { type: 'text', text: safeJsonStringify(result) },
+          { type: 'image', mimeType: captured.mimeType, data: captured.base64 },
+        ];
+        break;
+      }
+
+      case 'interact-document-viewer': {
+        const sessionId = String(args.sessionId || '');
+        const action = String(args.action || '').toLowerCase();
+        const session = viewerSessions.get(sessionId);
+
+        if (!session) {
+          return sendError(id, -32602, 'Viewer session not found. Call open-document-viewer first.');
+        }
+
+        try {
+          await applyViewerAction(session, { action, index: args.index, text: args.text });
+        } catch (err) {
+          return sendError(id, -32602, err.message);
+        }
+
+        result = buildViewerState(session);
+        break;
+      }
+
+      case 'use-document-viewer': {
+        const runtime = await getRuntime(args.workspacePath);
+        let session = null;
+
+        if (args.sessionId) {
+          session = viewerSessions.get(String(args.sessionId || ''));
+          if (!session) {
+            return sendError(id, -32602, 'Viewer session not found for sessionId');
+          }
+        } else {
+          const document = await resolveDocumentFromArgs(runtime, args);
+          if (!document) {
+            return sendError(id, -32602, 'Provide path/id to open a new viewer session');
+          }
+
+          const sessionId = createViewerSessionId();
+          session = {
+            sessionId,
+            workspaceRoot: runtime.workspaceRoot,
+            document,
+            activeBlockIndex: 0,
+            scrollTop: 0,
+          };
+          viewerSessions.set(sessionId, session);
+        }
+
+        const actions = Array.isArray(args.actions) && args.actions.length > 0
+          ? args.actions
+          : [{ action: 'inspect' }];
+
+        for (const actionSpec of actions) {
+          try {
+            await applyViewerAction(session, actionSpec);
+          } catch (err) {
+            return sendError(id, -32602, err.message);
+          }
+        }
+
+        const state = buildViewerState(session);
+        const captured = await captureDocumentViewPng(session.document, { size: args.size });
+        result = {
+          ...state,
+          capture: {
+            mimeType: captured.mimeType,
+            bytes: captured.bytes,
+          },
+        };
+        content = [
+          { type: 'text', text: safeJsonStringify(result) },
+          { type: 'image', mimeType: captured.mimeType, data: captured.base64 },
+        ];
         break;
       }
 
@@ -293,7 +619,7 @@ async function handleTool(id, toolName, args = {}) {
     }
 
     return sendResponse(id, {
-      content: [{ type: 'text', text: safeJsonStringify(result) }],
+      content: content || [{ type: 'text', text: safeJsonStringify(result) }],
     });
   } catch (err) {
     console.error(`Tool ${toolName} error:`, err);
@@ -335,22 +661,44 @@ async function handleRequest(message) {
 
     if (method === 'resources/list') {
       const runtime = await getRuntime(params?.workspacePath);
-      const resources = listDocuments(runtime.db, runtime.workspaceRoot).map((doc) => ({
-        uri: `doc:///${doc.relativePath}`,
-        name: doc.title || doc.relativePath,
-        mimeType: 'text/plain',
-      }));
+      const docs = await listOrSearchDocuments(runtime.workspaceRoot, runtime.db, '');
+      const resources = docs.flatMap((doc) => ([
+        {
+          uri: `doc:///${doc.relativePath}`,
+          name: `${doc.title || doc.relativePath} (source)`,
+          mimeType: 'text/plain',
+        },
+        {
+          uri: `docview:///${doc.relativePath}`,
+          name: `${doc.title || doc.relativePath} (view)`,
+          mimeType: 'text/html',
+        },
+      ]));
       return sendResponse(id, { resources });
     }
 
     if (method === 'resources/read') {
       const uri = String(params?.uri || '');
       const runtime = await getRuntime(params?.workspacePath);
-      const relativePath = uri.replace(/^doc:\/\/\//, '');
+      const relativePath = uri
+        .replace(/^doc:\/\/\//, '')
+        .replace(/^docview:\/\/\//, '');
       const doc = await getDocumentByRelativePath(runtime.workspaceRoot, runtime.db, relativePath);
 
       if (!doc) {
         return sendError(id, -32602, 'Document not found');
+      }
+
+      if (uri.startsWith('docview:///')) {
+        return sendResponse(id, {
+          contents: [
+            {
+              uri,
+              mimeType: 'text/html',
+              text: renderDocumentViewHtml(doc),
+            },
+          ],
+        });
       }
 
       return sendResponse(id, {
