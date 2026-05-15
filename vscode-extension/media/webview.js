@@ -1532,7 +1532,10 @@ function isBlankPageClickTarget(target, pageEl, blocksContainer) {
   if (target.closest('.meta-rendered') || target.closest('.meta-input')) return false;
   if (target.closest('.block-wrap')) return false;  // Don't close on any click within blocks
   if (target.closest('.block-view') || target.closest('.block-src-wrapper')) return false;
+  if (target.closest('.autocomplete-menu')) return false;  // Don't close on autocomplete interactions
   if (target.closest('button, select, input, textarea, a, label')) return false;
+  // Extra safety: never close editors if focus is in a textarea
+  if (document.activeElement && document.activeElement.classList.contains('block-src')) return false;
   return target === pageEl || target === blocksContainer;
 }
 
@@ -2091,6 +2094,11 @@ function initializeDocument() {
       const target = getEventElementTarget(event);
       if (!target) return;
 
+      // Never handle clicks if an editor textarea is currently focused
+      if (document.activeElement && document.activeElement.classList.contains('block-src')) {
+        return;
+      }
+
       const completionItem = target.closest('.autocomplete-item');
       if (completionItem) {
         event.preventDefault();
@@ -2113,7 +2121,7 @@ function initializeDocument() {
       }
 
       // Do not hijack clicks on interactive child content in rendered blocks.
-      if (target.closest('a, button, input, select, textarea, label')) {
+      if (target.closest('a, button, input, select, textarea, label, .autocomplete-menu')) {
         return;
       }
 
@@ -2339,6 +2347,11 @@ function initializeDocument() {
     pageEl.addEventListener('click', (event) => {
       const target = getEventElementTarget(event);
       if (!target) return;
+
+      // Never handle clicks if an editor textarea is currently focused
+      if (document.activeElement && document.activeElement.classList.contains('block-src')) {
+        return;
+      }
 
       const isBlankArea = isBlankPageClickTarget(target, pageEl, blocksContainer);
       if (!isBlankArea) return;
