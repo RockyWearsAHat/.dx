@@ -1,9 +1,0 @@
-@docstub 3
-path: documents/virtual-check.dx
-artifact: .doc/.repo-docs.bin
-key: documents/virtual-check.dx
-archive: .doc/.repo-docs.bin
-codec: brotli-docbin-v1
-sha256: 9597bf7ad8fa9144f56762a6123423f361bc2bb82ea9829c0bd094ce77f2c5d3
-packed_bytes: 177
-archive_bytes: 129

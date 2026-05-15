@@ -1,9 +1,0 @@
-@docstub 3
-path: documents/final-validation.dx
-artifact: .doc/.repo-docs.bin
-key: documents/final-validation.dx
-archive: .doc/.repo-docs.bin
-codec: brotli-docbin-v1
-sha256: 29613280c59bfb9ff1af9cfe348b69c92d32ccb304ed61009e9c9f670d7ccb94
-packed_bytes: 198
-archive_bytes: 121
