@@ -1,0 +1,25 @@
+import { createRequire } from 'node:module';
+
+const require = createRequire(import.meta.url);
+
+let nativeBinding = null;
+let usingNativeBridge = false;
+
+try {
+  nativeBinding = require('../build/Release/doc_sqlite.node');
+  usingNativeBridge = true;
+} catch {
+  nativeBinding = null;
+}
+
+let DatabaseSyncImpl = null;
+
+if (nativeBinding?.DatabaseSync) {
+  DatabaseSyncImpl = nativeBinding.DatabaseSync;
+} else {
+  const sqlite = await import('node:sqlite');
+  DatabaseSyncImpl = sqlite.DatabaseSync;
+}
+
+export const DatabaseSync = DatabaseSyncImpl;
+export const isNativeSQLiteBridge = usingNativeBridge;

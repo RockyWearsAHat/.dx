@@ -1,0 +1,66 @@
+{
+  "name": "docdb-virtual-files",
+  "displayName": "DOC DB Virtual Files",
+  "description": "Mount SQLite-backed DOC files as virtual files in VS Code without an HTTP backend.",
+  "version": "0.0.57",
+  "publisher": "local",
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished",
+    "onFileSystem:docdb"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "customEditors": [
+      {
+        "viewType": "docdb.stubPreview",
+        "displayName": "DOC DB Editor",
+        "selector": [
+          {
+            "filenamePattern": "*.dx"
+          }
+        ],
+        "priority": "default"
+      }
+    ],
+    "commands": [
+      {
+        "command": "docdb.mount",
+        "title": "DOC DB: Mount Virtual Files"
+      },
+      {
+        "command": "docdb.unmount",
+        "title": "DOC DB: Unmount Virtual Files"
+      },
+      {
+        "command": "docdb.refresh",
+        "title": "DOC DB: Refresh Virtual Files"
+      }
+    ],
+    "configuration": {
+      "title": "DOC DB",
+      "properties": {
+        "docdb.autoMount": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically mount the docdb:/ virtual folder into the current workspace."
+        },
+        "docdb.autoHideDocFolder": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically hide the .doc folder in the explorer when a .doc folder is detected in the workspace."
+        },
+        "docdb.autoRecommend": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically create extensions.json recommendation when a .doc folder is detected."
+        }
+      }
+    }
+  }
+}

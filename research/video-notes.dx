@@ -1,0 +1,9 @@
+@docstub 3
+path: research/video-notes.dx
+artifact: .doc/.repo-docs.bin
+key: research/video-notes.dx
+archive: .doc/.repo-docs.bin
+codec: brotli-docbin-v1
+sha256: 733dfb176243411b105ee5935b763ac7f54c388b4424302750ac6d96a65cade9
+packed_bytes: 1192
+archive_bytes: 573

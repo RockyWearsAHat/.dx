@@ -1,0 +1,9 @@
+@docstub 3
+path: documents/compact-proof.dx
+artifact: .doc/.repo-docs.bin
+key: documents/compact-proof.dx
+archive: .doc/.repo-docs.bin
+codec: brotli-docbin-v1
+sha256: 93d2a005d413dc045b6bf82ce9a897da167777baffb8a2f7bec924079ac3ed52
+packed_bytes: 265
+archive_bytes: 155

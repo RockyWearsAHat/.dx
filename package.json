@@ -1,0 +1,24 @@
+{
+  "name": "doc-platform",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build:native": "node-gyp rebuild || node -e \"console.warn('Native SQLite bridge build failed; falling back to node:sqlite.')\"",
+    "mcp": "npm run build:native && node src/mcp-server.js",
+    "mcp:dev": "npm run build:native && node --watch src/mcp-server.js",
+    "setup": "node src/cli.js setup",
+    "ingest": "node src/cli.js ingest",
+    "reconstruct": "node src/cli.js reconstruct",
+    "upgrade:install": "node scripts/upgrade-install.mjs"
+  },
+  "dependencies": {
+    "node-addon-api": "^8.3.1"
+  },
+  "devDependencies": {
+    "node-gyp": "^11.2.0"
+  },
+  "engines": {
+    "node": ">=23"
+  }
+}

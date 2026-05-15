@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "communityRepo": "RockyWearsAHat/github-shell-helpers",
+  "baseBranch": "main",
+  "branchPrefix": "automation/community-cache-submission",
+  "mode": "auto-submit-only-public",
+  "whitelistedRepos": [],
+  "shareResearch": true,
+  "shareKnowledge": true,
+  "localClone": "/Users/alexwaldmann/bin"
+}

@@ -1,0 +1,11 @@
+{
+    "editor.formatOnSave": false,
+    "editor.codeActionsOnSave": {},
+    "docdb.autoMount": false,
+    "docdb.autoStartServer": true,
+    "docdb.autoHideDocFolder": true,
+    "docdb.autoRecommend": true,
+    "files.associations": {
+        "*.dx": "plaintext"
+    }
+}

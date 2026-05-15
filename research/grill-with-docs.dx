@@ -1,0 +1,9 @@
+@docstub 3
+path: research/grill-with-docs.dx
+artifact: .doc/.repo-docs.bin
+key: research/grill-with-docs.dx
+archive: .doc/.repo-docs.bin
+codec: brotli-docbin-v1
+sha256: 3dd704d772aac725b8ace9c3d320d703f5187356a63f29b14c52c15ccb3ec102
+packed_bytes: 737
+archive_bytes: 375
