@@ -1,0 +1,9 @@
+@docstub 3
+path: examples/interaction-test-1778863373971.dx
+artifact: .doc/.repo-docs.bin
+key: examples/interaction-test-1778863373971.dx
+archive: .doc/.repo-docs.bin
+codec: brotli-docbin-v1
+sha256: 57aafff86d5f5dae0192850e56f22f16585e94e3edb5e8e0f7da5900c2f47116
+packed_bytes: 93
+archive_bytes: 87

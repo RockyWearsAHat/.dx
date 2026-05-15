@@ -2134,6 +2134,197 @@ function setEditMode(enabled) {
   persistEditModePreference(enabled);
 }
 
+function getFocusedBlockIndex() {
+  const active = document.activeElement;
+  if (!active || !(active instanceof Element)) {
+    return null;
+  }
+
+  const wrap = active.closest('.block-wrap');
+  if (!wrap) {
+    return null;
+  }
+
+  const index = Number.parseInt(wrap.dataset.blockIndex, 10);
+  return Number.isFinite(index) ? index : null;
+}
+
+function summarizeBlockTypeCounts() {
+  const counts = {
+    total: 0,
+    headings: 0,
+    paragraphs: 0,
+    lists: 0,
+    codeBlocks: 0,
+    images: 0,
+    quotes: 0,
+    rules: 0,
+  };
+
+  if (!docModel || !Array.isArray(docModel.blocks)) {
+    return counts;
+  }
+
+  for (const block of docModel.blocks) {
+    const type = String(block?.type || 'paragraph');
+    counts.total += 1;
+
+    if (type === 'heading') counts.headings += 1;
+    else if (type === 'paragraph') counts.paragraphs += 1;
+    else if (type === 'bulleted-list' || type === 'numbered-list' || type === 'checklist') counts.lists += 1;
+    else if (type === 'code') counts.codeBlocks += 1;
+    else if (type === 'image') counts.images += 1;
+    else if (type === 'quote') counts.quotes += 1;
+    else if (type === 'rule') counts.rules += 1;
+  }
+
+  return counts;
+}
+
+function captureSurfaceSnapshot(options = {}) {
+  const includeText = options.includeText !== false;
+  const includeStyles = Boolean(options.includeStyles);
+  const page = document.querySelector('.page');
+  const pageRect = page ? page.getBoundingClientRect() : null;
+  const wraps = Array.from(document.querySelectorAll('.block-wrap'));
+
+  const blocks = wraps.map((wrap) => {
+    const index = Number.parseInt(wrap.dataset.blockIndex, 10);
+    const view = wrap.querySelector('.block-view');
+    const srcWrap = wrap.querySelector('.block-src-wrapper');
+    const rect = wrap.getBoundingClientRect();
+    const block = Number.isFinite(index) && docModel && Array.isArray(docModel.blocks)
+      ? docModel.blocks[index]
+      : null;
+    const computed = view && includeStyles ? window.getComputedStyle(view) : null;
+
+    return {
+      index: Number.isFinite(index) ? index : -1,
+      id: block && block.id ? block.id : '',
+      type: block && block.type ? block.type : 'unknown',
+      rect: {
+        x: Math.round(rect.x),
+        y: Math.round(rect.y),
+        width: Math.round(rect.width),
+        height: Math.round(rect.height),
+      },
+      inViewport: rect.bottom > 0 && rect.top < window.innerHeight,
+      sourceOpen: Boolean(srcWrap && srcWrap.style.display === 'block'),
+      text: includeText
+        ? (block
+            ? (Array.isArray(block.items)
+                ? block.items.map((item) => (typeof item === 'object' && item ? item.text : item)).join(' | ')
+                : String(block.text || block.alt || block.src || ''))
+            : String(view ? view.textContent || '' : ''))
+        : undefined,
+      style: computed
+        ? {
+            fontSize: computed.fontSize,
+            lineHeight: computed.lineHeight,
+            color: computed.color,
+            backgroundColor: computed.backgroundColor,
+          }
+        : undefined,
+    };
+  });
+
+  return {
+    documentPath: currentDocPath,
+    capturedAt: new Date().toISOString(),
+    theme: currentTheme,
+    resolvedTheme: document.body.dataset.resolvedTheme || 'light',
+    editMode: isEditModeEnabled(),
+    viewport: {
+      width: window.innerWidth,
+      height: window.innerHeight,
+      scrollX: window.scrollX,
+      scrollY: window.scrollY,
+    },
+    page: pageRect
+      ? {
+          x: Math.round(pageRect.x),
+          y: Math.round(pageRect.y),
+          width: Math.round(pageRect.width),
+          height: Math.round(pageRect.height),
+        }
+      : null,
+    focusedBlockIndex: getFocusedBlockIndex(),
+    blockCounts: summarizeBlockTypeCounts(),
+    blocks,
+  };
+}
+
+function findBlockWrap(index) {
+  return document.querySelector(`.block-wrap[data-block-index="${index}"]`);
+}
+
+function focusBlock(index) {
+  const wrap = findBlockWrap(index);
+  if (!wrap) return false;
+  const view = wrap.querySelector('.block-view');
+  if (!view) return false;
+  view.focus();
+  return true;
+}
+
+function scrollToBlock(index, behavior = 'instant') {
+  const wrap = findBlockWrap(index);
+  if (!wrap) return false;
+  wrap.scrollIntoView({ block: 'center', behavior: behavior === 'smooth' ? 'smooth' : 'auto' });
+  return true;
+}
+
+function withAnimationFrame() {
+  return new Promise((resolve) => {
+    requestAnimationFrame(() => resolve());
+  });
+}
+
+async function runSurfaceAction(payload = {}) {
+  const action = String(payload.action || '').trim();
+
+  if (!action) {
+    throw new Error('Surface action is required.');
+  }
+
+  if (action === 'setEditMode') {
+    setEditMode(Boolean(payload.enabled));
+  } else if (action === 'scrollBy') {
+    const deltaY = Number(payload.deltaY || 0);
+    window.scrollBy({ top: Number.isFinite(deltaY) ? deltaY : 0, behavior: 'auto' });
+  } else if (action === 'scrollTo') {
+    const top = Number(payload.top || 0);
+    window.scrollTo({ top: Number.isFinite(top) ? top : 0, behavior: 'auto' });
+  } else if (action === 'scrollToBlock') {
+    const index = Number.parseInt(String(payload.blockIndex || '-1'), 10);
+    if (!Number.isFinite(index) || !scrollToBlock(index, String(payload.behavior || 'instant'))) {
+      throw new Error('Unable to scroll to target block.');
+    }
+  } else if (action === 'focusBlock') {
+    const index = Number.parseInt(String(payload.blockIndex || '-1'), 10);
+    if (!Number.isFinite(index) || !focusBlock(index)) {
+      throw new Error('Unable to focus target block.');
+    }
+  } else if (action === 'openBlockSource') {
+    const index = Number.parseInt(String(payload.blockIndex || '-1'), 10);
+    if (!Number.isFinite(index)) {
+      throw new Error('A valid block index is required.');
+    }
+    openBlockSrc(index);
+  } else if (action === 'closeBlockSource') {
+    const index = Number.parseInt(String(payload.blockIndex || '-1'), 10);
+    if (!Number.isFinite(index)) {
+      throw new Error('A valid block index is required.');
+    }
+    closeBlockSrc(index, payload.commit !== false);
+  } else {
+    throw new Error(`Unknown surface action: ${action}`);
+  }
+
+  await withAnimationFrame();
+  return captureSurfaceSnapshot(payload);
+}
+
 function toggleEditMode() {
   const page = document.querySelector('.page');
   if (!page) return;
@@ -3023,6 +3214,46 @@ function initializeDocument() {
 
   window.addEventListener('message', (event) => {
     const msg = event.data || {};
+
+    if (msg.type === 'surface-capture-request') {
+      try {
+        const snapshot = captureSurfaceSnapshot(msg.payload || {});
+        vscode.postMessage({
+          type: 'surface-capture-response',
+          requestId: msg.requestId,
+          payload: snapshot,
+        });
+      } catch (error) {
+        vscode.postMessage({
+          type: 'surface-capture-response',
+          requestId: msg.requestId,
+          error: error instanceof Error ? error.message : 'Surface capture failed.',
+        });
+      }
+      return;
+    }
+
+    if (msg.type === 'surface-action-request') {
+      runSurfaceAction(msg.payload || {})
+        .then((snapshot) => {
+          vscode.postMessage({
+            type: 'surface-action-response',
+            requestId: msg.requestId,
+            payload: {
+              action: msg?.payload?.action || '',
+              snapshot,
+            },
+          });
+        })
+        .catch((error) => {
+          vscode.postMessage({
+            type: 'surface-action-response',
+            requestId: msg.requestId,
+            error: error instanceof Error ? error.message : 'Surface action failed.',
+          });
+        });
+      return;
+    }
 
     if (msg.type === 'status') {
       setStatus(msg.text);

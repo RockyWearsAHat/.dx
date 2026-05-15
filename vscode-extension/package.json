@@ -40,6 +40,14 @@
       {
         "command": "docdb.refresh",
         "title": "DOC DB: Refresh Virtual Files"
+      },
+      {
+        "command": "docdb.surface.capture",
+        "title": "DOC DB: Capture Active Surface"
+      },
+      {
+        "command": "docdb.surface.action",
+        "title": "DOC DB: Run Surface Action"
       }
     ],
     "configuration": {
