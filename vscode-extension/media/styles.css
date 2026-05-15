@@ -420,18 +420,8 @@ body.show-chrome .ui-chrome,
   font-family: var(--font-mono);
   font-size: 12.5px;
   line-height: 1.56;
-}
-
-.block-src.css-target-active {
-  cursor: pointer;
-  text-decoration: underline;
-  text-decoration-color: color-mix(in srgb, var(--accent) 42%, transparent);
-  text-underline-offset: 2px;
-  text-decoration-thickness: 1px;
-}
-
-.block-src.css-target-active:hover {
-  background: color-mix(in srgb, var(--accent) 6%, transparent);
+  white-space: pre-wrap;
+  overflow: hidden;
 }
 
 /* When inside the new wrapper, the wrapper controls visibility */
@@ -448,6 +438,49 @@ body.show-chrome .ui-chrome,
 
 .block-src-wrapper {
   position: relative;
+  display: grid;
+  gap: 4px;
+}
+
+.block-src-body-wrap {
+  position: relative;
+}
+
+.block-edit-header {
+  display: none;
+  margin: 0;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.56;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.block-edit-header-prefix,
+.block-edit-header-key {
+  color: var(--muted);
+}
+
+.block-edit-header-token {
+  appearance: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--accent) 42%, transparent);
+  text-underline-offset: 2px;
+  text-decoration-thickness: 1px;
+  cursor: pointer;
+}
+
+.block-edit-header-token:hover,
+.block-edit-header-token:focus-visible {
+  color: var(--accent);
+  outline: none;
 }
 
 .inline-css-surface {
@@ -519,6 +552,70 @@ body.show-chrome .ui-chrome,
 
 .block-src-wrapper.ghost-active .block-src-mirror {
   display: block;
+}
+
+.block-src.block-src-type-paragraph,
+.block-src.block-src-type-image,
+.block-src.block-src-type-checklist,
+.block-src.block-src-type-bulleted-list,
+.block-src.block-src-type-numbered-list,
+.block-src.block-src-type-list {
+  font-family: var(--font-body);
+  font-size: calc(16px * var(--editor-scale));
+  line-height: 1.72;
+  color: var(--ink);
+}
+
+.block-src.block-src-type-heading {
+  font-family: var(--font-ui);
+  color: var(--ink);
+}
+
+.block-src.block-src-heading-1 {
+  font-size: 2.04rem;
+  font-weight: 720;
+  line-height: 1.16;
+}
+
+.block-src.block-src-heading-2 {
+  font-size: 1.5rem;
+  font-weight: 700;
+  line-height: 1.24;
+}
+
+.block-src.block-src-heading-3,
+.block-src.block-src-heading-4,
+.block-src.block-src-heading-5,
+.block-src.block-src-heading-6 {
+  font-size: 1.12rem;
+  font-weight: 670;
+  line-height: 1.3;
+}
+
+.block-src.block-src-type-quote {
+  border-left: 2px solid var(--accent);
+  padding-left: 12px;
+  font-family: var(--font-body);
+  font-size: calc(16px * var(--editor-scale));
+  line-height: 1.72;
+  color: var(--muted);
+}
+
+.block-src.block-src-type-code {
+  margin: 2px 0 14px;
+  border: 1px solid var(--line);
+  padding: 12px 14px;
+  background: color-mix(in srgb, var(--paper) 96%, var(--bg));
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.62;
+}
+
+.block-src.block-src-type-bulleted-list,
+.block-src.block-src-type-numbered-list,
+.block-src.block-src-type-list {
+  padding-left: 24px;
 }
 
 .ghost-suffix {

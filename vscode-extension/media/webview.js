@@ -18,6 +18,8 @@ let inlineCssSurfaceState = {
   source: null,
   selector: '',
   baseCssText: '',
+  selectionStart: 0,
+  selectionEnd: 0,
 };
 
 let blankPagePointerDownHadOpenEditors = false;
@@ -40,6 +42,10 @@ function debouncedAutosave() {
   autosaveTimer = setTimeout(() => {
     saveDocAuto();
   }, 200);
+}
+
+function hasActiveEditingSurface() {
+  return hasOpenBlockSources() || Boolean(inlineCssSurfaceState.source);
 }
 
 const BLOCK_AUTOCOMPLETE = [
@@ -1095,13 +1101,20 @@ function buildBlockWrap(block, index) {
   srcWrap.className = 'block-src-wrapper';
   srcWrap.style.display = 'none';
 
+  const header = document.createElement('div');
+  header.className = 'block-edit-header';
+  header.style.display = 'none';
+
+  const bodyWrap = document.createElement('div');
+  bodyWrap.className = 'block-src-body-wrap';
+
   const mirror = document.createElement('div');
   mirror.className = 'block-src-mirror';
   mirror.setAttribute('aria-hidden', 'true');
 
   const source = document.createElement('textarea');
   source.className = 'block-src';
-  source.setAttribute('aria-label', 'Edit block source');
+  source.setAttribute('aria-label', 'Edit block content');
   source.spellcheck = false;
   source.wrap = 'off';
 
@@ -1111,9 +1124,12 @@ function buildBlockWrap(block, index) {
   menu.setAttribute('aria-label', 'Autocomplete suggestions');
   menu.style.display = 'none';
 
-  srcWrap.appendChild(mirror);
-  srcWrap.appendChild(source);
-  srcWrap.appendChild(menu);
+  bodyWrap.appendChild(mirror);
+  bodyWrap.appendChild(source);
+  bodyWrap.appendChild(menu);
+
+  srcWrap.appendChild(header);
+  srcWrap.appendChild(bodyWrap);
 
   wrap.appendChild(view);
   wrap.appendChild(srcWrap);
@@ -1135,6 +1151,214 @@ function getRawSourceForEditor(rawSource) {
 
 function getRawSourceFromEditor(editorValue) {
   return String(editorValue || '').replace(/\r\n/g, '\n');
+}
+
+function splitBlockSourceForEditor(rawSource, blockType) {
+  const normalized = String(rawSource || '').replace(/\r\n/g, '\n');
+  const trimmed = normalized.trim();
+
+  if (!trimmed.startsWith('::')) {
+    return {
+      headerSource: '',
+      bodySource: normalized,
+      footerSource: '',
+    };
+  }
+
+  const lines = normalized.split('\n');
+  const headerSource = String(lines[0] || '').trimEnd();
+  let endIdx = lines.length;
+
+  for (let index = 1; index < lines.length; index += 1) {
+    if (lines[index].trim() === '::end') {
+      endIdx = index;
+      break;
+    }
+  }
+
+  return {
+    headerSource,
+    bodySource: lines.slice(1, endIdx).join('\n'),
+    footerSource: blockType === 'rule' ? '' : (endIdx < lines.length ? '::end' : ''),
+  };
+}
+
+function buildRawSourceFromEditorParts(headerSource, bodySource, footerSource) {
+  const header = String(headerSource || '').trimEnd();
+  const body = String(bodySource || '').replace(/\r\n/g, '\n');
+  const footer = String(footerSource || '').trim();
+
+  if (!header) {
+    return body;
+  }
+
+  const parts = [header];
+  if (body.length > 0) {
+    parts.push(body);
+  }
+  if (footer) {
+    parts.push(footer);
+  }
+
+  return parts.join('\n');
+}
+
+function renderEditableHeader(textarea) {
+  if (!textarea) return;
+
+  const srcWrap = textarea.closest('.block-src-wrapper');
+  const headerEl = srcWrap ? srcWrap.querySelector('.block-edit-header') : null;
+  const headerSource = String(textarea.dataset.headerSource || '').trim();
+
+  if (!headerEl) {
+    return;
+  }
+
+  if (!headerSource) {
+    headerEl.textContent = '';
+    headerEl.style.display = 'none';
+    headerEl.removeAttribute('title');
+    return;
+  }
+
+  headerEl.textContent = '';
+  headerEl.style.display = 'block';
+  headerEl.setAttribute('title', 'Click an id or class token to edit scoped styles');
+
+  const open = /^::([a-z-]+)(.*)$/i.exec(headerSource);
+  if (!open) {
+    headerEl.textContent = headerSource;
+    return;
+  }
+
+  const prefix = document.createElement('span');
+  prefix.className = 'block-edit-header-prefix';
+  prefix.textContent = `::${open[1]}`;
+  headerEl.appendChild(prefix);
+
+  const attrs = String(open[2] || '');
+  const attrPattern = /([a-zA-Z0-9._-]+)=("[^"]*"|'[^']*'|[^\s]+)/g;
+  let lastIndex = 0;
+  let match = attrPattern.exec(attrs);
+
+  function appendToken(text, selector) {
+    const token = document.createElement('button');
+    token.type = 'button';
+    token.className = 'block-edit-header-token';
+    token.dataset.selector = selector;
+    token.textContent = text;
+    headerEl.appendChild(token);
+  }
+
+  while (match) {
+    headerEl.appendChild(document.createTextNode(attrs.slice(lastIndex, match.index)));
+
+    const key = String(match[1] || '').toLowerCase();
+    const rawValue = String(match[2] || '');
+    const quote = rawValue.startsWith('"') || rawValue.startsWith("'") ? rawValue[0] : '';
+    const unquoted = quote ? rawValue.slice(1, -1) : rawValue;
+
+    const keyEl = document.createElement('span');
+    keyEl.className = 'block-edit-header-key';
+    keyEl.textContent = `${match[1]}=`;
+    headerEl.appendChild(keyEl);
+
+    if (quote) {
+      headerEl.appendChild(document.createTextNode(quote));
+    }
+
+    if (key === 'id' && unquoted.trim()) {
+      appendToken(unquoted, `#${unquoted.trim()}`);
+    } else if (key === 'class' && unquoted.trim()) {
+      const classTokenPattern = /\S+|\s+/g;
+      let classToken = classTokenPattern.exec(unquoted);
+
+      while (classToken) {
+        if (/\s+/.test(classToken[0])) {
+          headerEl.appendChild(document.createTextNode(classToken[0]));
+        } else {
+          appendToken(classToken[0], `.${classToken[0]}`);
+        }
+        classToken = classTokenPattern.exec(unquoted);
+      }
+    } else {
+      headerEl.appendChild(document.createTextNode(unquoted));
+    }
+
+    if (quote) {
+      headerEl.appendChild(document.createTextNode(quote));
+    }
+
+    lastIndex = attrPattern.lastIndex;
+    match = attrPattern.exec(attrs);
+  }
+
+  headerEl.appendChild(document.createTextNode(attrs.slice(lastIndex)));
+}
+
+function applyEditableBodyPresentation(wrap, block) {
+  if (!wrap || !block) return;
+
+  const view = wrap.querySelector('.block-view');
+  const source = wrap.querySelector('.block-src');
+  if (!view || !source) return;
+
+  const rendered = view.firstElementChild;
+  if (rendered && rendered.id) {
+    rendered.dataset.originalEditingId = rendered.id;
+    rendered.removeAttribute('id');
+  }
+
+  const previousClasses = String(source.dataset.editPresentationClasses || '').split(' ').filter(Boolean);
+  if (previousClasses.length > 0) {
+    source.classList.remove(...previousClasses);
+  }
+
+  const nextClasses = [`block-src-type-${String(block.type || 'paragraph').toLowerCase()}`];
+  if (block.type === 'heading') {
+    nextClasses.push(`block-src-heading-${Math.min(6, Math.max(1, Number(block.level || 1)))}`);
+  }
+
+  const customClasses = splitClassNames(block.className);
+  nextClasses.push(...customClasses);
+  source.classList.add(...nextClasses);
+  source.dataset.editPresentationClasses = nextClasses.join(' ');
+
+  if (block.id) {
+    source.id = block.id;
+  } else {
+    source.removeAttribute('id');
+  }
+
+  renderEditableHeader(source);
+}
+
+function clearEditableBodyPresentation(wrap) {
+  if (!wrap) return;
+
+  const view = wrap.querySelector('.block-view');
+  const source = wrap.querySelector('.block-src');
+  const header = wrap.querySelector('.block-edit-header');
+  if (!source) return;
+
+  const previousClasses = String(source.dataset.editPresentationClasses || '').split(' ').filter(Boolean);
+  if (previousClasses.length > 0) {
+    source.classList.remove(...previousClasses);
+  }
+
+  delete source.dataset.editPresentationClasses;
+  source.removeAttribute('id');
+
+  if (header) {
+    header.textContent = '';
+    header.style.display = 'none';
+  }
+
+  const rendered = view ? view.firstElementChild : null;
+  if (rendered && rendered.dataset.originalEditingId) {
+    rendered.id = rendered.dataset.originalEditingId;
+    delete rendered.dataset.originalEditingId;
+  }
 }
 
 function findAttributeTargetAtCursor(textarea) {
@@ -1366,6 +1590,7 @@ function ensureInlineCssSurface(source) {
   }
 
   const sourceArea = srcWrap.querySelector('.block-src');
+  const bodyWrap = sourceArea ? sourceArea.closest('.block-src-body-wrap') : null;
   if (!sourceArea) {
     return null;
   }
@@ -1373,8 +1598,8 @@ function ensureInlineCssSurface(source) {
   let surface = srcWrap.querySelector('.inline-css-surface');
 
   if (surface) {
-    if (surface.nextElementSibling !== sourceArea) {
-      srcWrap.insertBefore(surface, sourceArea);
+    if (bodyWrap && surface.nextElementSibling !== bodyWrap) {
+      srcWrap.insertBefore(surface, bodyWrap);
     }
     return surface;
   }
@@ -1398,9 +1623,20 @@ function ensureInlineCssSurface(source) {
         inlineCssSurfaceState.baseCssText = cssText;
       }
     });
+
+    editor.addEventListener('keydown', (event) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      event.stopPropagation();
+      closeInlineCssSurface(true);
+    });
   }
 
-  srcWrap.insertBefore(surface, sourceArea);
+  if (bodyWrap) {
+    srcWrap.insertBefore(surface, bodyWrap);
+  } else {
+    srcWrap.appendChild(surface);
+  }
 
   return surface;
 }
@@ -1422,8 +1658,10 @@ function autosizeInlineCssEditor(editor) {
   editor.style.overflowY = desiredHeight > maxHeight ? 'auto' : 'hidden';
 }
 
-function closeInlineCssSurface() {
+function closeInlineCssSurface(restoreFocus) {
   const activeSource = inlineCssSurfaceState.source;
+  const selectionStart = inlineCssSurfaceState.selectionStart;
+  const selectionEnd = inlineCssSurfaceState.selectionEnd;
   const srcWrap = activeSource ? activeSource.closest('.block-src-wrapper') : null;
   const surface = srcWrap
     ? srcWrap.querySelector('.inline-css-surface')
@@ -1437,7 +1675,18 @@ function closeInlineCssSurface() {
     source: null,
     selector: '',
     baseCssText: '',
+    selectionStart: 0,
+    selectionEnd: 0,
   };
+
+  if (restoreFocus && activeSource) {
+    const start = Number.isFinite(selectionStart) ? selectionStart : activeSource.value.length;
+    const end = Number.isFinite(selectionEnd) ? selectionEnd : start;
+    activeSource.focus();
+    if (typeof activeSource.setSelectionRange === 'function') {
+      activeSource.setSelectionRange(start, end);
+    }
+  }
 }
 
 function openInlineCssSurface(source, selector) {
@@ -1473,6 +1722,8 @@ function openInlineCssSurface(source, selector) {
     source,
     selector: requestedSelector,
     baseCssText: cssText,
+    selectionStart: typeof source.selectionStart === 'number' ? source.selectionStart : source.value.length,
+    selectionEnd: typeof source.selectionEnd === 'number' ? source.selectionEnd : source.value.length,
   };
 
   autosizeInlineCssEditor(editor);
@@ -1501,6 +1752,7 @@ function closeBlockSrc(index, commitChanges) {
   }
 
   closeInlineCssSurface();
+  clearEditableBodyPresentation(wrap);
   srcWrap.style.display = 'none';
   view.style.display = '';
 }
@@ -1542,14 +1794,7 @@ function isBlankPageClickTarget(target, pageEl, blocksContainer) {
 function updateInlineCssAffordance(textarea) {
   if (!textarea) return;
 
-  const target = findAttributeTargetAtCursor(textarea);
-  const isActive = Boolean(target && target.selector);
-  textarea.classList.toggle('css-target-active', isActive);
-  if (isActive) {
-    textarea.setAttribute('title', 'Option/Alt + click to edit scoped styles');
-  } else {
-    textarea.removeAttribute('title');
-  }
+  renderEditableHeader(textarea);
 }
 
 function openBlockSrc(index) {
@@ -1568,8 +1813,12 @@ function openBlockSrc(index) {
   if (!block) return;
 
   const rawSource = block.rawSource || stringifyBlock(block);
-  source.value = getRawSourceForEditor(rawSource);
+  const editorParts = splitBlockSourceForEditor(rawSource, block.type);
+  source.value = getRawSourceForEditor(editorParts.bodySource);
   source.dataset.originalSource = rawSource;
+  source.dataset.headerSource = editorParts.headerSource;
+  source.dataset.footerSource = editorParts.footerSource;
+  applyEditableBodyPresentation(wrap, block);
   view.style.display = 'none';
   srcWrap.style.display = 'block';
   autosizeBlockSrc(source);
@@ -1590,7 +1839,11 @@ function commitBlockSrc(index) {
   }
 
   const originalSource = source.dataset.originalSource || '';
-  const nextSource = getRawSourceFromEditor(source.value);
+  const nextSource = buildRawSourceFromEditorParts(
+    source.dataset.headerSource || '',
+    getRawSourceFromEditor(source.value),
+    source.dataset.footerSource || '',
+  );
   const parsed = parseBlock(nextSource);
   parsed.rawSource = nextSource;
 
@@ -1598,6 +1851,7 @@ function commitBlockSrc(index) {
     docModel.blocks.splice(index, 1);
     renderDocument();
     setStatus('Block removed');
+    debouncedAutosave();
     return;
   }
 
@@ -1612,6 +1866,7 @@ function commitBlockSrc(index) {
     docModel.blocks[index] = reverted;
     view.textContent = '';
     view.appendChild(buildRenderedContent(reverted));
+    clearEditableBodyPresentation(wrap);
     srcWrap.style.display = 'none';
     view.style.display = '';
     setStatus('Reverted — unknown block type');
@@ -1621,10 +1876,12 @@ function commitBlockSrc(index) {
   docModel.blocks[index] = parsed;
   view.textContent = '';
   view.appendChild(buildRenderedContent(parsed));
+  clearEditableBodyPresentation(wrap);
   srcWrap.style.display = 'none';
   view.style.display = '';
   refreshDocumentCss();
   setStatus('Unsaved changes');
+  debouncedAutosave();
 }
 
 function wireMetaField(viewId, inputId, getter, setter) {
@@ -1656,7 +1913,14 @@ function saveDoc() {
 
 function saveDocAuto() {
   if (!docModel) return;
-  commitOpenSources();
+
+  // Never close or commit an active editor just to autosave.
+  if (hasActiveEditingSurface()) {
+    docSaveState = 'dirty';
+    setStatusPersistent('Unsaved changes', 'dirty');
+    return;
+  }
+
   const currentDoc = stringifyDoc(docModel);
   
   if (currentDoc === lastSavedDoc) {
@@ -2267,6 +2531,21 @@ function initializeDocument() {
       if (!target || !target.classList.contains('block-src')) return;
       renderAutocomplete(target, false);
       updateInlineCssAffordance(target);
+    });
+
+    blocksContainer.addEventListener('click', (event) => {
+      const target = getEventElementTarget(event);
+      const token = target ? target.closest('.block-edit-header-token') : null;
+      if (!token) return;
+
+      const srcWrap = token.closest('.block-src-wrapper');
+      const textarea = srcWrap ? srcWrap.querySelector('.block-src') : null;
+      const selector = token.dataset.selector;
+      if (!textarea || !selector) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      openInlineCssSurface(textarea, selector);
     });
 
     blocksContainer.addEventListener('mouseup', (event) => {
