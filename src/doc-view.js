@@ -1,3 +1,8 @@
+import path from 'node:path';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { parseSourceBlocks, splitClassNames } from '../vscode-extension/media/doc-pipeline.js';
+
 function escapeHtml(value) {
   return String(value || '')
     .replace(/&/g, '&amp;')
@@ -7,72 +12,157 @@ function escapeHtml(value) {
     .replace(/'/g, '&#39;');
 }
 
+const moduleDir = path.dirname(fileURLToPath(import.meta.url));
+const extensionStylesPath = path.resolve(moduleDir, '..', 'vscode-extension', 'media', 'styles.css');
+let cachedExtensionStyles = null;
+
+function getExtensionStyles() {
+  if (cachedExtensionStyles !== null) {
+    return cachedExtensionStyles;
+  }
+
+  try {
+    cachedExtensionStyles = readFileSync(extensionStylesPath, 'utf8');
+  } catch {
+    cachedExtensionStyles = '';
+  }
+
+  return cachedExtensionStyles;
+}
+
+function toStringItems(items) {
+  if (!Array.isArray(items)) return [];
+  return items.map((item) => String(item?.text || item || '').trim()).filter(Boolean);
+}
+
+function getDocumentCss(blocks) {
+  const sourceBlocks = Array.isArray(blocks) ? blocks : [];
+  return sourceBlocks
+    .filter((block) => String(block?.type || '').toLowerCase() === 'code')
+    .filter((block) => {
+      const lang = String(block?.language || '').trim().toLowerCase();
+      return lang === 'css' || lang === 'stylesheet';
+    })
+    .map((block) => String(block?.text || '').trim())
+    .filter(Boolean)
+    .join('\n\n');
+}
+
+function decorateRootTag(tag, block) {
+  const attrs = [];
+  const classes = splitClassNames(block?.className);
+
+  if (block?.id) {
+    attrs.push(`id="${escapeHtml(block.id)}"`);
+    attrs.push(`data-block-id="${escapeHtml(block.id)}"`);
+    classes.push(String(block.id));
+  }
+
+  if (classes.length > 0) {
+    const unique = Array.from(new Set(classes));
+    attrs.push(`class="${escapeHtml(unique.join(' '))}"`);
+  }
+
+  return attrs.length > 0 ? `<${tag} ${attrs.join(' ')}>` : `<${tag}>`;
+}
+
 function renderBlock(block) {
   const type = String(block?.type || 'paragraph').toLowerCase();
 
   if (type === 'heading') {
     const level = Math.max(1, Math.min(6, Number(block?.level || 1)));
     const text = escapeHtml(block?.text || '');
-    return `<h${level}>${text}</h${level}>`;
+    const open = decorateRootTag(`h${level}`, block);
+    return `${open}${text}</h${level}>`;
   }
 
   if (type === 'bulleted-list' || type === 'list') {
-    const items = Array.isArray(block?.items) ? block.items : [];
-    return `<ul>${items.map((item) => `<li>${escapeHtml(item?.text || item || '')}</li>`).join('')}</ul>`;
+    const items = toStringItems(block?.items);
+    const open = decorateRootTag('ul', block);
+    return `${open}${items.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>`;
   }
 
   if (type === 'numbered-list') {
-    const items = Array.isArray(block?.items) ? block.items : [];
-    return `<ol>${items.map((item) => `<li>${escapeHtml(item?.text || item || '')}</li>`).join('')}</ol>`;
+    const items = toStringItems(block?.items);
+    const open = decorateRootTag('ol', block);
+    return `${open}${items.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ol>`;
   }
 
   if (type === 'checklist') {
     const items = Array.isArray(block?.items) ? block.items : [];
-    return `<ul class="checklist">${items.map((item) => {
+    const classes = ['checklist-wrap', ...splitClassNames(block?.className)].join(' ').trim();
+    const idAttr = block?.id ? ` id="${escapeHtml(block.id)}" data-block-id="${escapeHtml(block.id)}"` : '';
+    const classAttr = classes ? ` class="${escapeHtml(classes)}"` : '';
+    return `<ul${idAttr}${classAttr}>${items.map((item) => {
       const checked = Boolean(item?.checked);
       const text = escapeHtml(item?.text || item || '');
-      return `<li><input type="checkbox" disabled ${checked ? 'checked' : ''} /><span>${text}</span></li>`;
+      return `<li><input type="checkbox" disabled ${checked ? 'checked' : ''} /><span${checked ? ' class="check-done"' : ''}>${text}</span></li>`;
     }).join('')}</ul>`;
   }
 
   if (type === 'quote') {
-    return `<blockquote><p>${escapeHtml(block?.text || '')}</p></blockquote>`;
+    const open = decorateRootTag('blockquote', block);
+    return `${open}<p>${escapeHtml(block?.text || '')}</p></blockquote>`;
   }
 
   if (type === 'code') {
     const code = escapeHtml(block?.text || '');
-    return `<pre><code>${code}</code></pre>`;
+    const open = decorateRootTag('pre', block);
+    return `${open}${code}</pre>`;
   }
 
   if (type === 'image') {
     const src = escapeHtml(block?.src || '');
     const alt = escapeHtml(block?.alt || '');
     const caption = alt ? `<figcaption>${alt}</figcaption>` : '';
-    return `<figure><img src="${src}" alt="${alt}" loading="lazy" />${caption}</figure>`;
+    const extraClasses = ['image-wrap', ...splitClassNames(block?.className)].join(' ').trim();
+    const idAttr = block?.id ? ` id="${escapeHtml(block.id)}" data-block-id="${escapeHtml(block.id)}"` : '';
+    const classAttr = extraClasses ? ` class="${escapeHtml(extraClasses)}"` : '';
+    return `<figure${idAttr}${classAttr}><img src="${src}" alt="${alt}" loading="lazy" />${caption}</figure>`;
   }
 
   if (type === 'rule') {
-    return '<hr />';
+    const idAttr = block?.id ? ` id="${escapeHtml(block.id)}" data-block-id="${escapeHtml(block.id)}"` : '';
+    const classAttr = splitClassNames(block?.className).length > 0
+      ? ` class="${escapeHtml(splitClassNames(block?.className).join(' '))}"`
+      : '';
+    return `<hr${idAttr}${classAttr} />`;
   }
 
-  return `<p>${escapeHtml(block?.text || '')}</p>`;
+  const open = decorateRootTag('p', block);
+  return `${open}${escapeHtml(block?.text || '')}</p>`;
 }
 
-export function renderDocumentViewHtml(document) {
+export function renderDocumentViewHtml(document, {
+  theme = 'auto',
+  resolvedTheme = 'dark',
+  appearance = null,
+  effectiveCss = '',
+} = {}) {
   const title = String(document?.title || document?.relativePath || 'Untitled Document');
-  const summary = String(document?.summary || '').trim();
-  const tags = Array.isArray(document?.tags) ? document.tags : [];
-  const blocks = Array.isArray(document?.blocks) ? document.blocks : [];
-
-  const tagsMarkup = tags.length
-    ? `<div class="tags">${tags.map((tag) => `<span class="tag">${escapeHtml(tag)}</span>`).join('')}</div>`
-    : '';
-
-  const summaryMarkup = summary ? `<p class="summary">${escapeHtml(summary)}</p>` : '';
+  const parsedBlocks = parseSourceBlocks(String(document?.source || ''));
+  const blocks = parsedBlocks.length > 0
+    ? parsedBlocks
+    : (Array.isArray(document?.blocks) ? document.blocks : []);
+  const extensionStyles = getExtensionStyles();
+  const documentCss = String(effectiveCss || '').trim() || getDocumentCss(blocks);
+  const paper = String(appearance?.paper || 'white');
+  const density = String(appearance?.density || 'comfortable');
+  const scaleRaw = Number(appearance?.scale);
+  const scale = Number.isFinite(scaleRaw) ? Math.min(115, Math.max(90, Math.round(scaleRaw))) : 100;
 
   const blocksMarkup = blocks.map((block, index) => {
     const type = escapeHtml(block?.type || 'paragraph');
-    return `<section class="block" data-index="${index}" data-type="${type}">${renderBlock(block)}</section>`;
+    const aria = escapeHtml(`Block ${index + 1}: ${type}`);
+    const wrapClasses = ['block-wrap'];
+    for (const token of splitClassNames(block?.className)) {
+      wrapClasses.push(token);
+    }
+    if (block?.id) {
+      wrapClasses.push(String(block.id));
+    }
+    const wrapClassAttr = escapeHtml(Array.from(new Set(wrapClasses)).join(' '));
+    return `<div class="${wrapClassAttr}" data-block-index="${index}" data-block-type="${type}"><div class="block-view" role="article" tabindex="0" aria-label="${aria}">${renderBlock(block)}</div></div>`;
   }).join('\n');
 
   return `<!doctype html>
@@ -81,45 +171,14 @@ export function renderDocumentViewHtml(document) {
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>${escapeHtml(title)}</title>
-  <style>
-    :root {
-      --bg: #f4f6fb;
-      --paper: #ffffff;
-      --ink: #1c2431;
-      --muted: #607086;
-      --line: #d4ddeb;
-    }
-    @media (prefers-color-scheme: dark) {
-      :root {
-        --bg: #0f141d;
-        --paper: #161d29;
-        --ink: #ecf2fb;
-        --muted: #9ba8ba;
-        --line: #2a3549;
-      }
-    }
-    html, body { margin: 0; background: var(--bg); color: var(--ink); }
-    body { font: 16px/1.6 "Iowan Old Style", "Palatino Linotype", Palatino, serif; }
-    main { max-width: 900px; margin: 28px auto; padding: 28px 34px 52px; background: var(--paper); border: 1px solid var(--line); border-radius: 14px; }
-    h1, h2, h3, h4, h5, h6 { line-height: 1.2; margin: 0.1em 0 0.5em; }
-    p, ul, ol, pre, blockquote, figure { margin: 0 0 0.9rem; }
-    .summary { color: var(--muted); margin-top: -0.2rem; }
-    .tags { display: flex; gap: 0.4rem; flex-wrap: wrap; margin-bottom: 1rem; }
-    .tag { font: 12px/1.4 "Avenir Next", "Segoe UI", sans-serif; border: 1px solid var(--line); border-radius: 999px; padding: 0.08rem 0.5rem; color: var(--muted); }
-    blockquote { border-left: 3px solid var(--line); color: var(--muted); padding-left: 0.8rem; }
-    pre { border: 1px solid var(--line); border-radius: 8px; padding: 12px; overflow-x: auto; background: color-mix(in srgb, var(--paper) 92%, var(--bg)); }
-    img { max-width: 100%; border: 1px solid var(--line); border-radius: 8px; }
-    .checklist { list-style: none; padding: 0; }
-    .checklist li { display: flex; gap: 0.5rem; align-items: baseline; }
-  </style>
+  <style>${extensionStyles}</style>
+  <style>${documentCss}</style>
 </head>
-<body>
-  <main data-doc-path="${escapeHtml(document?.relativePath || '')}">
-    <h1>${escapeHtml(title)}</h1>
-    ${summaryMarkup}
-    ${tagsMarkup}
-    ${blocksMarkup}
+<body data-theme="${escapeHtml(theme)}" data-resolved-theme="${escapeHtml(resolvedTheme)}" data-paper="${escapeHtml(paper)}" data-density="${escapeHtml(density)}">
+  <main class="page" data-doc-path="${escapeHtml(document?.relativePath || '')}" data-edit-mode="true" data-ready="true">
+    <div id="blocks">${blocksMarkup}</div>
   </main>
+  <style>:root{--editor-scale:${escapeHtml(String(scale / 100))};}</style>
 </body>
 </html>`;
 }

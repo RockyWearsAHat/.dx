@@ -686,9 +686,8 @@ export function normalizeDocInput(filePath, input = {}) {
     source: '',
   };
 
-  document.source = typeof input.source === 'string' && input.source.trim()
-    ? `${input.source.trimEnd()}\n`
-    : stringifyDocFile(document);
+  // Canonical storage format is block-only source (no metadata preamble).
+  document.source = stringifyDocFile(document);
 
   return document;
 }
@@ -710,12 +709,6 @@ export function createDefaultBlocks(title) {
       text: 'Start writing without markup syntax. Add blocks from the editor toolbar.',
     },
   ]);
-}
-
-function encodeMetaLines(meta) {
-  return Object.entries(meta || {})
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([key, value]) => `meta.${key}: ${typeof value === 'string' ? value : JSON.stringify(value)}`);
 }
 
 function blockHeader(block) {
@@ -761,20 +754,11 @@ function blockBody(block) {
 }
 
 export function stringifyDocFile(document) {
-  const headerLines = [
-    '@doc 3',
-    `title: ${document.title || ''}`,
-    `summary: ${document.summary || ''}`,
-    `tags: ${normalizeTags(document.tags).join(', ')}`,
-    ...encodeMetaLines(normalizeMeta(document.meta)),
-    '---',
-  ];
-
   const blockChunks = (document.blocks || []).map((block) => {
     const lines = [blockHeader(block), blockBody(block), '::end'];
     return lines.join('\n');
   });
 
   const body = blockChunks.join('\n\n');
-  return `${headerLines.join('\n')}\n${body}\n`;
+  return `${body}\n`;
 }

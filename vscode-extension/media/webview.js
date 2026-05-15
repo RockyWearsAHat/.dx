@@ -1,3 +1,5 @@
+import { parseSourceBlocks } from './doc-pipeline.js';
+
 const vscode = typeof acquireVsCodeApi === 'function' ? acquireVsCodeApi() : { postMessage: () => {} };
 
 let docModel = null;
@@ -218,7 +220,29 @@ function extractCssFromDocumentModel() {
 function refreshDocumentCss() {
   const documentCss = extractCssFromDocumentModel();
   const fallbackCss = loadCustomCss();
-  applyCustomCss(documentCss || fallbackCss);
+  const effectiveCss = documentCss || fallbackCss;
+  applyCustomCss(effectiveCss);
+  publishViewState(effectiveCss);
+}
+
+function publishViewState(effectiveCss) {
+  const resolvedTheme = String(document.body && document.body.dataset ? document.body.dataset.resolvedTheme || 'dark' : 'dark');
+  const sourceText = docModel ? stringifyDoc(docModel) : '';
+  vscode.postMessage({
+    type: 'view-state',
+    payload: {
+      docPath: currentDocPath,
+      theme: currentTheme,
+      resolvedTheme,
+      sourceText,
+      appearance: {
+        paper: currentAppearance.paper,
+        density: currentAppearance.density,
+        scale: currentAppearance.scale,
+      },
+      effectiveCss: String(effectiveCss || ''),
+    },
+  });
 }
 
 function collectKnownIds() {
@@ -804,7 +828,7 @@ function parseBlock(raw) {
       type: 'rule',
       id: String(attrs.id || '').trim(),
       className: normalizeClassName(attrs.class),
-      rawSource: original,
+      language: String(attrs.language || attrs.lang || '').trim(),
     };
   }
 
@@ -813,7 +837,7 @@ function parseBlock(raw) {
       type: 'code',
       id: String(attrs.id || '').trim(),
       className: normalizeClassName(attrs.class),
-      language: String(attrs.language || '').trim(),
+      language: String(attrs.language || attrs.lang || '').trim(),
       text: content.join('\n').trimEnd(),
       rawSource: original,
     };
@@ -839,127 +863,7 @@ function parseBlock(raw) {
 }
 
 function parseDoc(source) {
-  const text = String(source || '').replace(/\r\n/g, '\n');
-  const lines = text.split('\n');
-  const blocks = [];
-  let cursor = 0;
-
-  // Skip @doc line if present (for backwards compat with old format)
-  if (lines[0] && lines[0].startsWith('@doc')) {
-    cursor = 1;
-  }
-
-  // Skip old metadata section (YAML-style key:value or --- separator)
-  // Any line starting with word: or --- is metadata and should be skipped
-  // But stop if we see a block (::) or plain prose (non-metadata, non-empty)
-  for (; cursor < lines.length; cursor += 1) {
-    const line = lines[cursor].trim();
-    if (line === '---') {
-      cursor += 1;
-      break;
-    }
-    // If we hit a block before ---, it's a new-format doc with no metadata
-    if (line.startsWith('::')) {
-      break;
-    }
-    // Skip empty lines and YAML-style metadata keys (word: value, including dotted like meta.status:)
-    if (line === '' || /^[a-z._-]+\s*:/i.test(line)) {
-      continue;
-    }
-    // Anything else is content, not metadata — stop skipping
-    break;
-  }
-
-  while (cursor < lines.length) {
-    const line = lines[cursor].trim();
-
-    if (!line) {
-      cursor += 1;
-      continue;
-    }
-
-    if (!line.startsWith('::')) {
-      blocks.push({ type: 'paragraph', text: lines[cursor], rawSource: lines[cursor], className: '', id: '' });
-      cursor += 1;
-      continue;
-    }
-
-    const open = /^::([a-z-]+)(.*)$/i.exec(line);
-
-    if (!open) {
-      cursor += 1;
-      continue;
-    }
-
-    const type = open[1].toLowerCase();
-    const attrs = parseAttributes(open[2] || '');
-    const content = [];
-    const blockStart = cursor;
-    cursor += 1;
-
-    // Self-closing: no content body or ::end needed
-    if (type === 'rule') {
-      blocks.push({ type: 'rule', rawSource: lines[blockStart], id: String(attrs.id || '').trim(), className: normalizeClassName(attrs.class) });
-      continue;
-    }
-
-    while (cursor < lines.length && lines[cursor].trim() !== '::end') {
-      content.push(lines[cursor]);
-      cursor += 1;
-    }
-
-    const blockEnd = cursor < lines.length && lines[cursor].trim() === '::end' ? cursor : cursor - 1;
-
-    if (cursor < lines.length && lines[cursor].trim() === '::end') {
-      cursor += 1;
-    }
-
-    const rawSource = lines.slice(blockStart, blockEnd + 1).join('\n');
-
-    if (type === 'heading') {
-      const level = Number(attrs.level || 1);
-      blocks.push({ type, id: String(attrs.id || '').trim(), className: normalizeClassName(attrs.class), level: Math.min(6, Math.max(1, level)), text: content.join('\n').trim(), rawSource });
-    } else if (isBulletedListType(type)) {
-      blocks.push({ type: 'bulleted-list', id: String(attrs.id || '').trim(), className: normalizeClassName(attrs.class), items: parseListItems(content), rawSource });
-    } else if (isNumberedListType(type)) {
-      blocks.push({ type: 'numbered-list', id: String(attrs.id || '').trim(), className: normalizeClassName(attrs.class), items: parseListItems(content), rawSource });
-    } else if (type === 'checklist') {
-      blocks.push({
-        type,
-        id: String(attrs.id || '').trim(),
-        className: normalizeClassName(attrs.class),
-        items: content
-          .map((i) => {
-            const match = /^\s*\[(x| )\]\s*(.*)$/i.exec(i.trim());
-            return match ? { checked: match[1].toLowerCase() === 'x', text: match[2] } : { checked: false, text: i.trim() };
-          })
-          .filter((item) => item.text.length > 0),
-        rawSource,
-      });
-    } else if (type === 'image') {
-      blocks.push({
-        type,
-        id: String(attrs.id || '').trim(),
-        className: normalizeClassName(attrs.class),
-        src: String(attrs.src || '').trim(),
-        alt: content.join('\n').trim(),
-        rawSource,
-      });
-    } else {
-      const text = type === 'paragraph' ? content.join('\n') : content.join('\n').trimEnd();
-      if (!(type === 'paragraph' && !text.trim())) {
-        const block = { type, id: String(attrs.id || '').trim(), className: normalizeClassName(attrs.class), text, rawSource };
-
-        if (type === 'code') {
-          block.language = String(attrs.language || '').trim();
-        }
-
-        blocks.push(block);
-      }
-    }
-  }
-
-  return { blocks };
+  return { blocks: parseSourceBlocks(source) };
 }
 
 function stringifyDoc(model) {
@@ -982,6 +886,7 @@ function buildRenderedContent(block) {
     if (block.id) {
       element.id = block.id;
       element.dataset.blockId = block.id;
+      element.classList.add(block.id);
     }
     for (const token of splitClassNames(block.className)) {
       element.classList.add(token);
@@ -1089,6 +994,14 @@ function buildBlockWrap(block, index) {
   const wrap = document.createElement('div');
   wrap.className = 'block-wrap';
   wrap.dataset.blockIndex = String(index);
+
+  for (const token of splitClassNames(block && block.className)) {
+    wrap.classList.add(token);
+  }
+
+  if (block && block.id) {
+    wrap.classList.add(String(block.id));
+  }
 
   const view = document.createElement('div');
   view.className = 'block-view';
@@ -1994,6 +1907,8 @@ function applyAppearance(persist = false) {
   if (persist) {
     persistAppearance();
   }
+
+  publishViewState(extractCssFromDocumentModel() || loadCustomCss());
 }
 
 function applyTheme(theme, persist = false) {
@@ -2013,6 +1928,8 @@ function applyTheme(theme, persist = false) {
   if (persist) {
     vscode.postMessage({ type: 'set-theme', theme: currentTheme });
   }
+
+  publishViewState(extractCssFromDocumentModel() || loadCustomCss());
 }
 
 function setControlsOpen(isOpen) {
@@ -3264,7 +3181,6 @@ function initializeDocument() {
       docModel = parseDoc(msg.text || '');
       lastSavedDoc = msg.text || '';
       renderDocument();
-      applyCustomCss(loadCustomCss());
       setStatus('Refreshed');
       return;
     }

@@ -11,6 +11,7 @@
 - `.dx` files on disk are lightweight stubs, not canonical source
 - A single hidden repository artifact at `.doc/.repo-docs.bin` stores Brotli-compressed DOC binary payloads keyed by document path
 - Canonical DB path resolved by `src/global-db-path.js`
+- Canonical reconstructed `.dx` source is block-only (`::heading`, `::paragraph`, etc.) with no required metadata preamble (`@doc`, `title`, `summary`, `tags`)
 
 ## SQLite Interface
 - Primary runtime interface is a native C++ Node-API bridge:

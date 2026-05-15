@@ -131,8 +131,10 @@ export async function ingestWorkspace(rootDir, db) {
 
       if (existing) {
         const fromDbSource = parseDocFile(existing.path, existing.source || '');
+        const normalizedId = upsertDocument(db, rootDir, fromDbSource, Math.trunc(fileStats.mtimeMs));
         await persistDocumentArtifacts(rootDir, stub.absolutePath, fromDbSource);
-        ingested.push(toClientDocument(rootDir, existing));
+        const normalized = getWorkspaceDocumentById(db, rootDir, normalizedId);
+        ingested.push(toClientDocument(rootDir, normalized));
         continue;
       }
 
