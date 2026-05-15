@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>DOC DB Welcome</title>
+  <style>:root {
+  --bg: #f3f5f8;
+  --paper: #ffffff;
+  --ink: #171c26;
+  --muted: #667185;
+  --line: #d8deea;
+  --accent: #2859c7;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #10151d;
+    --paper: #161e29;
+    --ink: #edf2fb;
+    --muted: #99a5b8;
+    --line: #2a3546;
+    --accent: #8aaeff;
+  }
+}
+html, body {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--ink);
+}
+body {
+  box-sizing: border-box;
+  font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Palatino, serif;
+}
+.page {
+  box-sizing: border-box;
+  min-height: 100vh;
+  width: 100%;
+  margin: 0;
+  padding: 34px 46px 72px;
+  background: var(--paper);
+  color: var(--ink);
+  font-size: 16px;
+  line-height: 1.65;
+}
+.block-wrap {
+  margin: 0 0 0.75rem;
+}
+.block-view {
+  border-radius: 6px;
+}
+.doc-header {
+  margin-bottom: 1rem;
+  color: var(--muted);
+  font-family: "Avenir Next", "Segoe UI", system-ui, sans-serif;
+  font-size: 12px;
+}
+.doc-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-top: 0.35rem;
+}
+.doc-tag {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0.08rem 0.5rem;
+}
+h1, h2, h3, h4, h5, h6 {
+  line-height: 1.22;
+  margin: 0.1em 0 0.5em;
+}
+p, ul, ol, pre, blockquote, figure, hr {
+  margin: 0 0 0.8rem;
+}
+blockquote {
+  border-left: 3px solid color-mix(in srgb, var(--accent) 55%, var(--line));
+  padding: 0.4rem 0 0.4rem 0.8rem;
+  color: var(--muted);
+}
+pre {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px 14px;
+  background: color-mix(in srgb, var(--paper) 94%, var(--bg));
+  overflow-x: auto;
+  font-family: "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+img {
+  max-width: 100%;
+  border: 1px solid var(--line);
+}
+@media (max-width: 820px) {
+  .page {
+    padding: 22px 18px 40px;
+  }
+}</style>
+</head>
+<body>
+  <main class="page" data-doc-path="examples/welcome.dx">
+    <div class="doc-header"><div>examples/welcome.dx</div><div>Practical starting point for writing documentation that is structured for AI and polished for humans.</div><div class="doc-tags"><span class="doc-tag">welcome</span><span class="doc-tag">docs</span><span class="doc-tag">standards</span></div></div>
+<div class="block-wrap" data-block-index="0" data-block-type="heading"><div class="block-view"><h1>DOC DB Documentation Workspace</h1></div></div>
+<div class="block-wrap" data-block-index="1" data-block-type="paragraph"><div class="block-view"><p>Use this workspace to build documentation that is easy to read, easy to query, and safe for automated edits.</p></div></div>
+<div class="block-wrap" data-block-index="2" data-block-type="heading"><div class="block-view"><h2>What You Can Do Here</h2></div></div>
+<div class="block-wrap" data-block-index="3" data-block-type="bulleted-list"><div class="block-view"><ul><li>Author docs as structured blocks instead of loose markdown</li><li>Search and retrieve content quickly through SQLite-backed indexing</li><li>Edit visually in the DOC webview while keeping deterministic source</li><li>Style key sections with scoped ids and classes</li></ul></div></div>
+<div class="block-wrap" data-block-index="4" data-block-type="heading"><div class="block-view"><h2>Authoring Standard</h2></div></div>
+<div class="block-wrap" data-block-index="5" data-block-type="numbered-list"><div class="block-view"><ol><li>Start each major page with one clear H1 and one concise purpose paragraph.</li><li>Use H2 sections for workflow steps, decisions, and references.</li><li>Prefer bulleted lists for scanability and code blocks for exact examples.</li><li>Keep section names task-oriented so AI retrieval stays semantically clean.</li></ol></div></div>
+<div class="block-wrap" data-block-index="6" data-block-type="heading"><div class="block-view"><h2>Visual Baseline (Scoped)</h2></div></div>
+<div class="block-wrap" data-block-index="7" data-block-type="paragraph"><div class="block-view"><p>These selectors are intentionally minimal and aligned with the extension&#39;s existing tokens.</p></div></div>
+<div class="block-wrap" data-block-index="8" data-block-type="code"><div class="block-view"><pre data-language="css"><code>#welcome-title {
+  margin-bottom: 0.35rem;
+}
+
+.welcome-title {
+  letter-spacing: -0.018em;
+  line-height: 1.08;
+}
+
+.welcome-intro {
+  max-width: 68ch;
+  color: var(--muted);
+}
+
+.section-title {
+  margin-top: 1.25rem;
+  letter-spacing: 0.01em;
+}
+
+#quick-actions {
+  border: 1px solid var(--line);
+  padding: 0.8rem 1rem;
+  background: color-mix(in srgb, var(--paper) 94%, var(--bg));
+}
+
+#authoring-steps {
+  padding-left: 1.2rem;
+}</code></pre></div></div>
+<div class="block-wrap" data-block-index="9" data-block-type="heading"><div class="block-view"><h2>First 10 Minutes</h2></div></div>
+<div class="block-wrap" data-block-index="10" data-block-type="numbered-list"><div class="block-view"><ol><li>Open examples/welcome.dx in the DOC editor and read it in both Read and Edit mode.</li><li>Create one new section with a heading, one paragraph, and one list.</li><li>Assign ids to important blocks that may need future styling.</li><li>Run ingestion or query tools to confirm retrievability before publishing.</li></ol></div></div>
+  </main>
+</body>
+</html>

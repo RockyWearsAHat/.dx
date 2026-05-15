@@ -14,9 +14,9 @@ const IMAGE_EXT_BY_MIME = {
   'image/svg+xml': 'svg',
   'image/webp': 'webp',
 };
-
 let runtimeRoot = null;
 let runtimePromise = null;
+
 async function ensureDocFolderConfiguration() {
   const workspaceFolders = vscode.workspace.workspaceFolders;
   if (!workspaceFolders || workspaceFolders.length === 0) return;

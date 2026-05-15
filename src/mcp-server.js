@@ -20,6 +20,7 @@ import {
   listOrSearchDocuments,
   saveDocumentSourceByRelativePath,
 } from './doc-service.js';
+import { buildVisualModel } from './doc-visual.js';
 import { resolveDocDbPath } from './global-db-path.js';
 
 const PROTOCOL_VERSION = '2024-11-05';
@@ -37,6 +38,15 @@ function toSlug(value) {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '') || 'untitled';
+}
+
+function safeJsonStringify(value) {
+  return JSON.stringify(value, (_key, item) => {
+    if (typeof item === 'bigint') {
+      return item.toString();
+    }
+    return item;
+  });
 }
 
 function resolveWorkspaceRoot(workspacePath) {
@@ -87,6 +97,10 @@ const TOOLS = [
         id: { type: 'number', description: 'Document ID' },
       },
       required: [],
+      oneOf: [
+        { required: ['path'] },
+        { required: ['id'] },
+      ],
     },
   },
   {
@@ -140,6 +154,24 @@ const TOOLS = [
         workspacePath: { type: 'string', description: 'Optional workspace root path' },
       },
       required: [],
+    },
+  },
+  {
+    name: 'get-document-visual',
+    description: 'Get the visual surface model for a document: block layout, design quality score, issues, recommendations, headings, media, and estimated geometry. Use this before editing a document to understand its current visual structure and design state.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspacePath: { type: 'string', description: 'Optional workspace root path' },
+        path: { type: 'string', description: 'Workspace-relative .dx path (e.g. examples/welcome.dx)' },
+        id: { type: 'number', description: 'Document ID (use list-documents to find IDs)' },
+      },
+      required: [],
+      oneOf: [
+        { required: ['path'] },
+        { required: ['id'] },
+      ],
+      description: 'Provide either path or id.',
     },
   },
 ];
@@ -226,12 +258,42 @@ async function handleTool(id, toolName, args = {}) {
         break;
       }
 
+      case 'get-document-visual': {
+        const runtime = await getRuntime(args.workspacePath);
+
+        let document;
+        if (args.path) {
+          document = await getDocumentByRelativePath(runtime.workspaceRoot, runtime.db, String(args.path));
+        } else if (Number.isFinite(Number(args.id))) {
+          document = await getDocument(runtime.workspaceRoot, runtime.db, Number(args.id));
+        } else {
+          return sendError(id, -32602, 'Either path or id is required');
+        }
+
+        if (!document) {
+          return sendError(id, -32602, 'Document not found');
+        }
+
+        const visualModel = buildVisualModel(document);
+
+        result = {
+          document: {
+            id: document.id,
+            title: document.title,
+            relativePath: document.relativePath,
+            updatedAt: document.updatedAt,
+          },
+          visualModel,
+        };
+        break;
+      }
+
       default:
         return sendError(id, -32601, `Unknown tool: ${toolName}`);
     }
 
     return sendResponse(id, {
-      content: [{ type: 'text', text: JSON.stringify(result) }],
+      content: [{ type: 'text', text: safeJsonStringify(result) }],
     });
   } catch (err) {
     console.error(`Tool ${toolName} error:`, err);
@@ -310,11 +372,11 @@ async function handleRequest(message) {
 }
 
 function sendResponse(id, result) {
-  console.log(JSON.stringify({ jsonrpc: '2.0', id, result }));
+  console.log(safeJsonStringify({ jsonrpc: '2.0', id, result }));
 }
 
 function sendError(id, code, message) {
-  console.log(JSON.stringify({ jsonrpc: '2.0', id, error: { code, message } }));
+  console.log(safeJsonStringify({ jsonrpc: '2.0', id, error: { code, message } }));
 }
 
 rl.on('line', async (line) => {

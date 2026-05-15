@@ -45,7 +45,11 @@
 
 ## MCP Server
 The MCP server exposes document operations to AI tools and agents:
-- Tools: list-documents, search-documents, get-document, create-document, save-document, ingest-workspace
+- Tools: list-documents, search-documents, get-document, create-document, save-document, ingest-workspace, get-document-visual
 - Resources: Virtual `doc:///` URIs for each document
 - Transport: stdio (standard MCP protocol)
+
+## Visual Processing
+- `src/doc-visual.js` converts document blocks into a DX-native visual hierarchy and surface model for AI reasoning
+- `get-document-visual` returns structured visual/design data directly from `.dx` content (no external webview/browser preview output)
 

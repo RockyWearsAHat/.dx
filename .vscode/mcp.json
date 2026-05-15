@@ -1,0 +1,12 @@
+{
+  "servers": {
+    "doc-platform": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["src/mcp-server.js"],
+      "env": {
+        "DOC_WORKSPACE_ROOT": "${workspaceFolder}"
+      }
+    }
+  }
+}
