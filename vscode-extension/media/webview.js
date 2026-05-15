@@ -1235,10 +1235,14 @@ function renderEditableHeader(textarea) {
 
   if (!headerSource.trim()) {
     headerEl.value = '';
-  } else {
-    headerEl.value = headerSource;
+    headerEl.style.display = 'none';
+    headerEl.classList.remove('tag-mode', 'paragraph-mode');
+    headerEl.removeAttribute('title');
+    headerEl.style.height = '0px';
+    return;
   }
 
+  headerEl.value = headerSource;
   headerEl.style.display = 'block';
   headerEl.setAttribute('title', 'Type block tag (for example ::heading level=1) or plain text');
   headerEl.style.height = '0px';
@@ -1784,16 +1788,7 @@ function openBlockSrc(index) {
   srcWrap.style.display = 'block';
   autosizeBlockSrc(source);
   updateInlineCssAffordance(source);
-
-  const headerEditor = getBlockHeaderEditor(source);
-  const isBlankOpen = !String(source.dataset.headerSource || '').trim() && !String(source.value || '').trim();
-
-  if (isBlankOpen && headerEditor) {
-    headerEditor.focus();
-    headerEditor.setSelectionRange(headerEditor.value.length, headerEditor.value.length);
-  } else {
-    source.focus();
-  }
+  source.focus();
 }
 
 function commitBlockSrc(index) {
@@ -2430,6 +2425,18 @@ function initializeDocument() {
           }
         }
 
+        if (event.key === 'ArrowRight' && bodyEditor) {
+          const value = String(textarea.value || '');
+          const start = typeof textarea.selectionStart === 'number' ? textarea.selectionStart : value.length;
+          const end = typeof textarea.selectionEnd === 'number' ? textarea.selectionEnd : value.length;
+          if (start === end && end === value.length) {
+            event.preventDefault();
+            bodyEditor.focus();
+            bodyEditor.setSelectionRange(0, 0);
+            return;
+          }
+        }
+
         if (event.key === 'Enter' && !event.metaKey && !event.ctrlKey) {
           event.preventDefault();
           event.stopPropagation();
@@ -2497,7 +2504,22 @@ function initializeDocument() {
         const end = typeof textarea.selectionEnd === 'number' ? textarea.selectionEnd : 0;
         if (start === 0 && end === 0) {
           const headerEditor = getBlockHeaderEditor(textarea);
-          if (headerEditor) {
+          if (headerEditor && headerEditor.style.display !== 'none') {
+            event.preventDefault();
+            const caret = String(headerEditor.value || '').length;
+            headerEditor.focus();
+            headerEditor.setSelectionRange(caret, caret);
+            return;
+          }
+        }
+      }
+
+      if (event.key === 'ArrowLeft' && !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey) {
+        const start = typeof textarea.selectionStart === 'number' ? textarea.selectionStart : 0;
+        const end = typeof textarea.selectionEnd === 'number' ? textarea.selectionEnd : 0;
+        if (start === 0 && end === 0) {
+          const headerEditor = getBlockHeaderEditor(textarea);
+          if (headerEditor && headerEditor.style.display !== 'none') {
             event.preventDefault();
             const caret = String(headerEditor.value || '').length;
             headerEditor.focus();
@@ -2711,6 +2733,7 @@ function initializeDocument() {
 
       const headerEditor = getBlockHeaderEditor(textarea);
       if (!headerEditor) return;
+      if (headerEditor.style.display === 'none') return;
 
       event.preventDefault();
       const caret = String(headerEditor.value || '').length;
