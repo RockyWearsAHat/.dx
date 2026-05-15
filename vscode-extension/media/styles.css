@@ -148,8 +148,8 @@ body {
 .page {
   box-sizing: border-box;
   min-height: 100vh;
-  width: min(100%, var(--paper-max-width));
-  margin: 0 auto;
+  width: 100%;
+  margin: 0;
   padding: 34px 46px 72px;
   background: var(--paper);
   color: var(--ink);
