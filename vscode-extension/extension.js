@@ -4,6 +4,8 @@ const { mkdir, writeFile } = require('node:fs/promises');
 const vscode = require('vscode');
 
 const THEME_OPTIONS = new Set(['auto', 'light', 'dark']);
+const WELCOME_DOC_RELATIVE_PATH = 'examples/welcome.dx';
+const WELCOME_DOC_OPENED_KEY = 'docdb.welcomeDocOpened.v1';
 const IMAGE_EXT_BY_MIME = {
   'image/gif': 'gif',
   'image/jpeg': 'jpg',
@@ -714,6 +716,34 @@ class DocDbCustomEditorProvider {
 
     webviewPanel.webview.html = renderEditorHtml(relativePath, sourceText, loadError, initialTheme, webviewPanel.webview.cspSource, stylesUri, webviewUri);
 
+    const pushLatestSourceToWebview = async () => {
+      try {
+        const latestSource = await readVirtualDocument(relativePath);
+        webviewPanel.webview.postMessage({ type: 'set-source', text: latestSource });
+      } catch {
+        // Ignore transient reload failures; next change or manual refresh can recover.
+      }
+    };
+
+    const matchesOpenDocument = (targetUri) => {
+      return targetUri && document.uri && targetUri.toString() === document.uri.toString();
+    };
+
+    const onSaved = vscode.workspace.onDidSaveTextDocument(async (savedDocument) => {
+      if (!matchesOpenDocument(savedDocument?.uri)) return;
+      await pushLatestSourceToWebview();
+    });
+
+    const onChanged = vscode.workspace.onDidChangeTextDocument(async (changeEvent) => {
+      if (!matchesOpenDocument(changeEvent?.document?.uri)) return;
+      await pushLatestSourceToWebview();
+    });
+
+    webviewPanel.onDidDispose(() => {
+      onSaved.dispose();
+      onChanged.dispose();
+    });
+
     webviewPanel.webview.onDidReceiveMessage(async (message) => {
       if (!message || !message.type) {
         return;
@@ -798,6 +828,27 @@ function unmountDocDbFolder() {
   }
 }
 
+async function openWelcomeDocumentOnFirstActivation(context) {
+  if (context.globalState.get(WELCOME_DOC_OPENED_KEY, false)) {
+    return;
+  }
+
+  const workspaceRoot = getWorkspaceRoot();
+  if (!workspaceRoot) {
+    return;
+  }
+
+  const welcomeUri = vscode.Uri.file(path.join(workspaceRoot, WELCOME_DOC_RELATIVE_PATH));
+
+  try {
+    await vscode.workspace.fs.stat(welcomeUri);
+    await vscode.commands.executeCommand('vscode.openWith', welcomeUri, 'docdb.stubPreview');
+    await context.globalState.update(WELCOME_DOC_OPENED_KEY, true);
+  } catch {
+    // Ignore first-run open failures; user can open the document manually.
+  }
+}
+
 function activate(context) {
   const provider = new DocDbFileSystemProvider();
   const customEditor = new DocDbCustomEditorProvider(context.extensionUri);
@@ -849,6 +900,8 @@ function activate(context) {
 
   // Auto-configure workspace when .doc folder is detected
   ensureDocFolderConfiguration();
+
+  void openWelcomeDocumentOnFirstActivation(context);
 
   context.subscriptions.push(
     new vscode.Disposable(() => {

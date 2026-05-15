@@ -2,7 +2,7 @@
   "name": "docdb-virtual-files",
   "displayName": "DOC DB Virtual Files",
   "description": "Mount SQLite-backed DOC files as virtual files in VS Code without an HTTP backend.",
-  "version": "0.0.68",
+  "version": "0.0.69",
   "publisher": "local",
   "engines": {
     "vscode": "^1.95.0"
