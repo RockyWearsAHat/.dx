@@ -1101,8 +1101,11 @@ function buildBlockWrap(block, index) {
   srcWrap.className = 'block-src-wrapper';
   srcWrap.style.display = 'none';
 
-  const header = document.createElement('div');
+  const header = document.createElement('textarea');
   header.className = 'block-edit-header';
+  header.setAttribute('aria-label', 'Edit block header');
+  header.spellcheck = false;
+  header.wrap = 'off';
   header.style.display = 'none';
 
   const bodyWrap = document.createElement('div');
@@ -1203,97 +1206,47 @@ function buildRawSourceFromEditorParts(headerSource, bodySource, footerSource) {
   return parts.join('\n');
 }
 
+function getBlockHeaderEditor(textarea) {
+  if (!textarea) return null;
+  if (textarea.classList && textarea.classList.contains('block-edit-header')) {
+    return textarea;
+  }
+  const srcWrap = textarea.closest('.block-src-wrapper');
+  return srcWrap ? srcWrap.querySelector('.block-edit-header') : null;
+}
+
+function getHeaderSourceFromEditor(textarea) {
+  const headerEditor = getBlockHeaderEditor(textarea);
+  if (!headerEditor) {
+    return String(textarea?.dataset?.headerSource || '');
+  }
+  return getRawSourceFromEditor(headerEditor.value || '');
+}
+
 function renderEditableHeader(textarea) {
   if (!textarea) return;
 
-  const srcWrap = textarea.closest('.block-src-wrapper');
-  const headerEl = srcWrap ? srcWrap.querySelector('.block-edit-header') : null;
-  const headerSource = String(textarea.dataset.headerSource || '').trim();
+  const headerEl = getBlockHeaderEditor(textarea);
+  const headerSource = String(textarea.dataset.headerSource || '');
 
   if (!headerEl) {
     return;
   }
 
-  if (!headerSource) {
-    headerEl.textContent = '';
-    headerEl.style.display = 'none';
-    headerEl.removeAttribute('title');
-    return;
+  if (!headerSource.trim()) {
+    headerEl.value = '';
+  } else {
+    headerEl.value = headerSource;
   }
 
-  headerEl.textContent = '';
   headerEl.style.display = 'block';
-  headerEl.setAttribute('title', 'Click an id or class token to edit scoped styles');
+  headerEl.setAttribute('title', 'Type block tag (for example ::heading level=1) or plain text');
+  headerEl.style.height = '0px';
+  headerEl.style.height = headerEl.scrollHeight + 'px';
 
-  const open = /^::([a-z-]+)(.*)$/i.exec(headerSource);
-  if (!open) {
-    headerEl.textContent = headerSource;
-    return;
-  }
-
-  const prefix = document.createElement('span');
-  prefix.className = 'block-edit-header-prefix';
-  prefix.textContent = `::${open[1]}`;
-  headerEl.appendChild(prefix);
-
-  const attrs = String(open[2] || '');
-  const attrPattern = /([a-zA-Z0-9._-]+)=("[^"]*"|'[^']*'|[^\s]+)/g;
-  let lastIndex = 0;
-  let match = attrPattern.exec(attrs);
-
-  function appendToken(text, selector) {
-    const token = document.createElement('button');
-    token.type = 'button';
-    token.className = 'block-edit-header-token';
-    token.dataset.selector = selector;
-    token.textContent = text;
-    headerEl.appendChild(token);
-  }
-
-  while (match) {
-    headerEl.appendChild(document.createTextNode(attrs.slice(lastIndex, match.index)));
-
-    const key = String(match[1] || '').toLowerCase();
-    const rawValue = String(match[2] || '');
-    const quote = rawValue.startsWith('"') || rawValue.startsWith("'") ? rawValue[0] : '';
-    const unquoted = quote ? rawValue.slice(1, -1) : rawValue;
-
-    const keyEl = document.createElement('span');
-    keyEl.className = 'block-edit-header-key';
-    keyEl.textContent = `${match[1]}=`;
-    headerEl.appendChild(keyEl);
-
-    if (quote) {
-      headerEl.appendChild(document.createTextNode(quote));
-    }
-
-    if (key === 'id' && unquoted.trim()) {
-      appendToken(unquoted, `#${unquoted.trim()}`);
-    } else if (key === 'class' && unquoted.trim()) {
-      const classTokenPattern = /\S+|\s+/g;
-      let classToken = classTokenPattern.exec(unquoted);
-
-      while (classToken) {
-        if (/\s+/.test(classToken[0])) {
-          headerEl.appendChild(document.createTextNode(classToken[0]));
-        } else {
-          appendToken(classToken[0], `.${classToken[0]}`);
-        }
-        classToken = classTokenPattern.exec(unquoted);
-      }
-    } else {
-      headerEl.appendChild(document.createTextNode(unquoted));
-    }
-
-    if (quote) {
-      headerEl.appendChild(document.createTextNode(quote));
-    }
-
-    lastIndex = attrPattern.lastIndex;
-    match = attrPattern.exec(attrs);
-  }
-
-  headerEl.appendChild(document.createTextNode(attrs.slice(lastIndex)));
+  const inTagMode = String(headerEl.value || '').startsWith(':');
+  headerEl.classList.toggle('tag-mode', inTagMode);
+  headerEl.classList.toggle('paragraph-mode', !inTagMode);
 }
 
 function applyEditableBodyPresentation(wrap, block) {
@@ -1793,8 +1746,16 @@ function isBlankPageClickTarget(target, pageEl, blocksContainer) {
 
 function updateInlineCssAffordance(textarea) {
   if (!textarea) return;
+  const target = findAttributeTargetAtCursor(textarea);
+  if (target && target.selector) {
+    textarea.setAttribute('title', 'Option/Alt + click to edit scoped styles');
+  } else {
+    textarea.removeAttribute('title');
+  }
 
-  renderEditableHeader(textarea);
+  if (textarea.classList.contains('block-src')) {
+    renderEditableHeader(textarea);
+  }
 }
 
 function openBlockSrc(index) {
@@ -1823,7 +1784,16 @@ function openBlockSrc(index) {
   srcWrap.style.display = 'block';
   autosizeBlockSrc(source);
   updateInlineCssAffordance(source);
-  source.focus();
+
+  const headerEditor = getBlockHeaderEditor(source);
+  const isBlankOpen = !String(source.dataset.headerSource || '').trim() && !String(source.value || '').trim();
+
+  if (isBlankOpen && headerEditor) {
+    headerEditor.focus();
+    headerEditor.setSelectionRange(headerEditor.value.length, headerEditor.value.length);
+  } else {
+    source.focus();
+  }
 }
 
 function commitBlockSrc(index) {
@@ -1840,7 +1810,7 @@ function commitBlockSrc(index) {
 
   const originalSource = source.dataset.originalSource || '';
   const nextSource = buildRawSourceFromEditorParts(
-    source.dataset.headerSource || '',
+    getHeaderSourceFromEditor(source),
     getRawSourceFromEditor(source.value),
     source.dataset.footerSource || '',
   );
@@ -2435,13 +2405,106 @@ function initializeDocument() {
     });
 
     blocksContainer.addEventListener('keydown', (event) => {
-      if (!event.target.classList.contains('block-src')) return;
+      if (!event.target.classList.contains('block-src') && !event.target.classList.contains('block-edit-header')) return;
       const textarea = event.target;
+
+      if (textarea.classList.contains('block-edit-header')) {
+        const srcWrap = textarea.closest('.block-src-wrapper');
+        const bodyEditor = srcWrap ? srcWrap.querySelector('.block-src') : null;
+
+        if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') {
+          event.preventDefault();
+          event.stopPropagation();
+          saveDoc();
+        }
+
+        if (event.key === 'ArrowDown' && bodyEditor) {
+          const value = String(textarea.value || '');
+          const start = typeof textarea.selectionStart === 'number' ? textarea.selectionStart : value.length;
+          const end = typeof textarea.selectionEnd === 'number' ? textarea.selectionEnd : value.length;
+          if (start === end && end === value.length) {
+            event.preventDefault();
+            bodyEditor.focus();
+            bodyEditor.setSelectionRange(0, 0);
+            return;
+          }
+        }
+
+        if (event.key === 'Enter' && !event.metaKey && !event.ctrlKey) {
+          event.preventDefault();
+          event.stopPropagation();
+
+          if (!bodyEditor) {
+            return;
+          }
+
+          const headerText = getRawSourceFromEditor(textarea.value || '');
+          const trimmedHeaderText = headerText.trim();
+
+          if (trimmedHeaderText.startsWith('::')) {
+            bodyEditor.dataset.headerSource = headerText;
+          } else if (trimmedHeaderText.length > 0) {
+            // Not a block tag: treat typed text as body content.
+            bodyEditor.value = bodyEditor.value.length > 0
+              ? `${headerText}\n${bodyEditor.value}`
+              : headerText;
+            bodyEditor.dataset.headerSource = '';
+            textarea.value = '';
+            autosizeBlockSrc(bodyEditor);
+          } else {
+            bodyEditor.dataset.headerSource = '';
+          }
+
+          renderEditableHeader(bodyEditor);
+          bodyEditor.focus();
+          bodyEditor.setSelectionRange(0, 0);
+          return;
+        }
+
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          event.stopPropagation();
+          const wrap = textarea.closest('.block-wrap');
+          if (!wrap) return;
+          const index = Number.parseInt(wrap.dataset.blockIndex, 10);
+          if (Number.isNaN(index)) return;
+          closeBlockSrc(index, true);
+          return;
+        }
+
+        if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+          event.preventDefault();
+          event.stopPropagation();
+          const wrap = textarea.closest('.block-wrap');
+          if (!wrap) return;
+          const index = Number.parseInt(wrap.dataset.blockIndex, 10);
+          if (Number.isNaN(index)) return;
+          closeBlockSrc(index, true);
+          return;
+        }
+
+        return;
+      }
 
       if ((event.ctrlKey || event.metaKey) && event.code === 'Space') {
         event.preventDefault();
         renderAutocomplete(textarea, true);
         return;
+      }
+
+      if (event.key === 'ArrowUp' && !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey) {
+        const start = typeof textarea.selectionStart === 'number' ? textarea.selectionStart : 0;
+        const end = typeof textarea.selectionEnd === 'number' ? textarea.selectionEnd : 0;
+        if (start === 0 && end === 0) {
+          const headerEditor = getBlockHeaderEditor(textarea);
+          if (headerEditor) {
+            event.preventDefault();
+            const caret = String(headerEditor.value || '').length;
+            headerEditor.focus();
+            headerEditor.setSelectionRange(caret, caret);
+            return;
+          }
+        }
       }
 
       if (event.key === 'ArrowDown' && autocompleteState.textarea === textarea) {
@@ -2511,7 +2574,40 @@ function initializeDocument() {
     });
 
     blocksContainer.addEventListener('input', (event) => {
+      if (event.target.classList.contains('block-edit-header')) {
+        const header = event.target;
+        const srcWrap = header.closest('.block-src-wrapper');
+        const source = srcWrap ? srcWrap.querySelector('.block-src') : null;
+        if (source) {
+          source.dataset.headerSource = getRawSourceFromEditor(header.value);
+        }
+        header.style.height = '0px';
+        header.style.height = header.scrollHeight + 'px';
+        updateInlineCssAffordance(header);
+        debouncedAutosave();
+        return;
+      }
+
       if (!event.target.classList.contains('block-src')) return;
+
+      // Seamless "one-part" editing: if a blank block starts with ':', transition that line into header mode.
+      const source = event.target;
+      const headerEditor = getBlockHeaderEditor(source);
+      const hasHeader = Boolean(String(source.dataset.headerSource || '').trim());
+      const bodyText = String(source.value || '');
+      if (!hasHeader && headerEditor && bodyText.startsWith(':') && !bodyText.includes('\n')) {
+        source.dataset.headerSource = bodyText;
+        source.value = '';
+        renderEditableHeader(source);
+        autosizeBlockSrc(source);
+        headerEditor.focus();
+        const caret = headerEditor.value.length;
+        headerEditor.setSelectionRange(caret, caret);
+        updateInlineCssAffordance(headerEditor);
+        debouncedAutosave();
+        return;
+      }
+
       autosizeBlockSrc(event.target);
       renderAutocomplete(event.target, false);
       updateInlineCssAffordance(event.target);
@@ -2519,6 +2615,11 @@ function initializeDocument() {
     });
 
     blocksContainer.addEventListener('keyup', (event) => {
+      if (event.target.classList.contains('block-edit-header')) {
+        updateInlineCssAffordance(event.target);
+        return;
+      }
+
       if (!event.target.classList.contains('block-src')) return;
       if (event.key === 'ArrowLeft' || event.key === 'ArrowRight' || event.key === 'Home' || event.key === 'End') {
         renderAutocomplete(event.target, false);
@@ -2528,24 +2629,46 @@ function initializeDocument() {
 
     blocksContainer.addEventListener('click', (event) => {
       const target = getEventElementTarget(event);
-      if (!target || !target.classList.contains('block-src')) return;
-      renderAutocomplete(target, false);
+      if (!target || !target.classList.contains('block-edit-header')) return;
       updateInlineCssAffordance(target);
     });
 
     blocksContainer.addEventListener('click', (event) => {
       const target = getEventElementTarget(event);
-      const token = target ? target.closest('.block-edit-header-token') : null;
-      if (!token) return;
+      if (!target || !target.classList.contains('block-src')) return;
+      renderAutocomplete(target, false);
+      updateInlineCssAffordance(target);
+    });
 
-      const srcWrap = token.closest('.block-src-wrapper');
-      const textarea = srcWrap ? srcWrap.querySelector('.block-src') : null;
-      const selector = token.dataset.selector;
-      if (!textarea || !selector) return;
+    blocksContainer.addEventListener('mouseup', (event) => {
+      const target = getEventElementTarget(event);
+      if (!target || !target.classList.contains('block-edit-header')) return;
+      const textarea = target;
 
-      event.preventDefault();
-      event.stopPropagation();
-      openInlineCssSurface(textarea, selector);
+      const wantsScopedStyleEdit = Boolean(event.altKey || event.metaKey || event.ctrlKey);
+      if (!wantsScopedStyleEdit) {
+        updateInlineCssAffordance(textarea);
+        return;
+      }
+
+      const selectionStart = typeof textarea.selectionStart === 'number' ? textarea.selectionStart : -1;
+      const selectionEnd = typeof textarea.selectionEnd === 'number' ? textarea.selectionEnd : -1;
+      if (selectionStart !== selectionEnd) {
+        updateInlineCssAffordance(textarea);
+        return;
+      }
+
+      requestAnimationFrame(() => {
+        const styleTarget = findAttributeTargetAtCursor(textarea);
+        const srcWrap = textarea.closest('.block-src-wrapper');
+        const source = srcWrap ? srcWrap.querySelector('.block-src') : null;
+
+        if (styleTarget && styleTarget.selector && source) {
+          openInlineCssSurface(source, styleTarget.selector);
+          return;
+        }
+        updateInlineCssAffordance(textarea);
+      });
     });
 
     blocksContainer.addEventListener('mouseup', (event) => {
@@ -2576,6 +2699,24 @@ function initializeDocument() {
         updateInlineCssAffordance(textarea);
       });
     });
+
+    blocksContainer.addEventListener('wheel', (event) => {
+      const target = getEventElementTarget(event);
+      if (!target || !target.classList.contains('block-src')) return;
+      const textarea = target;
+
+      if (event.deltaY >= 0 || textarea.scrollTop > 0) {
+        return;
+      }
+
+      const headerEditor = getBlockHeaderEditor(textarea);
+      if (!headerEditor) return;
+
+      event.preventDefault();
+      const caret = String(headerEditor.value || '').length;
+      headerEditor.focus();
+      headerEditor.setSelectionRange(caret, caret);
+    }, { passive: false });
 
     blocksContainer.addEventListener('mousedown', (event) => {
       const target = getEventElementTarget(event);
