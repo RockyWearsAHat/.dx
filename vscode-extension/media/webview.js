@@ -1777,7 +1777,7 @@ function openBlockSrc(index) {
   const block = docModel.blocks[index];
   if (!block) return;
 
-  const rawSource = block.rawSource || stringifyBlock(block);
+  const rawSource = typeof block.rawSource === 'string' ? block.rawSource : stringifyBlock(block);
   const editorParts = splitBlockSourceForEditor(rawSource, block.type);
   source.value = getRawSourceForEditor(editorParts.bodySource);
   source.dataset.originalSource = rawSource;
@@ -2434,6 +2434,25 @@ function initializeDocument() {
             bodyEditor.focus();
             bodyEditor.setSelectionRange(0, 0);
             return;
+          }
+        }
+
+        if (event.key === 'Delete' && bodyEditor) {
+          const headerValue = String(textarea.value || '');
+          const start = typeof textarea.selectionStart === 'number' ? textarea.selectionStart : headerValue.length;
+          const end = typeof textarea.selectionEnd === 'number' ? textarea.selectionEnd : headerValue.length;
+
+          if (start === end && end === headerValue.length) {
+            const bodyValue = String(bodyEditor.value || '');
+            if (bodyValue.length > 0) {
+              event.preventDefault();
+              event.stopPropagation();
+              bodyEditor.value = bodyValue.slice(1);
+              autosizeBlockSrc(bodyEditor);
+              updateInlineCssAffordance(textarea);
+              debouncedAutosave();
+              return;
+            }
           }
         }
 
