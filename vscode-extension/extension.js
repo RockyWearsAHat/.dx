@@ -123,24 +123,16 @@ async function persistViewStateSnapshot(relativePath, snapshot) {
     return;
   }
 
+  const { db, dbModule } = await getDocRuntime();
+  const absolutePath = path.resolve(workspaceRoot, rel);
+  const document = dbModule.getDocumentByPath(db, workspaceRoot, absolutePath);
+
+  if (!document) {
+    return;
+  }
+
   const viewStatePath = path.join(workspaceRoot, '.doc', 'view-state.json');
   await mkdir(path.dirname(viewStatePath), { recursive: true });
-
-  let current = { version: 1, documents: {} };
-
-  try {
-    const raw = await readFile(viewStatePath, 'utf8');
-    const parsed = JSON.parse(raw);
-
-    if (parsed && typeof parsed === 'object' && parsed.documents && typeof parsed.documents === 'object') {
-      current = {
-        version: 1,
-        documents: { ...parsed.documents },
-      };
-    }
-  } catch {
-    current = { version: 1, documents: {} };
-  }
 
   const theme = String(snapshot.theme || 'auto');
   const resolvedTheme = String(snapshot.resolvedTheme || 'dark');
@@ -150,7 +142,7 @@ async function persistViewStateSnapshot(relativePath, snapshot) {
   const zoomLevel = Number.isFinite(zoomLevelRaw) ? zoomLevelRaw : 0;
   const zoomFactor = Math.pow(1.2, zoomLevel);
 
-  current.documents[rel] = {
+  const normalizedSnapshot = {
     theme: ['auto', 'light', 'dark'].includes(theme) ? theme : 'auto',
     resolvedTheme: ['light', 'dark'].includes(resolvedTheme) ? resolvedTheme : 'dark',
     appearance: {
@@ -167,8 +159,35 @@ async function persistViewStateSnapshot(relativePath, snapshot) {
     },
     effectiveCss: String(snapshot.effectiveCss || ''),
     sourceText: String(snapshot.sourceText || ''),
-    updatedAt: new Date().toISOString(),
   };
+
+  dbModule.saveDocumentViewState(db, document.id, normalizedSnapshot);
+
+  const current = { version: 1, documents: {} };
+  const rows = db.prepare(`
+    SELECT path, view_state_json, updated_at
+    FROM documents
+    WHERE view_state_json IS NOT NULL
+    ORDER BY updated_at DESC
+  `).all();
+
+  for (const row of rows) {
+    try {
+      const entry = JSON.parse(row.view_state_json);
+      const key = normalizeDocPath(path.relative(workspaceRoot, row.path));
+
+      if (!key || !entry || typeof entry !== 'object') {
+        continue;
+      }
+
+      current.documents[key] = {
+        ...entry,
+        updatedAt: row.updated_at,
+      };
+    } catch {
+      continue;
+    }
+  }
 
   await writeFile(viewStatePath, `${JSON.stringify(current, null, 2)}\n`, 'utf8');
 }
