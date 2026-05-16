@@ -1,3 +1,21 @@
+import { parseSourceBlocks } from '../vscode-extension/media/doc-pipeline.js';
+
+function extractCssFromSource(sourceText) {
+  if (!sourceText || typeof sourceText !== 'string') {
+    return '';
+  }
+
+  try {
+    const blocks = parseSourceBlocks(sourceText);
+    const cssBlocks = blocks.filter(b =>
+      b && b.type === 'code' && (b.language === 'css' || b.language === 'stylesheet')
+    );
+    return cssBlocks.map(b => String(b.text || '')).join('\n\n');
+  } catch {
+    return '';
+  }
+}
+
 function sanitizeAppearance(input) {
   const appearance = input && typeof input === 'object' ? input : {};
   const paper = String(appearance.paper || 'white');
@@ -55,8 +73,13 @@ export function readDocumentViewState(db, documentId) {
 
     const theme = String(entry.theme || 'auto');
     const resolvedTheme = String(entry.resolvedTheme || 'dark');
-    const effectiveCss = String(entry.effectiveCss || '');
     const sourceText = String(entry.sourceText || '');
+    let effectiveCss = String(entry.effectiveCss || '');
+
+    // If CSS wasn't captured when view state was saved, extract it from source
+    if (!effectiveCss && sourceText) {
+      effectiveCss = extractCssFromSource(sourceText);
+    }
 
     return {
       theme: ['auto', 'light', 'dark'].includes(theme) ? theme : 'auto',
