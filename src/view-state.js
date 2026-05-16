@@ -1,10 +1,3 @@
-import path from 'node:path';
-import { readFile } from 'node:fs/promises';
-
-function normalizeDocPath(value) {
-  return String(value || '').replace(/\\/g, '/').replace(/^\/+/, '');
-}
-
 function sanitizeAppearance(input) {
   const appearance = input && typeof input === 'object' ? input : {};
   const paper = String(appearance.paper || 'white');
@@ -19,29 +12,43 @@ function sanitizeAppearance(input) {
   };
 }
 
-export async function readDocumentViewState(workspaceRoot, relativePath) {
-  const root = String(workspaceRoot || '').trim();
-  const rel = normalizeDocPath(relativePath);
+function sanitizeViewport(input) {
+  const viewport = input && typeof input === 'object' ? input : {};
+  const widthRaw = Number(viewport.width);
+  const heightRaw = Number(viewport.height);
+  const pixelRatioRaw = Number(viewport.pixelRatio);
+  const zoomLevelRaw = Number(viewport.zoomLevel);
+  const zoomFactorRaw = Number(viewport.zoomFactor);
 
-  if (!root || !rel) {
+  const width = Number.isFinite(widthRaw) && widthRaw > 0 ? Math.round(widthRaw) : null;
+  const height = Number.isFinite(heightRaw) && heightRaw > 0 ? Math.round(heightRaw) : null;
+  const pixelRatio = Number.isFinite(pixelRatioRaw) && pixelRatioRaw > 0 ? pixelRatioRaw : null;
+  const zoomLevel = Number.isFinite(zoomLevelRaw) ? zoomLevelRaw : 0;
+  const zoomFactor = Number.isFinite(zoomFactorRaw) && zoomFactorRaw > 0
+    ? zoomFactorRaw
+    : Math.pow(1.2, zoomLevel);
+
+  return {
+    width,
+    height,
+    pixelRatio,
+    zoomLevel,
+    zoomFactor,
+  };
+}
+
+export function readDocumentViewState(db, documentId) {
+  if (!db || !Number.isFinite(Number(documentId))) {
     return null;
   }
 
-  const viewStatePath = path.join(root, '.doc', 'view-state.json');
-
   try {
-    const raw = await readFile(viewStatePath, 'utf8');
-    const parsed = JSON.parse(raw);
-    const documents = parsed && typeof parsed === 'object' && parsed.documents && typeof parsed.documents === 'object'
-      ? parsed.documents
-      : null;
-
-    if (!documents) {
+    const row = db.prepare(`SELECT view_state_json FROM documents WHERE id = ?`).get(documentId);
+    if (!row || !row.view_state_json) {
       return null;
     }
 
-    const entry = documents[rel];
-
+    const entry = JSON.parse(row.view_state_json);
     if (!entry || typeof entry !== 'object') {
       return null;
     }
@@ -55,6 +62,7 @@ export async function readDocumentViewState(workspaceRoot, relativePath) {
       theme: ['auto', 'light', 'dark'].includes(theme) ? theme : 'auto',
       resolvedTheme: ['light', 'dark'].includes(resolvedTheme) ? resolvedTheme : 'dark',
       appearance: sanitizeAppearance(entry.appearance),
+      viewport: sanitizeViewport(entry.viewport),
       effectiveCss,
       sourceText,
     };

@@ -145,6 +145,10 @@ async function persistViewStateSnapshot(relativePath, snapshot) {
   const theme = String(snapshot.theme || 'auto');
   const resolvedTheme = String(snapshot.resolvedTheme || 'dark');
   const appearance = snapshot.appearance && typeof snapshot.appearance === 'object' ? snapshot.appearance : {};
+  const viewport = snapshot.viewport && typeof snapshot.viewport === 'object' ? snapshot.viewport : {};
+  const zoomLevelRaw = Number(vscode.workspace.getConfiguration('window').get('zoomLevel', 0));
+  const zoomLevel = Number.isFinite(zoomLevelRaw) ? zoomLevelRaw : 0;
+  const zoomFactor = Math.pow(1.2, zoomLevel);
 
   current.documents[rel] = {
     theme: ['auto', 'light', 'dark'].includes(theme) ? theme : 'auto',
@@ -153,6 +157,13 @@ async function persistViewStateSnapshot(relativePath, snapshot) {
       paper: ['white', 'cream', 'slate'].includes(String(appearance.paper || 'white')) ? String(appearance.paper || 'white') : 'white',
       density: ['comfortable', 'compact'].includes(String(appearance.density || 'comfortable')) ? String(appearance.density || 'comfortable') : 'comfortable',
       scale: Number.isFinite(Number(appearance.scale)) ? Math.min(115, Math.max(90, Math.round(Number(appearance.scale)))) : 100,
+    },
+    viewport: {
+      width: Number.isFinite(Number(viewport.width)) ? Math.max(1, Math.round(Number(viewport.width))) : null,
+      height: Number.isFinite(Number(viewport.height)) ? Math.max(1, Math.round(Number(viewport.height))) : null,
+      pixelRatio: Number.isFinite(Number(viewport.pixelRatio)) ? Number(viewport.pixelRatio) : null,
+      zoomLevel,
+      zoomFactor,
     },
     effectiveCss: String(snapshot.effectiveCss || ''),
     sourceText: String(snapshot.sourceText || ''),

@@ -130,6 +130,7 @@ export function createDatabase(dbPath) {
       metadata_json TEXT NOT NULL,
       body TEXT NOT NULL,
       outline_json TEXT NOT NULL,
+      view_state_json TEXT,
       source_mtime_ms INTEGER NOT NULL,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
@@ -181,6 +182,16 @@ export function createDatabase(dbPath) {
 
     CREATE INDEX IF NOT EXISTS idx_documents_updated_at ON documents(updated_at DESC);
     CREATE INDEX IF NOT EXISTS idx_sections_document_id ON sections(document_id, position);
+  `);
+
+  // Schema migration: add view_state_json column if it doesn't exist
+  try {
+    db.prepare(`SELECT view_state_json FROM documents LIMIT 0`).all();
+  } catch {
+    db.exec(`ALTER TABLE documents ADD COLUMN view_state_json TEXT;`);
+  }
+
+  db.exec(`
     CREATE INDEX IF NOT EXISTS idx_tokens_token ON tokens(token);
     CREATE INDEX IF NOT EXISTS idx_tokens_document_id ON tokens(document_id);
     CREATE INDEX IF NOT EXISTS idx_workspaces_root_path ON workspaces(root_path);
@@ -189,6 +200,23 @@ export function createDatabase(dbPath) {
   `);
 
   return db;
+}
+
+export function getDocumentViewState(db, documentId) {
+  const row = db.prepare(`SELECT view_state_json FROM documents WHERE id = ?`).get(documentId);
+  if (!row || !row.view_state_json) {
+    return null;
+  }
+  try {
+    return JSON.parse(row.view_state_json);
+  } catch {
+    return null;
+  }
+}
+
+export function saveDocumentViewState(db, documentId, viewState) {
+  const json = viewState && typeof viewState === 'object' ? JSON.stringify(viewState) : null;
+  db.prepare(`UPDATE documents SET view_state_json = ? WHERE id = ?`).run(json, documentId);
 }
 
 export function getUserConfigValue(db, key, fallbackValue = null) {

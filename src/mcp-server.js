@@ -20,7 +20,7 @@ import {
   saveDocumentSourceByRelativePath,
 } from './doc-service.js';
 import { renderDocumentViewHtml } from './doc-view.js';
-import { captureDocumentViewPng, captureWindowViewPng } from './doc-view-capture.js';
+import { captureDocumentViewPng } from './doc-view-capture.js';
 import { stringifyDocFile } from './doc-format.js';
 import { resolveDocDbPath } from './global-db-path.js';
 import { readDocumentViewState } from './view-state.js';
@@ -185,16 +185,14 @@ const TOOLS = [
   },
   {
     name: 'capture-document-view',
-    description: 'Capture a real PNG screenshot of the built-in rendered document viewer for a .dx document.',
+    description: 'Capture a real PNG screenshot for a .dx document rendered in the simple browser workflow.',
     inputSchema: {
       type: 'object',
       properties: {
         workspacePath: { type: 'string', description: 'Optional workspace root path' },
         path: { type: 'string', description: 'Workspace-relative .dx path' },
         id: { type: 'number', description: 'Document ID' },
-        size: { type: 'number', description: 'Capture width hint in pixels (default 1400)' },
-        captureMode: { type: 'string', enum: ['rendered', 'window'], description: 'Capture mode: rendered doc view or actual VS Code window.' },
-        appName: { type: 'string', description: 'macOS app name for window capture mode (default: Code - Insiders).' },
+        size: { type: 'number', description: 'Capture width hint in pixels (default 1492)' },
       },
       required: [],
       oneOf: [
@@ -205,7 +203,7 @@ const TOOLS = [
   },
   {
     name: 'use-document-viewer',
-    description: 'Single-call document viewer operation: open or resume a session, apply one or more interactions, optionally save, and return updated state with screenshot.',
+    description: 'Single-call document viewer operation: open/resume a session, apply interactions, and return updated state with rendered screenshot.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -213,9 +211,7 @@ const TOOLS = [
         path: { type: 'string', description: 'Workspace-relative .dx path' },
         id: { type: 'number', description: 'Document ID' },
         sessionId: { type: 'string', description: 'Existing viewer session id. If omitted, a new session opens from path or id.' },
-        size: { type: 'number', description: 'Screenshot width hint in pixels (default 1400)' },
-        captureMode: { type: 'string', enum: ['rendered', 'window'], description: 'Capture mode: rendered doc view or actual VS Code window.' },
-        appName: { type: 'string', description: 'macOS app name for window capture mode (default: Code - Insiders).' },
+        size: { type: 'number', description: 'Screenshot width hint in pixels (default 1492)' },
         actions: {
           type: 'array',
           description: 'Optional list of actions to run in order. If omitted, defaults to inspect.',
@@ -343,6 +339,11 @@ async function resolveDocumentFromArgs(runtime, args) {
   }
 
   return null;
+}
+
+async function captureRendered({ document, size, viewState }) {
+  const captured = await captureDocumentViewPng(document, { size, viewState });
+  return { captured };
 }
 
 async function applyViewerAction(session, actionSpec) {
@@ -506,6 +507,7 @@ async function handleTool(id, toolName, args = {}) {
         const session = {
           sessionId,
           workspaceRoot: runtime.workspaceRoot,
+          db: runtime.db,
           document,
           activeBlockIndex: 0,
           scrollTop: 0,
@@ -524,11 +526,8 @@ async function handleTool(id, toolName, args = {}) {
           return sendError(id, -32602, 'Document not found (provide valid path or id)');
         }
 
-        const captureMode = String(args.captureMode || 'rendered').toLowerCase();
-        const viewState = await readDocumentViewState(runtime.workspaceRoot, document.relativePath);
-        const captured = captureMode === 'window'
-          ? await captureWindowViewPng({ appName: args.appName || 'Code - Insiders' })
-          : await captureDocumentViewPng(document, { size: args.size, viewState });
+        const viewState = readDocumentViewState(runtime.db, document.id);
+        const { captured } = await captureRendered({ document, size: args.size, viewState });
 
         result = {
           document: {
@@ -540,8 +539,9 @@ async function handleTool(id, toolName, args = {}) {
           capture: {
             mimeType: captured.mimeType,
             bytes: captured.bytes,
-            mode: captured.mode || 'rendered',
-            appName: captured.appName,
+            mode: captured.mode,
+            engine: captured.engine,
+            viewport: captured.viewport,
           },
         };
 
@@ -610,18 +610,16 @@ async function handleTool(id, toolName, args = {}) {
         }
 
         const state = buildViewerState(session);
-        const captureMode = String(args.captureMode || 'rendered').toLowerCase();
-        const viewState = await readDocumentViewState(session.workspaceRoot, session.document.relativePath);
-        const captured = captureMode === 'window'
-          ? await captureWindowViewPng({ appName: args.appName || 'Code - Insiders' })
-          : await captureDocumentViewPng(session.document, { size: args.size, viewState });
+        const viewState = readDocumentViewState(session.db, session.document.id);
+        const { captured } = await captureRendered({ document: session.document, size: args.size, viewState });
         result = {
           ...state,
           capture: {
             mimeType: captured.mimeType,
             bytes: captured.bytes,
-            mode: captured.mode || 'rendered',
-            appName: captured.appName,
+            mode: captured.mode,
+            engine: captured.engine,
+            viewport: captured.viewport,
           },
         };
         content = [

@@ -13,7 +13,8 @@
     "upgrade:install": "node scripts/upgrade-install.mjs"
   },
   "dependencies": {
-    "node-addon-api": "^8.3.1"
+    "node-addon-api": "^8.3.1",
+    "playwright": "^1.60.0"
   },
   "devDependencies": {
     "node-gyp": "^11.2.0"
