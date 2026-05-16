@@ -42,7 +42,6 @@ function decorateRootTag(tag, block) {
   if (block?.id) {
     attrs.push(`id="${escapeHtml(block.id)}"`);
     attrs.push(`data-block-id="${escapeHtml(block.id)}"`);
-    classes.push(String(block.id));
   }
 
   if (classes.length > 0) {
@@ -60,7 +59,6 @@ function getDecoratedAttrs(block, baseClasses = []) {
   if (block?.id) {
     attrs.push(`id="${escapeHtml(block.id)}"`);
     attrs.push(`data-block-id="${escapeHtml(block.id)}"`);
-    classes.push(String(block.id));
   }
 
   if (classes.length > 0) {

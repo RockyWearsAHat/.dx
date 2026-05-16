@@ -891,7 +891,6 @@ function buildRenderedContent(block) {
     if (block.id) {
       element.id = block.id;
       element.dataset.blockId = block.id;
-      element.classList.add(block.id);
     }
     for (const token of splitClassNames(block.className)) {
       element.classList.add(token);
@@ -1005,7 +1004,7 @@ function buildBlockWrap(block, index) {
   }
 
   if (block && block.id) {
-    wrap.classList.add(String(block.id));
+    wrap.dataset.blockId = String(block.id);
   }
 
   const view = document.createElement('div');
