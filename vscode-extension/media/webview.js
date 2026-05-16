@@ -228,6 +228,10 @@ function refreshDocumentCss() {
 function publishViewState(effectiveCss) {
   const resolvedTheme = String(document.body && document.body.dataset ? document.body.dataset.resolvedTheme || 'dark' : 'dark');
   const sourceText = docModel ? stringifyDoc(docModel) : '';
+  const viewportWidth = Number.isFinite(window.innerWidth) ? Math.max(1, Math.round(window.innerWidth)) : null;
+  const viewportHeight = Number.isFinite(window.innerHeight) ? Math.max(1, Math.round(window.innerHeight)) : null;
+  const pixelRatio = Number.isFinite(window.devicePixelRatio) ? Number(window.devicePixelRatio) : null;
+
   vscode.postMessage({
     type: 'view-state',
     payload: {
@@ -239,6 +243,11 @@ function publishViewState(effectiveCss) {
         paper: currentAppearance.paper,
         density: currentAppearance.density,
         scale: currentAppearance.scale,
+      },
+      viewport: {
+        width: viewportWidth,
+        height: viewportHeight,
+        pixelRatio,
       },
       effectiveCss: String(effectiveCss || ''),
     },
