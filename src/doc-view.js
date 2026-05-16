@@ -35,19 +35,6 @@ function toStringItems(items) {
   return items.map((item) => String(item?.text || item || '').trim()).filter(Boolean);
 }
 
-function getDocumentCss(blocks) {
-  const sourceBlocks = Array.isArray(blocks) ? blocks : [];
-  return sourceBlocks
-    .filter((block) => String(block?.type || '').toLowerCase() === 'code')
-    .filter((block) => {
-      const lang = String(block?.language || '').trim().toLowerCase();
-      return lang === 'css' || lang === 'stylesheet';
-    })
-    .map((block) => String(block?.text || '').trim())
-    .filter(Boolean)
-    .join('\n\n');
-}
-
 function decorateRootTag(tag, block) {
   const attrs = [];
   const classes = splitClassNames(block?.className);
@@ -64,6 +51,26 @@ function decorateRootTag(tag, block) {
   }
 
   return attrs.length > 0 ? `<${tag} ${attrs.join(' ')}>` : `<${tag}>`;
+}
+
+function getDecoratedAttrs(block, baseClasses = []) {
+  const classes = [...baseClasses, ...splitClassNames(block?.className)];
+  const attrs = [];
+
+  if (block?.id) {
+    attrs.push(`id="${escapeHtml(block.id)}"`);
+    attrs.push(`data-block-id="${escapeHtml(block.id)}"`);
+    classes.push(String(block.id));
+  }
+
+  if (classes.length > 0) {
+    const unique = Array.from(new Set(classes.filter(Boolean)));
+    if (unique.length > 0) {
+      attrs.push(`class="${escapeHtml(unique.join(' '))}"`);
+    }
+  }
+
+  return attrs.length > 0 ? ` ${attrs.join(' ')}` : '';
 }
 
 function renderBlock(block) {
@@ -90,10 +97,8 @@ function renderBlock(block) {
 
   if (type === 'checklist') {
     const items = Array.isArray(block?.items) ? block.items : [];
-    const classes = ['checklist-wrap', ...splitClassNames(block?.className)].join(' ').trim();
-    const idAttr = block?.id ? ` id="${escapeHtml(block.id)}" data-block-id="${escapeHtml(block.id)}"` : '';
-    const classAttr = classes ? ` class="${escapeHtml(classes)}"` : '';
-    return `<ul${idAttr}${classAttr}>${items.map((item) => {
+    const attrs = getDecoratedAttrs(block, ['checklist-wrap']);
+    return `<ul${attrs}>${items.map((item) => {
       const checked = Boolean(item?.checked);
       const text = escapeHtml(item?.text || item || '');
       return `<li><input type="checkbox" disabled ${checked ? 'checked' : ''} /><span${checked ? ' class="check-done"' : ''}>${text}</span></li>`;
@@ -115,18 +120,13 @@ function renderBlock(block) {
     const src = escapeHtml(block?.src || '');
     const alt = escapeHtml(block?.alt || '');
     const caption = alt ? `<figcaption>${alt}</figcaption>` : '';
-    const extraClasses = ['image-wrap', ...splitClassNames(block?.className)].join(' ').trim();
-    const idAttr = block?.id ? ` id="${escapeHtml(block.id)}" data-block-id="${escapeHtml(block.id)}"` : '';
-    const classAttr = extraClasses ? ` class="${escapeHtml(extraClasses)}"` : '';
-    return `<figure${idAttr}${classAttr}><img src="${src}" alt="${alt}" loading="lazy" />${caption}</figure>`;
+    const attrs = getDecoratedAttrs(block, ['image-wrap']);
+    return `<figure${attrs}><img src="${src}" alt="${alt}" loading="lazy" />${caption}</figure>`;
   }
 
   if (type === 'rule') {
-    const idAttr = block?.id ? ` id="${escapeHtml(block.id)}" data-block-id="${escapeHtml(block.id)}"` : '';
-    const classAttr = splitClassNames(block?.className).length > 0
-      ? ` class="${escapeHtml(splitClassNames(block?.className).join(' '))}"`
-      : '';
-    return `<hr${idAttr}${classAttr} />`;
+    const attrs = getDecoratedAttrs(block);
+    return `<hr${attrs} />`;
   }
 
   const open = decorateRootTag('p', block);
@@ -145,7 +145,7 @@ export function renderDocumentViewHtml(document, {
     ? parsedBlocks
     : (Array.isArray(document?.blocks) ? document.blocks : []);
   const extensionStyles = getExtensionStyles();
-  const documentCss = String(effectiveCss || '').trim() || getDocumentCss(blocks);
+  const documentCss = String(effectiveCss || '').trim();
   const paper = String(appearance?.paper || 'white');
   const density = String(appearance?.density || 'comfortable');
   const scaleRaw = Number(appearance?.scale);
