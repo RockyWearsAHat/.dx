@@ -314,18 +314,65 @@ function parseBlockHeader(headerLine) {
   return { type, attributes };
 }
 
-function parseDocsrcBlocks(body) {
-  const lines = body.replace(/^\n+/, '').split('\n');
-  const blocks = [];
-  let current = null;
+function parseLeadingAttributesAndRemainder(text) {
+  const attrs = {};
+  let rest = String(text || '');
 
-  function flushCurrent() {
-    if (!current) {
-      return;
+  while (true) {
+    const match = /^\s*([a-zA-Z0-9._-]+)=(?:"([^"]*)"|'([^']*)'|([^\s]+))/.exec(rest);
+
+    if (!match) {
+      break;
     }
 
-    const content = current.lines.join('\n').trim();
-    const { type, attributes } = current.header;
+    const key = String(match[1] || '').trim().toLowerCase();
+    const value = match[2] ?? match[3] ?? match[4] ?? '';
+
+    if (key) {
+      attrs[key] = value;
+    }
+
+    rest = rest.slice(match[0].length);
+  }
+
+  return {
+    attrs,
+    remainder: rest.trim(),
+  };
+}
+
+function unwrapSyntheticParagraphWrappers(sourceText) {
+  const input = String(sourceText || '').replace(/\r\n/g, '\n').split('\n');
+  const output = [];
+
+  for (let i = 0; i < input.length; i += 1) {
+    const line = String(input[i] || '');
+    const trimmed = line.trim();
+    const isSyntheticParagraphOpen = /^::paragraph\s+id=paragraph-\d+\s*$/i.test(trimmed);
+
+    if (isSyntheticParagraphOpen && i + 2 < input.length) {
+      const wrappedLine = String(input[i + 1] || '');
+      const closeLine = String(input[i + 2] || '').trim();
+
+      if (closeLine === '::end') {
+        output.push(wrappedLine);
+        i += 2;
+        continue;
+      }
+    }
+
+    output.push(line);
+  }
+
+  return output.join('\n');
+}
+
+function parseDocsrcBlocks(body) {
+  const lines = unwrapSyntheticParagraphWrappers(body).replace(/^\n+/, '').split('\n');
+  const blocks = [];
+
+  function pushBlock(type, attributes, contentLines) {
+    const content = contentLines.join('\n').trim();
 
     if (type === 'heading') {
       blocks.push({
@@ -335,68 +382,133 @@ function parseDocsrcBlocks(body) {
         className: normalizeClassName(attributes.class),
         text: content || 'Section',
       });
-    } else if (type === 'paragraph') {
+      return;
+    }
+
+    if (type === 'paragraph') {
       blocks.push({
         type: 'paragraph',
         id: attributes.id,
         className: normalizeClassName(attributes.class),
         text: content,
       });
-    } else if (type === 'quote') {
+      return;
+    }
+
+    if (type === 'quote') {
       blocks.push({
         type: 'quote',
         id: attributes.id,
         className: normalizeClassName(attributes.class),
         text: content,
       });
-    } else if (type === 'code') {
+      return;
+    }
+
+    if (type === 'code') {
       blocks.push({
         type: 'code',
         id: attributes.id,
         className: normalizeClassName(attributes.class),
-        language: attributes.lang || '',
-        text: current.lines.join('\n').replace(/\n+$/, ''),
+        language: attributes.lang || attributes.language || '',
+        text: contentLines.join('\n').replace(/\n+$/, ''),
       });
-    } else if (type === 'bulleted-list' || type === 'numbered-list') {
+      return;
+    }
+
+    if (type === 'bulleted-list' || type === 'list' || type === 'numbered-list') {
+      const normalizedType = type === 'list' ? 'bulleted-list' : type;
       blocks.push({
-        type,
+        type: normalizedType,
         id: attributes.id,
         className: normalizeClassName(attributes.class),
-        items: current.lines.map((line) => line.trim()).filter(Boolean),
+        items: contentLines.map((line) => line.trim()).filter(Boolean),
       });
-    } else if (type === 'image') {
+      return;
+    }
+
+    if (type === 'image') {
       blocks.push({
-        type,
+        type: 'image',
         id: attributes.id,
         className: normalizeClassName(attributes.class),
         src: String(attributes.src || '').trim(),
-        alt: current.lines.join('\n').trim(),
+        alt: content,
       });
     }
-
-    current = null;
   }
 
-  for (const line of lines) {
-    if (!current) {
-      const header = parseBlockHeader(line);
+  let cursor = 0;
+  while (cursor < lines.length) {
+    const rawLine = String(lines[cursor] || '');
+    const line = rawLine.trim();
 
-      if (header) {
-        current = { header, lines: [] };
+    if (!line) {
+      cursor += 1;
+      continue;
+    }
+
+    const inline = /^::([a-z-]+)(.*)\s+::end\s*$/i.exec(line);
+    if (inline) {
+      const type = inline[1].toLowerCase();
+      if (type !== 'end') {
+        const parsed = parseLeadingAttributesAndRemainder(inline[2] || '');
+        const inlineContent = parsed.remainder ? [parsed.remainder] : [];
+        pushBlock(type, parsed.attrs, inlineContent);
+      }
+      cursor += 1;
+      continue;
+    }
+
+    const header = parseBlockHeader(line);
+    if (!header) {
+      cursor += 1;
+      continue;
+    }
+
+    const type = String(header.type || '').toLowerCase();
+    if (type === 'end') {
+      cursor += 1;
+      continue;
+    }
+
+    const parsedOpen = parseLeadingAttributesAndRemainder(rawLine.replace(/^::[a-z-]+/i, ''));
+    const contentLines = [];
+
+    if (parsedOpen.remainder) {
+      contentLines.push(parsedOpen.remainder);
+    }
+
+    cursor += 1;
+
+    while (cursor < lines.length) {
+      const bodyLine = String(lines[cursor] || '');
+      const bodyTrimmed = bodyLine.trim();
+      const endIndex = bodyLine.indexOf('::end');
+
+      if (bodyTrimmed === '::end') {
+        break;
       }
 
-      continue;
+      if (endIndex !== -1) {
+        const beforeEnd = bodyLine.slice(0, endIndex).trimEnd();
+        if (beforeEnd) {
+          contentLines.push(beforeEnd);
+        }
+        break;
+      }
+
+      contentLines.push(bodyLine);
+      cursor += 1;
     }
 
-    if (line.trim() === '::end') {
-      flushCurrent();
-      continue;
-    }
+    pushBlock(type, parsedOpen.attrs, contentLines);
 
-    current.lines.push(line);
+    if (cursor < lines.length) {
+      cursor += 1;
+    }
   }
 
-  flushCurrent();
   return blocks;
 }
 
@@ -627,6 +739,18 @@ function parseDocSource(text) {
   }
 
   const trimmed = text.trim();
+
+  // Canonical DOC source is block syntax without required frontmatter header.
+  if (/^::[a-z-]+(?:\s|$)/m.test(trimmed)) {
+    return {
+      title: '',
+      summary: '',
+      tags: [],
+      meta: {},
+      blocks: parseDocsrcBlocks(text),
+      source: text,
+    };
+  }
 
   if (trimmed.startsWith('{')) {
     const parsed = JSON.parse(trimmed);

@@ -110,6 +110,13 @@ This document is edited visually, not with Markdown syntax.
 
 For list blocks, each newline is one item. Leading `-`, `*`, or `1.` prefixes are optional and normalized away.
 
+## DX Contract and Review Checklist
+
+- DX format and safety contract: `docs/dx-format-contract.md`
+- Parser/render change grilling checklist: `docs/grill-me.md`
+
+These docs define the non-negotiable behavior for parsing, canonicalization, and CSS safety.
+
 ## Why this matches the video better
 
 The reparsed transcript makes the core complaint clear: Markdown is attractive because it renders well, but it has too many overlapping syntaxes, too much inline escape hatch behavior, and too much grammar pollution in the source text itself. This implementation fixes that by:

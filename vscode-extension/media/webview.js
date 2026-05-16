@@ -7,7 +7,6 @@ let currentTheme = 'auto';
 let loadNoteEl = null;
 let currentDocPath = 'unknown.dx';
 const appearanceStorageKey = 'docdb.appearance.v1';
-const customCssStoragePrefix = 'docdb.custom-css.v1:';
 const editModeStorageKey = 'docdb.edit-mode.v1';
 let currentAppearance = {
   paper: 'white',
@@ -158,10 +157,6 @@ function formatAttributeValue(value) {
   return '"' + text.replace(/"/g, '') + '"';
 }
 
-function getCustomCssStorageKey() {
-  return customCssStoragePrefix + currentDocPath;
-}
-
 function ensureCustomCssSheet() {
   if (customCssSheet) {
     return customCssSheet;
@@ -183,12 +178,15 @@ function applyCustomCss(cssText) {
   }
 }
 
-function loadCustomCss() {
-  try {
-    return window.localStorage.getItem(getCustomCssStorageKey()) || '';
-  } catch {
+function getActiveScopedCss() {
+  if (!inlineCssSurfaceState.selector || !inlineCssSurfaceState.baseCssText) {
     return '';
   }
+
+  return getScopedCssForSelector(
+    inlineCssSurfaceState.baseCssText,
+    inlineCssSurfaceState.selector,
+  );
 }
 
 function extractCssFromDocumentModel() {
@@ -218,9 +216,7 @@ function extractCssFromDocumentModel() {
 }
 
 function refreshDocumentCss() {
-  const documentCss = extractCssFromDocumentModel();
-  const fallbackCss = loadCustomCss();
-  const effectiveCss = documentCss || fallbackCss;
+  const effectiveCss = '';
   applyCustomCss(effectiveCss);
   publishViewState(effectiveCss);
 }
@@ -1497,9 +1493,11 @@ function ensureInlineCssSurface(source) {
         editor.value,
       );
       autosizeInlineCssEditor(editor);
-      if (applyCustomCss(cssText)) {
+      const scopedCss = getScopedCssForSelector(cssText, inlineCssSurfaceState.selector);
+      if (applyCustomCss(scopedCss)) {
         upsertCssBlock(cssText);
         inlineCssSurfaceState.baseCssText = cssText;
+        publishViewState(scopedCss);
       }
     });
 
@@ -1558,6 +1556,9 @@ function closeInlineCssSurface(restoreFocus) {
     selectionEnd: 0,
   };
 
+  applyCustomCss('');
+  publishViewState('');
+
   if (restoreFocus && activeSource) {
     const start = Number.isFinite(selectionStart) ? selectionStart : activeSource.value.length;
     const end = Number.isFinite(selectionEnd) ? selectionEnd : start;
@@ -1592,8 +1593,9 @@ function openInlineCssSurface(source, selector) {
     meta.textContent = requestedSelector ? `${requestedSelector} {` : '{';
   }
 
-  const cssText = extractCssFromDocumentModel() || loadCustomCss();
+  const cssText = extractCssFromDocumentModel();
   const declarations = getScopedCssDeclarations(cssText, requestedSelector);
+  const scopedCss = getScopedCssForSelector(cssText, requestedSelector);
 
   editor.value = declarations || '';
   surface.style.display = 'block';
@@ -1604,6 +1606,9 @@ function openInlineCssSurface(source, selector) {
     selectionStart: typeof source.selectionStart === 'number' ? source.selectionStart : source.value.length,
     selectionEnd: typeof source.selectionEnd === 'number' ? source.selectionEnd : source.value.length,
   };
+
+  applyCustomCss(scopedCss);
+  publishViewState(scopedCss);
 
   autosizeInlineCssEditor(editor);
 
@@ -1917,7 +1922,7 @@ function applyAppearance(persist = false) {
     persistAppearance();
   }
 
-  publishViewState(extractCssFromDocumentModel() || loadCustomCss());
+  publishViewState(getActiveScopedCss());
 }
 
 function applyTheme(theme, persist = false) {
@@ -1938,7 +1943,7 @@ function applyTheme(theme, persist = false) {
     vscode.postMessage({ type: 'set-theme', theme: currentTheme });
   }
 
-  publishViewState(extractCssFromDocumentModel() || loadCustomCss());
+  publishViewState(getActiveScopedCss());
 }
 
 function setControlsOpen(isOpen) {
