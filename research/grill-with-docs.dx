@@ -4,6 +4,6 @@ artifact: .doc/.repo-docs.bin
 key: research/grill-with-docs.dx
 archive: .doc/.repo-docs.bin
 codec: brotli-docbin-v1
-sha256: 266fa09f2535450d103debcd20373e4a8cd1079be7985c16bed0acf83b357890
+sha256: 78d3466ca99ddabac573c3e745b7b0b367d240c33bb9fbe4cb18ef9c5614c1c0
 packed_bytes: 665
-archive_bytes: 324
+archive_bytes: undefined

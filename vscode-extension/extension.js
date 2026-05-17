@@ -804,6 +804,58 @@ class DocDbCustomEditorProvider {
 
     let sourcePushTimer = null;
     let suppressedEchoSource = null;
+    let suppressNextChangePush = false;
+    let dirtySyncTimer = null;
+    let pendingDirtySource = null;
+
+    const replaceWorkingCopyText = async (nextText) => {
+      const desiredText = String(nextText || '');
+      const currentText = document.getText();
+
+      if (currentText === desiredText) {
+        return false;
+      }
+
+      const fullRange = new vscode.Range(
+        document.positionAt(0),
+        document.positionAt(currentText.length),
+      );
+
+      const edit = new vscode.WorkspaceEdit();
+      edit.replace(document.uri, fullRange, desiredText);
+
+      suppressNextChangePush = true;
+      await vscode.workspace.applyEdit(edit);
+      return true;
+    };
+
+    const flushDirtyWorkingCopySync = async () => {
+      const nextText = pendingDirtySource;
+      pendingDirtySource = null;
+
+      if (typeof nextText !== 'string') {
+        return;
+      }
+
+      try {
+        await replaceWorkingCopyText(nextText);
+      } catch {
+        // Ignore dirty-sync failures; explicit save path will still persist content.
+      }
+    };
+
+    const scheduleDirtyWorkingCopySync = (nextText) => {
+      pendingDirtySource = String(nextText || '');
+
+      if (dirtySyncTimer) {
+        clearTimeout(dirtySyncTimer);
+      }
+
+      dirtySyncTimer = setTimeout(() => {
+        dirtySyncTimer = null;
+        void flushDirtyWorkingCopySync();
+      }, 100);
+    };
 
     const pushLatestSourceToWebview = async () => {
       try {
@@ -842,6 +894,12 @@ class DocDbCustomEditorProvider {
 
     const onChanged = vscode.workspace.onDidChangeTextDocument(async (changeEvent) => {
       if (!matchesOpenDocument(changeEvent?.document?.uri)) return;
+
+      if (suppressNextChangePush) {
+        suppressNextChangePush = false;
+        return;
+      }
+
       schedulePushLatestSourceToWebview();
     });
 
@@ -849,6 +907,10 @@ class DocDbCustomEditorProvider {
       if (sourcePushTimer) {
         clearTimeout(sourcePushTimer);
         sourcePushTimer = null;
+      }
+      if (dirtySyncTimer) {
+        clearTimeout(dirtySyncTimer);
+        dirtySyncTimer = null;
       }
       onSaved.dispose();
       onChanged.dispose();
@@ -911,6 +973,11 @@ class DocDbCustomEditorProvider {
         return;
       }
 
+      if (message.type === 'mark-dirty') {
+        scheduleDirtyWorkingCopySync(String(message.text || ''));
+        return;
+      }
+
       if (message.type !== 'save') {
         return;
       }
@@ -918,7 +985,33 @@ class DocDbCustomEditorProvider {
       try {
         const saveText = String(message.text || '');
         const saveRequestId = Number(message.requestId || 0);
-        await writeVirtualDocument(relativePath, saveText);
+        if (dirtySyncTimer) {
+          clearTimeout(dirtySyncTimer);
+          dirtySyncTimer = null;
+        }
+        pendingDirtySource = null;
+
+        // Save the source to SQLite + archive and get back the stub pointer
+        // text that belongs on disk. The .dx file is always a pointer, never
+        // the raw source.
+        let stubText = null;
+        try {
+          const { workspaceRoot, db, serviceModule } = await getDocRuntime();
+          const result = await serviceModule.saveDocumentSourceToDbAndArchive(workspaceRoot, db, relativePath, saveText);
+          stubText = result.stubText;
+        } catch {
+          // Non-fatal: fall back to replacing working copy with raw source.
+        }
+
+        // Write the stub pointer (or raw source as last resort) into the
+        // VS Code document buffer, then let VS Code flush it to disk.
+        await replaceWorkingCopyText(stubText ?? saveText);
+
+        const saved = await document.save();
+        if (!saved) {
+          throw new Error('Save was cancelled.');
+        }
+
         suppressedEchoSource = saveText;
         webviewPanel.webview.postMessage({ type: 'save-complete', requestId: saveRequestId });
       } catch (error) {

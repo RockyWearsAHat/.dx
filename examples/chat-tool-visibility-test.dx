@@ -4,6 +4,6 @@ artifact: .doc/.repo-docs.bin
 key: examples/chat-tool-visibility-test.dx
 archive: .doc/.repo-docs.bin
 codec: brotli-docbin-v1
-sha256: 46a0f62ae90f76e3002022011322ab3094cd18b42c5bc43c7e612233d163e9ef
+sha256: d46a68d88545778e8e885f885436b7f76bd2709d952332fa00c9fedc0d4f3ee4
 packed_bytes: 88
-archive_bytes: 85
+archive_bytes: undefined

@@ -113,6 +113,7 @@ let nextSaveRequestId = 1;
 let pendingExternalSource = null;
 const FSM_HISTORY_LIMIT = 32;
 let fsmHistory = [];
+let fsmFuture = [];
 let suppressFsmHistory = false;
 const DOC_HISTORY_LIMIT = 120;
 const DOC_EDITOR_UNDO_ACTIONS = new Set([
@@ -124,6 +125,7 @@ const DOC_EDITOR_UNDO_ACTIONS = new Set([
 let docUndoStack = [];
 let docRedoStack = [];
 let isApplyingDocHistory = false;
+let hasDirtyWorkingCopySignal = false;
 
 function captureFsmSnapshot() {
   return {
@@ -149,6 +151,8 @@ function pushFsmHistory(entry) {
   if (fsmHistory.length > FSM_HISTORY_LIMIT) {
     fsmHistory = fsmHistory.slice(-FSM_HISTORY_LIMIT);
   }
+
+  fsmFuture = [];
 }
 
 function restoreFsmSnapshot(snapshot) {
@@ -183,7 +187,58 @@ function undoLastFsmTransition() {
     return false;
   }
 
+  fsmFuture.push(lastEntry);
+
   return restoreFsmSnapshot(lastEntry.before);
+}
+
+function redoLastFsmTransition() {
+  if (fsmFuture.length === 0) {
+    return false;
+  }
+
+  const entry = fsmFuture.pop();
+  if (!entry || !entry.after) {
+    return false;
+  }
+
+  fsmHistory.push(entry);
+  return restoreFsmSnapshot(entry.after);
+}
+
+function performGlobalUndo() {
+  if (undoDocumentChange()) {
+    return 'document';
+  }
+
+  if (undoLastFsmTransition()) {
+    setStatus('Undid state change');
+    return 'fsm';
+  }
+
+  return null;
+}
+
+function performGlobalRedo() {
+  if (redoDocumentChange()) {
+    return 'document';
+  }
+
+  if (redoLastFsmTransition()) {
+    setStatus('Redid state change');
+    return 'fsm';
+  }
+
+  return null;
+}
+
+function isRedoShortcut(event) {
+  if (!event || !(event.metaKey || event.ctrlKey)) {
+    return false;
+  }
+
+  const key = String(event.key || '').toLowerCase();
+  return key === 'y' || (key === 'z' && event.shiftKey);
 }
 
 function syncVisibleStateFromMachine() {
@@ -226,6 +281,14 @@ function resetDocumentHistory() {
 function markDocumentDirty() {
   transitionDocSaveState('MARK_DIRTY');
   setStatusPersistent('Unsaved changes', 'dirty');
+
+  if (!hasDirtyWorkingCopySignal) {
+    hasDirtyWorkingCopySignal = true;
+    vscode.postMessage({
+      type: 'mark-dirty',
+      text: currentDocSourceText(),
+    });
+  }
 }
 
 function syncDocumentSaveStateFromModel() {
@@ -239,6 +302,7 @@ function syncDocumentSaveStateFromModel() {
 
   transitionDocSaveState('SYNC_CLEAN');
   clearStatusPersistent();
+  hasDirtyWorkingCopySignal = false;
 }
 
 function recordDocumentUndo(action = 'edit') {
@@ -441,13 +505,21 @@ function canApplyExternalSourceNow() {
 }
 
 function applyIncomingSourceText(sourceText) {
-  docModel = parseDoc(sourceText || '');
-  resetDocumentHistory();
-  lastSavedDoc = String(sourceText || '');
+  const incomingText = String(sourceText || '');
+  const previousSource = currentDocSourceText();
+
+  if (docModel && previousSource !== incomingText && !isApplyingDocHistory) {
+    recordDocumentUndo('external-sync');
+  }
+
+  docModel = parseDoc(incomingText);
+  docRedoStack = [];
+  lastSavedDoc = incomingText;
   pendingExternalSource = null;
   transitionDocSaveState('SYNC_CLEAN');
   renderDocument();
   clearStatusPersistent();
+  hasDirtyWorkingCopySignal = false;
   setStatus('Refreshed');
 }
 
@@ -2773,12 +2845,12 @@ async function runSurfaceAction(payload = {}) {
     }
   } else if (action === 'undoDocument') {
     commitOpenSourcesForHistory();
-    if (!undoDocumentChange()) {
+    if (!performGlobalUndo()) {
       throw new Error('No document edit available to undo.');
     }
   } else if (action === 'redoDocument') {
     commitOpenSourcesForHistory();
-    if (!redoDocumentChange()) {
+    if (!performGlobalRedo()) {
       throw new Error('No document edit available to redo.');
     }
   } else {
@@ -3054,7 +3126,7 @@ function initializeDocument() {
       if (!event.target.classList.contains('block-src') && !event.target.classList.contains('block-edit-header')) return;
       const textarea = event.target;
 
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'z') {
+      if ((event.metaKey || event.ctrlKey) && (event.key.toLowerCase() === 'z' || event.key.toLowerCase() === 'y')) {
         event.preventDefault();
         event.stopPropagation();
         closeInlineCssSurface();
@@ -3067,11 +3139,11 @@ function initializeDocument() {
           }
         }
 
-        if (event.shiftKey) {
-          if (!redoDocumentChange()) {
+        if (isRedoShortcut(event)) {
+          if (!performGlobalRedo()) {
             setStatus('Nothing to redo');
           }
-        } else if (!undoDocumentChange()) {
+        } else if (!performGlobalUndo()) {
           setStatus('Nothing to undo');
         }
         return;
@@ -3669,6 +3741,48 @@ function initializeDocument() {
   hideLoadingScreen();
   vscode.postMessage({ type: 'get-config' });
 
+  document.addEventListener('keydown', (event) => {
+    if (event.defaultPrevented) {
+      return;
+    }
+
+    const key = String(event.key || '').toLowerCase();
+    const isPrimaryModifier = event.metaKey || event.ctrlKey;
+
+    if (isPrimaryModifier && key === 'z' && !isTypingTarget(document.activeElement)) {
+      event.preventDefault();
+      event.stopPropagation();
+      if (typeof event.stopImmediatePropagation === 'function') {
+        event.stopImmediatePropagation();
+      }
+
+      commitOpenSourcesForHistory();
+
+      if (event.shiftKey) {
+        if (!performGlobalRedo()) {
+          setStatus('Nothing to redo');
+        }
+        return;
+      }
+
+      if (!performGlobalUndo()) {
+        setStatus('Nothing to undo');
+      }
+      return;
+    }
+
+    if (isPrimaryModifier && key === 's') {
+      event.preventDefault();
+      event.stopPropagation();
+      if (typeof event.stopImmediatePropagation === 'function') {
+        event.stopImmediatePropagation();
+      }
+
+      commitOpenSources();
+      saveDoc();
+    }
+  }, true);
+
   window.addEventListener('keydown', (event) => {
     if (event.defaultPrevented) {
       return;
@@ -3686,18 +3800,20 @@ function initializeDocument() {
       saveDoc();
     }
 
-    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'z' && !isTypingTarget(document.activeElement)) {
+    if ((event.metaKey || event.ctrlKey)
+      && (event.key.toLowerCase() === 'z' || event.key.toLowerCase() === 'y')
+      && !isTypingTarget(document.activeElement)) {
       event.preventDefault();
       commitOpenSourcesForHistory();
 
-      if (event.shiftKey) {
-        if (!redoDocumentChange()) {
+      if (isRedoShortcut(event)) {
+        if (!performGlobalRedo()) {
           setStatus('Nothing to redo');
         }
         return;
       }
 
-      if (!undoDocumentChange()) {
+      if (!performGlobalUndo()) {
         setStatus('Nothing to undo');
       }
       return;
@@ -3782,6 +3898,7 @@ function initializeDocument() {
         lastSavedDoc = incomingSource;
         transitionDocSaveState('SYNC_CLEAN');
         clearStatusPersistent();
+        hasDirtyWorkingCopySignal = false;
         tryApplyPendingExternalSource();
         return;
       }
@@ -3821,6 +3938,7 @@ function initializeDocument() {
       transitionDocSaveState('SAVE_COMPLETE');
   lastSaveErrorMessage = '';
       lastSavedDoc = stringifyDoc(docModel || { metadata: {}, blocks: [] });
+        hasDirtyWorkingCopySignal = false;
       setStatusPersistent('Saved', 'saved');
       setTimeout(() => {
         if (docSaveState === DOC_SAVE_STATES.SAVED) {

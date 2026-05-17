@@ -1,6 +1,8 @@
 import { readdir } from 'node:fs/promises';
 import path from 'node:path';
 
+import { listGitEligibleDxFiles } from './git-doc-state.js';
+
 const IGNORED_DIRECTORIES = new Set([
   '.git',
   '.github',
@@ -11,6 +13,7 @@ const IGNORED_DIRECTORIES = new Set([
 
 export async function findDocFiles(rootDir) {
   const results = [];
+  const gitEligible = listGitEligibleDxFiles(rootDir);
 
   async function walk(currentDir) {
     const entries = await readdir(currentDir, { withFileTypes: true });
@@ -28,6 +31,9 @@ export async function findDocFiles(rootDir) {
       }
 
       if (entry.isFile() && entry.name.endsWith('.dx')) {
+        if (gitEligible && !gitEligible.has(absolutePath)) {
+          continue;
+        }
         results.push(absolutePath);
       }
     }
