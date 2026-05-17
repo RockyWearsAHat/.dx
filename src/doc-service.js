@@ -88,7 +88,7 @@ async function writeDocStub(rootDir, absolutePath, archiveInfo = null) {
 
 async function persistDocumentArtifacts(rootDir, absolutePath, document) {
   const archiveInfo = await writeDocArchive(rootDir, absolutePath, document);
-  await writeDocStub(rootDir, absolutePath, archiveInfo);
+  await writeDocStub(rootDir, absolutePath, archiveInfo || null);
 
   const legacyCompanion = getLegacyCompanionArchivePath(absolutePath);
   try {
@@ -214,6 +214,24 @@ export async function saveDocumentSourceByRelativePath(rootDir, db, relativePath
   const documentId = upsertDocument(db, rootDir, parsed, Date.now());
   await persistDocumentArtifacts(rootDir, absolutePath, parsed);
   return toClientDocument(rootDir, getWorkspaceDocumentById(db, rootDir, documentId));
+}
+
+/**
+ * Saves document source text to SQLite and the binary archive, then returns
+ * the stub pointer text that should be written to the on-disk .dx file.
+ * The caller is responsible for writing the stub to disk; this function never
+ * touches the filesystem directly so there is no double-write race.
+ */
+export async function saveDocumentSourceToDbAndArchive(rootDir, db, relativePath, sourceText) {
+  const absolutePath = resolveDocumentPath(rootDir, relativePath);
+  const parsed = parseDocFile(absolutePath, String(sourceText || ''));
+  const documentId = upsertDocument(db, rootDir, parsed, Date.now());
+  const archiveInfo = await writeDocArchive(rootDir, absolutePath, parsed);
+  const stubText = buildDocStub(rootDir, absolutePath, archiveInfo || null);
+  return {
+    document: toClientDocument(rootDir, getWorkspaceDocumentById(db, rootDir, documentId)),
+    stubText,
+  };
 }
 
 export async function getDocument(rootDir, db, documentId) {

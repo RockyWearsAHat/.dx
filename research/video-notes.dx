@@ -4,6 +4,6 @@ artifact: .doc/.repo-docs.bin
 key: research/video-notes.dx
 archive: .doc/.repo-docs.bin
 codec: brotli-docbin-v1
-sha256: 69f6d04d61981cd7473f47d00f9617ff430c9b095c60e930c0a63c2403e7e224
+sha256: ce4f34248c922b0e69d2b01562d79f90f8f8ca1cc28039804aabe1170740c29c
 packed_bytes: 759
-archive_bytes: 368
+archive_bytes: undefined
