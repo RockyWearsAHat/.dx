@@ -4,6 +4,6 @@ artifact: .doc/.repo-docs.bin
 key: examples/id-test-1778863390562.dx
 archive: .doc/.repo-docs.bin
 codec: brotli-docbin-v1
-sha256: 9c07c6bab20d7f66f4d16d9be538c5019eca9a94b92811d90cdba60994751c1a
-packed_bytes: 50
-archive_bytes: 62
+sha256: 9c0845894ff6b17fb27408757a7db4f60aeb0a3cdb58b00bc7a638664020bf53
+packed_bytes: 84
+archive_bytes: 83

@@ -137,6 +137,9 @@ export function renderDocumentViewHtml(document, {
   appearance = null,
   effectiveCss = '',
 } = {}) {
+  // Blocks are expected to be pre-validated and canonical.
+  // The caller is responsible for parsing/validation upstream.
+  // This function renders them as-is without roundtrip validation.
   const title = String(document?.title || document?.relativePath || 'Untitled Document');
   const parsedBlocks = parseSourceBlocks(String(document?.source || ''));
   const blocks = parsedBlocks.length > 0
@@ -173,7 +176,7 @@ export function renderDocumentViewHtml(document, {
   <style>${documentCss}</style>
 </head>
 <body data-theme="${escapeHtml(theme)}" data-resolved-theme="${escapeHtml(resolvedTheme)}" data-paper="${escapeHtml(paper)}" data-density="${escapeHtml(density)}">
-  <main class="page" data-doc-path="${escapeHtml(document?.relativePath || '')}" data-edit-mode="true" data-ready="true">
+  <main class="page" data-doc-path="${escapeHtml(document?.relativePath || '')}" data-edit-mode="false" data-ready="true">
     <div id="blocks">${blocksMarkup}</div>
   </main>
   <style>:root{--editor-scale:${escapeHtml(String(scale / 100))};}</style>
