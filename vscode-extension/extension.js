@@ -540,10 +540,10 @@ function renderEditorHtml(relativePath, sourceText, errorText = '', initialTheme
   const initialMarkup = `
     <div class="page" data-edit-mode="true" data-ready="false" aria-busy="true">
       <div class="loading-screen" id="loading-screen">
-        <div class="loading-card" role="status" aria-live="polite">
-          <div class="loading-title">DOC</div>
-          <div class="loading-subtitle">Loading document</div>
+        <div class="loading-card" role="status" aria-live="polite" aria-label="Loading">
           <div class="loading-spinner" aria-hidden="true">
+            <div class="spinner-block"></div>
+            <div class="spinner-block"></div>
             <div class="spinner-block"></div>
           </div>
         </div>
@@ -802,13 +802,33 @@ class DocDbCustomEditorProvider {
 
     webviewPanel.webview.html = renderEditorHtml(relativePath, sourceText, loadError, initialTheme, webviewPanel.webview.cspSource, stylesUri, webviewUri);
 
+    let sourcePushTimer = null;
+    let suppressedEchoSource = null;
+
     const pushLatestSourceToWebview = async () => {
       try {
         const latestSource = await readVirtualDocument(relativePath);
+
+        if (suppressedEchoSource !== null && latestSource === suppressedEchoSource) {
+          suppressedEchoSource = null;
+          return;
+        }
+
         webviewPanel.webview.postMessage({ type: 'set-source', text: latestSource });
       } catch {
         // Ignore transient reload failures; next change or manual refresh can recover.
       }
+    };
+
+    const schedulePushLatestSourceToWebview = () => {
+      if (sourcePushTimer) {
+        clearTimeout(sourcePushTimer);
+      }
+
+      sourcePushTimer = setTimeout(() => {
+        sourcePushTimer = null;
+        void pushLatestSourceToWebview();
+      }, 90);
     };
 
     const matchesOpenDocument = (targetUri) => {
@@ -817,15 +837,19 @@ class DocDbCustomEditorProvider {
 
     const onSaved = vscode.workspace.onDidSaveTextDocument(async (savedDocument) => {
       if (!matchesOpenDocument(savedDocument?.uri)) return;
-      await pushLatestSourceToWebview();
+      schedulePushLatestSourceToWebview();
     });
 
     const onChanged = vscode.workspace.onDidChangeTextDocument(async (changeEvent) => {
       if (!matchesOpenDocument(changeEvent?.document?.uri)) return;
-      await pushLatestSourceToWebview();
+      schedulePushLatestSourceToWebview();
     });
 
     webviewPanel.onDidDispose(() => {
+      if (sourcePushTimer) {
+        clearTimeout(sourcePushTimer);
+        sourcePushTimer = null;
+      }
       onSaved.dispose();
       onChanged.dispose();
     });
@@ -892,11 +916,14 @@ class DocDbCustomEditorProvider {
       }
 
       try {
-        await writeVirtualDocument(relativePath, String(message.text || ''));
-        webviewPanel.webview.postMessage({ type: 'save-complete' });
+        const saveText = String(message.text || '');
+        const saveRequestId = Number(message.requestId || 0);
+        await writeVirtualDocument(relativePath, saveText);
+        suppressedEchoSource = saveText;
+        webviewPanel.webview.postMessage({ type: 'save-complete', requestId: saveRequestId });
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : 'Save failed.';
-        webviewPanel.webview.postMessage({ type: 'save-error', error: errorMsg });
+        webviewPanel.webview.postMessage({ type: 'save-error', requestId: Number(message.requestId || 0), error: errorMsg });
       }
     });
   }

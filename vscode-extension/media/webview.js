@@ -21,28 +21,460 @@ let inlineCssSurfaceState = {
   baseCssText: '',
   selectionStart: 0,
   selectionEnd: 0,
+  undoSeeded: false,
 };
 
 let blankPagePointerDownHadOpenEditors = false;
-let autosaveTimer = null;
-let docSaveState = 'idle'; // idle | dirty | saving | saved | error
+const DOC_VIEW_STATES = Object.freeze({
+  BOOTSTRAPPING: 'bootstrapping',
+  LOADING_READ: 'loading-read',
+  LOADING_EDIT: 'loading-edit',
+  READY_READ: 'ready-read',
+  READY_EDIT: 'ready-edit',
+  LOAD_ERROR: 'load-error',
+});
+
+const DOC_VIEW_TRANSITIONS = Object.freeze({
+  [DOC_VIEW_STATES.BOOTSTRAPPING]: {
+    START_READ: DOC_VIEW_STATES.LOADING_READ,
+    START_EDIT: DOC_VIEW_STATES.LOADING_EDIT,
+  },
+  [DOC_VIEW_STATES.LOADING_READ]: {
+    SET_EDIT: DOC_VIEW_STATES.LOADING_EDIT,
+    MARK_READY: DOC_VIEW_STATES.READY_READ,
+    MARK_FAILED: DOC_VIEW_STATES.LOAD_ERROR,
+  },
+  [DOC_VIEW_STATES.LOADING_EDIT]: {
+    SET_READ: DOC_VIEW_STATES.LOADING_READ,
+    MARK_READY: DOC_VIEW_STATES.READY_EDIT,
+    MARK_FAILED: DOC_VIEW_STATES.LOAD_ERROR,
+  },
+  [DOC_VIEW_STATES.READY_READ]: {
+    SET_EDIT: DOC_VIEW_STATES.READY_EDIT,
+    RELOAD_READ: DOC_VIEW_STATES.LOADING_READ,
+    RELOAD_EDIT: DOC_VIEW_STATES.LOADING_EDIT,
+    MARK_FAILED: DOC_VIEW_STATES.LOAD_ERROR,
+  },
+  [DOC_VIEW_STATES.READY_EDIT]: {
+    SET_READ: DOC_VIEW_STATES.READY_READ,
+    RELOAD_READ: DOC_VIEW_STATES.LOADING_READ,
+    RELOAD_EDIT: DOC_VIEW_STATES.LOADING_EDIT,
+    MARK_FAILED: DOC_VIEW_STATES.LOAD_ERROR,
+  },
+  [DOC_VIEW_STATES.LOAD_ERROR]: {
+    START_READ: DOC_VIEW_STATES.LOADING_READ,
+    START_EDIT: DOC_VIEW_STATES.LOADING_EDIT,
+  },
+});
+
+const DOC_SAVE_STATES = Object.freeze({
+  IDLE: 'idle',
+  DIRTY: 'dirty',
+  SAVING: 'saving',
+  SAVED: 'saved',
+  ERROR: 'error',
+});
+
+const DOC_SAVE_TRANSITIONS = Object.freeze({
+  [DOC_SAVE_STATES.IDLE]: {
+    MARK_DIRTY: DOC_SAVE_STATES.DIRTY,
+    START_SAVE: DOC_SAVE_STATES.SAVING,
+    SYNC_CLEAN: DOC_SAVE_STATES.IDLE,
+  },
+  [DOC_SAVE_STATES.DIRTY]: {
+    MARK_DIRTY: DOC_SAVE_STATES.DIRTY,
+    START_SAVE: DOC_SAVE_STATES.SAVING,
+    SYNC_CLEAN: DOC_SAVE_STATES.IDLE,
+  },
+  [DOC_SAVE_STATES.SAVING]: {
+    MARK_DIRTY: DOC_SAVE_STATES.DIRTY,
+    SAVE_COMPLETE: DOC_SAVE_STATES.SAVED,
+    SAVE_FAILED: DOC_SAVE_STATES.ERROR,
+  },
+  [DOC_SAVE_STATES.SAVED]: {
+    MARK_DIRTY: DOC_SAVE_STATES.DIRTY,
+    START_SAVE: DOC_SAVE_STATES.SAVING,
+    CLEAR_SAVED: DOC_SAVE_STATES.IDLE,
+    SYNC_CLEAN: DOC_SAVE_STATES.IDLE,
+  },
+  [DOC_SAVE_STATES.ERROR]: {
+    MARK_DIRTY: DOC_SAVE_STATES.DIRTY,
+    START_SAVE: DOC_SAVE_STATES.SAVING,
+    SYNC_CLEAN: DOC_SAVE_STATES.IDLE,
+  },
+});
+
+let docViewState = DOC_VIEW_STATES.BOOTSTRAPPING;
+let docSaveState = DOC_SAVE_STATES.IDLE;
 let lastSavedDoc = '';
+let lastSaveErrorMessage = '';
+let inFlightSaveRequestId = 0;
+let nextSaveRequestId = 1;
+let pendingExternalSource = null;
+const FSM_HISTORY_LIMIT = 32;
+let fsmHistory = [];
+let suppressFsmHistory = false;
+const DOC_HISTORY_LIMIT = 120;
+const DOC_EDITOR_UNDO_ACTIONS = new Set([
+  'live-edit',
+  'block-live-edit',
+  'header-live-edit',
+  'header-delete-join',
+]);
+let docUndoStack = [];
+let docRedoStack = [];
+let isApplyingDocHistory = false;
+
+function captureFsmSnapshot() {
+  return {
+    docViewState,
+    docSaveState,
+    pendingExternalSource,
+    inFlightSaveRequestId,
+    lastSavedDoc,
+    lastSaveErrorMessage,
+  };
+}
+
+function pushFsmHistory(entry) {
+  if (suppressFsmHistory) {
+    return;
+  }
+
+  fsmHistory.push({
+    ts: new Date().toISOString(),
+    ...entry,
+  });
+
+  if (fsmHistory.length > FSM_HISTORY_LIMIT) {
+    fsmHistory = fsmHistory.slice(-FSM_HISTORY_LIMIT);
+  }
+}
+
+function restoreFsmSnapshot(snapshot) {
+  if (!snapshot || typeof snapshot !== 'object') {
+    return false;
+  }
+
+  suppressFsmHistory = true;
+  try {
+    docViewState = snapshot.docViewState || DOC_VIEW_STATES.BOOTSTRAPPING;
+    docSaveState = snapshot.docSaveState || DOC_SAVE_STATES.IDLE;
+    pendingExternalSource = typeof snapshot.pendingExternalSource === 'string' ? snapshot.pendingExternalSource : null;
+    inFlightSaveRequestId = Number(snapshot.inFlightSaveRequestId || 0);
+    lastSavedDoc = String(snapshot.lastSavedDoc || '');
+    lastSaveErrorMessage = String(snapshot.lastSaveErrorMessage || '');
+    updateRuntimeStateAttributes();
+    syncVisibleStateFromMachine();
+  } finally {
+    suppressFsmHistory = false;
+  }
+
+  return true;
+}
+
+function undoLastFsmTransition() {
+  if (fsmHistory.length === 0) {
+    return false;
+  }
+
+  const lastEntry = fsmHistory.pop();
+  if (!lastEntry || !lastEntry.before) {
+    return false;
+  }
+
+  return restoreFsmSnapshot(lastEntry.before);
+}
+
+function syncVisibleStateFromMachine() {
+  const toggle = document.getElementById('ui-chrome-edit-toggle');
+  const modePill = document.getElementById('mode-pill');
+
+  const editEnabled = isEditModeState(docViewState);
+
+  if (toggle) {
+    toggle.setAttribute('aria-pressed', editEnabled ? 'true' : 'false');
+  }
+
+  if (modePill) {
+    modePill.dataset.mode = editEnabled ? 'edit' : 'read';
+    modePill.textContent = editEnabled ? 'Editing' : 'Read only';
+  }
+
+  if (docSaveState === DOC_SAVE_STATES.IDLE) {
+    clearStatusPersistent();
+  } else if (docSaveState === DOC_SAVE_STATES.DIRTY) {
+    setStatusPersistent('Unsaved changes', 'dirty');
+  } else if (docSaveState === DOC_SAVE_STATES.SAVING) {
+    setStatusPersistent('Saving…', 'saving');
+  } else if (docSaveState === DOC_SAVE_STATES.SAVED) {
+    setStatusPersistent('Saved', 'saved');
+  } else if (docSaveState === DOC_SAVE_STATES.ERROR) {
+    setStatusPersistent(lastSaveErrorMessage || 'Save failed', 'error');
+  }
+}
+
+function cloneDocModel(model) {
+  return JSON.parse(JSON.stringify(model || { blocks: [] }));
+}
+
+function resetDocumentHistory() {
+  docUndoStack = [];
+  docRedoStack = [];
+}
+
+function markDocumentDirty() {
+  transitionDocSaveState('MARK_DIRTY');
+  setStatusPersistent('Unsaved changes', 'dirty');
+}
+
+function syncDocumentSaveStateFromModel() {
+  const isDirty = currentDocSourceText() !== lastSavedDoc;
+
+  if (isDirty) {
+    transitionDocSaveState('MARK_DIRTY');
+    setStatusPersistent('Unsaved changes', 'dirty');
+    return;
+  }
+
+  transitionDocSaveState('SYNC_CLEAN');
+  clearStatusPersistent();
+}
+
+function recordDocumentUndo(action = 'edit') {
+  if (!docModel || isApplyingDocHistory) {
+    return;
+  }
+
+  docUndoStack.push({
+    action: String(action || 'edit'),
+    at: new Date().toISOString(),
+    snapshot: cloneDocModel(docModel),
+  });
+
+  if (docUndoStack.length > DOC_HISTORY_LIMIT) {
+    docUndoStack = docUndoStack.slice(-DOC_HISTORY_LIMIT);
+  }
+
+  docRedoStack = [];
+}
+
+function ensureDocumentUndoSeed(source, action = 'live-edit') {
+  if (!source) {
+    return;
+  }
+
+  if (source.dataset.undoSeeded === '1') {
+    return;
+  }
+
+  recordDocumentUndo(action);
+  source.dataset.undoSeeded = '1';
+  source.dataset.undoSeedAction = String(action || 'live-edit');
+  source.dataset.undoSeedDepth = String(docUndoStack.length);
+}
+
+function clearDocumentUndoSeed(source, options = {}) {
+  if (!source) {
+    return;
+  }
+
+  const discardIfNoop = Boolean(options.discardIfNoop);
+  const hasSeededUndo = source.dataset.undoSeeded === '1';
+  const seedAction = String(source.dataset.undoSeedAction || '');
+  const seedDepth = Number.parseInt(source.dataset.undoSeedDepth || '', 10);
+
+  if (
+    discardIfNoop
+    && hasSeededUndo
+    && Number.isInteger(seedDepth)
+    && seedDepth === docUndoStack.length
+    && docUndoStack.length > 0
+    && DOC_EDITOR_UNDO_ACTIONS.has(seedAction)
+  ) {
+    const lastEntry = docUndoStack[docUndoStack.length - 1];
+    if (lastEntry && String(lastEntry.action || '') === seedAction) {
+      docUndoStack.pop();
+    }
+  }
+
+  source.dataset.undoSeeded = '0';
+  source.dataset.undoSeedAction = '';
+  source.dataset.undoSeedDepth = '';
+}
+
+function applyDocumentHistorySnapshot(entry, mode) {
+  if (!entry || !entry.snapshot) {
+    return false;
+  }
+
+  isApplyingDocHistory = true;
+  try {
+    docModel = cloneDocModel(entry.snapshot);
+    renderDocument();
+    syncDocumentSaveStateFromModel();
+    setStatus(mode === 'redo' ? 'Redid change' : 'Undid change');
+  } finally {
+    isApplyingDocHistory = false;
+  }
+
+  return true;
+}
+
+function undoDocumentChange() {
+  if (!docModel || docUndoStack.length === 0) {
+    return false;
+  }
+
+  docRedoStack.push({
+    action: 'redo-anchor',
+    at: new Date().toISOString(),
+    snapshot: cloneDocModel(docModel),
+  });
+
+  const previous = docUndoStack.pop();
+  return applyDocumentHistorySnapshot(previous, 'undo');
+}
+
+function redoDocumentChange() {
+  if (!docModel || docRedoStack.length === 0) {
+    return false;
+  }
+
+  docUndoStack.push({
+    action: 'undo-anchor',
+    at: new Date().toISOString(),
+    snapshot: cloneDocModel(docModel),
+  });
+
+  const next = docRedoStack.pop();
+  return applyDocumentHistorySnapshot(next, 'redo');
+}
+
+function resolveTransition(table, currentState, event, machineName) {
+  const nextState = table[currentState] ? table[currentState][event] : undefined;
+
+  if (!nextState) {
+    console.warn('[fsm] invalid transition', {
+      machine: machineName,
+      currentState,
+      event,
+    });
+    return null;
+  }
+
+  return nextState;
+}
+
+function isEditModeState(state) {
+  return state === DOC_VIEW_STATES.LOADING_EDIT || state === DOC_VIEW_STATES.READY_EDIT;
+}
+
+function isReadyViewState(state) {
+  return state === DOC_VIEW_STATES.READY_EDIT || state === DOC_VIEW_STATES.READY_READ;
+}
+
+function updateRuntimeStateAttributes() {
+  const page = document.querySelector('.page');
+  if (!page) {
+    return;
+  }
+
+  const editEnabled = isEditModeState(docViewState);
+  const isReady = isReadyViewState(docViewState);
+
+  page.dataset.editMode = editEnabled ? 'true' : 'false';
+  page.dataset.ready = isReady ? 'true' : 'false';
+  page.dataset.fsmDocState = docViewState;
+  page.dataset.fsmSaveState = docSaveState;
+  page.setAttribute('aria-busy', isReady ? 'false' : 'true');
+}
+
+function transitionDocViewState(event) {
+  const nextState = resolveTransition(DOC_VIEW_TRANSITIONS, docViewState, event, 'doc-view');
+  if (!nextState) {
+    return false;
+  }
+
+  const before = captureFsmSnapshot();
+  docViewState = nextState;
+  updateRuntimeStateAttributes();
+  pushFsmHistory({
+    machine: 'doc-view',
+    event,
+    before,
+    after: captureFsmSnapshot(),
+  });
+  return true;
+}
+
+function transitionDocSaveState(event) {
+  const nextState = resolveTransition(DOC_SAVE_TRANSITIONS, docSaveState, event, 'doc-save');
+  if (!nextState) {
+    return false;
+  }
+
+  const before = captureFsmSnapshot();
+  docSaveState = nextState;
+  updateRuntimeStateAttributes();
+  pushFsmHistory({
+    machine: 'doc-save',
+    event,
+    before,
+    after: captureFsmSnapshot(),
+  });
+  return true;
+}
+
+function currentDocSourceText() {
+  if (!docModel) {
+    return '';
+  }
+
+  return stringifyDoc(docModel);
+}
+
+function canApplyExternalSourceNow() {
+  return !hasActiveEditingSurface()
+    && docSaveState !== DOC_SAVE_STATES.SAVING
+    && docSaveState !== DOC_SAVE_STATES.DIRTY;
+}
+
+function applyIncomingSourceText(sourceText) {
+  docModel = parseDoc(sourceText || '');
+  resetDocumentHistory();
+  lastSavedDoc = String(sourceText || '');
+  pendingExternalSource = null;
+  transitionDocSaveState('SYNC_CLEAN');
+  renderDocument();
+  clearStatusPersistent();
+  setStatus('Refreshed');
+}
+
+function tryApplyPendingExternalSource() {
+  if (pendingExternalSource === null) {
+    return;
+  }
+
+  if (!canApplyExternalSourceNow()) {
+    return;
+  }
+
+  applyIncomingSourceText(pendingExternalSource);
+}
+
+function startSaveRequest(sourceText) {
+  const requestId = nextSaveRequestId;
+  nextSaveRequestId += 1;
+  inFlightSaveRequestId = requestId;
+
+  transitionDocSaveState('START_SAVE');
+  setStatusPersistent('Saving…', 'saving');
+  vscode.postMessage({ type: 'save', text: sourceText, requestId });
+}
 
 function debouncedAutosave() {
-  if (autosaveTimer) {
-    clearTimeout(autosaveTimer);
-  }
-  
-  if (docSaveState !== 'idle') {
-    docSaveState = 'dirty';
-  } else {
-    docSaveState = 'dirty';
-    setStatusPersistent('Unsaved changes', 'dirty');
-  }
-  
-  autosaveTimer = setTimeout(() => {
-    saveDocAuto();
-  }, 200);
+  markDocumentDirty();
 }
 
 function hasActiveEditingSurface() {
@@ -234,6 +666,16 @@ function publishViewState(effectiveCss) {
       docPath: currentDocPath,
       theme: currentTheme,
       resolvedTheme,
+      fsm: {
+        documentState: docViewState,
+        saveState: docSaveState,
+        historyLength: fsmHistory.length,
+        lastTransition: fsmHistory.length > 0 ? fsmHistory[fsmHistory.length - 1] : null,
+      },
+      documentHistory: {
+        undoDepth: docUndoStack.length,
+        redoDepth: docRedoStack.length,
+      },
       sourceText,
       appearance: {
         paper: currentAppearance.paper,
@@ -1494,8 +1936,13 @@ function ensureInlineCssSurface(source) {
       autosizeInlineCssEditor(editor);
       const scopedCss = getScopedCssForSelector(cssText, inlineCssSurfaceState.selector);
       if (applyCustomCss(scopedCss)) {
+        if (!inlineCssSurfaceState.undoSeeded) {
+          recordDocumentUndo('inline-css-edit');
+          inlineCssSurfaceState.undoSeeded = true;
+        }
         upsertCssBlock(cssText);
         inlineCssSurfaceState.baseCssText = cssText;
+        markDocumentDirty();
         publishViewState(scopedCss);
       }
     });
@@ -1553,6 +2000,7 @@ function closeInlineCssSurface(restoreFocus) {
     baseCssText: '',
     selectionStart: 0,
     selectionEnd: 0,
+    undoSeeded: false,
   };
 
   applyCustomCss('');
@@ -1604,6 +2052,7 @@ function openInlineCssSurface(source, selector) {
     baseCssText: cssText,
     selectionStart: typeof source.selectionStart === 'number' ? source.selectionStart : source.value.length,
     selectionEnd: typeof source.selectionEnd === 'number' ? source.selectionEnd : source.value.length,
+    undoSeeded: false,
   };
 
   applyCustomCss(scopedCss);
@@ -1635,9 +2084,40 @@ function closeBlockSrc(index, commitChanges) {
   }
 
   closeInlineCssSurface();
+  clearDocumentUndoSeed(source, { discardIfNoop: true });
   clearEditableBodyPresentation(wrap);
   srcWrap.style.display = 'none';
   view.style.display = '';
+}
+
+function hasPendingBlockSourceChanges(source) {
+  if (!source) {
+    return false;
+  }
+
+  const originalSource = source.dataset.originalSource || '';
+  const nextSource = buildRawSourceFromEditorParts(
+    getHeaderSourceFromEditor(source),
+    getRawSourceFromEditor(source.value),
+    source.dataset.footerSource || '',
+  );
+
+  return nextSource !== originalSource;
+}
+
+function commitBlockSourceForHistory(index) {
+  const wrap = document.querySelector('.block-wrap[data-block-index="' + index + '"]');
+  if (!wrap) {
+    return;
+  }
+
+  const source = wrap.querySelector('.block-src');
+  if (hasPendingBlockSourceChanges(source)) {
+    commitBlockSrc(index);
+    return;
+  }
+
+  closeBlockSrc(index, false);
 }
 
 function commitOpenSources(exceptIndex) {
@@ -1654,6 +2134,26 @@ function commitOpenSources(exceptIndex) {
   for (const index of indices) {
     commitBlockSrc(index);
   }
+
+  tryApplyPendingExternalSource();
+}
+
+function commitOpenSourcesForHistory(exceptIndex) {
+  const openWraps = Array.from(document.querySelectorAll('.block-wrap .block-src-wrapper'))
+    .filter((node) => node.style.display === 'block')
+    .map((node) => node.closest('.block-wrap'))
+    .filter(Boolean);
+
+  const indices = openWraps
+    .map((wrap) => Number.parseInt(wrap.dataset.blockIndex, 10))
+    .filter((value) => !Number.isNaN(value) && value !== exceptIndex)
+    .sort((a, b) => b - a);
+
+  for (const index of indices) {
+    commitBlockSourceForHistory(index);
+  }
+
+  tryApplyPendingExternalSource();
 }
 
 function hasOpenBlockSources() {
@@ -1709,6 +2209,9 @@ function openBlockSrc(index) {
   source.dataset.originalSource = rawSource;
   source.dataset.headerSource = editorParts.headerSource;
   source.dataset.footerSource = editorParts.footerSource;
+  source.dataset.undoSeeded = '0';
+  source.dataset.undoSeedAction = '';
+  source.dataset.undoSeedDepth = '';
   applyEditableBodyPresentation(wrap, block);
   view.style.display = 'none';
   srcWrap.style.display = 'block';
@@ -1737,9 +2240,15 @@ function commitBlockSrc(index) {
   );
   const parsed = parseBlock(nextSource);
   parsed.rawSource = nextSource;
+  const sourceChanged = nextSource !== originalSource;
+  const hasSeededUndo = source.dataset.undoSeeded === '1';
 
   if (parsed.type === 'paragraph' && !String(parsed.text || '').trim()) {
+    if (sourceChanged && !hasSeededUndo) {
+      recordDocumentUndo('commit-block-source');
+    }
     docModel.blocks.splice(index, 1);
+    clearDocumentUndoSeed(source, { discardIfNoop: !sourceChanged });
     renderDocument();
     setStatus('Block removed');
     debouncedAutosave();
@@ -1749,6 +2258,7 @@ function commitBlockSrc(index) {
   if (!KNOWN_BLOCK_TYPES.has(parsed.type)) {
     if (!originalSource) {
       docModel.blocks.splice(index, 1);
+      clearDocumentUndoSeed(source, { discardIfNoop: !sourceChanged });
       renderDocument();
       return;
     }
@@ -1760,8 +2270,13 @@ function commitBlockSrc(index) {
     clearEditableBodyPresentation(wrap);
     srcWrap.style.display = 'none';
     view.style.display = '';
+    clearDocumentUndoSeed(source, { discardIfNoop: true });
     setStatus('Reverted — unknown block type');
     return;
+  }
+
+  if (sourceChanged && !hasSeededUndo) {
+    recordDocumentUndo('commit-block-source');
   }
 
   docModel.blocks[index] = parsed;
@@ -1771,6 +2286,7 @@ function commitBlockSrc(index) {
   srcWrap.style.display = 'none';
   view.style.display = '';
   refreshDocumentCss();
+  clearDocumentUndoSeed(source, { discardIfNoop: !sourceChanged });
   setStatus('Unsaved changes');
   debouncedAutosave();
 }
@@ -1797,32 +2313,19 @@ function renderDocument() {
 function saveDoc() {
   if (!docModel) return;
   commitOpenSources();
-  docSaveState = 'saving';
-  setStatusPersistent('Saving…', 'saving');
-  vscode.postMessage({ type: 'save', text: stringifyDoc(docModel) });
-}
 
-function saveDocAuto() {
-  if (!docModel) return;
-
-  // Never close or commit an active editor just to autosave.
-  if (hasActiveEditingSurface()) {
-    docSaveState = 'dirty';
-    setStatusPersistent('Unsaved changes', 'dirty');
-    return;
-  }
-
-  const currentDoc = stringifyDoc(docModel);
-  
+  const currentDoc = currentDocSourceText();
   if (currentDoc === lastSavedDoc) {
-    docSaveState = 'idle';
+    transitionDocSaveState('SYNC_CLEAN');
     clearStatusPersistent();
     return;
   }
-  
-  docSaveState = 'saving';
-  setStatusPersistent('Saving…', 'saving');
-  vscode.postMessage({ type: 'save', text: currentDoc });
+
+  startSaveRequest(currentDoc);
+}
+
+function saveDocAuto() {
+  // Autosave intentionally disabled. Persistence happens only on explicit Cmd/Ctrl+S.
 }
 
 function getInsertIndexForY(container, clientY) {
@@ -1842,6 +2345,8 @@ function getInsertIndexForY(container, clientY) {
 function insertParagraphBlock(index) {
   if (!docModel || !Array.isArray(docModel.blocks)) return;
 
+  recordDocumentUndo('insert-paragraph');
+
   const next = {
     type: 'paragraph',
     text: '',
@@ -1851,6 +2356,7 @@ function insertParagraphBlock(index) {
   const safeIndex = Math.max(0, Math.min(index, docModel.blocks.length));
   docModel.blocks.splice(safeIndex, 0, next);
   renderDocument();
+  markDocumentDirty();
   setStatus('New block');
 
   requestAnimationFrame(() => {
@@ -2022,8 +2528,7 @@ function toggleHelp() {
 }
 
 function isEditModeEnabled() {
-  const page = document.querySelector('.page');
-  return Boolean(page && page.dataset.editMode === 'true');
+  return isEditModeState(docViewState);
 }
 
 function loadEditModePreference() {
@@ -2044,24 +2549,29 @@ function persistEditModePreference(enabled) {
 }
 
 function setEditMode(enabled) {
-  const page = document.querySelector('.page');
   const toggle = document.getElementById('ui-chrome-edit-toggle');
   const modePill = document.getElementById('mode-pill');
-  
-  if (page) {
-    page.dataset.editMode = enabled ? 'true' : 'false';
+
+  const transitioned = enabled
+    ? transitionDocViewState('SET_EDIT')
+    : transitionDocViewState('SET_READ');
+
+  if (!transitioned && (docViewState === DOC_VIEW_STATES.BOOTSTRAPPING || docViewState === DOC_VIEW_STATES.LOAD_ERROR)) {
+    transitionDocViewState(enabled ? 'START_EDIT' : 'START_READ');
   }
+
+  const editEnabled = isEditModeState(docViewState);
   
   if (toggle) {
-    toggle.setAttribute('aria-pressed', enabled ? 'true' : 'false');
+    toggle.setAttribute('aria-pressed', editEnabled ? 'true' : 'false');
   }
 
   if (modePill) {
-    modePill.dataset.mode = enabled ? 'edit' : 'read';
-    modePill.textContent = enabled ? 'Editing' : 'Read only';
+    modePill.dataset.mode = editEnabled ? 'edit' : 'read';
+    modePill.textContent = editEnabled ? 'Editing' : 'Read only';
   }
 
-  persistEditModePreference(enabled);
+  persistEditModePreference(editEnabled);
 }
 
 function getFocusedBlockIndex() {
@@ -2164,6 +2674,16 @@ function captureSurfaceSnapshot(options = {}) {
     theme: currentTheme,
     resolvedTheme: document.body.dataset.resolvedTheme || 'light',
     editMode: isEditModeEnabled(),
+    fsm: {
+      documentState: docViewState,
+      saveState: docSaveState,
+      historyLength: fsmHistory.length,
+      lastTransition: fsmHistory.length > 0 ? fsmHistory[fsmHistory.length - 1] : null,
+    },
+    documentHistory: {
+      undoDepth: docUndoStack.length,
+      redoDepth: docRedoStack.length,
+    },
     viewport: {
       width: window.innerWidth,
       height: window.innerHeight,
@@ -2247,6 +2767,20 @@ async function runSurfaceAction(payload = {}) {
       throw new Error('A valid block index is required.');
     }
     closeBlockSrc(index, payload.commit !== false);
+  } else if (action === 'undoState') {
+    if (!undoLastFsmTransition()) {
+      throw new Error('No FSM transition available to undo.');
+    }
+  } else if (action === 'undoDocument') {
+    commitOpenSourcesForHistory();
+    if (!undoDocumentChange()) {
+      throw new Error('No document edit available to undo.');
+    }
+  } else if (action === 'redoDocument') {
+    commitOpenSourcesForHistory();
+    if (!redoDocumentChange()) {
+      throw new Error('No document edit available to redo.');
+    }
   } else {
     throw new Error(`Unknown surface action: ${action}`);
   }
@@ -2256,9 +2790,7 @@ async function runSurfaceAction(payload = {}) {
 }
 
 function toggleEditMode() {
-  const page = document.querySelector('.page');
-  if (!page) return;
-  const isEnabled = page.dataset.editMode === 'true';
+  const isEnabled = isEditModeEnabled();
   const nextEnabled = !isEnabled;
 
   if (!nextEnabled) {
@@ -2269,32 +2801,29 @@ function toggleEditMode() {
 
   setEditMode(nextEnabled);
   setStatus(nextEnabled ? 'Edit mode on' : 'Edit mode off');
+  tryApplyPendingExternalSource();
 }
 
 function hideLoadingScreen() {
-  const page = document.querySelector('.page');
   const loadingScreen = document.getElementById('loading-screen');
 
-  if (page) {
-    page.dataset.ready = 'true';
-    page.setAttribute('aria-busy', 'false');
-  }
+  transitionDocViewState('MARK_READY');
 
   if (loadingScreen) {
-    requestAnimationFrame(() => {
-      loadingScreen.dataset.hidden = 'true';
-      const removeLoading = () => {
-        loadingScreen.style.display = 'none';
-      };
+    loadingScreen.dataset.hidden = 'true';
+    const removeLoading = () => {
+      loadingScreen.style.display = 'none';
+    };
 
-      loadingScreen.addEventListener('transitionend', removeLoading, { once: true });
-      setTimeout(removeLoading, 220);
-    });
+    loadingScreen.addEventListener('transitionend', removeLoading, { once: true });
+    setTimeout(removeLoading, 220);
   }
 }
 
 function insertImageBlock(imagePath, altText) {
   if (!docModel) return;
+
+  recordDocumentUndo('insert-image');
 
   const block = {
     type: 'image',
@@ -2305,6 +2834,7 @@ function insertImageBlock(imagePath, altText) {
   block.rawSource = stringifyBlock(block);
   docModel.blocks.push(block);
   renderDocument();
+  markDocumentDirty();
   setStatus('Image added');
 }
 
@@ -2524,6 +3054,29 @@ function initializeDocument() {
       if (!event.target.classList.contains('block-src') && !event.target.classList.contains('block-edit-header')) return;
       const textarea = event.target;
 
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'z') {
+        event.preventDefault();
+        event.stopPropagation();
+        closeInlineCssSurface();
+
+        const wrap = textarea.closest('.block-wrap');
+        if (wrap) {
+          const index = Number.parseInt(wrap.dataset.blockIndex, 10);
+          if (!Number.isNaN(index)) {
+            commitBlockSourceForHistory(index);
+          }
+        }
+
+        if (event.shiftKey) {
+          if (!redoDocumentChange()) {
+            setStatus('Nothing to redo');
+          }
+        } else if (!undoDocumentChange()) {
+          setStatus('Nothing to undo');
+        }
+        return;
+      }
+
       if (textarea.classList.contains('block-edit-header')) {
         const srcWrap = textarea.closest('.block-src-wrapper');
         const bodyEditor = srcWrap ? srcWrap.querySelector('.block-src') : null;
@@ -2531,6 +3084,13 @@ function initializeDocument() {
         if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') {
           event.preventDefault();
           event.stopPropagation();
+          const wrap = textarea.closest('.block-wrap');
+          if (wrap) {
+            const index = Number.parseInt(wrap.dataset.blockIndex, 10);
+            if (!Number.isNaN(index)) {
+              commitBlockSrc(index);
+            }
+          }
           saveDoc();
         }
 
@@ -2568,6 +3128,7 @@ function initializeDocument() {
             if (bodyValue.length > 0) {
               event.preventDefault();
               event.stopPropagation();
+              ensureDocumentUndoSeed(bodyEditor, 'header-delete-join');
               bodyEditor.value = bodyValue.slice(1);
               autosizeBlockSrc(bodyEditor);
               updateInlineCssAffordance(textarea);
@@ -2731,6 +3292,13 @@ function initializeDocument() {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') {
         event.preventDefault();
         event.stopPropagation();
+        const wrap = textarea.closest('.block-wrap');
+        if (wrap) {
+          const index = Number.parseInt(wrap.dataset.blockIndex, 10);
+          if (!Number.isNaN(index)) {
+            commitBlockSrc(index);
+          }
+        }
         saveDoc();
       }
     });
@@ -2740,6 +3308,7 @@ function initializeDocument() {
         const header = event.target;
         const srcWrap = header.closest('.block-src-wrapper');
         const source = srcWrap ? srcWrap.querySelector('.block-src') : null;
+        ensureDocumentUndoSeed(source, 'header-live-edit');
         if (source) {
           source.dataset.headerSource = getRawSourceFromEditor(header.value);
         }
@@ -2754,6 +3323,7 @@ function initializeDocument() {
 
       // Seamless "one-part" editing: if a blank block starts with ':', transition that line into header mode.
       const source = event.target;
+      ensureDocumentUndoSeed(source, 'block-live-edit');
       const headerEditor = getBlockHeaderEditor(source);
       const hasHeader = Boolean(String(source.dataset.headerSource || '').trim());
       const bodyText = String(source.value || '');
@@ -2952,11 +3522,7 @@ function initializeDocument() {
         return;
       }
 
-      // Get edit mode state
-      const page = document.querySelector('.page');
-      const isEditMode = page && page.dataset.editMode === 'true';
-      
-      if (!isEditMode) {
+      if (!isEditModeEnabled()) {
         return;
       }
 
@@ -3098,7 +3664,7 @@ function initializeDocument() {
   refreshDocumentCss();
   setControlsOpen(false);
   setHelpOpen(false);
-  setEditMode(true);
+  setEditMode(loadEditModePreference());
   wireDragAndDrop();
   hideLoadingScreen();
   vscode.postMessage({ type: 'get-config' });
@@ -3116,7 +3682,25 @@ function initializeDocument() {
 
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') {
       event.preventDefault();
+      commitOpenSources();
       saveDoc();
+    }
+
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'z' && !isTypingTarget(document.activeElement)) {
+      event.preventDefault();
+      commitOpenSourcesForHistory();
+
+      if (event.shiftKey) {
+        if (!redoDocumentChange()) {
+          setStatus('Nothing to redo');
+        }
+        return;
+      }
+
+      if (!undoDocumentChange()) {
+        setStatus('Nothing to undo');
+      }
+      return;
     }
 
     if (event.key === 'Tab' && !isTypingTarget(document.activeElement)) {
@@ -3191,10 +3775,24 @@ function initializeDocument() {
     }
 
     if (msg.type === 'set-source') {
-      docModel = parseDoc(msg.text || '');
-      lastSavedDoc = msg.text || '';
-      renderDocument();
-      setStatus('Refreshed');
+      const incomingSource = String(msg.text || '');
+      const activeSource = currentDocSourceText();
+
+      if (incomingSource === activeSource) {
+        lastSavedDoc = incomingSource;
+        transitionDocSaveState('SYNC_CLEAN');
+        clearStatusPersistent();
+        tryApplyPendingExternalSource();
+        return;
+      }
+
+      if (!canApplyExternalSourceNow()) {
+        pendingExternalSource = incomingSource;
+        setStatusPersistent('External update pending… finish edits to sync', 'dirty');
+        return;
+      }
+
+      applyIncomingSourceText(incomingSource);
       return;
     }
 
@@ -3208,21 +3806,42 @@ function initializeDocument() {
     }
 
     if (msg.type === 'save-complete') {
-      docSaveState = 'saved';
+      const requestId = Number(msg.requestId || 0);
+      if (requestId > 0 && requestId !== inFlightSaveRequestId) {
+        return;
+      }
+
+      inFlightSaveRequestId = 0;
+
+      if (docSaveState === DOC_SAVE_STATES.DIRTY) {
+        setStatusPersistent('Unsaved changes', 'dirty');
+        return;
+      }
+
+      transitionDocSaveState('SAVE_COMPLETE');
+  lastSaveErrorMessage = '';
       lastSavedDoc = stringifyDoc(docModel || { metadata: {}, blocks: [] });
       setStatusPersistent('Saved', 'saved');
       setTimeout(() => {
-        if (docSaveState === 'saved') {
-          docSaveState = 'idle';
+        if (docSaveState === DOC_SAVE_STATES.SAVED) {
+          transitionDocSaveState('CLEAR_SAVED');
           clearStatusPersistent();
+          tryApplyPendingExternalSource();
         }
       }, 1600);
       return;
     }
 
     if (msg.type === 'save-error') {
-      docSaveState = 'error';
-      setStatusPersistent('Save failed: ' + (msg.error || 'unknown error'), 'error');
+      const requestId = Number(msg.requestId || 0);
+      if (requestId > 0 && requestId !== inFlightSaveRequestId) {
+        return;
+      }
+
+      inFlightSaveRequestId = 0;
+      lastSaveErrorMessage = String(msg.error || 'unknown save error');
+      transitionDocSaveState('SAVE_FAILED');
+      setStatusPersistent('Save failed: ' + lastSaveErrorMessage, 'error');
       return;
     }
   });

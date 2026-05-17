@@ -174,7 +174,7 @@ const TOOLS = [
         sessionId: { type: 'string', description: 'Viewer session id returned by open-document-viewer' },
         action: {
           type: 'string',
-          enum: ['inspect', 'click-block', 'scroll-to', 'set-block-text', 'append-paragraph', 'save'],
+          enum: ['inspect', 'click-block', 'scroll-to', 'set-block-text', 'append-paragraph', 'save', 'undo-state', 'redo-state', 'undo-document', 'redo-document'],
           description: 'Interaction action to apply',
         },
         index: { type: 'number', description: 'Block index for click/set/scroll actions' },
@@ -220,7 +220,7 @@ const TOOLS = [
             properties: {
               action: {
                 type: 'string',
-                enum: ['inspect', 'click-block', 'scroll-to', 'set-block-text', 'append-paragraph', 'save'],
+                enum: ['inspect', 'click-block', 'scroll-to', 'set-block-text', 'append-paragraph', 'save', 'undo-state', 'redo-state', 'undo-document', 'redo-document'],
               },
               index: { type: 'number' },
               text: { type: 'string' },
@@ -270,6 +270,8 @@ function toBlockPreview(block) {
 function buildViewerState(session) {
   const document = session.document;
   const blocks = Array.isArray(document?.blocks) ? document.blocks : [];
+  const historyDepth = Array.isArray(session.history) ? session.history.length : 0;
+  const redoDepth = Array.isArray(session.future) ? session.future.length : 0;
 
   return {
     sessionId: session.sessionId,
@@ -283,6 +285,9 @@ function buildViewerState(session) {
       uri: `docview:///${document.relativePath}`,
       activeBlockIndex: session.activeBlockIndex,
       scrollTop: session.scrollTop,
+      saveState: session.isDirty ? 'dirty' : 'clean',
+      historyDepth,
+      redoDepth,
       blockCount: blocks.length,
       blocks: blocks.map((block, index) => ({
         index,
@@ -346,6 +351,116 @@ async function captureRendered({ document, size, viewState }) {
   return { captured };
 }
 
+function cloneSessionDocument(document) {
+  return JSON.parse(JSON.stringify(document || {}));
+}
+
+function createSessionSnapshot(session) {
+  return {
+    document: cloneSessionDocument(session.document),
+    activeBlockIndex: session.activeBlockIndex,
+    scrollTop: session.scrollTop,
+  };
+}
+
+function pushSessionHistory(session, action) {
+  if (!session || typeof session !== 'object') {
+    return;
+  }
+
+  if (!Array.isArray(session.history)) {
+    session.history = [];
+  }
+
+  if (!Array.isArray(session.future)) {
+    session.future = [];
+  }
+
+  session.future = [];
+
+  session.history.push({
+    action: String(action || '').toLowerCase(),
+    at: new Date().toISOString(),
+    snapshot: createSessionSnapshot(session),
+  });
+
+  if (session.history.length > 32) {
+    session.history = session.history.slice(-32);
+  }
+}
+
+function syncSessionDirtyState(session) {
+  if (!session || typeof session !== 'object') {
+    return;
+  }
+
+  const currentSource = stringifyDocFile(session.document);
+  session.document.source = currentSource;
+  session.isDirty = currentSource !== String(session.savedSource || '');
+}
+
+function undoSessionState(session) {
+  if (!session || !Array.isArray(session.history) || session.history.length === 0) {
+    return false;
+  }
+
+  if (!Array.isArray(session.future)) {
+    session.future = [];
+  }
+
+  session.future.push({
+    action: 'redo-state',
+    at: new Date().toISOString(),
+    snapshot: createSessionSnapshot(session),
+  });
+
+  const previous = session.history.pop();
+  if (!previous || !previous.snapshot) {
+    return false;
+  }
+
+  session.document = cloneSessionDocument(previous.snapshot.document);
+  session.activeBlockIndex = Number.isInteger(previous.snapshot.activeBlockIndex)
+    ? previous.snapshot.activeBlockIndex
+    : 0;
+  session.scrollTop = Number.isFinite(previous.snapshot.scrollTop)
+    ? previous.snapshot.scrollTop
+    : 0;
+  syncSessionDirtyState(session);
+  return true;
+}
+
+function redoSessionState(session) {
+  if (!session || !Array.isArray(session.future) || session.future.length === 0) {
+    return false;
+  }
+
+  if (!Array.isArray(session.history)) {
+    session.history = [];
+  }
+
+  session.history.push({
+    action: 'undo-state',
+    at: new Date().toISOString(),
+    snapshot: createSessionSnapshot(session),
+  });
+
+  const next = session.future.pop();
+  if (!next || !next.snapshot) {
+    return false;
+  }
+
+  session.document = cloneSessionDocument(next.snapshot.document);
+  session.activeBlockIndex = Number.isInteger(next.snapshot.activeBlockIndex)
+    ? next.snapshot.activeBlockIndex
+    : 0;
+  session.scrollTop = Number.isFinite(next.snapshot.scrollTop)
+    ? next.snapshot.scrollTop
+    : 0;
+  syncSessionDirtyState(session);
+  return true;
+}
+
 async function applyViewerAction(session, actionSpec) {
   const action = String(actionSpec?.action || '').toLowerCase();
   const blocks = Array.isArray(session.document?.blocks) ? session.document.blocks : [];
@@ -355,10 +470,25 @@ async function applyViewerAction(session, actionSpec) {
     return;
   }
 
+  if (action === 'undo-state' || action === 'undo-document') {
+    if (!undoSessionState(session)) {
+      throw new Error('No viewer state transition available to undo');
+    }
+    return;
+  }
+
+  if (action === 'redo-state' || action === 'redo-document') {
+    if (!redoSessionState(session)) {
+      throw new Error('No viewer state transition available to redo');
+    }
+    return;
+  }
+
   if (action === 'click-block') {
     if (!Number.isInteger(index) || index < 0 || index >= blocks.length) {
       throw new Error('index is required and must reference an existing block');
     }
+    pushSessionHistory(session, action);
     session.activeBlockIndex = index;
     return;
   }
@@ -367,6 +497,7 @@ async function applyViewerAction(session, actionSpec) {
     if (!Number.isFinite(index)) {
       throw new Error('index is required for scroll-to');
     }
+    pushSessionHistory(session, action);
     session.scrollTop = Math.max(0, Math.trunc(index));
     return;
   }
@@ -376,8 +507,9 @@ async function applyViewerAction(session, actionSpec) {
       throw new Error('index is required and must reference an existing block');
     }
 
+    pushSessionHistory(session, action);
     setBlockText(blocks[index], String(actionSpec?.text || ''));
-    session.document.source = stringifyDocFile(session.document);
+    syncSessionDirtyState(session);
     return;
   }
 
@@ -387,13 +519,14 @@ async function applyViewerAction(session, actionSpec) {
       throw new Error('text is required for append-paragraph');
     }
 
+    pushSessionHistory(session, action);
     blocks.push({
       id: `paragraph-${blocks.length + 1}`,
       className: '',
       type: 'paragraph',
       text,
     });
-    session.document.source = stringifyDocFile(session.document);
+    syncSessionDirtyState(session);
     return;
   }
 
@@ -406,6 +539,9 @@ async function applyViewerAction(session, actionSpec) {
       stringifyDocFile(session.document)
     );
     session.document = saved;
+    session.savedSource = stringifyDocFile(saved);
+    session.isDirty = false;
+    session.future = [];
     return;
   }
 
@@ -504,6 +640,7 @@ async function handleTool(id, toolName, args = {}) {
         }
 
         const sessionId = createViewerSessionId();
+        const savedSource = stringifyDocFile(document);
         const session = {
           sessionId,
           workspaceRoot: runtime.workspaceRoot,
@@ -511,6 +648,10 @@ async function handleTool(id, toolName, args = {}) {
           document,
           activeBlockIndex: 0,
           scrollTop: 0,
+          history: [],
+          future: [],
+          savedSource,
+          isDirty: false,
         };
 
         viewerSessions.set(sessionId, session);
@@ -587,12 +728,18 @@ async function handleTool(id, toolName, args = {}) {
           }
 
           const sessionId = createViewerSessionId();
+          const savedSource = stringifyDocFile(document);
           session = {
             sessionId,
             workspaceRoot: runtime.workspaceRoot,
+            db: runtime.db,
             document,
             activeBlockIndex: 0,
             scrollTop: 0,
+            history: [],
+            future: [],
+            savedSource,
+            isDirty: false,
           };
           viewerSessions.set(sessionId, session);
         }

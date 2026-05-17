@@ -77,7 +77,7 @@ async function captureRenderedWithPlaywright(html, { size = 1000, viewState = nu
     });
 
     // Give layout a beat to settle after CSS variables/theme attributes apply.
-    await page.waitForTimeout(40);
+    await page.waitForTimeout(150);
 
     const bytes = await page.screenshot({ type: 'png', fullPage: true });
 

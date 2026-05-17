@@ -32,81 +32,78 @@ body[data-resolved-theme="dark"] {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--paper);
+  background: var(--vscode-editor-background, var(--paper));
   z-index: 999;
   opacity: 1;
   pointer-events: auto;
-  transition: opacity 120ms ease;
+  transition: opacity 200ms ease;
 }
 
 .loading-card {
-  display: grid;
-  justify-items: center;
-  gap: 7px;
-  min-width: 0;
-  max-width: min(80vw, 320px);
-  padding: 0;
-  border: none;
-  border-radius: 0;
-  background: transparent;
-  box-shadow: none;
-}
-
-.loading-title {
-  font-family: var(--font-ui);
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--muted);
-}
-
-.loading-subtitle {
-  font-family: var(--font-body);
-  font-size: 13px;
-  color: var(--ink);
-  text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .page[data-ready="false"] > :not(.loading-screen) {
-  visibility: hidden;
   pointer-events: none;
 }
 
-.page[data-ready="true"] > :not(.loading-screen) {
-  visibility: visible;
-}
-
-.page[data-edit-mode="false"] .loading-screen,
 .loading-screen[data-hidden="true"] {
   opacity: 0;
   pointer-events: none;
 }
 
 .loading-spinner {
-  width: min(220px, 70%);
-  height: 1px;
-  border-radius: 0;
-  overflow: hidden;
-  background: color-mix(in srgb, var(--line) 90%, transparent);
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: center;
 }
 
 .spinner-block {
-  width: 32%;
-  height: 100%;
-  border-radius: 0;
-  background: color-mix(in srgb, var(--accent) 68%, var(--line));
-  animation: loadingSweep 1.2s linear infinite;
+  width: 12px;
+  height: 12px;
+  border-radius: 2px;
+  background: var(--vscode-focusBorder, var(--accent));
+  animation: spinnerPulse 2s cubic-bezier(0.4, 0, 0.2, 1) infinite;
 }
 
-@keyframes loadingSweep {
+.spinner-block:nth-child(1) {
+  animation-delay: 0s;
+}
+
+.spinner-block:nth-child(2) {
+  animation-delay: 0.1s;
+}
+
+.spinner-block:nth-child(3) {
+  animation-delay: 0.2s;
+}
+
+@keyframes spinnerPulse {
   0% {
-    transform: translateX(-100%);
-    opacity: 0.45;
+    transform: scale(0) rotate(0deg);
+    opacity: 0;
+  }
+  20% {
+    opacity: 1;
+  }
+  25% {
+    transform: scale(1) rotate(90deg);
+    opacity: 1;
+  }
+  75% {
+    transform: scale(1) rotate(90deg);
+    opacity: 1;
+  }
+  90% {
+    transform: scale(0) rotate(180deg);
+    opacity: 0;
   }
   100% {
-    transform: translateX(265%);
-    opacity: 0.9;
+    transform: scale(0) rotate(180deg);
+    opacity: 0;
   }
 }
 
@@ -275,7 +272,6 @@ body.show-chrome .ui-chrome,
 }
 
 .page[data-edit-mode="false"] .block-view {
-  opacity: 0.92;
   cursor: default;
 }
 
