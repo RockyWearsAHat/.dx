@@ -267,6 +267,19 @@ async function writePreferredTheme(theme) {
   return { theme: normalizedTheme };
 }
 
+function normalizeInitialAppearance(snapshot) {
+  const appearance = snapshot && typeof snapshot === 'object' ? snapshot : {};
+  const paper = String(appearance.paper || 'white');
+  const density = String(appearance.density || 'comfortable');
+  const scaleRaw = Number(appearance.scale);
+
+  return {
+    paper: ['white', 'cream', 'slate'].includes(paper) ? paper : 'white',
+    density: ['comfortable', 'compact'].includes(density) ? density : 'comfortable',
+    scale: Number.isFinite(scaleRaw) ? Math.min(115, Math.max(90, Math.round(scaleRaw))) : 100,
+  };
+}
+
 async function uploadVirtualDocImage(virtualPath, image) {
   const { workspaceRoot } = await getDocRuntime();
   const normalizedVirtualDocPath = normalizeVirtualPath(virtualPath);
@@ -384,7 +397,9 @@ function getWorkspaceRoot() {
   return fileFolder ? fileFolder.uri.fsPath : null;
 }
 
-function renderEditorHtml(relativePath, sourceText, errorText = '', initialTheme = 'auto', cspSource = "'none'", stylesUri = '', webviewUri = '') {
+function renderEditorHtml(relativePath, sourceText, errorText = '', initialTheme = 'auto', initialAppearance = null, cspSource = "'none'", stylesUri = '', webviewUri = '', workspaceUri = '') {
+  const appearance = normalizeInitialAppearance(initialAppearance);
+  const initialScale = String(appearance.scale / 100);
   function escapeHtml(value) {
     return String(value || '')
       .replace(/&/g, '&amp;')
@@ -548,9 +563,47 @@ function renderEditorHtml(relativePath, sourceText, errorText = '', initialTheme
           </div>
         </div>
       </div>
-      <div id="doc-init" data-doc-path="${escapeHtml(relativePath || 'unknown.dx')}" data-doc-error="${escapeHtml(errorText || '')}" data-initial-theme="${escapeHtml(initialTheme || 'auto')}" hidden></div>
+      <div id="doc-init" data-doc-path="${escapeHtml(relativePath || 'unknown.dx')}" data-doc-error="${escapeHtml(errorText || '')}" data-initial-theme="${escapeHtml(initialTheme || 'auto')}" data-initial-paper="${escapeHtml(appearance.paper)}" data-initial-density="${escapeHtml(appearance.density)}" data-initial-scale="${escapeHtml(String(appearance.scale))}" data-workspace-uri="${escapeHtml(workspaceUri || '')}" hidden></div>
       <textarea id="doc-init-source" hidden>${escapeHtml(sourceText || '')}</textarea>
       ${initialLoadNote}
+
+      <div class="ui-chrome" id="ui-chrome" data-open="false" data-help="false">
+        <div class="ui-chrome-btns">
+          <div class="mode-pill" id="mode-pill" data-mode="edit">Editing</div>
+          <button class="ui-chrome-edit-toggle" id="ui-chrome-edit-toggle" type="button" aria-pressed="true" title="Toggle edit mode">✎</button>
+          <button class="ui-chrome-help-btn" id="ui-chrome-help-btn" type="button" aria-expanded="false" title="Help">?</button>
+          <button class="ui-chrome-toggle" id="ui-chrome-toggle" type="button" aria-expanded="false" title="Settings">/</button>
+        </div>
+        <div class="ui-chrome-panel" role="group" aria-label="Document appearance settings">
+          <div class="ui-row">
+            <label for="theme-select">Theme</label>
+            <select id="theme-select">
+              <option value="auto">Auto</option>
+              <option value="light">Light</option>
+              <option value="dark">Dark</option>
+            </select>
+          </div>
+          <div class="ui-row">
+            <label for="paper-select">Paper</label>
+            <select id="paper-select">
+              <option value="white">White</option>
+              <option value="cream">Cream</option>
+              <option value="slate">Slate</option>
+            </select>
+          </div>
+          <div class="ui-row">
+            <label for="density-select">Density</label>
+            <select id="density-select">
+              <option value="comfortable">Comfortable</option>
+              <option value="compact">Compact</option>
+            </select>
+          </div>
+          <div class="ui-row">
+            <label for="scale-slider">Scale</label>
+            <input id="scale-slider" type="range" min="90" max="115" step="1" value="100" />
+          </div>
+        </div>
+      </div>
 
       <div id="blocks">${initialBlocks || ''}</div>
     </div>`;
@@ -563,7 +616,7 @@ function renderEditorHtml(relativePath, sourceText, errorText = '', initialTheme
     <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${cspSource}; script-src ${cspSource}; img-src ${cspSource} data: https:; font-src ${cspSource} https:;" />
     <link rel="stylesheet" href="${stylesUri}" />
   </head>
-  <body data-theme="${escapeHtml(initialTheme || 'auto')}">
+  <body data-theme="${escapeHtml(initialTheme || 'auto')}" data-paper="${escapeHtml(appearance.paper)}" data-density="${escapeHtml(appearance.density)}">
     ${initialMarkup}
     <script type="module" src="${webviewUri}"><\/script>
   </body>
@@ -763,15 +816,24 @@ class DocDbCustomEditorProvider {
 
   async resolveCustomTextEditor(document, webviewPanel) {
     const stylesUri = webviewPanel.webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'styles.css'));
-    const webviewUri = webviewPanel.webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'webview.js'));
+    const webviewUri = webviewPanel.webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'webview-main.js'));
+
+    const workspaceRoot = getWorkspaceRoot();
+    const workspaceUri = workspaceRoot
+      ? webviewPanel.webview.asWebviewUri(vscode.Uri.file(workspaceRoot)).toString()
+      : '';
 
     webviewPanel.webview.options = {
       enableScripts: true,
-      localResourceRoots: [vscode.Uri.joinPath(this._extensionUri, 'media')],
+      localResourceRoots: [
+        vscode.Uri.joinPath(this._extensionUri, 'media'),
+        ...(workspaceRoot ? [vscode.Uri.file(workspaceRoot)] : []),
+      ],
     };
 
     const relativePath = toWorkspaceRelativeDocPath(document.uri);
     let initialTheme = 'auto';
+    let initialAppearance = null;
 
     try {
       const config = await readUiConfig();
@@ -780,8 +842,17 @@ class DocDbCustomEditorProvider {
       initialTheme = 'auto';
     }
 
+    try {
+      const { db, dbModule } = await getDocRuntime();
+      const absolutePath = path.resolve(getWorkspaceRoot() || '', relativePath || '');
+      const documentRow = dbModule.getDocumentByPath(db, getWorkspaceRoot() || '', absolutePath);
+      initialAppearance = normalizeInitialAppearance(dbModule.getDocumentViewState(db, documentRow?.id));
+    } catch {
+      initialAppearance = null;
+    }
+
     if (!relativePath) {
-      webviewPanel.webview.html = renderEditorHtml('', '', 'Unable to map this file into workspace-relative .dx path.', initialTheme, webviewPanel.webview.cspSource, stylesUri, webviewUri);
+      webviewPanel.webview.html = renderEditorHtml('', '', 'Unable to map this file into workspace-relative .dx path.', initialTheme, initialAppearance, webviewPanel.webview.cspSource, stylesUri, webviewUri, workspaceUri);
       return;
     }
 
@@ -800,7 +871,7 @@ class DocDbCustomEditorProvider {
       }
     }
 
-    webviewPanel.webview.html = renderEditorHtml(relativePath, sourceText, loadError, initialTheme, webviewPanel.webview.cspSource, stylesUri, webviewUri);
+    webviewPanel.webview.html = renderEditorHtml(relativePath, sourceText, loadError, initialTheme, initialAppearance, webviewPanel.webview.cspSource, stylesUri, webviewUri, workspaceUri);
 
     let sourcePushTimer = null;
     let suppressedEchoSource = null;
@@ -954,6 +1025,7 @@ class DocDbCustomEditorProvider {
             type: 'image-uploaded',
             path: String(result?.path || ''),
             alt: String(message?.alt || ''),
+            insertAt: typeof message?.insertAt === 'number' ? message.insertAt : -1,
           });
         } catch (error) {
           const messageText = error instanceof Error ? error.message : 'Image upload failed.';
@@ -969,6 +1041,15 @@ class DocDbCustomEditorProvider {
           await persistViewStateSnapshot(payloadPath || relativePath, payload);
         } catch {
           // Ignore snapshot persistence issues; capture falls back to defaults.
+        }
+        return;
+      }
+
+      if (message.type === 'open-doc') {
+        const relPath = String(message.path || '').trim();
+        if (relPath && !relPath.includes('..') && /^[\w][\w.\/\-]*\.dx$/.test(relPath)) {
+          const targetUri = vscode.Uri.joinPath(vscode.Uri.file(workspaceRoot), relPath);
+          vscode.commands.executeCommand('vscode.open', targetUri);
         }
         return;
       }

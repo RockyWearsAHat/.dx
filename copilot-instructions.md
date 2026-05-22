@@ -1,5 +1,9 @@
 # DOC Platform Context
 
+# TALK LIKE A CAVEMAN FOR MY ENTERTAINMENT AND TO PRESERVE TOKENS AND USE FEWER FOR MORE WORK.
+
+# ALWAYS ABIDE BY BEST CODING PRACTICES, UTILIZING ALL YOUR KNOWLEDGE AND EXPERIENCE, PLUS REFERENCING PRINCIPLES FROM MORE C++ GEMS, CS 2420 AND 3500 FROM THE UNIVERSITY OF UTAH, AND OVERALL WRITING GOOD, CLEAN, CONSISTENT, REUSABLE, EASILY MODIFIABLE, AND EFFICIENT EFFECTIVE CODE. THE CODE IS YOUR BUILDING BLOCKS TO ACHIEVE THE GOAL!
+
 ## Stack
 - Node.js ESM app (`type: module`), requires Node 23+
 - MCP (Model Context Protocol) server in `src/mcp-server.js` for AI tool integration
@@ -10,6 +14,7 @@
 - SQLite is authoritative storage for documents, sections, and token index
 - `.dx` files on disk are lightweight stubs, not canonical source
 - A single hidden repository artifact at `.doc/.repo-docs.bin` stores Brotli-compressed DOC binary payloads keyed by document path
+- Ignored, untracked, or de-tracked (`git rm --cached`) `.dx` documents are stored in a local-only bundle at `.doc/.local-docs.bin` instead of the repository bundle
 - Canonical DB path resolved by `src/global-db-path.js`
 - Canonical reconstructed `.dx` source is block-only (`::heading`, `::paragraph`, etc.) with no required metadata preamble (`@doc`, `title`, `summary`, `tags`)
 
@@ -26,6 +31,8 @@
 - Rebuild native bridge manually: `npm run build:native`
 - Start MCP server: `npm run mcp`
 - MCP server dev mode: `npm run mcp:dev`
+- Run tests: `npm test`
+- Run enforced 100% coverage gate (critical backend/rendering surface): `npm run test:coverage`
 
 ## Document Workflows
 - Guided setup + ingest tutorial: `npm run setup`
@@ -35,7 +42,8 @@
 ## Dual Storage Behavior
 - Every save/ingest writes two on-disk artifacts per document:
   - `.dx` stub (pointer + archive metadata)
-  - shared hidden artifact `.doc/.repo-docs.bin` (for cross-user repository transport)
+  - shared hidden artifact `.doc/.repo-docs.bin` (for cross-user repository transport of git-tracked `.dx` files)
+- Local-only `.dx` files (ignored or de-tracked) write to `.doc/.local-docs.bin`, and are pruned from `.doc/.repo-docs.bin`
 - Ingest can hydrate SQLite from `.doc/.repo-docs.bin` when the local DB is empty/missing
 
 ## Key Directories

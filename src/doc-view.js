@@ -1,6 +1,3 @@
-import path from 'node:path';
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import { parseSourceBlocks, splitClassNames } from '../vscode-extension/media/doc-pipeline.js';
 
 function escapeHtml(value) {
@@ -12,22 +9,8 @@ function escapeHtml(value) {
     .replace(/'/g, '&#39;');
 }
 
-const moduleDir = path.dirname(fileURLToPath(import.meta.url));
-const extensionStylesPath = path.resolve(moduleDir, '..', 'vscode-extension', 'media', 'styles.css');
-let cachedExtensionStyles = null;
-
-function getExtensionStyles() {
-  if (cachedExtensionStyles !== null) {
-    return cachedExtensionStyles;
-  }
-
-  try {
-    cachedExtensionStyles = readFileSync(extensionStylesPath, 'utf8');
-  } catch {
-    cachedExtensionStyles = '';
-  }
-
-  return cachedExtensionStyles;
+function escapeStyleTagContent(value) {
+  return String(value).replace(/<\/(style)/gi, '<\\/$1');
 }
 
 function toStringItems(items) {
@@ -73,6 +56,10 @@ function getDecoratedAttrs(block, baseClasses = []) {
 
 function renderBlock(block) {
   const type = String(block?.type || 'paragraph').toLowerCase();
+
+  if (type === 'style' || type === 'stylesheet') {
+    return '';
+  }
 
   if (type === 'heading') {
     const level = Math.max(1, Math.min(6, Number(block?.level || 1)));
@@ -145,7 +132,14 @@ export function renderDocumentViewHtml(document, {
   const blocks = parsedBlocks.length > 0
     ? parsedBlocks
     : (Array.isArray(document?.blocks) ? document.blocks : []);
-  const extensionStyles = getExtensionStyles();
+  const styleBlocks = blocks
+    .filter((block) => String(block?.type || '').toLowerCase() === 'style')
+    .map((block) => String(block?.text || '').trim())
+    .filter(Boolean);
+  const stylesheetLinks = blocks
+    .filter((block) => String(block?.type || '').toLowerCase() === 'stylesheet')
+    .map((block) => String(block?.href || block?.src || '').trim())
+    .filter(Boolean);
   const documentCss = String(effectiveCss || '').trim();
   const paper = String(appearance?.paper || 'white');
   const density = String(appearance?.density || 'comfortable');
@@ -165,6 +159,12 @@ export function renderDocumentViewHtml(document, {
     const wrapClassAttr = escapeHtml(Array.from(new Set(wrapClasses)).join(' '));
     return `<div class="${wrapClassAttr}" data-block-index="${index}" data-block-type="${type}"><div class="block-view" role="article" tabindex="0" aria-label="${aria}">${renderBlock(block)}</div></div>`;
   }).join('\n');
+  const styleMarkup = styleBlocks
+    .map((css, index) => `<style data-doc-style="${index + 1}">${escapeStyleTagContent(css)}</style>`)
+    .join('\n  ');
+  const stylesheetMarkup = stylesheetLinks
+    .map((href) => `<link rel="stylesheet" href="${escapeHtml(href)}" />`)
+    .join('\n  ');
 
   return `<!doctype html>
 <html lang="en">
@@ -172,10 +172,11 @@ export function renderDocumentViewHtml(document, {
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>${escapeHtml(title)}</title>
-  <style>${extensionStyles}</style>
+  ${stylesheetMarkup}
+  ${styleMarkup}
   <style>${documentCss}</style>
 </head>
-<body data-theme="${escapeHtml(theme)}" data-resolved-theme="${escapeHtml(resolvedTheme)}" data-paper="${escapeHtml(paper)}" data-density="${escapeHtml(density)}">
+<body data-theme="${escapeHtml(theme)}" data-resolved-theme="${escapeHtml(resolvedTheme)}" data-paper="${escapeHtml(paper)}" data-density="${escapeHtml(density)}" data-doc-default-style="off">
   <main class="page" data-doc-path="${escapeHtml(document?.relativePath || '')}" data-edit-mode="false" data-ready="true">
     <div id="blocks">${blocksMarkup}</div>
   </main>

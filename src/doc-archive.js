@@ -12,6 +12,8 @@ const ARCHIVE_CODEC = 'brotli-docbin-v1';
 const REPO_ARCHIVE_MAGIC = Buffer.from('DXRA1', 'ascii');
 const BUNDLE_MAGIC = Buffer.from('DXBUN2', 'ascii');
 const REPO_ARCHIVE_RELATIVE_PATH = '.doc/.repo-docs.bin';
+const LOCAL_ARCHIVE_RELATIVE_PATH = '.doc/.local-docs.bin';
+const LOCAL_ARCHIVE_GITIGNORE_ENTRY = '/.doc/.local-docs.bin';
 
 function readUInt32LE(buffer, offset) {
   if (offset + 4 > buffer.length) {
@@ -94,6 +96,10 @@ function decodeArchivePayload(filePath, archiveBuffer) {
 
 function getRepoArchiveAbsolutePath(rootDir) {
   return path.resolve(rootDir, REPO_ARCHIVE_RELATIVE_PATH);
+}
+
+function getLocalArchiveAbsolutePath(rootDir) {
+  return path.resolve(rootDir, LOCAL_ARCHIVE_RELATIVE_PATH);
 }
 
 function decodeRepoArchive(buffer) {
@@ -266,8 +272,7 @@ function encodeRepoArchive(container) {
   return Buffer.concat([REPO_ARCHIVE_MAGIC, compressed]);
 }
 
-async function readRepoArchiveContainer(rootDir) {
-  const absolutePath = getRepoArchiveAbsolutePath(rootDir);
+async function readArchiveContainerAt(absolutePath) {
 
   try {
     const payload = await readFile(absolutePath);
@@ -319,6 +324,56 @@ async function writeRepoArchiveContainer(rootDir, container) {
   };
 }
 
+async function readRepoArchiveContainer(rootDir) {
+  return readArchiveContainerAt(getRepoArchiveAbsolutePath(rootDir));
+}
+
+async function readLocalArchiveContainer(rootDir) {
+  return readArchiveContainerAt(getLocalArchiveAbsolutePath(rootDir));
+}
+
+async function writeArchiveContainer(rootDir, relativePath, container) {
+  const absolutePath = path.resolve(rootDir, relativePath);
+  await mkdir(path.dirname(absolutePath), { recursive: true });
+  const payload = encodeBundle(container);
+  await writeFile(absolutePath, payload);
+
+  return {
+    absolutePath,
+    relativePath,
+    bytes: payload.length,
+  };
+}
+
+async function writeLocalArchiveContainer(rootDir, container) {
+  await ensureGitIgnored(rootDir, LOCAL_ARCHIVE_GITIGNORE_ENTRY);
+  return writeArchiveContainer(rootDir, LOCAL_ARCHIVE_RELATIVE_PATH, container);
+}
+
+async function ensureGitIgnored(rootDir, entry) {
+  const trimmedEntry = String(entry || '').trim();
+  if (!trimmedEntry) {
+    return;
+  }
+
+  const gitIgnorePath = path.resolve(rootDir, '.gitignore');
+  let current = '';
+
+  try {
+    current = await readFile(gitIgnorePath, 'utf8');
+  } catch {
+    current = '';
+  }
+
+  const lines = current.split(/\r?\n/).map((line) => line.trim());
+  if (lines.includes(trimmedEntry)) {
+    return;
+  }
+
+  const suffix = current && !current.endsWith('\n') ? '\n' : '';
+  await writeFile(gitIgnorePath, `${current}${suffix}${trimmedEntry}\n`, 'utf8');
+}
+
 export function getDocArchiveMetadata(rootDir, absoluteDocPath) {
   const relativeDocPath = toRelativePath(rootDir, absoluteDocPath);
 
@@ -332,35 +387,61 @@ export function getDocArchiveMetadata(rootDir, absoluteDocPath) {
 
 export async function writeDocArchive(rootDir, absoluteDocPath, document) {
   const archiveMeta = getDocArchiveMetadata(rootDir, absoluteDocPath);
-  const container = await readRepoArchiveContainer(rootDir);
+  const repoContainer = await readRepoArchiveContainer(rootDir);
   const gitState = getGitDocState(rootDir, absoluteDocPath);
-
-  if (!gitState.includeInRepoArchive) {
-    const hadEntry = Boolean(container.documents[archiveMeta.key]);
-    if (hadEntry) {
-      delete container.documents[archiveMeta.key];
-      await writeRepoArchiveContainer(rootDir, container);
-    }
-    return null;
-  }
-
   const packed = packDocument(document);
   const sha256 = createHash('sha256').update(packed).digest('hex');
 
-  container.documents[archiveMeta.key] = {
-    sha256,
-    packedBytes: packed.length,
-    _packed: packed,
-    git: {
-      tracked: gitState.tracked,
-      untracked: gitState.untracked,
-      ignored: gitState.ignored,
-      modified: gitState.modified,
-      staged: gitState.staged,
-    },
+  const writeEntry = (container) => {
+    container.documents[archiveMeta.key] = {
+      sha256,
+      packedBytes: packed.length,
+      _packed: packed,
+      git: {
+        tracked: gitState.tracked,
+        untracked: gitState.untracked,
+        ignored: gitState.ignored,
+        modified: gitState.modified,
+        staged: gitState.staged,
+      },
+    };
   };
 
-  const repoArtifact = await writeRepoArchiveContainer(rootDir, container);
+  if (!gitState.includeInRepoArchive) {
+    let repoTouched = false;
+    if (repoContainer.documents[archiveMeta.key]) {
+      delete repoContainer.documents[archiveMeta.key];
+      repoTouched = true;
+    }
+    if (repoTouched) {
+      await writeRepoArchiveContainer(rootDir, repoContainer);
+    }
+
+    const localContainer = await readLocalArchiveContainer(rootDir);
+    writeEntry(localContainer);
+    const localArtifact = await writeLocalArchiveContainer(rootDir, localContainer);
+
+    return {
+      codec: ARCHIVE_CODEC,
+      relativePath: localArtifact.relativePath,
+      key: archiveMeta.key,
+      sha256,
+      packedBytes: packed.length,
+      repoArtifactBytes: localArtifact.bytes,
+      localOnly: true,
+    };
+  }
+
+  // Restore repo-tracked mode and prune any stale local copy for this key.
+  const localContainer = await readLocalArchiveContainer(rootDir);
+  if (localContainer.documents[archiveMeta.key]) {
+    delete localContainer.documents[archiveMeta.key];
+    await writeLocalArchiveContainer(rootDir, localContainer);
+  }
+
+  writeEntry(repoContainer);
+
+  const repoArtifact = await writeRepoArchiveContainer(rootDir, repoContainer);
 
   return {
     codec: ARCHIVE_CODEC,
@@ -389,6 +470,21 @@ export async function readDocArchive(rootDir, absoluteDocPath, explicitRelativeA
     // Legacy DXRA1: payload stored as base64-encoded per-document brotli archive
     if (entry.payload) {
       const archiveBuffer = Buffer.from(String(entry.payload || ''), 'base64');
+      return decodeArchivePayload(absoluteDocPath, archiveBuffer);
+    }
+  }
+
+  const localContainer = await readLocalArchiveContainer(rootDir);
+  const localEntry = localContainer.documents && localContainer.documents[key];
+  if (localEntry) {
+    if (localEntry._packed) {
+      const packed = Buffer.isBuffer(localEntry._packed) ? localEntry._packed : Buffer.from(localEntry._packed);
+      const unpacked = unpackDocument(packed);
+      return normalizeDocInput(absoluteDocPath, unpacked);
+    }
+
+    if (localEntry.payload) {
+      const archiveBuffer = Buffer.from(String(localEntry.payload || ''), 'base64');
       return decodeArchivePayload(absoluteDocPath, archiveBuffer);
     }
   }

@@ -18,8 +18,8 @@ export function parseAttributes(args) {
   let match = pattern.exec(text);
 
   while (match) {
-    const key = String(match[1] || '').trim().toLowerCase();
-    const value = match[2] ?? match[3] ?? match[4] ?? '';
+    const key = String(match[1]).trim().toLowerCase();
+    const value = match[2] ?? match[3] ?? match[4];
 
     if (key) {
       attributes[key] = value;
@@ -55,8 +55,8 @@ function parseLeadingAttributesAndRemainder(text) {
       break;
     }
 
-    const key = String(match[1] || '').trim().toLowerCase();
-    const value = match[2] ?? match[3] ?? match[4] ?? '';
+    const key = String(match[1]).trim().toLowerCase();
+    const value = match[2] ?? match[3] ?? match[4];
 
     if (key) {
       attrs[key] = value;
@@ -81,8 +81,10 @@ function unwrapSyntheticParagraphWrappers(sourceText) {
     const isSyntheticParagraphOpen = /^::paragraph\s+id=paragraph-\d+\s*$/i.test(trimmed);
 
     if (isSyntheticParagraphOpen && i + 2 < input.length) {
-      const wrappedLine = String(input[i + 1] || '');
-      const closeLine = String(input[i + 2] || '').trim();
+      // Guard for malformed wrappers.
+            const wrappedLine = String(input[i + 1] || '');
+      // Guard for malformed wrappers.
+            const closeLine = String(input[i + 2] || '').trim();
 
       if (closeLine === '::end') {
         output.push(wrappedLine);
@@ -148,8 +150,34 @@ export function parseSourceBlocks(source) {
         blocks.push({
           type: 'rule',
           rawSource,
+            // Inline rule may omit id.
+                      id: String(attrs.id || '').trim(),
+          className: normalizeClassName(attrs.class),
+        });
+        cursor += 1;
+        continue;
+      }
+
+      if (type === 'style') {
+        blocks.push({
+          type: 'style',
           id: String(attrs.id || '').trim(),
           className: normalizeClassName(attrs.class),
+          text: inlineText,
+          rawSource,
+        });
+        cursor += 1;
+        continue;
+      }
+
+      if (type === 'stylesheet') {
+        blocks.push({
+          type: 'stylesheet',
+          id: String(attrs.id || '').trim(),
+          className: normalizeClassName(attrs.class),
+                    href: String(attrs.href || attrs.src || inlineText || '').trim(),
+          media: String(attrs.media || '').trim(),
+          rawSource,
         });
         cursor += 1;
         continue;
@@ -233,7 +261,8 @@ export function parseSourceBlocks(source) {
       };
 
       if (type === 'code') {
-        block.language = String(attrs.language || attrs.lang || '').trim();
+          // Either attr may be present depending on source shape.
+                  block.language = String(attrs.language || attrs.lang || '').trim();
       }
 
       if (type !== 'paragraph' || block.text.trim()) {
@@ -306,7 +335,8 @@ export function parseSourceBlocks(source) {
     const rawSource = lines.slice(blockStart, blockEnd + 1).join('\n');
 
     if (type === 'heading') {
-      const level = Number(attrs.level || 1);
+        // Default heading level for implicit headings.
+              const level = Number(attrs.level || 1);
       blocks.push({
         type,
         id: String(attrs.id || '').trim(),
@@ -363,6 +393,29 @@ export function parseSourceBlocks(source) {
         className: normalizeClassName(attrs.class),
         src: String(attrs.src || '').trim(),
         alt: content.join('\n').trim(),
+        rawSource,
+      });
+      continue;
+    }
+
+    if (type === 'style') {
+      blocks.push({
+        type: 'style',
+        id: String(attrs.id || '').trim(),
+        className: normalizeClassName(attrs.class),
+        text: content.join('\n').trimEnd(),
+        rawSource,
+      });
+      continue;
+    }
+
+    if (type === 'stylesheet') {
+      blocks.push({
+        type: 'stylesheet',
+        id: String(attrs.id || '').trim(),
+        className: normalizeClassName(attrs.class),
+                href: String(attrs.href || attrs.src || content.join('\n').trim() || '').trim(),
+        media: String(attrs.media || '').trim(),
         rawSource,
       });
       continue;

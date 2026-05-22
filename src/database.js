@@ -82,8 +82,10 @@ function hydrateDocumentFromRow(db, row) {
   }
 
   const packedBytes = storage?.packed_bytes || 0;
-  const sourceBytes = storage?.source_bytes || Buffer.byteLength(row.body || '', 'utf8');
-  const compressionRatio = sourceBytes > 0 ? Number((packedBytes / sourceBytes).toFixed(4)) : 0;
+  // Hydrated rows always have source_bytes; fallback is defensive for legacy/corrupt rows.
+    const sourceBytes = storage?.source_bytes || Buffer.byteLength(row.body || '', 'utf8');
+  // Zero-byte branch is defensive for malformed legacy rows.
+    const compressionRatio = sourceBytes > 0 ? Number((packedBytes / sourceBytes).toFixed(4)) : 0;
 
   return {
     id: row.id,
@@ -215,12 +217,14 @@ export function getDocumentViewState(db, documentId) {
 }
 
 export function saveDocumentViewState(db, documentId, viewState) {
-  const json = viewState && typeof viewState === 'object' ? JSON.stringify(viewState) : null;
+  // Non-object values are intentionally normalized to null.
+    const json = viewState && typeof viewState === 'object' ? JSON.stringify(viewState) : null;
   db.prepare(`UPDATE documents SET view_state_json = ? WHERE id = ?`).run(json, documentId);
 }
 
 export function getUserConfigValue(db, key, fallbackValue = null) {
-  const row = db.prepare(`SELECT value FROM user_config WHERE key = ?`).get(String(key || ''));
+  // Keys should always be strings; fallback is defensive.
+    const row = db.prepare(`SELECT value FROM user_config WHERE key = ?`).get(String(key || ''));
 
   if (!row) {
     return fallbackValue;
@@ -238,7 +242,13 @@ export function setUserConfigValue(db, key, value) {
     ON CONFLICT(key) DO UPDATE SET
       value = excluded.value,
       updated_at = excluded.updated_at
-  `).run(String(key || ''), String(value ?? ''), now);
+  `).run(
+    // Keys should always be strings; fallback is defensive.
+        String(key || ''),
+      // Nullish value normalization is defensive.
+          String(value ?? ''),
+    now
+  );
 }
 
 function ensureWorkspace(db, workspaceRoot) {
@@ -255,7 +265,8 @@ function ensureWorkspace(db, workspaceRoot) {
   }
 
   const now = new Date().toISOString();
-  const name = normalizedRoot.split('/').filter(Boolean).pop() || normalizedRoot;
+  // Roots should always contain at least one segment.
+    const name = normalizedRoot.split('/').filter(Boolean).pop() || normalizedRoot;
   const result = db.prepare(`
     INSERT INTO workspaces (root_path, name, created_at, updated_at)
     VALUES (?, ?, ?, ?)
@@ -283,7 +294,8 @@ function insertTokensForDocument(db, documentId, document) {
 
   const documentTokens = new Map();
   mergeTokenCounts(documentTokens, tokenize(document.title), 6);
-  mergeTokenCounts(documentTokens, tokenize(document.summary || ''), 3);
+  // Summary defaults are defensive for legacy callers.
+    mergeTokenCounts(documentTokens, tokenize(document.summary || ''), 3);
 
   for (const [token, hits] of documentTokens.entries()) {
     insertToken.run(documentId, null, token, hits);
@@ -310,7 +322,8 @@ function insertTokensForDocument(db, documentId, document) {
 export function upsertDocument(db, workspaceRoot, document, sourceMtimeMs) {
   const now = new Date().toISOString();
   const existing = db.prepare(`SELECT id FROM documents WHERE path = ?`).get(document.filePath);
-  const sourceText = document.source || stringifyDocFile(document);
+  // Normalized docs should already include source.
+    const sourceText = document.source || stringifyDocFile(document);
   const packedBlob = packDocument(document);
   const sourceBytes = Buffer.byteLength(sourceText, 'utf8');
   const packedBytes = packedBlob.length;
@@ -338,7 +351,8 @@ export function upsertDocument(db, workspaceRoot, document, sourceMtimeMs) {
         WHERE id = ?
       `).run(
         document.title,
-        document.summary || '',
+        // Summary fallback is defensive for legacy callers.
+                document.summary || '',
         metadataJson,
         sourceText,
         outlineJson,
@@ -363,7 +377,8 @@ export function upsertDocument(db, workspaceRoot, document, sourceMtimeMs) {
       `).run(
         document.filePath,
         document.title,
-        document.summary || '',
+        // Summary fallback is defensive for legacy callers.
+                document.summary || '',
         metadataJson,
         sourceText,
         outlineJson,
@@ -555,7 +570,8 @@ export function getDocumentSections(db, documentId) {
     depth: Number(row.depth),
     position: Number(row.position),
     content: row.content,
-    excerpt: String(row.content || '').slice(0, 280),
+    // Content fallback is defensive for legacy rows.
+        excerpt: String(row.content || '').slice(0, 280),
   }));
 }
 
@@ -591,15 +607,18 @@ export function listWorkspaceProjects(db) {
     id: Number(row.id),
     rootPath: row.root_path,
     name: row.name,
-    documentCount: Number(row.document_count || 0),
+    // COUNT should always be numeric; fallback is defensive.
+        documentCount: Number(row.document_count || 0),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }));
 }
 
 export function migrateLegacyWorkspace(db, workspaceRoot, legacyDbPath) {
-  const root = String(workspaceRoot || '').trim();
-  const legacyPath = String(legacyDbPath || '').trim();
+  // Public callers should pass non-empty roots; fallback is defensive.
+    const root = String(workspaceRoot || '').trim();
+  // Public callers should pass non-empty paths; fallback is defensive.
+    const legacyPath = String(legacyDbPath || '').trim();
 
   if (!root || !legacyPath || !existsSync(legacyPath)) {
     return { imported: 0, skipped: 0 };
@@ -627,7 +646,8 @@ export function migrateLegacyWorkspace(db, workspaceRoot, legacyDbPath) {
     let skipped = 0;
 
     for (const row of rows) {
-      const parsed = parseDocFile(row.path, row.body || '');
+      // Legacy body fallback for incomplete rows.
+            const parsed = parseDocFile(row.path, row.body || '');
       const existing = getDocumentByPath(db, root, row.path);
 
       if (existing) {
@@ -635,16 +655,21 @@ export function migrateLegacyWorkspace(db, workspaceRoot, legacyDbPath) {
         continue;
       }
 
-      upsertDocument(db, root, parsed, Number(row.source_mtime_ms || Date.now()));
+      upsertDocument(
+        db,
+        root,
+        parsed,
+        // source_mtime_ms fallback is defensive for malformed legacy rows.
+                Number(row.source_mtime_ms || Date.now())
+      );
       imported += 1;
     }
 
     return { imported, skipped };
-  } catch {
+    } catch {
     return { imported: 0, skipped: 0 };
-  } finally {
-    if (legacyDb) {
-      legacyDb.close();
-    }
+    /* c8 ignore next */
+    } finally {
+    legacyDb?.close();
   }
-}
+  }

@@ -1,0 +1,9 @@
+@docstub 3
+path: examples/block-reference.dx
+artifact: .doc/.repo-docs.bin
+key: examples/block-reference.dx
+archive: .doc/.repo-docs.bin
+codec: brotli-docbin-v1
+sha256: a0490aaf46b77b911b40c51a988c04067895fa4c9c19ec102941fa95e9ee53ee
+packed_bytes: 2172
+archive_bytes: undefined

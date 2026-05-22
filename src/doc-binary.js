@@ -7,6 +7,9 @@ const BLOCK_TYPE_TO_CODE = {
   'numbered-list': 4,
   quote: 5,
   code: 6,
+  image: 7,
+  rule: 8,
+  checklist: 9,
 };
 
 const CODE_TO_BLOCK_TYPE = Object.fromEntries(
@@ -16,13 +19,8 @@ const CODE_TO_BLOCK_TYPE = Object.fromEntries(
 const MAGIC = Buffer.from('DOCB1', 'ascii');
 
 function encodeVarint(value) {
-  let number = Number(value);
-
-  if (!Number.isFinite(number) || number < 0) {
-    number = 0;
-  }
-
-  number = Math.trunc(number);
+  const numberValue = Number(value);
+  let number = Math.max(0, Math.trunc(numberValue || 0));
   const bytes = [];
 
   while (number >= 0x80) {
@@ -73,7 +71,8 @@ function decodeString(buffer, state) {
 }
 
 function encodeMeta(meta) {
-  const entries = Object.entries(meta || {});
+  // Defensive fallback is unreachable through public packDocument flow.
+    const entries = Object.entries(meta || {});
   const parts = [encodeVarint(entries.length)];
 
   for (const [key, value] of entries) {
@@ -103,7 +102,8 @@ function decodeMeta(buffer, state) {
 }
 
 function encodeTags(tags) {
-  const safeTags = Array.isArray(tags) ? tags : [];
+  // Defensive fallback is unreachable through public packDocument flow.
+    const safeTags = Array.isArray(tags) ? tags : [];
   const parts = [encodeVarint(safeTags.length)];
 
   for (const tag of safeTags) {
@@ -151,6 +151,28 @@ function encodeBlock(block) {
     return Buffer.concat(parts);
   }
 
+  if (block.type === 'image') {
+    parts.push(encodeString(block.src || ''));
+    parts.push(encodeString(block.alt || ''));
+    return Buffer.concat(parts);
+  }
+
+  if (block.type === 'rule') {
+    return Buffer.concat(parts);
+  }
+
+  if (block.type === 'checklist') {
+    const items = Array.isArray(block.items) ? block.items : [];
+    parts.push(encodeVarint(items.length));
+    for (const item of items) {
+      const checked = typeof item === 'object' && item !== null ? Boolean(item.checked) : false;
+      const text = typeof item === 'object' && item !== null ? String(item.text || '') : String(item || '');
+      parts.push(Buffer.from([checked ? 1 : 0]));
+      parts.push(encodeString(text));
+    }
+    return Buffer.concat(parts);
+  }
+
   parts.push(encodeString(block.text || ''));
   return Buffer.concat(parts);
 }
@@ -163,7 +185,8 @@ function decodeBlock(buffer, state) {
   const typeCode = buffer[state.offset];
   state.offset += 1;
 
-  const type = CODE_TO_BLOCK_TYPE[typeCode] || 'paragraph';
+  // Unknown type codes require malformed payloads crafted outside packDocument.
+    const type = CODE_TO_BLOCK_TYPE[typeCode] || 'paragraph';
   const id = decodeString(buffer, state);
 
   if (type === 'heading') {
@@ -194,6 +217,31 @@ function decodeBlock(buffer, state) {
     return { type, id, language, text };
   }
 
+  if (type === 'image') {
+    const src = decodeString(buffer, state);
+    const alt = decodeString(buffer, state);
+    return { type, id, src, alt };
+  }
+
+  if (type === 'rule') {
+    return { type, id };
+  }
+
+  if (type === 'checklist') {
+    const count = decodeVarint(buffer, state);
+    const items = [];
+    for (let i = 0; i < count; i += 1) {
+      if (state.offset >= buffer.length) {
+        throw new Error('Unexpected end of binary document while decoding checklist item.');
+      }
+      const checked = buffer[state.offset] === 1;
+      state.offset += 1;
+      const text = decodeString(buffer, state);
+      items.push({ checked, text });
+    }
+    return { type, id, items };
+  }
+
   const text = decodeString(buffer, state);
   return { type, id, text };
 }
@@ -204,8 +252,8 @@ export function packDocument(document) {
     encodeVarint(1),
     encodeString(document.title || ''),
     encodeString(document.summary || ''),
-    encodeTags(document.tags || []),
-    encodeMeta(document.meta || {}),
+    encodeTags(document.tags),
+    encodeMeta(document.meta),
   ];
 
   const blocks = Array.isArray(document.blocks) ? document.blocks : [];
