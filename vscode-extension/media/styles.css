@@ -164,7 +164,6 @@ body {
 }
 
 /* Strict paper-first mode: hide non-document chrome surfaces */
-.ui-chrome,
 .help-panel,
 .status-bar,
 .doc-path,
@@ -728,6 +727,18 @@ body.show-chrome .ui-chrome,
   color: var(--muted);
 }
 
+.block-view .doc-link {
+  color: var(--accent);
+  text-decoration: none;
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+
+.block-view .doc-link:hover {
+  border-bottom-color: var(--accent);
+}
+
 .block-view ul {
   margin: 0 0 12px;
   padding-left: 24px;
@@ -824,6 +835,24 @@ body.show-chrome .ui-chrome,
 body.drag-active .page {
   outline: 2px solid var(--focus);
   outline-offset: -2px;
+}
+
+.drop-ghost {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 4px 0;
+  height: 44px;
+  border: 2px dashed var(--focus);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--focus) 8%, transparent);
+  color: var(--focus);
+  font-size: 0.8rem;
+  font-style: italic;
+  pointer-events: none;
+  user-select: none;
+  opacity: 0.85;
+  transition: height 0.12s ease, opacity 0.1s ease;
 }
 
 @media (max-width: 860px) {

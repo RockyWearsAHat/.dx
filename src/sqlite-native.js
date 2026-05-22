@@ -1,12 +1,13 @@
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
+const nativeBindingPath = process.env.DOC_SQLITE_NATIVE_BINDING_PATH || '../build/Release/doc_sqlite.node';
 
 let nativeBinding = null;
 let usingNativeBridge = false;
 
 try {
-  nativeBinding = require('../build/Release/doc_sqlite.node');
+  nativeBinding = require(nativeBindingPath);
   usingNativeBridge = true;
 } catch {
   nativeBinding = null;

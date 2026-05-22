@@ -8,6 +8,10 @@ const BLOCK_TYPES = new Set([
   'quote',
   'code',
   'image',
+  'checklist',
+  'rule',
+  'style',
+  'stylesheet',
 ]);
 
 function clampHeadingLevel(value) {
@@ -21,7 +25,7 @@ function clampHeadingLevel(value) {
 }
 
 function parseValue(raw) {
-  const value = String(raw || '').trim();
+  const value = String(raw).trim();
 
   if (value === 'true') {
     return true;
@@ -106,10 +110,22 @@ function normalizeTags(tags) {
 }
 
 function blockText(block) {
+  if (block.type === 'style' || block.type === 'stylesheet') {
+    return '';
+  }
+
   if (block.type === 'image') {
     const alt = String(block.alt || '').trim();
     const src = String(block.src || '').trim();
     return alt || src;
+  }
+
+  if (block.type === 'checklist') {
+    return block.items.map((item) => String(item.text).trim()).join('\n');
+  }
+
+  if (block.type === 'rule') {
+    return '';
   }
 
   if (block.type === 'bulleted-list' || block.type === 'numbered-list') {
@@ -141,8 +157,8 @@ function parseAttributeString(rawAttributes) {
   let match = pattern.exec(text);
 
   while (match) {
-    const key = String(match[1] || '').trim();
-    const value = match[2] ?? match[3] ?? match[4] ?? '';
+    const key = String(match[1]).trim();
+    const value = match[2] ?? match[3] ?? match[4];
 
     if (key) {
       attributes[key] = value;
@@ -155,11 +171,7 @@ function parseAttributeString(rawAttributes) {
 }
 
 function formatAttributeValue(value) {
-  const text = String(value || '').trim();
-
-  if (!text) {
-    return '';
-  }
+  const text = String(value).trim();
 
   if (/^[^\s"'=]+$/.test(text)) {
     return text;
@@ -186,17 +198,27 @@ function normalizeBlock(block, index, registry) {
 
   if (blockType === 'bulleted-list' || blockType === 'numbered-list') {
     const items = Array.isArray(block?.items)
-      ? block.items.map((item) => String(item).trim()).filter(Boolean)
-      : String(block?.text || '')
+      ? block.items.map((item) => {
+          // Preserve nested structure: if item is an object with text/nested, keep it
+          if (typeof item === 'object' && item !== null && item.text !== undefined) {
+            return {
+              text: String(item.text || '').trim(),
+              ...(item.nested && Array.isArray(item.nested) && { nested: item.nested }),
+            };
+          }
+          // Fallback: treat as string
+          return { text: String(item).trim() };
+        }).filter((item) => item.text.length > 0)
+      : String(block?.text ?? '')
           .split('\n')
-          .map((item) => item.trim())
-          .filter(Boolean);
+          .map((item) => ({ text: item.trim() }))
+          .filter((item) => item.text.length > 0);
 
     return {
       id,
       className,
       type: blockType,
-      items: items.length > 0 ? items : ['List item'],
+      items: items.length > 0 ? items : [{ text: 'List item' }],
     };
   }
 
@@ -207,6 +229,45 @@ function normalizeBlock(block, index, registry) {
       type: 'image',
       src: String(block?.src || '').trim(),
       alt: String(block?.alt || '').trim(),
+    };
+  }
+
+  if (blockType === 'checklist') {
+    const rawItems = Array.isArray(block?.items) ? block.items : [];
+    const items = rawItems.map((item) => {
+      if (typeof item === 'object' && item !== null) {
+        return { checked: Boolean(item.checked), text: String(item.text || '').trim() };
+      }
+        return { checked: false, text: String(item ?? '').trim() };
+    }).filter((item) => item.text.length > 0);
+    return {
+      id,
+      className,
+      type: 'checklist',
+      items: items.length > 0 ? items : [{ checked: false, text: 'Item' }],
+    };
+  }
+
+  if (blockType === 'rule') {
+    return { id, className, type: 'rule' };
+  }
+
+  if (blockType === 'style') {
+    return {
+      id,
+      className,
+      type: 'style',
+      text: String(block?.text || '').trimEnd(),
+    };
+  }
+
+  if (blockType === 'stylesheet') {
+    return {
+      id,
+      className,
+      type: 'stylesheet',
+      href: String(block?.href || block?.src || '').trim(),
+      media: String(block?.media || '').trim(),
     };
   }
 
@@ -325,8 +386,8 @@ function parseLeadingAttributesAndRemainder(text) {
       break;
     }
 
-    const key = String(match[1] || '').trim().toLowerCase();
-    const value = match[2] ?? match[3] ?? match[4] ?? '';
+    const key = String(match[1]).trim().toLowerCase();
+    const value = match[2] ?? match[3] ?? match[4];
 
     if (key) {
       attrs[key] = value;
@@ -342,7 +403,7 @@ function parseLeadingAttributesAndRemainder(text) {
 }
 
 function unwrapSyntheticParagraphWrappers(sourceText) {
-  const input = String(sourceText || '').replace(/\r\n/g, '\n').split('\n');
+  const input = String(sourceText).replace(/\r\n/g, '\n').split('\n');
   const output = [];
 
   for (let i = 0; i < input.length; i += 1) {
@@ -351,8 +412,8 @@ function unwrapSyntheticParagraphWrappers(sourceText) {
     const isSyntheticParagraphOpen = /^::paragraph\s+id=paragraph-\d+\s*$/i.test(trimmed);
 
     if (isSyntheticParagraphOpen && i + 2 < input.length) {
-      const wrappedLine = String(input[i + 1] || '');
-      const closeLine = String(input[i + 2] || '').trim();
+      const wrappedLine = String(input[i + 1]);
+      const closeLine = String(input[i + 2]).trim();
 
       if (closeLine === '::end') {
         output.push(wrappedLine);
@@ -418,11 +479,29 @@ function parseDocsrcBlocks(body) {
 
     if (type === 'bulleted-list' || type === 'list' || type === 'numbered-list') {
       const normalizedType = type === 'list' ? 'bulleted-list' : type;
+      // Parse items with indentation to preserve nesting
+      const itemsWithIndent = contentLines
+        .map((line) => {
+          // Match: optional indent, then list marker (-, *, or digit.), then text
+          const bulletMatch = /^(\s*)[-*]\s+(.*)$/.exec(line);
+          const numberedMatch = /^(\s*)\d+\.\s+(.*)$/.exec(line);
+          const match = bulletMatch || numberedMatch;
+          if (!match) {
+            // Fallback: no list marker, treat as-is
+            const fallback = /^(\s*)(.+)$/.exec(line);
+            if (!fallback) return null;
+            return { text: fallback[2].trim(), indent: fallback[1].length };
+          }
+          return { text: match[2].trim(), indent: match[1].length };
+        })
+        .filter(Boolean);
+      
+      const nested = buildNestedListStructure(itemsWithIndent);
       blocks.push({
         type: normalizedType,
         id: attributes.id,
         className: normalizeClassName(attributes.class),
-        items: contentLines.map((line) => line.trim()).filter(Boolean),
+        items: nested,
       });
       return;
     }
@@ -435,6 +514,58 @@ function parseDocsrcBlocks(body) {
         src: String(attributes.src || '').trim(),
         alt: content,
       });
+      return;
+    }
+
+    if (type === 'checklist') {
+      const items = contentLines
+        .map((line) => {
+          const match = /^\s*\[(x| )\]\s*(.*)$/i.exec(line.trim());
+          if (match) {
+            return { checked: match[1].toLowerCase() === 'x', text: match[2].trim() };
+          }
+          const trimmed = line.trim();
+          return trimmed ? { checked: false, text: trimmed } : null;
+        })
+        .filter(Boolean)
+        .filter((item) => item.text.length > 0);
+      blocks.push({
+        type: 'checklist',
+        id: attributes.id,
+        className: normalizeClassName(attributes.class),
+        items,
+      });
+      return;
+    }
+
+    if (type === 'rule') {
+      blocks.push({
+        type: 'rule',
+        id: attributes.id,
+        className: normalizeClassName(attributes.class),
+      });
+      return;
+    }
+
+    if (type === 'style') {
+      blocks.push({
+        type: 'style',
+        id: attributes.id,
+        className: normalizeClassName(attributes.class),
+        text: contentLines.join('\n').trimEnd(),
+      });
+      return;
+    }
+
+    if (type === 'stylesheet') {
+      blocks.push({
+        type: 'stylesheet',
+        id: attributes.id,
+        className: normalizeClassName(attributes.class),
+        href: String(attributes.href || attributes.src || contentLines.join('\n').trim() || '').trim(),
+        media: String(attributes.media || '').trim(),
+      });
+      return;
     }
   }
 
@@ -452,7 +583,7 @@ function parseDocsrcBlocks(body) {
     if (inline) {
       const type = inline[1].toLowerCase();
       if (type !== 'end') {
-        const parsed = parseLeadingAttributesAndRemainder(inline[2] || '');
+          const parsed = parseLeadingAttributesAndRemainder(inline[2]);
         const inlineContent = parsed.remainder ? [parsed.remainder] : [];
         pushBlock(type, parsed.attrs, inlineContent);
       }
@@ -466,7 +597,7 @@ function parseDocsrcBlocks(body) {
       continue;
     }
 
-    const type = String(header.type || '').toLowerCase();
+    const type = header.type.toLowerCase();
     if (type === 'end') {
       cursor += 1;
       continue;
@@ -480,13 +611,15 @@ function parseDocsrcBlocks(body) {
     }
 
     cursor += 1;
+    let foundEnd = false;
 
     while (cursor < lines.length) {
-      const bodyLine = String(lines[cursor] || '');
+      const bodyLine = String(lines[cursor]);
       const bodyTrimmed = bodyLine.trim();
       const endIndex = bodyLine.indexOf('::end');
 
       if (bodyTrimmed === '::end') {
+        foundEnd = true;
         break;
       }
 
@@ -495,6 +628,7 @@ function parseDocsrcBlocks(body) {
         if (beforeEnd) {
           contentLines.push(beforeEnd);
         }
+        foundEnd = true;
         break;
       }
 
@@ -504,7 +638,9 @@ function parseDocsrcBlocks(body) {
 
     pushBlock(type, parsedOpen.attrs, contentLines);
 
-    if (cursor < lines.length) {
+    // Auto-close: if we didn't find ::end, that's okay—block is still valid
+    // (unclosed blocks are auto-closed at EOF)
+    if (cursor < lines.length && foundEnd) {
       cursor += 1;
     }
   }
@@ -524,6 +660,46 @@ function flushBufferedParagraph(paragraphLines, blocks) {
   paragraphLines.length = 0;
 }
 
+function buildNestedListStructure(flatItems) {
+  // Convert flat list with indent levels into nested structure
+  // Each item is { text: string, indent: number }
+  // Returns array of items with 'nested' field for children
+  
+  if (!flatItems || flatItems.length === 0) {
+    return [];
+  }
+
+  const result = [];
+  const stack = [];
+
+  for (const item of flatItems) {
+    const indent = item.indent || 0;
+    
+    // Pop items from stack until we find the correct parent level
+    while (stack.length > 0 && stack[stack.length - 1].indent >= indent) {
+      stack.pop();
+    }
+
+    const processed = { text: item.text };
+
+    if (stack.length > 0) {
+      // This item should be nested under the last item in stack
+      const parent = stack[stack.length - 1];
+      if (!parent.nested) {
+        parent.nested = [];
+      }
+      parent.nested.push(processed);
+    } else {
+      // Top-level item
+      result.push(processed);
+    }
+
+    stack.push(Object.assign({}, processed, { indent }));
+  }
+
+  return result;
+}
+
 function flushBufferedList(listState, blocks) {
   if (!listState.type || listState.items.length === 0) {
     listState.type = null;
@@ -531,9 +707,10 @@ function flushBufferedList(listState, blocks) {
     return;
   }
 
+  const nested = buildNestedListStructure(listState.items);
   blocks.push({
     type: listState.type,
-    items: [...listState.items],
+    items: nested,
   });
 
   listState.type = null;
@@ -564,12 +741,12 @@ function parseLegacyBlocks(body) {
 
   for (const line of lines) {
     const headingMatch = /^(#{1,4})\s+(.*)$/.exec(line);
-    const bulletListMatch = /^[-*]\s+(.*)$/.exec(line);
-    const numberedListMatch = /^\d+\.\s+(.*)$/.exec(line);
+    const bulletListMatch = /^(\s*)[-*]\s+(.*)$/.exec(line);
+    const numberedListMatch = /^(\s*)\d+\.\s+(.*)$/.exec(line);
     const quoteMatch = /^>\s?(.*)$/.exec(line);
     const codeFenceMatch = /^```(.*)$/.exec(line.trim());
 
-    if (codeFence) {
+    if (codeFence !== null) {
       if (codeFenceMatch) {
         blocks.push({
           type: 'code',
@@ -614,8 +791,9 @@ function parseLegacyBlocks(body) {
         flushBufferedList(listState, blocks);
       }
 
+      const indent = bulletListMatch[1].length;
       listState.type = 'bulleted-list';
-      listState.items.push(bulletListMatch[1].trim());
+      listState.items.push({ text: bulletListMatch[2].trim(), indent });
       continue;
     }
 
@@ -627,8 +805,9 @@ function parseLegacyBlocks(body) {
         flushBufferedList(listState, blocks);
       }
 
+      const indent = numberedListMatch[1].length;
       listState.type = 'numbered-list';
-      listState.items.push(numberedListMatch[1].trim());
+      listState.items.push({ text: numberedListMatch[2].trim(), indent });
       continue;
     }
 
@@ -653,7 +832,7 @@ function parseLegacyBlocks(body) {
   flushBufferedList(listState, blocks);
   flushBufferedQuote(quoteLines, blocks);
 
-  if (codeFence) {
+  if (codeFence !== null) {
     blocks.push({
       type: 'code',
       language: codeFence,
@@ -862,16 +1041,67 @@ function blockHeader(block) {
     return `::image ${attributes.join(' ')}`;
   }
 
+  if (block.type === 'stylesheet') {
+    if (block.href) {
+      attributes.push(`href=${formatAttributeValue(block.href)}`);
+    }
+
+    if (block.media) {
+      attributes.push(`media=${formatAttributeValue(block.media)}`);
+    }
+
+    return `::stylesheet ${attributes.join(' ')}`;
+  }
+
   return `::${block.type} ${attributes.join(' ')}`;
 }
 
 function blockBody(block) {
   if (block.type === 'bulleted-list' || block.type === 'numbered-list') {
-    return block.items.join('\n');
+    const toLines = (items, depth = 0) => {
+      if (!Array.isArray(items)) {
+        return [];
+      }
+
+      const lines = [];
+      const indent = '  '.repeat(Math.max(0, depth));
+
+      for (const item of items) {
+        if (typeof item === 'object' && item !== null) {
+          const text = String(item.text || '').trim();
+          if (text) {
+            lines.push(`${indent}- ${text}`);
+          }
+
+          if (Array.isArray(item.nested) && item.nested.length > 0) {
+            lines.push(...toLines(item.nested, depth + 1));
+          }
+
+          continue;
+        }
+
+        const text = String(item || '').trim();
+        if (text) {
+          lines.push(`${indent}- ${text}`);
+        }
+      }
+
+      return lines;
+    };
+
+    return toLines(block.items).join('\n');
   }
 
   if (block.type === 'image') {
     return block.alt || '';
+  }
+
+  if (block.type === 'style') {
+    return block.text || '';
+  }
+
+  if (block.type === 'stylesheet' || block.type === 'rule') {
+    return '';
   }
 
   return block.text || '';

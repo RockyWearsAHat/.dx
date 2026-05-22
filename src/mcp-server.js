@@ -10,6 +10,7 @@ import { mkdir } from 'node:fs/promises';
 import {
   createDatabase,
   migrateLegacyWorkspace,
+  saveDocumentViewState,
 } from './database.js';
 import {
   createDocument,
@@ -23,7 +24,7 @@ import { renderDocumentViewHtml } from './doc-view.js';
 import { captureDocumentViewPng } from './doc-view-capture.js';
 import { stringifyDocFile } from './doc-format.js';
 import { resolveDocDbPath } from './global-db-path.js';
-import { readDocumentViewState } from './view-state.js';
+import { mergeDocumentViewState, normalizeDocumentViewState, readDocumentViewState } from './view-state.js';
 
 const PROTOCOL_VERSION = '2024-11-05';
 const runtimeCache = new Map();
@@ -174,11 +175,23 @@ const TOOLS = [
         sessionId: { type: 'string', description: 'Viewer session id returned by open-document-viewer' },
         action: {
           type: 'string',
-          enum: ['inspect', 'click-block', 'scroll-to', 'set-block-text', 'append-paragraph', 'save', 'undo-state', 'redo-state', 'undo-document', 'redo-document'],
+          enum: ['inspect', 'click-block', 'scroll-to', 'set-block-text', 'append-paragraph', 'save', 'set-view-settings', 'reset-view-settings', 'close', 'undo-state', 'redo-state', 'undo-document', 'redo-document'],
           description: 'Interaction action to apply',
         },
         index: { type: 'number', description: 'Block index for click/set/scroll actions' },
         text: { type: 'string', description: 'Text payload for set-block-text or append-paragraph' },
+        settings: {
+          type: 'object',
+          description: 'Optional viewer settings patch for set-view-settings',
+          properties: {
+            theme: { type: 'string' },
+            resolvedTheme: { type: 'string' },
+            appearance: { type: 'object' },
+            viewport: { type: 'object' },
+            effectiveCss: { type: 'string' },
+            sourceText: { type: 'string' },
+          },
+        },
       },
       required: ['sessionId', 'action'],
     },
@@ -220,10 +233,11 @@ const TOOLS = [
             properties: {
               action: {
                 type: 'string',
-                enum: ['inspect', 'click-block', 'scroll-to', 'set-block-text', 'append-paragraph', 'save', 'undo-state', 'redo-state', 'undo-document', 'redo-document'],
+                enum: ['inspect', 'click-block', 'scroll-to', 'set-block-text', 'append-paragraph', 'save', 'set-view-settings', 'reset-view-settings', 'close', 'undo-state', 'redo-state', 'undo-document', 'redo-document'],
               },
               index: { type: 'number' },
               text: { type: 'string' },
+              settings: { type: 'object' },
             },
             required: ['action'],
           },
@@ -269,6 +283,7 @@ function toBlockPreview(block) {
 
 function buildViewerState(session) {
   const document = session.document;
+  const viewState = normalizeDocumentViewState(session.activeViewState);
   const blocks = Array.isArray(document?.blocks) ? document.blocks : [];
   const historyDepth = Array.isArray(session.history) ? session.history.length : 0;
   const redoDepth = Array.isArray(session.future) ? session.future.length : 0;
@@ -295,9 +310,43 @@ function buildViewerState(session) {
         type: block.type,
         preview: toBlockPreview(block),
       })),
-      html: renderDocumentViewHtml(document),
+      viewSettings: viewState,
+      html: renderDocumentViewHtml(document, {
+        theme: viewState.theme,
+        resolvedTheme: viewState.resolvedTheme,
+        appearance: viewState.appearance,
+        effectiveCss: viewState.effectiveCss,
+      }),
     },
   };
+}
+
+function findViewerSessionForDocument(workspaceRoot, documentId) {
+  const targetId = Number(documentId);
+  if (!Number.isFinite(targetId)) {
+    return null;
+  }
+
+  for (const session of viewerSessions.values()) {
+    if (!session || session.workspaceRoot !== workspaceRoot) {
+      continue;
+    }
+
+    if (Number(session?.document?.id) === targetId) {
+      return session;
+    }
+  }
+
+  return null;
+}
+
+function getActiveCaptureViewState(runtime, document) {
+  const liveSession = findViewerSessionForDocument(runtime.workspaceRoot, document?.id);
+  if (liveSession?.activeViewState) {
+    return normalizeDocumentViewState(liveSession.activeViewState);
+  }
+
+  return readDocumentViewState(runtime.db, document?.id);
 }
 
 function setBlockText(block, text) {
@@ -352,7 +401,17 @@ async function captureRendered({ document, size, viewState }) {
 }
 
 function cloneSessionDocument(document) {
-  return JSON.parse(JSON.stringify(document || {}));
+  return JSON.parse(safeJsonStringify(document || {}));
+}
+
+function createInitialViewerViewState(db, document) {
+  const fromDb = readDocumentViewState(db, document?.id);
+  return normalizeDocumentViewState(fromDb || {});
+}
+
+function resetSessionViewState(session) {
+  session.activeViewState = normalizeDocumentViewState(session.initialViewState);
+  session.settingsDirty = false;
 }
 
 function createSessionSnapshot(session) {
@@ -545,6 +604,33 @@ async function applyViewerAction(session, actionSpec) {
     return;
   }
 
+  if (action === 'set-view-settings') {
+    const patch = actionSpec?.settings;
+    if (!patch || typeof patch !== 'object') {
+      throw new Error('settings object is required for set-view-settings');
+    }
+
+    session.activeViewState = mergeDocumentViewState(session.activeViewState, patch);
+    session.settingsDirty = safeJsonStringify(session.activeViewState) !== safeJsonStringify(session.initialViewState);
+    return;
+  }
+
+  if (action === 'reset-view-settings') {
+    resetSessionViewState(session);
+    return;
+  }
+
+  if (action === 'close') {
+    if (session.settingsDirty) {
+      resetSessionViewState(session);
+    }
+
+    return {
+      closed: true,
+      restoredViewSettings: normalizeDocumentViewState(session.initialViewState),
+    };
+  }
+
   throw new Error(`Unknown interaction action: ${action}`);
 }
 
@@ -641,11 +727,15 @@ async function handleTool(id, toolName, args = {}) {
 
         const sessionId = createViewerSessionId();
         const savedSource = stringifyDocFile(document);
+        const initialViewState = createInitialViewerViewState(runtime.db, document);
         const session = {
           sessionId,
           workspaceRoot: runtime.workspaceRoot,
           db: runtime.db,
           document,
+          initialViewState,
+          activeViewState: normalizeDocumentViewState(initialViewState),
+          settingsDirty: false,
           activeBlockIndex: 0,
           scrollTop: 0,
           history: [],
@@ -667,7 +757,7 @@ async function handleTool(id, toolName, args = {}) {
           return sendError(id, -32602, 'Document not found (provide valid path or id)');
         }
 
-        const viewState = readDocumentViewState(runtime.db, document.id);
+        const viewState = getActiveCaptureViewState(runtime, document);
         const { captured } = await captureRendered({ document, size: args.size, viewState });
 
         result = {
@@ -703,7 +793,22 @@ async function handleTool(id, toolName, args = {}) {
         }
 
         try {
-          await applyViewerAction(session, { action, index: args.index, text: args.text });
+          const actionResult = await applyViewerAction(session, {
+            action,
+            index: args.index,
+            text: args.text,
+            settings: args.settings,
+          });
+
+          if (actionResult?.closed) {
+            viewerSessions.delete(sessionId);
+            result = {
+              sessionId,
+              closed: true,
+              restoredViewSettings: actionResult.restoredViewSettings,
+            };
+            break;
+          }
         } catch (err) {
           return sendError(id, -32602, err.message);
         }
@@ -729,11 +834,15 @@ async function handleTool(id, toolName, args = {}) {
 
           const sessionId = createViewerSessionId();
           const savedSource = stringifyDocFile(document);
+          const initialViewState = createInitialViewerViewState(runtime.db, document);
           session = {
             sessionId,
             workspaceRoot: runtime.workspaceRoot,
             db: runtime.db,
             document,
+            initialViewState,
+            activeViewState: normalizeDocumentViewState(initialViewState),
+            settingsDirty: false,
             activeBlockIndex: 0,
             scrollTop: 0,
             history: [],
@@ -750,15 +859,28 @@ async function handleTool(id, toolName, args = {}) {
 
         for (const actionSpec of actions) {
           try {
-            await applyViewerAction(session, actionSpec);
+            const actionResult = await applyViewerAction(session, actionSpec);
+            if (actionResult?.closed) {
+              viewerSessions.delete(session.sessionId);
+              result = {
+                sessionId: session.sessionId,
+                closed: true,
+                restoredViewSettings: actionResult.restoredViewSettings,
+              };
+              content = [{ type: 'text', text: safeJsonStringify(result) }];
+              return sendResponse(id, { content });
+            }
           } catch (err) {
             return sendError(id, -32602, err.message);
           }
         }
 
         const state = buildViewerState(session);
-        const viewState = readDocumentViewState(session.db, session.document.id);
-        const { captured } = await captureRendered({ document: session.document, size: args.size, viewState });
+        const { captured } = await captureRendered({
+          document: session.document,
+          size: args.size,
+          viewState: normalizeDocumentViewState(session.activeViewState),
+        });
         result = {
           ...state,
           capture: {

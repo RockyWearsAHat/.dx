@@ -37,6 +37,45 @@ function sanitizeViewport(input) {
   };
 }
 
+export function normalizeDocumentViewState(input) {
+  const entry = input && typeof input === 'object' ? input : {};
+  const theme = String(entry.theme || 'auto');
+  const resolvedTheme = String(entry.resolvedTheme || 'dark');
+  const sourceText = String(entry.sourceText || '');
+  const effectiveCss = String(entry.effectiveCss || '');
+
+  return {
+    theme: ['auto', 'light', 'dark'].includes(theme) ? theme : 'auto',
+    resolvedTheme: ['light', 'dark'].includes(resolvedTheme) ? resolvedTheme : 'dark',
+    appearance: sanitizeAppearance(entry.appearance),
+    viewport: sanitizeViewport(entry.viewport),
+    effectiveCss,
+    sourceText,
+  };
+}
+
+export function mergeDocumentViewState(baseState, patchState) {
+  const base = normalizeDocumentViewState(baseState);
+  const patch = patchState && typeof patchState === 'object' ? patchState : {};
+
+  const merged = {
+    theme: patch.theme ?? base.theme,
+    resolvedTheme: patch.resolvedTheme ?? base.resolvedTheme,
+    appearance: {
+      ...base.appearance,
+      ...(patch.appearance && typeof patch.appearance === 'object' ? patch.appearance : {}),
+    },
+    viewport: {
+      ...base.viewport,
+      ...(patch.viewport && typeof patch.viewport === 'object' ? patch.viewport : {}),
+    },
+    effectiveCss: patch.effectiveCss ?? base.effectiveCss,
+    sourceText: patch.sourceText ?? base.sourceText,
+  };
+
+  return normalizeDocumentViewState(merged);
+}
+
 export function readDocumentViewState(db, documentId) {
   if (!db || !Number.isFinite(Number(documentId))) {
     return null;
@@ -52,20 +91,7 @@ export function readDocumentViewState(db, documentId) {
     if (!entry || typeof entry !== 'object') {
       return null;
     }
-
-    const theme = String(entry.theme || 'auto');
-    const resolvedTheme = String(entry.resolvedTheme || 'dark');
-    const sourceText = String(entry.sourceText || '');
-    const effectiveCss = String(entry.effectiveCss || '');
-
-    return {
-      theme: ['auto', 'light', 'dark'].includes(theme) ? theme : 'auto',
-      resolvedTheme: ['light', 'dark'].includes(resolvedTheme) ? resolvedTheme : 'dark',
-      appearance: sanitizeAppearance(entry.appearance),
-      viewport: sanitizeViewport(entry.viewport),
-      effectiveCss,
-      sourceText,
-    };
+    return normalizeDocumentViewState(entry);
   } catch {
     return null;
   }

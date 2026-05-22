@@ -10,6 +10,25 @@
         "scale": 100
       },
       "viewport": {
+        "width": 696,
+        "height": 552,
+        "pixelRatio": 2,
+        "zoomLevel": 0,
+        "zoomFactor": 1
+      },
+      "effectiveCss": "",
+      "sourceText": "::heading level=1 id=welcome-heading\nWelcome to .dx\n::end\n\n::quote id=welcome-tagline\nStructured documents that agents can query, humans can edit, and both can trust.\n::end\n\n::heading level=2 id=what-is-dx\nWhat is .dx\n::end\n\n::paragraph id=dx-description\n.dx is a writing environment where every document is stored as typed blocks — headings, paragraphs, lists, quotes, and code — rather than raw markup. The source file on disk is a lightweight pointer. The content lives in a local SQLite database and a compact binary bundle that travels with your repository.\n::end\n\n::heading level=2 id=why-not-markdown\nWhy not Markdown\n::end\n\n::paragraph id=markdown-problems\nMarkdown is ambiguous by design. Multiple syntaxes produce the same output. Inline HTML forces parsers to handle two grammars at once. Edge cases grow with every extension. Writers end up fighting syntax instead of writing content. .dx uses one canonical block grammar with no ambiguity and no escape hatches.\n::end\n\n::heading level=2 id=how-it-works\nHow it works\n::end\n\n::numbered-list id=how-it-works-steps\n- Every document is a sequence of typed blocks. There is no markdown, no inline HTML, and no implicit formatting.\n- Blocks are stored in SQLite and packed into a compact binary bundle at .doc/.repo-docs.bin that commits with your code.\n- The .dx file on disk is a stub pointer - a few lines that reference the archive. The real content never lives in the stub.\n- An MCP server exposes every document to any connected agent for search, retrieval, and structured editing.\n::end\n\n::heading level=2 id=explore-further\nExplore further\n::end\n\n::paragraph id=tutorial-link\nReady to start writing? Open [the hands-on tutorial](examples/tutorial.dx) to create your first document and learn every block type.\n::end\n\n::paragraph id=reference-link\nWant to see every block type in one place? Browse [the block reference](examples/block-reference.dx) for a complete catalogue with working examples.\n::end\n",
+      "updatedAt": "2026-05-22T22:20:06.116Z"
+    },
+    "examples/tutorial.dx": {
+      "theme": "dark",
+      "resolvedTheme": "dark",
+      "appearance": {
+        "paper": "white",
+        "density": "comfortable",
+        "scale": 100
+      },
+      "viewport": {
         "width": 801,
         "height": 474,
         "pixelRatio": 2,
@@ -17,8 +36,65 @@
         "zoomFactor": 1
       },
       "effectiveCss": "",
-      "sourceText": "::heading level=1 id=doc-hero\nWelcome to DOC DB Test\n::end\n\n::quote id=hero-tagline\nStructured docs that agents can query, humans can edit, and both can trust.\n::end\n\n::heading level=2 id=what-is-docdb\nWhat is DOC DB\n::end\n\n::paragraph id=docdb-description\nDOC DB is a writing environment where every document lives in SQLite. Documents are structured as typed blocks — headings, paragraphs, lists, code, quotes — so they can be searched, styled, and edited programmatically without breaking format.\n::end\n\n::heading level=2 id=block-types\nBlock Types\n::end\n\n::bulleted-list id=block-type-list\nheading — section titles at any level, H1 through H6\nparagraph — body text\nquote — pull quotes and callouts\nbulleted-list and numbered-list — ordered and unordered items\nchecklist — checkable task lists\ncode — source blocks with an optional language tag\nimage — embedded images with alt captions\nrule — horizontal dividers\n::end\n\n::heading level=2 id=how-css-works\nHow Styling Works\n::end\n\n::paragraph id=css-policy\nCSS blocks are document content. They are stored and versioned like any other block and are NOT globally auto-applied. To activate styling, open any block's inline CSS editor and write declarations for that block's id or class. The editor scopes your rules to the selected block so they never silently affect anything else.\n::end\n\n::code id=css-reference lang=css\n/* Apply to the H1 by its id */\n#doc-hero {\n  font-size: clamp(2.1rem, 5vw, 3.2rem);\n  letter-spacing: -0.032em;\n  line-height: 1.05;\n}\n\n/* Apply to the quote by its id */\n#hero-tagline {\n  font-size: 1.08rem;\n  border-left: 3px solid var(--accent);\n  padding: 0.55rem 1rem;\n  margin: 1.1rem 0 1.8rem;\n}\n\n/* Apply to any block with class=callout */\n.callout {\n  background: var(--surface-2);\n  border-radius: 6px;\n  padding: 1rem 1.25rem;\n}\n::end\n\n::heading level=2 id=start-here\nStart Here\n::end\n\n::numbered-list id=getting-started\nOpen a .dx file in VS Code to see the structured editor.\nClick any block to edit its source directly.\nUse the CSS icon on a block to apply scoped styles by id or class.\nQuery documents with the MCP server from any connected agent.\n::end\n",
-      "updatedAt": "2026-05-17T08:23:56.328Z"
+      "sourceText": "::heading level=1 id=tutorial-heading\nTutorial\n::end\n\n::quote id=tutorial-intro\nThis tutorial walks you through everything you need to write, edit, and style documents in .dx. It takes about ten minutes.\n::end\n\n::heading level=2 id=opening-a-doc\nOpening a document\n::end\n\n::paragraph id=opening-desc\nAny file with a .dx extension opens automatically in the structured editor. Click any block in the view to open its source. Edit the text and press Escape or click outside the block to commit the change.\n::end\n\n::heading level=2 id=block-types-overview\nBlock types\n::end\n\n::paragraph id=block-types-intro\nEvery document is a sequence of typed blocks. The full catalogue is in [the block reference](examples/block-reference.dx). The most common ones are:\n::end\n\n::bulleted-list id=block-type-summary\n- heading — section titles at levels 1 through 4\n- paragraph — body text, supports [links to other .dx docs](examples/block-reference.dx)\n- quote — pull quotes and callout text\n- bulleted-list and numbered-list — unordered and ordered items\n- code — source blocks with an optional language tag for display\n- image — embedded images with alt text\n- rule — horizontal dividers between sections\n::end\n\n::heading level=2 id=writing-your-first-doc\nWriting your first document\n::end\n\n::numbered-list id=first-doc-steps\n- The editor opens any .dx file automatically. Create a new file with a .dx extension in your workspace to get started.\n- The new file opens with a single empty paragraph block. Click it to start editing.\n- Type your content and press Escape or click outside the block to confirm.\n- Add a heading or any other block type using the block menu between blocks.\n- Save with Cmd+S (macOS) or Ctrl+S (Windows/Linux). The stub on disk updates and the archive is rewritten.\n::end\n\n::heading level=2 id=styling-blocks\nStyling blocks\n::end\n\n::paragraph id=styling-desc\nEvery block has an id and an optional class. To style a block, hover over it and click the CSS icon. A scoped editor opens pre-filled with the selector for that block. Write your CSS declarations inside the braces and close the editor. Styles are document content — they are stored and versioned like any other block.\n::end\n\n::code id=styling-example lang=css\n/* Target a specific block by its id */\n#tutorial-heading {\n  font-size: clamp(2rem, 4vw, 3rem);\n  letter-spacing: -0.03em;\n}\n\n/* Target any block with a shared class */\n.callout {\n  background: var(--surface-2);\n  border-radius: 6px;\n  padding: 1rem 1.25rem;\n}\n::end\n\n::heading level=2 id=querying-with-agents\nQuerying with an agent\n::end\n\n::paragraph id=agent-desc\nThe .dx MCP server exposes all documents in your workspace to any connected agent. Once the server is running, an agent can list documents, retrieve a document by path or id, search across all block content, and write back edits via structured calls. No markdown parsing, no fragile regex — just typed blocks.\n::end\n\n::heading level=2 id=whats-next\nWhat to explore next\n::end\n\n::paragraph id=next-steps\nYou now know how .dx works end-to-end. See [the block reference](examples/block-reference.dx) for the complete block catalogue, or go back to [the welcome doc](examples/welcome.dx) for a summary of the design principles.\n::end\n",
+      "updatedAt": "2026-05-22T22:15:00.217Z"
+    },
+    "examples/block-reference.dx": {
+      "theme": "dark",
+      "resolvedTheme": "dark",
+      "appearance": {
+        "paper": "white",
+        "density": "comfortable",
+        "scale": 100
+      },
+      "viewport": {
+        "width": 801,
+        "height": 474,
+        "pixelRatio": 2,
+        "zoomLevel": 0,
+        "zoomFactor": 1
+      },
+      "effectiveCss": "",
+      "sourceText": "::heading level=1 id=block-reference-heading\nBlock Reference\n::end\n\n::quote id=block-reference-intro\nEvery block type that .dx supports, shown with a live working example. Use this as your catalogue when writing documents.\n::end\n\n::heading level=2 id=heading-block\nHeading\n::end\n\n::paragraph id=heading-desc\nSection titles at levels 1 through 4. Level 1 is the document title. Levels 2 through 4 are subsections.\n::end\n\n::heading level=3 id=heading-example-label\nThis is a level-3 heading\n::end\n\n::heading level=2 id=paragraph-block\nParagraph\n::end\n\n::paragraph id=paragraph-desc\nBody text. The default block type. Supports [inline links to other .dx documents](examples/welcome.dx) using the same bracket syntax as Markdown links. The linked path must be a relative .dx path.\n::end\n\n::heading level=2 id=quote-block\nQuote\n::end\n\n::quote id=quote-example\nPull quotes stand out from body text. Use them for key insights, design principles, or anything you want a reader to notice immediately.\n::end\n\n::heading level=2 id=bulleted-list-block\nBulleted list\n::end\n\n::paragraph id=bulleted-list-desc\nUnordered items. Each line in the source is a separate list item.\n::end\n\n::bulleted-list id=bulleted-list-example\n- First item in the list\n- Second item in the list\n- Third item, [with a link](examples/tutorial.dx) to another document\n::end\n\n::heading level=2 id=numbered-list-block\nNumbered list\n::end\n\n::paragraph id=numbered-list-desc\nOrdered items. The renderer applies sequential numbers automatically.\n::end\n\n::numbered-list id=numbered-list-example\n- Open the document in the editor\n- Click a block to edit it\n- Press Escape to confirm the edit\n- Save with Cmd+S or Ctrl+S\n::end\n\n::heading level=2 id=code-block\nCode\n::end\n\n::paragraph id=code-desc\nSource blocks with an optional language tag. The editor displays the raw text in a monospace font. When the language is css, the block is eligible for scoped style activation via the CSS editor.\n::end\n\n::code id=code-example lang=js\nfunction greet(name) {\n  return `Hello, ${name}.`;\n}\n::end\n\n::heading level=2 id=image-block\nImage\n::end\n\n::paragraph id=image-desc\nEmbedded images with alt text for accessibility. The src attribute holds a relative path or a data URI for inline images uploaded through the editor.\n::end\n\n::heading level=2 id=rule-block\nRule\n::end\n\n::paragraph id=rule-desc\nA horizontal divider between sections. It has no content — just the block declaration.\n::end\n\n::rule id=rule-example\n\n::paragraph id=rule-after\nThe rule above separates this block from the previous section.\n::end\n\n::heading level=2 id=back-link\nReturn\n::end\n\n::paragraph id=back-link-text\nBack to [the welcome doc](examples/welcome.dx) or continue with [the tutorial](examples/tutorial.dx).\n::end\n",
+      "updatedAt": "2026-05-22T22:15:00.163Z"
+    },
+    "research/video-notes.dx": {
+      "theme": "dark",
+      "resolvedTheme": "dark",
+      "appearance": {
+        "paper": "white",
+        "density": "comfortable",
+        "scale": 100
+      },
+      "viewport": {
+        "width": 801,
+        "height": 474,
+        "pixelRatio": 2,
+        "zoomLevel": 0,
+        "zoomFactor": 1
+      },
+      "effectiveCss": "",
+      "sourceText": "::heading level=1 id=core-thesis\nCore thesis\n::end\n\n::heading level=2 id=what-is-actually-broken\nWhat is actually broken\n::end\n\n::bulleted-list id=bulleted-list-4\nMultiple syntaxes can produce the same output.\nInline HTML forces parsers to handle two grammars at once.\nEdge cases and vulnerabilities grow with each extension hook.\nWriters end up fighting syntax instead of writing content.\n::end\n\n::heading level=2 id=implication-for-doc\nImplication for DOC\n::end\n\n::heading level=2 id=design-rules\nDesign rules extracted from the video\n::end\n\n::numbered-list id=numbered-list-8\nUse one canonical syntax, not many overlapping variants.\nKeep humans out of raw markup whenever possible.\nKeep AI-facing structure explicit and deterministic.\nSeparate rendering concerns from storage and indexing concerns.\nKeep parser attack surface small.\n::end\n",
+      "updatedAt": "2026-05-17T08:33:53.268Z"
+    },
+    "research/grill-with-docs.dx": {
+      "theme": "dark",
+      "resolvedTheme": "dark",
+      "appearance": {
+        "paper": "white",
+        "density": "comfortable",
+        "scale": 100
+      },
+      "viewport": {
+        "width": 801,
+        "height": 474,
+        "pixelRatio": 2,
+        "zoomLevel": 0,
+        "zoomFactor": 1
+      },
+      "effectiveCss": "",
+      "sourceText": "::heading level=1 id=non-negotiables\nNon-negotiables\n::end\n\n::numbered-list id=numbered-list-2\nThe source file must stay easy for humans to edit.\nMachine storage must be compact and separate from the source representation.\nRendering must feel like reading a document, not browsing a dashboard.\nAI retrieval must remain deterministic and fast.\n::end\n\n::heading level=2 id=what-to-test\nWhat to test\n::end\n\n::bulleted-list id=bulleted-list-4\nCreate, edit, reindex, and reconstruct documents.\nSearch across headings, paragraphs, lists, and code blocks.\nVerify old Markdown-shaped .doc files still ingest cleanly.\nVerify packed binary bytes are smaller than source bytes on normal docs.\n::end\n",
+      "updatedAt": "2026-05-17T08:33:53.229Z"
     }
   }
 }

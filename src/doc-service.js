@@ -27,7 +27,8 @@ function toClientDocument(rootDir, document) {
 }
 
 function parseStubTarget(rootDir, currentPath, sourceText) {
-  const lines = String(sourceText || '').split('\n').map((line) => line.trim());
+  // In production flows sourceText is always provided by readFile.
+    const lines = String(sourceText || '').split('\n').map((line) => line.trim());
 
   if (!lines[0] || !lines[0].startsWith(DOC_STUB_PREFIX)) {
     return null;
@@ -88,7 +89,7 @@ async function writeDocStub(rootDir, absolutePath, archiveInfo = null) {
 
 async function persistDocumentArtifacts(rootDir, absolutePath, document) {
   const archiveInfo = await writeDocArchive(rootDir, absolutePath, document);
-  await writeDocStub(rootDir, absolutePath, archiveInfo || null);
+  await writeDocStub(rootDir, absolutePath, archiveInfo);
 
   const legacyCompanion = getLegacyCompanionArchivePath(absolutePath);
   try {
@@ -99,7 +100,8 @@ async function persistDocumentArtifacts(rootDir, absolutePath, document) {
 }
 
 function normalizeRelativeDocPath(relativePath) {
-  const trimmed = String(relativePath || '').trim().replace(/^\/+/, '');
+  // Public APIs validate input before calling this helper.
+    const trimmed = String(relativePath || '').trim().replace(/^\/+/, '');
 
   if (!trimmed || !trimmed.endsWith('.dx')) {
     throw new Error('A valid .dx path is required.');
@@ -130,7 +132,8 @@ export async function ingestWorkspace(rootDir, db) {
       const existing = getDocumentByPath(db, rootDir, stub.absolutePath);
 
       if (existing) {
-        const fromDbSource = parseDocFile(existing.path, existing.source || '');
+        // Existing hydrated documents should always have source text.
+                const fromDbSource = parseDocFile(existing.path, existing.source || '');
         const normalizedId = upsertDocument(db, rootDir, fromDbSource, Math.trunc(fileStats.mtimeMs));
         await persistDocumentArtifacts(rootDir, stub.absolutePath, fromDbSource);
         const normalized = getWorkspaceDocumentById(db, rootDir, normalizedId);
@@ -140,8 +143,7 @@ export async function ingestWorkspace(rootDir, db) {
 
       if (stub.archiveRelativePath) {
         try {
-          const legacyArchive = stub.version < 3 ? stub.archiveRelativePath : '';
-          const reconstructed = await readDocArchive(rootDir, stub.absolutePath, legacyArchive);
+            const reconstructed = await readDocArchive(rootDir, stub.absolutePath, stub.archiveRelativePath);
           const documentId = upsertDocument(db, rootDir, reconstructed, Math.trunc(fileStats.mtimeMs));
           await persistDocumentArtifacts(rootDir, stub.absolutePath, reconstructed);
           const hydrated = getWorkspaceDocumentById(db, rootDir, documentId);
@@ -227,7 +229,7 @@ export async function saveDocumentSourceToDbAndArchive(rootDir, db, relativePath
   const parsed = parseDocFile(absolutePath, String(sourceText || ''));
   const documentId = upsertDocument(db, rootDir, parsed, Date.now());
   const archiveInfo = await writeDocArchive(rootDir, absolutePath, parsed);
-  const stubText = buildDocStub(rootDir, absolutePath, archiveInfo || null);
+  const stubText = buildDocStub(rootDir, absolutePath, archiveInfo);
   return {
     document: toClientDocument(rootDir, getWorkspaceDocumentById(db, rootDir, documentId)),
     stubText,

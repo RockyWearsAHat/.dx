@@ -14,7 +14,7 @@ On-disk `.dx` files are stubs and one hidden repository artifact stores all comp
 - On-disk `.dx` files are minimal stubs, for example:
 
 ```text
-@docstub 1
+@docstub 3
 path: research/grill-with-docs.dx
 ```
 
@@ -107,8 +107,12 @@ This document is edited visually, not with Markdown syntax.
 - `::quote` text `::end`
 - `::code` text `::end` (optional `lang=` or `language=` attribute)
 - `::image src=...` alt text body `::end`
+- `::style` CSS declarations `::end` (applies style, not semantic content)
+- `::stylesheet href=...` `::end` (external stylesheet link, not semantic content)
 
 For list blocks, each newline is one item. Leading `-`, `*`, or `1.` prefixes are optional and normalized away.
+
+Style and stylesheet blocks affect rendering only. They are intentionally excluded from section text extraction/search context so AI text workflows focus on document meaning rather than presentation rules.
 
 ## DX Contract and Review Checklist
 
@@ -132,9 +136,9 @@ The reparsed transcript makes the core complaint clear: Markdown is attractive b
 - `src/doc-binary.js` packs normalized documents into compact SQLite blobs.
 - `src/database.js` stores source, compact storage blobs, and searchable semantic sections.
 - `src/doc-service.js` enforces SQLite-first storage and writes tiny link stubs to disk.
-- `src/server.js` serves editor APIs and virtual file APIs (`/api/virtual-docs`).
+- `src/mcp-server.js` exposes stdio MCP tools/resources for document read/write/search/view workflows.
+- `src/doc-view-capture.js` captures rendered document surfaces as PNG via Playwright (Quick Look fallback on macOS).
 - `vscode-extension/` provides the `docdb:/` virtual filesystem and `.dx` stub custom editor.
-- `public/` contains the browser block editor and paged reader.
 
 ## Limits
 

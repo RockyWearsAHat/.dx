@@ -43,9 +43,11 @@ export function getGitDocState(rootDir, absoluteDocPath) {
     tracked: false,
     ignored: false,
     untracked: false,
+    removedFromIndex: false,
     modified: false,
     staged: false,
     includeInRepoArchive: true,
+    localOnlyArchive: false,
   };
 
   if (!gitRoot) {
@@ -73,6 +75,7 @@ export function getGitDocState(rootDir, absoluteDocPath) {
 
   let modified = false;
   let staged = false;
+  let removedFromIndex = false;
 
   for (const line of statusLines) {
     const x = line[0] || ' ';
@@ -86,19 +89,28 @@ export function getGitDocState(rootDir, absoluteDocPath) {
     if (x !== ' ' && x !== '?') {
       staged = true;
     }
+    if (x === 'D') {
+      removedFromIndex = true;
+    }
     if (y !== ' ' || x === 'M' || x === 'A' || x === 'D' || x === 'R' || x === 'C') {
       modified = true;
     }
   }
+
+  // Treat ignored, untracked, and index-removed docs as local-only backups.
+  // This keeps accidental de-tracking from leaking into repository artifacts.
+  const localOnlyArchive = ignored || !tracked || removedFromIndex;
 
   return {
     gitAvailable: true,
     tracked,
     ignored,
     untracked: !tracked && !ignored,
+    removedFromIndex,
     modified,
     staged,
-    includeInRepoArchive: tracked || !ignored,
+    includeInRepoArchive: !localOnlyArchive,
+    localOnlyArchive,
   };
 }
 
