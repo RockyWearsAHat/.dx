@@ -38,10 +38,17 @@
 ## Build and Run
 - Install deps/build native module: `npm install`
 - Rebuild native bridge manually: `npm run build:native`
+- Compile TypeScript sources to runtime JavaScript: `npm run build:ts`
 - Start MCP server: `npm run mcp`
 - MCP server dev mode: `npm run mcp:dev`
 - Run tests: `npm test`
 - Run enforced 100% coverage gate (critical backend/rendering surface): `npm run test:coverage`
+
+## TypeScript Source Of Truth
+- Runtime modules in `src/` now have TypeScript source files (`*.ts`) checked in.
+- Webview modules in `vscode-extension/media/` now have TypeScript source files (`*.ts`) checked in.
+- Emitted JavaScript artifacts (`*.js`) are still produced for runtime compatibility with Node entrypoints and webview loading.
+- Primary TypeScript project config is `tsconfig.json`; `tsconfig.surface.json` files are compatibility entrypoints extending the root config.
 
 ## Document Workflows
 - Guided setup + ingest tutorial: `npm run setup`
