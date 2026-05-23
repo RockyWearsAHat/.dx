@@ -1,0 +1,309 @@
+{
+  "version": 1,
+  "built_at": "2026-05-23T21:41:35.860Z",
+  "file_count": 1,
+  "idf": {
+    "doc": 1,
+    "dirty": 1,
+    "state": 1,
+    "reconciliation": 1,
+    "code": 1,
+    "tracking": 1,
+    "version": 1,
+    "save": 1,
+    "based": 1,
+    "strict": 1,
+    "text": 1,
+    "equality": 1,
+    "webview": 1,
+    "model": 1,
+    "may": 1,
+    "lag": 1,
+    "block": 1,
+    "source": 1,
+    "header": 1,
+    "editor": 1,
+    "surfaces": 1,
+    "open": 1,
+    "reconcile": 1,
+    "emit": 1,
+    "clean": 1,
+    "editing": 1,
+    "active": 1,
+    "otherwise": 1,
+    "host": 1,
+    "incorrectly": 1,
+    "restore": 1,
+    "stub": 1,
+    "interfere": 1,
+    "flow": 1,
+    "run": 1,
+    "immediately": 1,
+    "close": 1,
+    "commit": 1,
+    "wrappers": 1,
+    "clear": 1,
+    "edits": 1,
+    "resolve": 1,
+    "saved": 1,
+    "snapshot": 1,
+    "runtime": 1,
+    "extension": 1,
+    "uses": 1,
+    "built": 1,
+    "artifacts": 1,
+    "fixes": 1,
+    "require": 1,
+    "rebuild": 1,
+    "install": 1,
+    "manual": 1,
+    "verification": 1
+  },
+  "files": {
+    "docdb-dirty-state-reconciliation.md": {
+      "title": "DOC DB Dirty-State Reconciliation",
+      "top_terms": [
+        "dirty",
+        "state",
+        "save",
+        "based",
+        "text",
+        "source",
+        "surfaces",
+        "reconcile",
+        "doc",
+        "reconciliation",
+        "code",
+        "tracking",
+        "version",
+        "strict",
+        "equality"
+      ],
+      "norm_vec": {
+        "dirty": 0.3273268353539886,
+        "state": 0.2182178902359924,
+        "save": 0.2182178902359924,
+        "based": 0.2182178902359924,
+        "text": 0.2182178902359924,
+        "source": 0.2182178902359924,
+        "surfaces": 0.2182178902359924,
+        "reconcile": 0.2182178902359924,
+        "doc": 0.1091089451179962,
+        "reconciliation": 0.1091089451179962,
+        "code": 0.1091089451179962,
+        "tracking": 0.1091089451179962,
+        "version": 0.1091089451179962,
+        "strict": 0.1091089451179962,
+        "equality": 0.1091089451179962,
+        "webview": 0.1091089451179962,
+        "model": 0.1091089451179962,
+        "may": 0.1091089451179962,
+        "lag": 0.1091089451179962,
+        "block": 0.1091089451179962,
+        "header": 0.1091089451179962,
+        "editor": 0.1091089451179962,
+        "open": 0.1091089451179962,
+        "emit": 0.1091089451179962,
+        "clean": 0.1091089451179962,
+        "editing": 0.1091089451179962,
+        "active": 0.1091089451179962,
+        "otherwise": 0.1091089451179962,
+        "host": 0.1091089451179962,
+        "incorrectly": 0.1091089451179962,
+        "restore": 0.1091089451179962,
+        "stub": 0.1091089451179962,
+        "interfere": 0.1091089451179962,
+        "flow": 0.1091089451179962,
+        "run": 0.1091089451179962,
+        "immediately": 0.1091089451179962,
+        "close": 0.1091089451179962,
+        "commit": 0.1091089451179962,
+        "wrappers": 0.1091089451179962,
+        "clear": 0.1091089451179962,
+        "edits": 0.1091089451179962,
+        "resolve": 0.1091089451179962,
+        "saved": 0.1091089451179962,
+        "snapshot": 0.1091089451179962,
+        "runtime": 0.1091089451179962,
+        "extension": 0.1091089451179962,
+        "uses": 0.1091089451179962,
+        "built": 0.1091089451179962,
+        "artifacts": 0.1091089451179962,
+        "fixes": 0.1091089451179962,
+        "require": 0.1091089451179962,
+        "rebuild": 0.1091089451179962,
+        "install": 0.1091089451179962,
+        "manual": 0.1091089451179962,
+        "verification": 0.1091089451179962
+      },
+      "related": []
+    }
+  },
+  "posting": {
+    "dirty": [
+      "docdb-dirty-state-reconciliation.md"
+    ],
+    "state": [
+      "docdb-dirty-state-reconciliation.md"
+    ],
+    "save": [
+      "docdb-dirty-state-reconciliation.md"
+    ],
+    "based": [
+      "docdb-dirty-state-reconciliation.md"
+    ],
+    "text": [
+      "docdb-dirty-state-reconciliation.md"
+    ],
+    "source": [
+      "docdb-dirty-state-reconciliation.md"
+    ],
+    "surfaces": [
+      "docdb-dirty-state-reconciliation.md"
+    ],
+    "reconcile": [
+      "docdb-dirty-state-reconciliation.md"
+    ],
+    "doc": [
+      "docdb-dirty-state-reconciliation.md"
+    ],
+    "reconciliation": [
+      "docdb-dirty-state-reconciliation.md"
+    ],
+    "code": [
+      "docdb-dirty-state-reconciliation.md"
+    ],
+    "tracking": [
+      "docdb-dirty-state-reconciliation.md"
+    ],
+    "version": [
+      "docdb-dirty-state-reconciliation.md"
+    ],
+    "strict": [
+      "docdb-dirty-state-reconciliation.md"
+    ],
+    "equality": [
+      "docdb-dirty-state-reconciliation.md"
+    ],
+    "webview": [
+      "docdb-dirty-state-reconciliation.md"
+    ],
+    "model": [
+      "docdb-dirty-state-reconciliation.md"
+    ],
+    "may": [
+      "docdb-dirty-state-reconciliation.md"
+    ],
+    "lag": [
+      "docdb-dirty-state-reconciliation.md"
+    ],
+    "block": [
+      "docdb-dirty-state-reconciliation.md"
+    ],
+    "header": [
+      "docdb-dirty-state-reconciliation.md"
+    ],
+    "editor": [
+      "docdb-dirty-state-reconciliation.md"
+    ],
+    "open": [
+      "docdb-dirty-state-reconciliation.md"
+    ],
+    "emit": [
+      "docdb-dirty-state-reconciliation.md"
+    ],
+    "clean": [
+      "docdb-dirty-state-reconciliation.md"
+    ],
+    "editing": [
+      "docdb-dirty-state-reconciliation.md"
+    ],
+    "active": [
+      "docdb-dirty-state-reconciliation.md"
+    ],
+    "otherwise": [
+      "docdb-dirty-state-reconciliation.md"
+    ],
+    "host": [
+      "docdb-dirty-state-reconciliation.md"
+    ],
+    "incorrectly": [
+      "docdb-dirty-state-reconciliation.md"
+    ],
+    "restore": [
+      "docdb-dirty-state-reconciliation.md"
+    ],
+    "stub": [
+      "docdb-dirty-state-reconciliation.md"
+    ],
+    "interfere": [
+      "docdb-dirty-state-reconciliation.md"
+    ],
+    "flow": [
+      "docdb-dirty-state-reconciliation.md"
+    ],
+    "run": [
+      "docdb-dirty-state-reconciliation.md"
+    ],
+    "immediately": [
+      "docdb-dirty-state-reconciliation.md"
+    ],
+    "close": [
+      "docdb-dirty-state-reconciliation.md"
+    ],
+    "commit": [
+      "docdb-dirty-state-reconciliation.md"
+    ],
+    "wrappers": [
+      "docdb-dirty-state-reconciliation.md"
+    ],
+    "clear": [
+      "docdb-dirty-state-reconciliation.md"
+    ],
+    "edits": [
+      "docdb-dirty-state-reconciliation.md"
+    ],
+    "resolve": [
+      "docdb-dirty-state-reconciliation.md"
+    ],
+    "saved": [
+      "docdb-dirty-state-reconciliation.md"
+    ],
+    "snapshot": [
+      "docdb-dirty-state-reconciliation.md"
+    ],
+    "runtime": [
+      "docdb-dirty-state-reconciliation.md"
+    ],
+    "extension": [
+      "docdb-dirty-state-reconciliation.md"
+    ],
+    "uses": [
+      "docdb-dirty-state-reconciliation.md"
+    ],
+    "built": [
+      "docdb-dirty-state-reconciliation.md"
+    ],
+    "artifacts": [
+      "docdb-dirty-state-reconciliation.md"
+    ],
+    "fixes": [
+      "docdb-dirty-state-reconciliation.md"
+    ],
+    "require": [
+      "docdb-dirty-state-reconciliation.md"
+    ],
+    "rebuild": [
+      "docdb-dirty-state-reconciliation.md"
+    ],
+    "install": [
+      "docdb-dirty-state-reconciliation.md"
+    ],
+    "manual": [
+      "docdb-dirty-state-reconciliation.md"
+    ],
+    "verification": [
+      "docdb-dirty-state-reconciliation.md"
+    ]
+  }
+}

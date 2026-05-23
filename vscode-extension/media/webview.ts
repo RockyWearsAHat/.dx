@@ -386,6 +386,23 @@ function syncDocumentSaveStateFromModel(): void {
 
 function reconcileSaveStateFromModel(emitDirtySync = true): void {
   const latestSource = currentDocSourceText();
+
+  // While a source editor surface is open, live textarea/header edits may not
+  // yet be reflected in docModel. Never sync clean from a stale model snapshot.
+  if (hasActiveEditingSurface()) {
+    transitionDocSaveState('MARK_DIRTY');
+    setStatusPersistent('Unsaved changes', 'dirty');
+    hasDirtyWorkingCopySignal = true;
+
+    if (emitDirtySync) {
+      vscode.postMessage({
+        type: 'mark-dirty',
+        text: latestSource,
+      });
+    }
+    return;
+  }
+
   const outcome = computeDirtyReconcileResult({
     latestSource,
     lastSavedSource: lastSavedDoc,
@@ -1368,6 +1385,10 @@ function closeBlockSrc(index: number, commitChanges: boolean): void {
   if (blockSourceController) {
     blockSourceController.closeBlockSrc(index, commitChanges);
   }
+
+  // Closing or committing an editor surface can return to a clean snapshot
+  // without another input event; reconcile immediately.
+  syncDocumentSaveStateFromModel();
 }
 
 function hasPendingBlockSourceChanges(source: HTMLTextAreaElement | null): boolean {
@@ -1387,6 +1408,8 @@ function commitOpenSources(exceptIndex?: number): void {
   if (blockSourceController) {
     blockSourceController.commitOpenSources(exceptIndex);
   }
+
+  syncDocumentSaveStateFromModel();
 }
 
 function commitOpenSourcesForHistory(exceptIndex?: number): void {
@@ -1394,6 +1417,8 @@ function commitOpenSourcesForHistory(exceptIndex?: number): void {
   if (blockSourceController) {
     blockSourceController.commitOpenSourcesForHistory(exceptIndex);
   }
+
+  syncDocumentSaveStateFromModel();
 }
 
 function hasOpenBlockSources(): boolean {
