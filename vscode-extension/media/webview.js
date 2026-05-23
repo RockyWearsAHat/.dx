@@ -27,18 +27,11 @@ import { createUiStateController } from './webview-ui-state.js';
 const vscode = typeof acquireVsCodeApi === 'function' ? acquireVsCodeApi() : { postMessage: () => {} };
 
 let docModel = null;
-let currentTheme = 'auto';
 let loadNoteEl = null;
 let currentDocPath = 'unknown.dx';
 let workspaceBaseUri = '';
 const appearanceStorageKey = 'docdb.appearance.v1';
 const editModeStorageKey = 'docdb.edit-mode.v1';
-let currentAppearance = {
-  paper: 'white',
-  density: 'comfortable',
-  scale: 100,
-};
-let chromeRevealTimer = null;
 let loadingGuardTimer = null;
 let customCssSheet = null;
 
@@ -745,12 +738,13 @@ function publishViewState(effectiveCss) {
   const viewportWidth = Number.isFinite(window.innerWidth) ? Math.max(1, Math.round(window.innerWidth)) : null;
   const viewportHeight = Number.isFinite(window.innerHeight) ? Math.max(1, Math.round(window.innerHeight)) : null;
   const pixelRatio = Number.isFinite(window.devicePixelRatio) ? Number(window.devicePixelRatio) : null;
+  const appearance = ensureUiStateController().getCurrentAppearance();
 
   vscode.postMessage({
     type: 'view-state',
     payload: {
       docPath: currentDocPath,
-      theme: currentTheme,
+      theme: ensureUiStateController().getCurrentTheme(),
       resolvedTheme,
       fsm: {
         documentState: docViewState,
@@ -764,9 +758,9 @@ function publishViewState(effectiveCss) {
       },
       sourceText,
       appearance: {
-        paper: currentAppearance.paper,
-        density: currentAppearance.density,
-        scale: currentAppearance.scale,
+        paper: appearance.paper,
+        density: appearance.density,
+        scale: appearance.scale,
       },
       viewport: {
         width: viewportWidth,
@@ -1397,25 +1391,6 @@ function insertParagraphBlock(index) {
   });
 }
 
-function clampScale(value) {
-  const numeric = Number(value);
-
-  if (!Number.isFinite(numeric)) {
-    return 100;
-  }
-
-  return Math.min(115, Math.max(90, Math.round(numeric)));
-}
-
-function syncUiStateMirrorFromController() {
-  if (!uiStateController) {
-    return;
-  }
-
-  currentTheme = uiStateController.getCurrentTheme();
-  currentAppearance = uiStateController.getCurrentAppearance();
-}
-
 function ensureUiStateController() {
   if (uiStateController) {
     return uiStateController;
@@ -1439,34 +1414,11 @@ function ensureUiStateController() {
     tryApplyPendingExternalSource,
   });
 
-  uiStateController.setAppearance(currentAppearance);
-  uiStateController.applyTheme(currentTheme, false);
-  syncUiStateMirrorFromController();
   return uiStateController;
-}
-
-function loadAppearance() {
-  ensureUiStateController().loadAppearance();
-  syncUiStateMirrorFromController();
-}
-
-function persistAppearance() {
-  const controller = ensureUiStateController();
-  controller.setAppearance(currentAppearance);
-  controller.applyAppearance(true);
-  syncUiStateMirrorFromController();
-}
-
-function applyAppearance(persist = false) {
-  const controller = ensureUiStateController();
-  controller.setAppearance(currentAppearance);
-  controller.applyAppearance(Boolean(persist));
-  syncUiStateMirrorFromController();
 }
 
 function applyTheme(theme, persist = false) {
   ensureUiStateController().applyTheme(theme, Boolean(persist));
-  syncUiStateMirrorFromController();
 }
 
 function setControlsOpen(isOpen) {
@@ -1497,16 +1449,8 @@ function loadEditModePreference() {
   return ensureUiStateController().loadEditModePreference();
 }
 
-function persistEditModePreference(enabled) {
-  try {
-    window.localStorage.setItem(editModeStorageKey, enabled ? 'true' : 'false');
-  } catch {
-  }
-}
-
 function setEditMode(enabled) {
   ensureUiStateController().setEditMode(Boolean(enabled));
-  syncUiStateMirrorFromController();
 }
 
 function getFocusedBlockIndex() {
@@ -1606,7 +1550,7 @@ function captureSurfaceSnapshot(options = {}) {
   return {
     documentPath: currentDocPath,
     capturedAt: new Date().toISOString(),
-    theme: currentTheme,
+    theme: ensureUiStateController().getCurrentTheme(),
     resolvedTheme: document.body.dataset.resolvedTheme || 'light',
     editMode: isEditModeEnabled(),
     fsm: {
@@ -1725,18 +1669,7 @@ async function runSurfaceAction(payload = {}) {
 }
 
 function toggleEditMode() {
-  const isEnabled = isEditModeEnabled();
-  const nextEnabled = !isEnabled;
-
-  if (!nextEnabled) {
-    closeInlineCssSurface();
-    commitOpenSources();
-    closeAutocomplete();
-  }
-
-  setEditMode(nextEnabled);
-  setStatus(nextEnabled ? 'Edit mode on' : 'Edit mode off');
-  tryApplyPendingExternalSource();
+  ensureUiStateController().toggleEditMode();
 }
 
 function hideLoadingScreen() {
@@ -1965,7 +1898,7 @@ function initializeDocument() {
   const initialTheme = initEl && initEl.dataset && initEl.dataset.initialTheme ? initEl.dataset.initialTheme : 'auto';
   const initialPaper = initEl && initEl.dataset && initEl.dataset.initialPaper ? initEl.dataset.initialPaper : 'white';
   const initialDensity = initEl && initEl.dataset && initEl.dataset.initialDensity ? initEl.dataset.initialDensity : 'comfortable';
-  const initialScale = initEl && initEl.dataset && initEl.dataset.initialScale ? clampScale(initEl.dataset.initialScale) : 100;
+  const initialScale = initEl && initEl.dataset && initEl.dataset.initialScale ? Number(initEl.dataset.initialScale) : 100;
   const preferredEditMode = loadEditModePreference();
   currentDocPath = docPath;
   workspaceBaseUri = (initEl && initEl.dataset && initEl.dataset.workspaceUri) ? String(initEl.dataset.workspaceUri).replace(/\/$/, '') : '';
@@ -2626,24 +2559,27 @@ function initializeDocument() {
   const paperSelect = document.getElementById('paper-select');
   if (paperSelect) {
     paperSelect.addEventListener('change', (event) => {
-      currentAppearance.paper = String(event.target.value || 'white');
-      applyAppearance(true);
+      ensureUiStateController().updateAppearance({
+        paper: String(event.target.value || 'white'),
+      }, true);
     });
   }
 
   const densitySelect = document.getElementById('density-select');
   if (densitySelect) {
     densitySelect.addEventListener('change', (event) => {
-      currentAppearance.density = String(event.target.value || 'comfortable');
-      applyAppearance(true);
+      ensureUiStateController().updateAppearance({
+        density: String(event.target.value || 'comfortable'),
+      }, true);
     });
   }
 
   const scaleSlider = document.getElementById('scale-slider');
   if (scaleSlider) {
     scaleSlider.addEventListener('input', (event) => {
-      currentAppearance.scale = clampScale(event.target.value);
-      applyAppearance(true);
+      ensureUiStateController().updateAppearance({
+        scale: event.target.value,
+      }, true);
     });
   }
 
@@ -2743,7 +2679,7 @@ function initializeDocument() {
   if (window.matchMedia) {
     const media = window.matchMedia('(prefers-color-scheme: dark)');
     media.addEventListener('change', () => {
-      if (currentTheme === 'auto') {
+      if (ensureUiStateController().getCurrentTheme() === 'auto') {
         applyTheme('auto', false);
       }
     });
@@ -2751,12 +2687,11 @@ function initializeDocument() {
 
   try {
     applyTheme(initialTheme, false);
-    currentAppearance = {
+    ensureUiStateController().updateAppearance({
       paper: ['white', 'cream', 'slate'].includes(String(initialPaper || 'white')) ? String(initialPaper || 'white') : 'white',
       density: ['comfortable', 'compact'].includes(String(initialDensity || 'comfortable')) ? String(initialDensity || 'comfortable') : 'comfortable',
       scale: initialScale,
-    };
-    applyAppearance(false);
+    }, false);
     refreshDocumentCss();
     setControlsOpen(false);
     setHelpOpen(false);
