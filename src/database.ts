@@ -699,19 +699,29 @@ export function listWorkspaceProjects(db: DatabaseConnection) {
 
 export function migrateLegacyWorkspace(db: DatabaseConnection, workspaceRoot: string, legacyDbPath: string) {
   // Public callers should pass non-empty roots; fallback is defensive.
-    const root = String(workspaceRoot || '').trim();
+  const root = String(workspaceRoot || '').trim();
   // Public callers should pass non-empty paths; fallback is defensive.
-    const legacyPath = String(legacyDbPath || '').trim();
+  const legacyPath = String(legacyDbPath || '').trim();
 
   if (!root || !legacyPath || !existsSync(legacyPath)) {
     return { imported: 0, skipped: 0 };
   }
 
-  let legacyDb;
+  interface LegacyDbHandle {
+    prepare(sql: string): { all<T = unknown>(...params: unknown[]): T[] };
+    close(): void;
+  }
+
+  let legacyDb: LegacyDbHandle = {
+    prepare() {
+      throw new Error('legacyDb handle not initialized');
+    },
+    close() {},
+  };
 
   try {
     legacyDb = new DatabaseSync(legacyPath);
-    const tables = legacyDb.prepare(`SELECT name FROM sqlite_master WHERE type = ?`).all('table');
+    const tables = legacyDb.prepare(`SELECT name FROM sqlite_master WHERE type = ?`).all<LegacyTableRow>('table');
     const hasDocuments = tables.some((row: LegacyTableRow) => row.name === 'documents');
 
     if (!hasDocuments) {
@@ -730,7 +740,7 @@ export function migrateLegacyWorkspace(db: DatabaseConnection, workspaceRoot: st
 
     for (const row of rows as LegacyDocumentRow[]) {
       // Legacy body fallback for incomplete rows.
-            const parsed = parseDocFile(row.path, row.body || '');
+      const parsed = parseDocFile(row.path, row.body || '');
       const existing = getDocumentByPath(db, root, row.path);
 
       if (existing) {
@@ -743,16 +753,15 @@ export function migrateLegacyWorkspace(db: DatabaseConnection, workspaceRoot: st
         root,
         parsed,
         // source_mtime_ms fallback is defensive for malformed legacy rows.
-                Number(row.source_mtime_ms || Date.now())
+        Number(row.source_mtime_ms || Date.now())
       );
       imported += 1;
     }
 
+    legacyDb.close();
     return { imported, skipped };
-    } catch {
+  } catch {
+    legacyDb.close();
     return { imported: 0, skipped: 0 };
-    /* c8 ignore next */
-    } finally {
-    legacyDb?.close();
   }
-  }
+}

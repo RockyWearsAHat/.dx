@@ -76,10 +76,7 @@ function decodeVarint(buffer: Buffer, state: DecodeState): number {
   let value = 0;
 
   while (state.offset < buffer.length) {
-    const byte = buffer[state.offset];
-    if (byte === undefined) {
-      throw new Error('Unexpected end of binary document while decoding varint byte.');
-    }
+    const byte = buffer[state.offset] as number;
     state.offset += 1;
     value |= (byte & 0x7f) << shift;
 
@@ -226,10 +223,7 @@ function decodeBlock(buffer: Buffer, state: DecodeState): BinaryBlock {
     throw new Error('Unexpected end of binary document while decoding block.');
   }
 
-  const typeCode = buffer[state.offset];
-  if (typeCode === undefined) {
-    throw new Error('Unexpected end of binary document while decoding block type.');
-  }
+  const typeCode = buffer[state.offset] as number;
   state.offset += 1;
 
   // Unknown type codes require malformed payloads crafted outside packDocument.
@@ -241,10 +235,7 @@ function decodeBlock(buffer: Buffer, state: DecodeState): BinaryBlock {
       throw new Error('Unexpected end of binary document while decoding heading level.');
     }
 
-    const level = buffer[state.offset];
-    if (level === undefined) {
-      throw new Error('Unexpected end of binary document while decoding heading level.');
-    }
+    const level = buffer[state.offset] as number;
     state.offset += 1;
     const text = decodeString(buffer, state);
     return { type, id, level, text };

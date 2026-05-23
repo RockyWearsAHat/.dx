@@ -2,3 +2,18 @@ data/*.sqlite
 data/*.sqlite-*
 node_modules/
 /.doc/.local-docs.bin
+
+# Generated artifacts
+build/
+coverage/
+tmp/
+*.vsix
+
+# Legacy JS byproducts from pre-TS-only source layout
+src/*.js
+src/*.js.map
+vscode-extension/media/*.js
+vscode-extension/media/*.js.map
+
+# Local workspace noise
+.DS_Store

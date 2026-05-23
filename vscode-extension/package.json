@@ -4,6 +4,7 @@
   "description": "Mount SQLite-backed DOC files as virtual files in VS Code without an HTTP backend.",
   "version": "0.0.98",
   "publisher": "local",
+  "type": "module",
   "repository": {
     "type": "git",
     "url": "https://github.com/RockyWearsAHat/.dx.git"
@@ -18,7 +19,7 @@
     "onStartupFinished",
     "onFileSystem:docdb"
   ],
-  "main": "./extension.js",
+  "main": "../build/runtime/vscode-extension/extension.cjs",
   "contributes": {
     "customEditors": [
       {

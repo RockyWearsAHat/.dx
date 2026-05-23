@@ -26,6 +26,12 @@ import { createUiStateController } from './webview-ui-state.js';
 import { createSurfaceController } from './webview-surface-controller.js';
 import type { PipelineBlock } from './doc-pipeline.js';
 
+declare function acquireVsCodeApi(): {
+  postMessage: (message: object) => void;
+  getState?: () => object | null;
+  setState?: (state: object) => void;
+};
+
 const vscode = typeof acquireVsCodeApi === 'function' ? acquireVsCodeApi() : { postMessage: () => {} };
 
 type JsonLike = string | number | boolean | null | undefined | object;
