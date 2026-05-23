@@ -2,8 +2,8 @@
   "servers": {
     "doc-platform": {
       "type": "stdio",
-      "command": "node",
-      "args": ["src/mcp-server.js"],
+      "command": "npm",
+      "args": ["run", "-s", "mcp"],
       "env": {
         "DOC_WORKSPACE_ROOT": "${workspaceFolder}"
       }
