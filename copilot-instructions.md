@@ -38,13 +38,16 @@
 ## Build and Run
 - Install deps/build native module: `npm install`
 - Rebuild native bridge manually: `npm run build:native`
+- Build native bridge only if missing: `npm run build:native:once`
 - Compile TypeScript sources to runtime JavaScript (migration-safe emit): `npm run build:ts`
 - Seed baseline example docs: `npm run docs:seed`
 - Run strict TypeScript diagnostics for stabilized surface files: `npm run typecheck`
 - Run full migration diagnostics across all TypeScript source files: `npm run typecheck:full`
 - Produce latest release artifacts in `build/`: `npm run build:artifacts`
-- Start MCP server: `npm run mcp`
-- MCP server dev mode: `npm run mcp:dev`
+- Start MCP server (fast start, no rebuild): `npm run mcp`
+- Prepare MCP runtime + native bridge once: `npm run mcp:prepare`
+- MCP server dev mode (fast start): `npm run mcp:dev`
+- MCP dev mode with prepare step: `npm run mcp:dev:prepare`
 - Run tests: `npm test`
 - Run enforced 100% coverage gate (critical backend/rendering surface): `npm run test:coverage`
 - Build artifacts cleanup helper: `npm run clean`

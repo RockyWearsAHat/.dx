@@ -28,12 +28,13 @@ path: research/grill-with-docs.dx
 2. **(Optional) Seed example docs:** `npm run docs:seed` to rewrite baseline welcome/tutorial/reference docs.
 3. **Ingest workspace (repeat when needed):** `npm run ingest` to migrate/reindex all `.dx` files into SQLite.
 4. **Compile TypeScript runtime artifacts:** `npm run build:ts`.
-5. **Run strict TypeScript diagnostics for the stabilized surface:** `npm run typecheck`.
-6. **Run full migration diagnostics across all TypeScript files:** `npm run typecheck:full`.
-7. **Run MCP server:** `npm run mcp` to start the MCP server (exposes document operations to AI tools).
-8. **Edit in VS Code:** Open `vscode-extension/` and press `F5` to launch the extension with virtual `docdb:/` filesystem.
-9. **Reconstruct:** `npm run reconstruct -- <document-id>` to emit SQLite-backed DOCSRC source.
-10. **Re-clean generated outputs (when needed):** `npm run clean`.
+5. **(Optional) Ensure native bridge exists once:** `npm run build:native:once`.
+6. **Run strict TypeScript diagnostics for the stabilized surface:** `npm run typecheck`.
+7. **Run full migration diagnostics across all TypeScript files:** `npm run typecheck:full`.
+8. **Run MCP server (fast start):** `npm run mcp` to start the MCP server immediately from built runtime.
+9. **Edit in VS Code:** Open `vscode-extension/` and press `F5` to launch the extension with virtual `docdb:/` filesystem.
+10. **Reconstruct:** `npm run reconstruct -- <document-id>` to emit SQLite-backed DOCSRC source.
+11. **Re-clean generated outputs (when needed):** `npm run clean`.
 
 ## Project layout
 
@@ -82,6 +83,8 @@ The project exposes document operations via a Model Context Protocol (MCP) serve
 ```bash
 npm run mcp
 ```
+
+`npm run mcp` intentionally does not rebuild the native addon. The server starts quickly and uses the native bridge when `build/Release/doc_sqlite.node` is already present, otherwise it falls back to `node:sqlite` automatically. Use `npm run mcp:prepare` when you want to refresh runtime artifacts and ensure a native bridge is available.
 
 **Available Tools:**
 - `list-documents` — List all documents with optional search query
