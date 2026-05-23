@@ -39,6 +39,7 @@
 - Install deps/build native module: `npm install`
 - Rebuild native bridge manually: `npm run build:native`
 - Compile TypeScript sources to runtime JavaScript: `npm run build:ts`
+- Produce latest release artifacts in `build/`: `npm run build:artifacts`
 - Start MCP server: `npm run mcp`
 - MCP server dev mode: `npm run mcp:dev`
 - Run tests: `npm test`
@@ -49,6 +50,11 @@
 - Webview modules in `vscode-extension/media/` now have TypeScript source files (`*.ts`) checked in.
 - Emitted JavaScript artifacts (`*.js`) are still produced for runtime compatibility with Node entrypoints and webview loading.
 - Primary TypeScript project config is `tsconfig.json`; `tsconfig.surface.json` files are compatibility entrypoints extending the root config.
+
+## Release Artifacts Layout
+- Latest minified webview bundle output: `build/docdb-webview.bundle.min.js`
+- Latest VSIX package output: `build/docdb-virtual-files-<version>.vsix`
+- Previous bundles/VSIX files are archived under timestamped directories in `build/old_builds/`.
 
 ## Document Workflows
 - Guided setup + ingest tutorial: `npm run setup`

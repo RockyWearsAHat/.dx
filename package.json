@@ -7,6 +7,8 @@
     "build:native": "node-gyp rebuild || node -e \"console.warn('Native SQLite bridge build failed; falling back to node:sqlite.')\"",
     "build:ts": "npx tsc --project tsconfig.json",
     "build:surface": "npm run build:ts",
+    "build:artifacts": "node scripts/build-artifacts.mjs",
+    "build:release": "npm run build:artifacts",
     "mcp": "npm run build:native && node src/mcp-server.js",
     "mcp:dev": "npm run build:native && node --watch src/mcp-server.js",
     "verify:doc-fsm": "node scripts/verify-doc-save-fsm.mjs",
@@ -22,8 +24,10 @@
     "playwright": "^1.60.0"
   },
   "devDependencies": {
+    "@vscode/vsce": "^3.6.2",
     "@types/node": "^25.9.1",
     "c8": "^10.1.3",
+    "esbuild": "^0.27.0",
     "node-gyp": "^11.2.0",
     "typescript": "^6.0.3"
   },
