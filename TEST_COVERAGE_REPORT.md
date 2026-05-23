@@ -68,7 +68,7 @@ These areas are not part of the strict `--100` include list and can regress with
 - `src/cli.js` (command parsing/output/exit behavior)
 - `src/doc-view-capture.js` (Playwright and Quick Look fallback paths)
 - `src/git-doc-state.js` and `src/file-discovery.js` git-shell integration behavior
-- `vscode-extension/extension.js` and `vscode-extension/media/webview.js`
+- `vscode-extension/extension.js`, `vscode-extension/media/webview-main.js`, and `vscode-extension/media/webview.js`
 - native C++ implementation internals in `native/sqlite_bridge.cc` beyond JS-level smoke behavior
 
 ## Documentation Alignment Notes

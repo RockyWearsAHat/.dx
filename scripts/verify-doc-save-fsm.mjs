@@ -1,44 +1,9 @@
 #!/usr/bin/env node
 
 // Verifies the DOC save-state FSM table used by the webview.
-// Keep this in sync with vscode-extension/media/webview.js.
+// Keep this in sync with vscode-extension/media/webview-fsm.mjs.
 
-const DOC_SAVE_STATES = Object.freeze({
-  IDLE: 'idle',
-  DIRTY: 'dirty',
-  SAVING: 'saving',
-  SAVED: 'saved',
-  ERROR: 'error',
-});
-
-const DOC_SAVE_TRANSITIONS = Object.freeze({
-  [DOC_SAVE_STATES.IDLE]: {
-    MARK_DIRTY: DOC_SAVE_STATES.DIRTY,
-    START_SAVE: DOC_SAVE_STATES.SAVING,
-    SYNC_CLEAN: DOC_SAVE_STATES.IDLE,
-  },
-  [DOC_SAVE_STATES.DIRTY]: {
-    MARK_DIRTY: DOC_SAVE_STATES.DIRTY,
-    START_SAVE: DOC_SAVE_STATES.SAVING,
-    SYNC_CLEAN: DOC_SAVE_STATES.IDLE,
-  },
-  [DOC_SAVE_STATES.SAVING]: {
-    MARK_DIRTY: DOC_SAVE_STATES.DIRTY,
-    SAVE_COMPLETE: DOC_SAVE_STATES.SAVED,
-    SAVE_FAILED: DOC_SAVE_STATES.ERROR,
-  },
-  [DOC_SAVE_STATES.SAVED]: {
-    MARK_DIRTY: DOC_SAVE_STATES.DIRTY,
-    START_SAVE: DOC_SAVE_STATES.SAVING,
-    CLEAR_SAVED: DOC_SAVE_STATES.IDLE,
-    SYNC_CLEAN: DOC_SAVE_STATES.IDLE,
-  },
-  [DOC_SAVE_STATES.ERROR]: {
-    MARK_DIRTY: DOC_SAVE_STATES.DIRTY,
-    START_SAVE: DOC_SAVE_STATES.SAVING,
-    SYNC_CLEAN: DOC_SAVE_STATES.IDLE,
-  },
-});
+import { DOC_SAVE_STATES, DOC_SAVE_TRANSITIONS } from '../vscode-extension/media/webview-fsm.mjs';
 
 function verifySaveFsm(states, transitions) {
   const errors = [];
