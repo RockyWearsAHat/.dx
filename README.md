@@ -26,9 +26,12 @@ path: research/grill-with-docs.dx
 
 1. **Run guided setup:** `npm run setup` to ingest docs and print behavior-focused editor tips.
 2. **Ingest workspace (repeat when needed):** `npm run ingest` to migrate/reindex all `.dx` files into SQLite.
-3. **Run MCP server:** `npm run mcp` to start the MCP server (exposes document operations to AI tools).
-4. **Edit in VS Code:** Open `vscode-extension/` and press `F5` to launch the extension with virtual `docdb:/` filesystem.
-5. **Reconstruct:** `npm run reconstruct -- <document-id>` to emit SQLite-backed DOCSRC source.
+3. **Compile TypeScript runtime artifacts:** `npm run build:ts`.
+4. **Run strict TypeScript diagnostics for the stabilized surface:** `npm run typecheck`.
+5. **Run full migration diagnostics across all TypeScript files:** `npm run typecheck:full`.
+6. **Run MCP server:** `npm run mcp` to start the MCP server (exposes document operations to AI tools).
+7. **Edit in VS Code:** Open `vscode-extension/` and press `F5` to launch the extension with virtual `docdb:/` filesystem.
+8. **Reconstruct:** `npm run reconstruct -- <document-id>` to emit SQLite-backed DOCSRC source.
 
 The MCP server is the standard interface for AI agents and tools to query and manipulate documents. The VS Code extension connects directly to the local SQLite database via the native C++ bridge — no HTTP server required.
 

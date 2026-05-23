@@ -25,10 +25,118 @@ import { captureDocumentViewPng } from './doc-view-capture.js';
 import { stringifyDocFile } from './doc-format.js';
 import { resolveDocDbPath } from './global-db-path.js';
 import { mergeDocumentViewState, normalizeDocumentViewState, readDocumentViewState } from './view-state.js';
+import type { DocumentViewState } from './view-state.js';
 
 const PROTOCOL_VERSION = '2024-11-05';
-const runtimeCache = new Map();
-const viewerSessions = new Map();
+
+type JsonPrimitive = string | number | boolean | null;
+type JsonValue = JsonPrimitive | undefined | object | JsonValue[];
+type DbConnection = ReturnType<typeof createDatabase>;
+
+interface Runtime {
+  workspaceRoot: string;
+  db: DbConnection;
+}
+
+type ViewStateDb = Parameters<typeof readDocumentViewState>[0];
+
+interface DocBlock {
+  id?: string;
+  className?: string;
+  type?: string;
+  text?: string;
+  alt?: string;
+  src?: string;
+  language?: string;
+  href?: string;
+  media?: string;
+  items?: Array<string | { text?: string; checked?: boolean }>;
+}
+
+interface DocRecord {
+  id: number;
+  title: string;
+  relativePath: string;
+  updatedAt: string;
+  source?: string;
+  blocks?: DocBlock[];
+}
+
+interface ViewerActionSpec {
+  action?: string;
+  index?: number;
+  text?: string;
+  settings?: Record<string, JsonValue>;
+}
+
+interface ToolArgs extends ViewerActionSpec {
+  workspacePath?: string;
+  query?: string;
+  limit?: number;
+  path?: string;
+  id?: number | string;
+  title?: string;
+  summary?: string;
+  tags?: JsonValue[];
+  content?: string;
+  size?: number;
+  sessionId?: string;
+  actions?: ViewerActionSpec[];
+}
+
+interface ViewerSessionSnapshot {
+  document: DocRecord;
+  activeBlockIndex: number;
+  scrollTop: number;
+}
+
+interface ViewerHistoryEntry {
+  action: string;
+  at: string;
+  snapshot: ViewerSessionSnapshot;
+}
+
+interface ViewerSession {
+  sessionId: string;
+  workspaceRoot: string;
+  db: DbConnection;
+  document: DocRecord;
+  initialViewState: NormalizedViewState;
+  activeViewState: NormalizedViewState;
+  settingsDirty: boolean;
+  activeBlockIndex: number;
+  scrollTop: number;
+  history: ViewerHistoryEntry[];
+  future: ViewerHistoryEntry[];
+  savedSource: string;
+  isDirty: boolean;
+}
+
+interface JsonRpcRequest {
+  jsonrpc?: string;
+  method?: string;
+  params?: {
+    name?: string;
+    arguments?: ToolArgs;
+    workspacePath?: string;
+    uri?: string;
+  };
+  id?: JsonValue;
+}
+
+interface CaptureResult {
+  mimeType: string;
+  base64: string;
+  bytes: number;
+  mode: string;
+  engine: string;
+  viewport?: JsonValue;
+}
+
+type NormalizedViewState = DocumentViewState;
+
+const runtimeCache = new Map<string, Runtime>();
+const viewerSessions = new Map<string, ViewerSession>();
 
 const rl = readline.createInterface({
   input: process.stdin,
@@ -36,7 +144,7 @@ const rl = readline.createInterface({
   terminal: false,
 });
 
-function toSlug(value) {
+function toSlug(value: JsonValue): string {
   return String(value || 'untitled')
     .trim()
     .toLowerCase()
@@ -44,7 +152,7 @@ function toSlug(value) {
     .replace(/^-+|-+$/g, '') || 'untitled';
 }
 
-function safeJsonStringify(value) {
+function safeJsonStringify(value: JsonValue): string {
   return JSON.stringify(value, (_key, item) => {
     if (typeof item === 'bigint') {
       return item.toString();
@@ -53,16 +161,17 @@ function safeJsonStringify(value) {
   });
 }
 
-function resolveWorkspaceRoot(workspacePath) {
+function resolveWorkspaceRoot(workspacePath: JsonValue): string {
   const candidate = String(workspacePath || process.env.DOC_WORKSPACE_ROOT || process.cwd());
   return path.resolve(candidate);
 }
 
-async function getRuntime(workspacePath) {
+async function getRuntime(workspacePath: JsonValue): Promise<Runtime> {
   const workspaceRoot = resolveWorkspaceRoot(workspacePath);
 
-  if (runtimeCache.has(workspaceRoot)) {
-    return runtimeCache.get(workspaceRoot);
+  const cached = runtimeCache.get(workspaceRoot);
+  if (cached) {
+    return cached;
   }
 
   const dbPath = resolveDocDbPath();
@@ -259,16 +368,21 @@ const TOOLS = [
   },
 ];
 
-function createViewerSessionId() {
+function createViewerSessionId(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-function toBlockPreview(block) {
+function toBlockPreview(block: DocBlock | null | undefined): string {
   const type = String(block?.type || 'paragraph');
   if (type === 'bulleted-list' || type === 'numbered-list' || type === 'checklist') {
     const items = Array.isArray(block?.items) ? block.items : [];
     return items
-      .map((item) => String(item?.text || item || '').trim())
+      .map((item) => {
+        if (typeof item === 'object' && item !== null) {
+          return String(item.text || '').trim();
+        }
+        return String(item || '').trim();
+      })
       .filter(Boolean)
       .join(' | ')
       .slice(0, 180);
@@ -281,9 +395,9 @@ function toBlockPreview(block) {
   return String(block?.text || '').slice(0, 180);
 }
 
-function buildViewerState(session) {
+function buildViewerState(session: ViewerSession): Record<string, string | number | boolean | null | undefined | object> {
   const document = session.document;
-  const viewState = normalizeDocumentViewState(session.activeViewState);
+  const viewState = normalizeDocumentViewState(session.activeViewState) as NormalizedViewState;
   const blocks = Array.isArray(document?.blocks) ? document.blocks : [];
   const historyDepth = Array.isArray(session.history) ? session.history.length : 0;
   const redoDepth = Array.isArray(session.future) ? session.future.length : 0;
@@ -311,17 +425,16 @@ function buildViewerState(session) {
         preview: toBlockPreview(block),
       })),
       viewSettings: viewState,
-      html: renderDocumentViewHtml(document, {
-        theme: viewState.theme,
-        resolvedTheme: viewState.resolvedTheme,
-        appearance: viewState.appearance,
-        effectiveCss: viewState.effectiveCss,
+      html: renderDocumentViewHtml({
+        title: document.title,
+        relativePath: document.relativePath,
+        source: document.source,
       }),
     },
   };
 }
 
-function findViewerSessionForDocument(workspaceRoot, documentId) {
+function findViewerSessionForDocument(workspaceRoot: string, documentId: string | number | boolean | null | undefined | object): ViewerSession | null {
   const targetId = Number(documentId);
   if (!Number.isFinite(targetId)) {
     return null;
@@ -340,16 +453,16 @@ function findViewerSessionForDocument(workspaceRoot, documentId) {
   return null;
 }
 
-function getActiveCaptureViewState(runtime, document) {
+function getActiveCaptureViewState(runtime: Runtime, document: DocRecord | null): NormalizedViewState {
   const liveSession = findViewerSessionForDocument(runtime.workspaceRoot, document?.id);
   if (liveSession?.activeViewState) {
-    return normalizeDocumentViewState(liveSession.activeViewState);
+    return normalizeDocumentViewState(liveSession.activeViewState) as NormalizedViewState;
   }
 
-  return readDocumentViewState(runtime.db, document?.id);
+  return normalizeDocumentViewState(readDocumentViewState(runtime.db as ViewStateDb, document?.id) || {}) as NormalizedViewState;
 }
 
-function setBlockText(block, text) {
+function setBlockText(block: DocBlock, text: string | number | boolean | null | undefined | object): void {
   const value = String(text || '');
   const type = String(block?.type || 'paragraph');
 
@@ -367,7 +480,9 @@ function setBlockText(block, text) {
       .map((line) => {
         const match = /^\s*\[(x| )\]\s*(.*)$/i.exec(line.trim());
         if (match) {
-          return { checked: match[1].toLowerCase() === 'x', text: match[2] };
+          const checkedToken = match[1] ?? ' ';
+          const itemText = match[2] ?? '';
+          return { checked: checkedToken.toLowerCase() === 'x', text: itemText };
         }
         return { checked: false, text: line.trim() };
       })
@@ -383,7 +498,7 @@ function setBlockText(block, text) {
   block.text = value;
 }
 
-async function resolveDocumentFromArgs(runtime, args) {
+async function resolveDocumentFromArgs(runtime: Runtime, args: ToolArgs): Promise<DocRecord | null> {
   if (args.path) {
     return getDocumentByRelativePath(runtime.workspaceRoot, runtime.db, String(args.path));
   }
@@ -395,26 +510,26 @@ async function resolveDocumentFromArgs(runtime, args) {
   return null;
 }
 
-async function captureRendered({ document, size, viewState }) {
-  const captured = await captureDocumentViewPng(document, { size, viewState });
+async function captureRendered({ document, size, viewState }: { document: DocRecord; size?: number; viewState?: NormalizedViewState }) {
+  const captured = await captureDocumentViewPng(document, { size, viewState }) as CaptureResult;
   return { captured };
 }
 
-function cloneSessionDocument(document) {
-  return JSON.parse(safeJsonStringify(document || {}));
+function cloneSessionDocument(document: DocRecord): DocRecord {
+  return JSON.parse(safeJsonStringify(document || {})) as DocRecord;
 }
 
-function createInitialViewerViewState(db, document) {
+function createInitialViewerViewState(db: ViewStateDb, document: DocRecord): NormalizedViewState {
   const fromDb = readDocumentViewState(db, document?.id);
-  return normalizeDocumentViewState(fromDb || {});
+  return normalizeDocumentViewState(fromDb || {}) as NormalizedViewState;
 }
 
-function resetSessionViewState(session) {
+function resetSessionViewState(session: ViewerSession): void {
   session.activeViewState = normalizeDocumentViewState(session.initialViewState);
   session.settingsDirty = false;
 }
 
-function createSessionSnapshot(session) {
+function createSessionSnapshot(session: ViewerSession): ViewerSessionSnapshot {
   return {
     document: cloneSessionDocument(session.document),
     activeBlockIndex: session.activeBlockIndex,
@@ -422,7 +537,7 @@ function createSessionSnapshot(session) {
   };
 }
 
-function pushSessionHistory(session, action) {
+function pushSessionHistory(session: ViewerSession, action: string | number | boolean | null | undefined | object): void {
   if (!session || typeof session !== 'object') {
     return;
   }
@@ -448,7 +563,7 @@ function pushSessionHistory(session, action) {
   }
 }
 
-function syncSessionDirtyState(session) {
+function syncSessionDirtyState(session: ViewerSession): void {
   if (!session || typeof session !== 'object') {
     return;
   }
@@ -458,7 +573,7 @@ function syncSessionDirtyState(session) {
   session.isDirty = currentSource !== String(session.savedSource || '');
 }
 
-function undoSessionState(session) {
+function undoSessionState(session: ViewerSession): boolean {
   if (!session || !Array.isArray(session.history) || session.history.length === 0) {
     return false;
   }
@@ -489,7 +604,7 @@ function undoSessionState(session) {
   return true;
 }
 
-function redoSessionState(session) {
+function redoSessionState(session: ViewerSession): boolean {
   if (!session || !Array.isArray(session.future) || session.future.length === 0) {
     return false;
   }
@@ -520,7 +635,7 @@ function redoSessionState(session) {
   return true;
 }
 
-async function applyViewerAction(session, actionSpec) {
+async function applyViewerAction(session: ViewerSession, actionSpec: ViewerActionSpec): Promise<{ closed: true; restoredViewSettings: NormalizedViewState } | void> {
   const action = String(actionSpec?.action || '').toLowerCase();
   const blocks = Array.isArray(session.document?.blocks) ? session.document.blocks : [];
   const index = Number(actionSpec?.index);
@@ -567,7 +682,11 @@ async function applyViewerAction(session, actionSpec) {
     }
 
     pushSessionHistory(session, action);
-    setBlockText(blocks[index], String(actionSpec?.text || ''));
+    const block = blocks[index];
+    if (!block) {
+      throw new Error('index is required and must reference an existing block');
+    }
+    setBlockText(block, String(actionSpec?.text || ''));
     syncSessionDirtyState(session);
     return;
   }
@@ -634,7 +753,11 @@ async function applyViewerAction(session, actionSpec) {
   throw new Error(`Unknown interaction action: ${action}`);
 }
 
-async function handleTool(id, toolName, args = {}) {
+function toErrorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+async function handleTool(id: JsonValue, toolName: string, args: ToolArgs = {}) {
   try {
     let result;
     let content = null;
@@ -688,7 +811,9 @@ async function handleTool(id, toolName, args = {}) {
           path: docPath,
           title,
           summary: args.summary,
-          tags: Array.isArray(args.tags) ? args.tags : [],
+          tags: Array.isArray(args.tags)
+            ? args.tags.map((tag) => String(tag || '').trim()).filter(Boolean)
+            : [],
         });
 
         if (String(args.content || '').trim()) {
@@ -727,7 +852,7 @@ async function handleTool(id, toolName, args = {}) {
 
         const sessionId = createViewerSessionId();
         const savedSource = stringifyDocFile(document);
-        const initialViewState = createInitialViewerViewState(runtime.db, document);
+        const initialViewState = createInitialViewerViewState(runtime.db as ViewStateDb, document);
         const session = {
           sessionId,
           workspaceRoot: runtime.workspaceRoot,
@@ -810,7 +935,7 @@ async function handleTool(id, toolName, args = {}) {
             break;
           }
         } catch (err) {
-          return sendError(id, -32602, err.message);
+          return sendError(id, -32602, toErrorMessage(err));
         }
 
         result = buildViewerState(session);
@@ -834,7 +959,7 @@ async function handleTool(id, toolName, args = {}) {
 
           const sessionId = createViewerSessionId();
           const savedSource = stringifyDocFile(document);
-          const initialViewState = createInitialViewerViewState(runtime.db, document);
+          const initialViewState = createInitialViewerViewState(runtime.db as ViewStateDb, document);
           session = {
             sessionId,
             workspaceRoot: runtime.workspaceRoot,
@@ -871,7 +996,7 @@ async function handleTool(id, toolName, args = {}) {
               return sendResponse(id, { content });
             }
           } catch (err) {
-            return sendError(id, -32602, err.message);
+            return sendError(id, -32602, toErrorMessage(err));
           }
         }
 
@@ -907,11 +1032,11 @@ async function handleTool(id, toolName, args = {}) {
     });
   } catch (err) {
     console.error(`Tool ${toolName} error:`, err);
-    return sendError(id, -32603, `Tool execution failed: ${err.message}`);
+    return sendError(id, -32603, `Tool execution failed: ${toErrorMessage(err)}`);
   }
 }
 
-async function handleRequest(message) {
+async function handleRequest(message: JsonRpcRequest) {
   try {
     if (!message.jsonrpc || message.jsonrpc !== '2.0') {
       return sendError(message.id, -32600, 'Invalid Request');
@@ -938,7 +1063,7 @@ async function handleRequest(message) {
     }
 
     if (method === 'tools/call') {
-      const name = params?.name;
+      const name = String(params?.name || '');
       const callArgs = params?.arguments || {};
       return handleTool(id, name, callArgs);
     }
@@ -974,12 +1099,18 @@ async function handleRequest(message) {
       }
 
       if (uri.startsWith('docview:///')) {
+        const renderDocument = {
+          title: doc.title,
+          relativePath: doc.relativePath,
+          source: doc.source,
+        };
+
         return sendResponse(id, {
           contents: [
             {
               uri,
               mimeType: 'text/html',
-              text: renderDocumentViewHtml(doc),
+              text: renderDocumentViewHtml(renderDocument),
             },
           ],
         });
@@ -999,15 +1130,15 @@ async function handleRequest(message) {
     return sendError(id, -32601, 'Method not found');
   } catch (err) {
     console.error('Request handling error:', err);
-    return sendError(message.id, -32603, `Internal error: ${err.message}`);
+    return sendError(message.id, -32603, `Internal error: ${toErrorMessage(err)}`);
   }
 }
 
-function sendResponse(id, result) {
+function sendResponse(id: JsonValue, result: JsonValue): void {
   console.log(safeJsonStringify({ jsonrpc: '2.0', id, result }));
 }
 
-function sendError(id, code, message) {
+function sendError(id: JsonValue, code: number, message: string): void {
   console.log(safeJsonStringify({ jsonrpc: '2.0', id, error: { code, message } }));
 }
 
@@ -1016,7 +1147,7 @@ rl.on('line', async (line) => {
     const message = JSON.parse(line);
     await handleRequest(message);
   } catch (err) {
-    console.error('Parse error:', err.message);
+    console.error('Parse error:', toErrorMessage(err));
     sendError(null, -32700, 'Parse error');
   }
 });

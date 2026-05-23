@@ -1,13 +1,57 @@
-function isBulletedListType(type) {
+interface ChecklistItem {
+  checked?: boolean;
+  text?: string;
+}
+
+type BlockItem = string | ChecklistItem;
+
+interface RenderBlock {
+  id?: string;
+  className?: string;
+  type: string;
+  text?: string;
+  level?: number;
+  src?: string;
+  alt?: string;
+  items?: BlockItem[];
+}
+
+interface RendererOptions {
+  applyBlockViewPresentation?: (element: HTMLElement, block: RenderBlock) => void;
+  listItemText?: (item: BlockItem) => string;
+  splitClassNames?: (className: string | undefined) => string[];
+  getWorkspaceBaseUri?: () => string;
+}
+
+interface ParsedTextToken {
+  type: 'text';
+  value: string;
+}
+
+interface ParsedLinkToken {
+  type: 'link';
+  label: string;
+  href: string;
+}
+
+type ParsedToken = ParsedTextToken | ParsedLinkToken;
+
+interface SplitEditorSource {
+  headerSource: string;
+  bodySource: string;
+  footerSource: string;
+}
+
+function isBulletedListType(type: string): boolean {
   return type === 'list' || type === 'bulleted-list';
 }
 
-function isNumberedListType(type) {
+function isNumberedListType(type: string): boolean {
   return type === 'numbered-list';
 }
 
-function parseInlineLinks(text) {
-  const tokens = [];
+function parseInlineLinks(text: string): ParsedToken[] {
+  const tokens: ParsedToken[] = [];
   const pattern = /\[([^\]]+)\]\(([^)]+)\)/g;
   let lastIndex = 0;
   let match = pattern.exec(text);
@@ -15,7 +59,7 @@ function parseInlineLinks(text) {
     if (match.index > lastIndex) {
       tokens.push({ type: 'text', value: text.slice(lastIndex, match.index) });
     }
-    tokens.push({ type: 'link', label: match[1], href: match[2] });
+    tokens.push({ type: 'link', label: match[1] ?? '', href: match[2] ?? '' });
     lastIndex = match.index + match[0].length;
     match = pattern.exec(text);
   }
@@ -25,13 +69,13 @@ function parseInlineLinks(text) {
   return tokens;
 }
 
-export function createBlockRenderer(options = {}) {
+export function createBlockRenderer(options: RendererOptions = {}) {
   const applyBlockViewPresentation = typeof options.applyBlockViewPresentation === 'function'
     ? options.applyBlockViewPresentation
     : () => {};
   const listItemText = typeof options.listItemText === 'function'
     ? options.listItemText
-    : (item) => String(item || '');
+    : (item: BlockItem) => String(item || '');
   const splitClassNames = typeof options.splitClassNames === 'function'
     ? options.splitClassNames
     : () => [];
@@ -39,10 +83,11 @@ export function createBlockRenderer(options = {}) {
     ? options.getWorkspaceBaseUri
     : () => '';
 
-  function setInlineContent(el, text) {
+  function setInlineContent(el: HTMLElement, text: string): void {
     const tokens = parseInlineLinks(String(text || ''));
-    if (tokens.length === 1 && tokens[0].type === 'text') {
-      el.textContent = tokens[0].value;
+    const firstToken = tokens[0];
+    if (tokens.length === 1 && firstToken?.type === 'text') {
+      el.textContent = firstToken.value;
       return;
     }
     el.textContent = '';
@@ -60,8 +105,8 @@ export function createBlockRenderer(options = {}) {
     }
   }
 
-  function buildRenderedContent(block) {
-    function applyBlockDecorations(element) {
+  function buildRenderedContent(block: RenderBlock): HTMLElement {
+    function applyBlockDecorations<T extends HTMLElement>(element: T): T {
       if (!element) return element;
       if (block.id) {
         element.id = block.id;
@@ -75,7 +120,7 @@ export function createBlockRenderer(options = {}) {
 
     if (block.type === 'heading') {
       const level = Math.min(6, Math.max(1, Number(block.level || 1)));
-      const heading = document.createElement('h' + level);
+      const heading = document.createElement(`h${level}`);
       heading.textContent = block.text || '';
       return applyBlockDecorations(heading);
     }
@@ -162,14 +207,18 @@ export function createBlockRenderer(options = {}) {
       const ul = document.createElement('ul');
       ul.className = 'checklist-wrap';
       (block.items || []).forEach((item, itemIndex) => {
+        const normalized = typeof item === 'object' && item !== null
+          ? { checked: Boolean(item.checked), text: String(item.text || '') }
+          : { checked: false, text: String(item || '') };
+
         const li = document.createElement('li');
         const checkbox = document.createElement('input');
         checkbox.type = 'checkbox';
-        checkbox.checked = Boolean(item.checked);
+        checkbox.checked = normalized.checked;
         checkbox.dataset.itemIndex = String(itemIndex);
         const span = document.createElement('span');
-        setInlineContent(span, item.text);
-        if (item.checked) {
+        setInlineContent(span, normalized.text);
+        if (normalized.checked) {
           span.className = 'check-done';
         }
         li.appendChild(checkbox);
@@ -184,7 +233,7 @@ export function createBlockRenderer(options = {}) {
     return applyBlockDecorations(fallback);
   }
 
-  function buildBlockWrap(block, index) {
+  function buildBlockWrap(block: RenderBlock, index: number): HTMLDivElement {
     const wrap = document.createElement('div');
     wrap.className = 'block-wrap';
     wrap.dataset.blockIndex = String(index);
@@ -247,17 +296,17 @@ export function createBlockRenderer(options = {}) {
     return wrap;
   }
 
-  function getRawSourceForEditor(rawSource) {
+  function getRawSourceForEditor(rawSource: string | number | boolean | null | undefined | object): string {
     return String(rawSource || '')
       .replace(/\r\n/g, '\n')
       .replace(/\n::end\s*$/, '');
   }
 
-  function getRawSourceFromEditor(editorValue) {
+  function getRawSourceFromEditor(editorValue: string | number | boolean | null | undefined | object): string {
     return String(editorValue || '').replace(/\r\n/g, '\n');
   }
 
-  function splitBlockSourceForEditor(rawSource, blockType) {
+  function splitBlockSourceForEditor(rawSource: string | number | boolean | null | undefined | object, blockType: string): SplitEditorSource {
     const normalized = String(rawSource || '').replace(/\r\n/g, '\n');
     const trimmed = normalized.trim();
 
@@ -274,7 +323,8 @@ export function createBlockRenderer(options = {}) {
     let endIdx = lines.length;
 
     for (let index = 1; index < lines.length; index += 1) {
-      if (lines[index].trim() === '::end') {
+      const line = lines[index] ?? '';
+      if (line.trim() === '::end') {
         endIdx = index;
         break;
       }
@@ -287,7 +337,7 @@ export function createBlockRenderer(options = {}) {
     };
   }
 
-  function buildRawSourceFromEditorParts(headerSource, bodySource, footerSource) {
+  function buildRawSourceFromEditorParts(headerSource: string | number | boolean | null | undefined | object, bodySource: string | number | boolean | null | undefined | object, footerSource: string | number | boolean | null | undefined | object): string {
     const header = String(headerSource || '').trimEnd();
     const body = String(bodySource || '').replace(/\r\n/g, '\n');
     const footer = String(footerSource || '').trim();
@@ -307,16 +357,18 @@ export function createBlockRenderer(options = {}) {
     return parts.join('\n');
   }
 
-  function getBlockHeaderEditor(textarea) {
+  function getBlockHeaderEditor(textarea: HTMLTextAreaElement | null): HTMLTextAreaElement | null {
     if (!textarea) return null;
     if (textarea.classList && textarea.classList.contains('block-edit-header')) {
       return textarea;
     }
     const srcWrap = textarea.closest('.block-src-wrapper');
-    return srcWrap ? srcWrap.querySelector('.block-edit-header') : null;
+    if (!srcWrap) return null;
+    const header = srcWrap.querySelector('.block-edit-header');
+    return header instanceof HTMLTextAreaElement ? header : null;
   }
 
-  function getHeaderSourceFromEditor(textarea) {
+  function getHeaderSourceFromEditor(textarea: HTMLTextAreaElement | null): string {
     const headerEditor = getBlockHeaderEditor(textarea);
     if (!headerEditor) {
       return String(textarea?.dataset?.headerSource || '');
@@ -324,7 +376,7 @@ export function createBlockRenderer(options = {}) {
     return getRawSourceFromEditor(headerEditor.value || '');
   }
 
-  function renderEditableHeader(textarea) {
+  function renderEditableHeader(textarea: HTMLTextAreaElement | null): void {
     if (!textarea) return;
 
     const headerEl = getBlockHeaderEditor(textarea);
@@ -354,15 +406,15 @@ export function createBlockRenderer(options = {}) {
     headerEl.classList.toggle('paragraph-mode', !inTagMode);
   }
 
-  function applyEditableBodyPresentation(wrap, block) {
+  function applyEditableBodyPresentation(wrap: HTMLElement | null, block: RenderBlock | null): void {
     if (!wrap || !block) return;
 
     const view = wrap.querySelector('.block-view');
     const source = wrap.querySelector('.block-src');
-    if (!view || !source) return;
+    if (!(view instanceof HTMLElement) || !(source instanceof HTMLTextAreaElement)) return;
 
     const rendered = view.firstElementChild;
-    if (rendered && rendered.id) {
+    if (rendered instanceof HTMLElement && rendered.id) {
       rendered.dataset.originalEditingId = rendered.id;
       rendered.removeAttribute('id');
     }
@@ -391,13 +443,13 @@ export function createBlockRenderer(options = {}) {
     renderEditableHeader(source);
   }
 
-  function clearEditableBodyPresentation(wrap) {
+  function clearEditableBodyPresentation(wrap: HTMLElement | null): void {
     if (!wrap) return;
 
     const view = wrap.querySelector('.block-view');
     const source = wrap.querySelector('.block-src');
     const header = wrap.querySelector('.block-edit-header');
-    if (!source) return;
+    if (!(source instanceof HTMLTextAreaElement)) return;
 
     const previousClasses = String(source.dataset.editPresentationClasses || '').split(' ').filter(Boolean);
     if (previousClasses.length > 0) {
@@ -407,13 +459,13 @@ export function createBlockRenderer(options = {}) {
     delete source.dataset.editPresentationClasses;
     source.removeAttribute('id');
 
-    if (header) {
+    if (header instanceof HTMLTextAreaElement) {
       header.textContent = '';
       header.style.display = 'none';
     }
 
-    const rendered = view ? view.firstElementChild : null;
-    if (rendered && rendered.dataset.originalEditingId) {
+    const rendered = view instanceof HTMLElement ? view.firstElementChild : null;
+    if (rendered instanceof HTMLElement && rendered.dataset.originalEditingId) {
       rendered.id = rendered.dataset.originalEditingId;
       delete rendered.dataset.originalEditingId;
     }

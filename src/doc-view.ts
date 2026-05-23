@@ -1,6 +1,22 @@
 import { parseSourceBlocks, splitClassNames } from '../vscode-extension/media/doc-pipeline.js';
+import type { ChecklistItem, PipelineBlock } from '../vscode-extension/media/doc-pipeline.js';
+import type { DocumentViewState } from './view-state.js';
 
-function escapeHtml(value) {
+interface RenderDocument {
+  title?: string;
+  relativePath?: string;
+  source?: string;
+  blocks?: PipelineBlock[];
+}
+
+interface RenderOptions {
+  theme?: DocumentViewState['theme'];
+  resolvedTheme?: DocumentViewState['resolvedTheme'];
+  appearance?: DocumentViewState['appearance'] | null;
+  effectiveCss?: string;
+}
+
+function escapeHtml(value: string | number | boolean | null | undefined | object): string {
   return String(value || '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
@@ -9,16 +25,21 @@ function escapeHtml(value) {
     .replace(/'/g, '&#39;');
 }
 
-function escapeStyleTagContent(value) {
+function escapeStyleTagContent(value: string | number | boolean | null | undefined | object): string {
   return String(value).replace(/<\/(style)/gi, '<\\/$1');
 }
 
-function toStringItems(items) {
+function toStringItems(items: Array<string | ChecklistItem> | undefined): string[] {
   if (!Array.isArray(items)) return [];
-  return items.map((item) => String(item?.text || item || '').trim()).filter(Boolean);
+  return items.map((item) => {
+    if (typeof item === 'object' && item !== null) {
+      return String(item.text || '').trim();
+    }
+    return String(item || '').trim();
+  }).filter(Boolean);
 }
 
-function decorateRootTag(tag, block) {
+function decorateRootTag(tag: string, block: PipelineBlock | undefined) {
   const attrs = [];
   const classes = splitClassNames(block?.className);
 
@@ -35,7 +56,7 @@ function decorateRootTag(tag, block) {
   return attrs.length > 0 ? `<${tag} ${attrs.join(' ')}>` : `<${tag}>`;
 }
 
-function getDecoratedAttrs(block, baseClasses = []) {
+function getDecoratedAttrs(block: PipelineBlock | undefined, baseClasses: string[] = []): string {
   const classes = [...baseClasses, ...splitClassNames(block?.className)];
   const attrs = [];
 
@@ -54,7 +75,7 @@ function getDecoratedAttrs(block, baseClasses = []) {
   return attrs.length > 0 ? ` ${attrs.join(' ')}` : '';
 }
 
-function renderBlock(block) {
+function renderBlock(block: PipelineBlock): string {
   const type = String(block?.type || 'paragraph').toLowerCase();
 
   if (type === 'style' || type === 'stylesheet') {
@@ -84,8 +105,11 @@ function renderBlock(block) {
     const items = Array.isArray(block?.items) ? block.items : [];
     const attrs = getDecoratedAttrs(block, ['checklist-wrap']);
     return `<ul${attrs}>${items.map((item) => {
-      const checked = Boolean(item?.checked);
-      const text = escapeHtml(item?.text || item || '');
+      const normalized = typeof item === 'object' && item !== null
+        ? { checked: Boolean(item.checked), text: String(item.text || '') }
+        : { checked: false, text: String(item || '') };
+      const checked = normalized.checked;
+      const text = escapeHtml(normalized.text);
       return `<li><input type="checkbox" disabled ${checked ? 'checked' : ''} /><span${checked ? ' class="check-done"' : ''}>${text}</span></li>`;
     }).join('')}</ul>`;
   }
@@ -118,18 +142,18 @@ function renderBlock(block) {
   return `${open}${escapeHtml(block?.text || '')}</p>`;
 }
 
-export function renderDocumentViewHtml(document, {
+export function renderDocumentViewHtml(document: RenderDocument, {
   theme = 'auto',
   resolvedTheme = 'dark',
   appearance = null,
   effectiveCss = '',
-} = {}) {
+}: RenderOptions = {}) {
   // Blocks are expected to be pre-validated and canonical.
   // The caller is responsible for parsing/validation upstream.
   // This function renders them as-is without roundtrip validation.
   const title = String(document?.title || document?.relativePath || 'Untitled Document');
   const parsedBlocks = parseSourceBlocks(String(document?.source || ''));
-  const blocks = parsedBlocks.length > 0
+  const blocks: PipelineBlock[] = parsedBlocks.length > 0
     ? parsedBlocks
     : (Array.isArray(document?.blocks) ? document.blocks : []);
   const styleBlocks = blocks
@@ -150,7 +174,7 @@ export function renderDocumentViewHtml(document, {
     const type = escapeHtml(block?.type || 'paragraph');
     const aria = escapeHtml(`Block ${index + 1}: ${type}`);
     const wrapClasses = ['block-wrap'];
-    for (const token of splitClassNames(block?.className)) {
+    for (const token of splitClassNames(block.className)) {
       wrapClasses.push(token);
     }
     if (block?.id) {

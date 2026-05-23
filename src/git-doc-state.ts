@@ -1,7 +1,14 @@
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 
-function runGit(args, cwd) {
+interface GitRunResult {
+  ok: boolean;
+  status: number;
+  stdout: string;
+  stderr: string;
+}
+
+function runGit(args: string[], cwd: string): GitRunResult {
   const result = spawnSync('git', args, {
     cwd,
     encoding: 'utf8',
@@ -16,7 +23,7 @@ function runGit(args, cwd) {
   };
 }
 
-function normalizeGitRelativePath(gitRoot, absolutePath) {
+function normalizeGitRelativePath(gitRoot: string, absolutePath: string): string {
   const relative = path.relative(gitRoot, absolutePath).replace(/\\/g, '/');
 
   if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) {
@@ -26,7 +33,7 @@ function normalizeGitRelativePath(gitRoot, absolutePath) {
   return relative;
 }
 
-export function resolveGitRoot(rootDir) {
+export function resolveGitRoot(rootDir: string): string {
   const probe = runGit(['-C', rootDir, 'rev-parse', '--show-toplevel'], rootDir);
 
   if (!probe.ok) {
@@ -36,7 +43,7 @@ export function resolveGitRoot(rootDir) {
   return path.resolve(String(probe.stdout || '').trim());
 }
 
-export function getGitDocState(rootDir, absoluteDocPath) {
+export function getGitDocState(rootDir: string, absoluteDocPath: string) {
   const gitRoot = resolveGitRoot(rootDir);
   const defaultState = {
     gitAvailable: Boolean(gitRoot),
@@ -114,7 +121,7 @@ export function getGitDocState(rootDir, absoluteDocPath) {
   };
 }
 
-export function listGitEligibleDxFiles(rootDir) {
+export function listGitEligibleDxFiles(rootDir: string): Set<string> | null {
   const gitRoot = resolveGitRoot(rootDir);
 
   if (!gitRoot) {
@@ -124,8 +131,8 @@ export function listGitEligibleDxFiles(rootDir) {
   const trackedResult = runGit(['-C', gitRoot, 'ls-files', '-z', '--', '*.dx'], gitRoot);
   const untrackedResult = runGit(['-C', gitRoot, 'ls-files', '-z', '--others', '--exclude-standard', '--', '*.dx'], gitRoot);
 
-  const eligible = new Set();
-  const addFromOutput = (output) => {
+  const eligible = new Set<string>();
+  const addFromOutput = (output: string) => {
     const entries = String(output || '').split('\0').filter(Boolean);
     for (const relativePath of entries) {
       const absolutePath = path.resolve(gitRoot, relativePath);

@@ -95,7 +95,8 @@ function decodeTags(buffer, state) {
     return tags;
 }
 function encodeBlock(block) {
-    const blockCode = BLOCK_TYPE_TO_CODE[block.type] || BLOCK_TYPE_TO_CODE.paragraph;
+    const normalizedType = typeof block.type === 'string' ? block.type : 'paragraph';
+    const blockCode = BLOCK_TYPE_TO_CODE[normalizedType] || BLOCK_TYPE_TO_CODE.paragraph;
     const parts = [Buffer.from([blockCode]), encodeString(block.id || '')];
     if (block.type === 'heading') {
         parts.push(Buffer.from([Math.max(1, Math.min(4, Number(block.level) || 1))]));
@@ -106,7 +107,8 @@ function encodeBlock(block) {
         const items = Array.isArray(block.items) ? block.items : [];
         parts.push(encodeVarint(items.length));
         for (const item of items) {
-            parts.push(encodeString(item));
+            const text = typeof item === 'object' && item !== null ? String(item.text || '') : String(item || '');
+            parts.push(encodeString(text));
         }
         return Buffer.concat(parts);
     }
@@ -144,7 +146,7 @@ function decodeBlock(buffer, state) {
     const typeCode = buffer[state.offset];
     state.offset += 1;
     // Unknown type codes require malformed payloads crafted outside packDocument.
-    const type = CODE_TO_BLOCK_TYPE[typeCode] || 'paragraph';
+    const type = (CODE_TO_BLOCK_TYPE[typeCode] || 'paragraph');
     const id = decodeString(buffer, state);
     if (type === 'heading') {
         if (state.offset >= buffer.length) {

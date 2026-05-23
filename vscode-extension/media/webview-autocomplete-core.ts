@@ -11,7 +11,45 @@ export const DEFAULT_BLOCK_AUTOCOMPLETE = [
   '::end',
 ];
 
-export function getLineContextFromValue(value, cursor) {
+export interface LineContext {
+  value: string;
+  cursor: number;
+  lineStart: number;
+  lineEnd: number;
+  lineText: string;
+  beforeCursor: string;
+  indent: string;
+}
+
+export interface AutocompleteSuggestion {
+  label: string;
+  insertText: string;
+  kind: 'block' | 'attribute-key' | 'attribute-value' | 'id' | 'class' | 'src';
+  detail: string;
+}
+
+export interface AutocompleteModel {
+  suggestions: AutocompleteSuggestion[];
+  replaceStart: number;
+  replaceEnd: number;
+  typed: string;
+}
+
+export interface AutocompleteComputeOptions {
+  forceOpen?: boolean;
+  context?: LineContext;
+  value?: string;
+  cursor?: number;
+  blockAutocomplete?: string[];
+  knownIds?: string[];
+  knownClasses?: string[];
+  knownImageSources?: string[];
+  knownBlockTypes?: string[];
+  knownAttributeKeys?: string[];
+  knownAttributeValuesByKey?: Record<string, string[]>;
+}
+
+export function getLineContextFromValue(value: string | number | boolean | null | undefined | object, cursor: string | number | boolean | null | undefined | object): LineContext {
   const text = String(value || '');
   const safeCursor = Math.max(0, Math.min(Number(cursor || 0), text.length));
   const lineStart = text.lastIndexOf('\n', Math.max(0, safeCursor - 1)) + 1;
@@ -32,7 +70,7 @@ export function getLineContextFromValue(value, cursor) {
   };
 }
 
-export function computeAutocompleteSuggestions(options) {
+export function computeAutocompleteSuggestions(options: AutocompleteComputeOptions): AutocompleteModel {
   const config = options || {};
   const forceOpen = Boolean(config.forceOpen);
   const context = config.context || getLineContextFromValue(config.value || '', config.cursor || 0);
@@ -48,7 +86,7 @@ export function computeAutocompleteSuggestions(options) {
     ? config.knownAttributeValuesByKey
     : {};
 
-  const suggestions = [];
+  const suggestions: AutocompleteSuggestion[] = [];
   let replaceStart = context.cursor;
   let replaceEnd = context.cursor;
   let typed = '';
@@ -87,7 +125,7 @@ export function computeAutocompleteSuggestions(options) {
 
       const afterLine = context.value.slice(context.cursor, context.lineEnd);
       const right = /^([^\s"']*)/.exec(afterLine);
-      replaceEnd = context.cursor + (right ? right[1].length : 0);
+      replaceEnd = context.cursor + (right?.[1]?.length ?? 0);
 
       const keyValues = Array.isArray(knownAttributeValuesByKey[key]) ? knownAttributeValuesByKey[key] : [];
       const candidates = new Set(keyValues);
@@ -117,7 +155,7 @@ export function computeAutocompleteSuggestions(options) {
 
     const keyMatch = /(?:\s|::[a-z-]+\s+)([a-zA-Z0-9._-]*)$/i.exec(before);
     if (keyMatch) {
-      typed = keyMatch[1] || '';
+      typed = keyMatch[1] ?? '';
       replaceStart = context.cursor - typed.length;
       replaceEnd = context.cursor;
 
@@ -148,11 +186,11 @@ export function computeAutocompleteSuggestions(options) {
 
   const idMatch = /\bid=([^\s]*)$/i.exec(context.beforeCursor);
   if (idMatch) {
-    typed = idMatch[1] || '';
+    typed = idMatch[1] ?? '';
     replaceStart = context.cursor - typed.length;
     const afterLine = context.value.slice(context.cursor, context.lineEnd);
     const right = /^([^\s]*)/.exec(afterLine);
-    replaceEnd = context.cursor + (right ? right[1].length : 0);
+    replaceEnd = context.cursor + (right?.[1]?.length ?? 0);
 
     for (const id of knownIds) {
       if (!id.startsWith(typed)) continue;
@@ -175,7 +213,7 @@ export function computeAutocompleteSuggestions(options) {
     replaceStart = context.cursor - currentToken.length;
     const afterClass = context.value.slice(context.cursor, context.lineEnd);
     const rightClass = /^([^\s"']*)/.exec(afterClass);
-    replaceEnd = context.cursor + (rightClass ? rightClass[1].length : 0);
+    replaceEnd = context.cursor + (rightClass?.[1]?.length ?? 0);
 
     for (const token of knownClasses) {
       if (!token.startsWith(currentToken) || token === currentToken) continue;
@@ -192,11 +230,11 @@ export function computeAutocompleteSuggestions(options) {
 
   const imageSrcMatch = /::image\s+[^\n]*\bsrc=([^\s]*)$/i.exec(context.beforeCursor);
   if (imageSrcMatch) {
-    typed = imageSrcMatch[1] || '';
+    typed = imageSrcMatch[1] ?? '';
     replaceStart = context.cursor - typed.length;
     const afterSrc = context.value.slice(context.cursor, context.lineEnd);
     const rightSrc = /^([^\s]*)/.exec(afterSrc);
-    replaceEnd = context.cursor + (rightSrc ? rightSrc[1].length : 0);
+    replaceEnd = context.cursor + (rightSrc?.[1]?.length ?? 0);
 
     for (const source of knownImageSources) {
       if (!source.startsWith(typed)) continue;
@@ -225,7 +263,7 @@ export function computeAutocompleteSuggestions(options) {
   return { suggestions, replaceStart, replaceEnd, typed };
 }
 
-export function computeNextSelectedIndex(currentIndex, delta, count) {
+export function computeNextSelectedIndex(currentIndex: number, delta: number, count: number): number {
   if (!Number.isFinite(count) || count <= 0) {
     return 0;
   }

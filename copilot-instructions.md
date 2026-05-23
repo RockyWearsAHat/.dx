@@ -38,7 +38,9 @@
 ## Build and Run
 - Install deps/build native module: `npm install`
 - Rebuild native bridge manually: `npm run build:native`
-- Compile TypeScript sources to runtime JavaScript: `npm run build:ts`
+- Compile TypeScript sources to runtime JavaScript (migration-safe emit): `npm run build:ts`
+- Run strict TypeScript diagnostics for stabilized surface files: `npm run typecheck`
+- Run full migration diagnostics across all TypeScript source files: `npm run typecheck:full`
 - Produce latest release artifacts in `build/`: `npm run build:artifacts`
 - Start MCP server: `npm run mcp`
 - MCP server dev mode: `npm run mcp:dev`

@@ -11,11 +11,11 @@ const IGNORED_DIRECTORIES = new Set([
   'node_modules',
 ]);
 
-export async function findDocFiles(rootDir) {
-  const results = [];
+export async function findDocFiles(rootDir: string): Promise<string[]> {
+  const results: string[] = [];
   const gitEligible = listGitEligibleDxFiles(rootDir);
 
-  async function walk(currentDir) {
+  async function walk(currentDir: string): Promise<void> {
     const entries = await readdir(currentDir, { withFileTypes: true });
 
     for (const entry of entries) {

@@ -15,7 +15,32 @@ const REPO_ARCHIVE_RELATIVE_PATH = '.doc/.repo-docs.bin';
 const LOCAL_ARCHIVE_RELATIVE_PATH = '.doc/.local-docs.bin';
 const LOCAL_ARCHIVE_GITIGNORE_ENTRY = '/.doc/.local-docs.bin';
 
-function readUInt32LE(buffer, offset) {
+interface ArchiveGitFlags {
+  tracked?: boolean;
+  untracked?: boolean;
+  ignored?: boolean;
+  modified?: boolean;
+  staged?: boolean;
+}
+
+interface ArchiveEntry {
+  sha256: string;
+  packedBytes: number;
+  _packed?: Buffer | Uint8Array;
+  payload?: string;
+  git?: ArchiveGitFlags;
+}
+
+interface ArchiveContainer {
+  version: number;
+  codec?: string;
+  updatedAt?: string;
+  documents: Record<string, ArchiveEntry>;
+}
+
+type ArchiveDocument = Parameters<typeof packDocument>[0];
+
+function readUInt32LE(buffer: Buffer, offset: number): number {
   if (offset + 4 > buffer.length) {
     throw new Error('Archive payload is truncated.');
   }
@@ -23,7 +48,7 @@ function readUInt32LE(buffer, offset) {
   return buffer.readUInt32LE(offset);
 }
 
-function legacyCompanionArchivePath(absoluteDocPath) {
+function legacyCompanionArchivePath(absoluteDocPath: string): string {
   const docPath = String(absoluteDocPath || '');
 
   if (!docPath.endsWith('.dx')) {
@@ -33,7 +58,7 @@ function legacyCompanionArchivePath(absoluteDocPath) {
   return `${docPath.slice(0, -3)}.dxz`;
 }
 
-function toRelativePath(rootDir, absolutePath) {
+function toRelativePath(rootDir: string, absolutePath: string): string {
   const relative = path.relative(rootDir, absolutePath);
 
   if (relative.startsWith('..') || path.isAbsolute(relative)) {
@@ -43,7 +68,7 @@ function toRelativePath(rootDir, absolutePath) {
   return relative;
 }
 
-function encodeArchivePayload(document) {
+function encodeArchivePayload(document: ArchiveDocument) {
   const packed = packDocument(document);
   const compressed = brotliCompressSync(packed, {
     params: {
@@ -69,7 +94,7 @@ function encodeArchivePayload(document) {
   };
 }
 
-function decodeArchivePayload(filePath, archiveBuffer) {
+function decodeArchivePayload(filePath: string, archiveBuffer: Buffer | Uint8Array | string | null | undefined) {
   const buffer = Buffer.isBuffer(archiveBuffer) ? archiveBuffer : Buffer.from(archiveBuffer || []);
 
   if (buffer.length < ARCHIVE_MAGIC.length + 4) {
@@ -94,15 +119,15 @@ function decodeArchivePayload(filePath, archiveBuffer) {
   return normalizeDocInput(filePath, unpacked);
 }
 
-function getRepoArchiveAbsolutePath(rootDir) {
+function getRepoArchiveAbsolutePath(rootDir: string): string {
   return path.resolve(rootDir, REPO_ARCHIVE_RELATIVE_PATH);
 }
 
-function getLocalArchiveAbsolutePath(rootDir) {
+function getLocalArchiveAbsolutePath(rootDir: string): string {
   return path.resolve(rootDir, LOCAL_ARCHIVE_RELATIVE_PATH);
 }
 
-function decodeRepoArchive(buffer) {
+function decodeRepoArchive(buffer: Buffer | Uint8Array | string | null | undefined): ArchiveContainer {
   const payload = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer || []);
 
   if (payload.length < REPO_ARCHIVE_MAGIC.length) {
@@ -115,7 +140,7 @@ function decodeRepoArchive(buffer) {
 
   const compressed = payload.subarray(REPO_ARCHIVE_MAGIC.length);
   const jsonText = brotliDecompressSync(compressed).toString('utf8');
-  const parsed = JSON.parse(jsonText);
+  const parsed = JSON.parse(jsonText) as ArchiveContainer;
 
   if (!parsed || typeof parsed !== 'object' || !parsed.documents || typeof parsed.documents !== 'object') {
     throw new Error('Repository archive has an invalid schema.');
@@ -145,11 +170,24 @@ function decodeRepoArchive(buffer) {
 // far more opportunity to find redundancy than per-document compression.
 // ---------------------------------------------------------------------------
 
-function encodeBundle(container) {
+function encodeBundle(container: ArchiveContainer): Buffer {
   const entries = Object.entries(container.documents || {});
 
   const pathBufs = entries.map(([k]) => Buffer.from(k, 'utf8'));
-  const packedBufs = entries.map(([, v]) => Buffer.from(v._packed));
+  const packedBufs = entries.map(([, v]) => {
+    if (v._packed) {
+      return Buffer.isBuffer(v._packed) ? v._packed : Buffer.from(v._packed);
+    }
+
+    if (v.payload) {
+      const archiveBuffer = Buffer.from(String(v.payload), 'base64');
+      const packedLen = archiveBuffer.readUInt32LE(ARCHIVE_MAGIC.length);
+      const compressed = archiveBuffer.subarray(ARCHIVE_MAGIC.length + 4);
+      return brotliDecompressSync(compressed).subarray(0, packedLen);
+    }
+
+    throw new Error('Archive entry is missing packed bytes and payload data.');
+  });
   const shas = entries.map(([, v]) => Buffer.from(v.sha256, 'hex'));
   const gitFlagsBufs = entries.map(([, v]) => {
     const g = v.git || {};
@@ -162,21 +200,30 @@ function encodeBundle(container) {
     return flags;
   });
 
-  const headerParts = [Buffer.alloc(4)];
-  headerParts[0].writeUInt32LE(entries.length, 0);
+  const countHeader = Buffer.alloc(4);
+  countHeader.writeUInt32LE(entries.length, 0);
+  const headerParts = [countHeader];
 
   for (let i = 0; i < entries.length; i++) {
     const pathBuf = pathBufs[i];
+    const sha = shas[i];
+    const gitFlags = gitFlagsBufs[i];
+    const packed = packedBufs[i];
+
+    if (!pathBuf || !sha || gitFlags === undefined || !packed) {
+      throw new Error('Archive bundle index arrays are out of sync.');
+    }
+
     const pathLen = Math.min(pathBuf.length, 255);
     const row = Buffer.alloc(1 + pathLen + 32 + 1 + 4);
     let off = 0;
     row.writeUInt8(pathLen, off++);
     pathBuf.copy(row, off, 0, pathLen);
     off += pathLen;
-    shas[i].copy(row, off);
+    sha.copy(row, off);
     off += 32;
-    row.writeUInt8(gitFlagsBufs[i], off++);
-    row.writeUInt32LE(packedBufs[i].length, off);
+    row.writeUInt8(gitFlags, off++);
+    row.writeUInt32LE(packed.length, off);
     headerParts.push(row);
   }
 
@@ -195,7 +242,7 @@ function encodeBundle(container) {
   return Buffer.concat([BUNDLE_MAGIC, lenBuf, compressed]);
 }
 
-function decodeBundle(buffer) {
+function decodeBundle(buffer: Buffer | Uint8Array | string | null | undefined): ArchiveContainer {
   const buf = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer || []);
   const minLen = BUNDLE_MAGIC.length + 4;
 
@@ -216,7 +263,7 @@ function decodeBundle(buffer) {
   const entryCount = uncompressed.readUInt32LE(off);
   off += 4;
 
-  const headers = [];
+  const headers: Array<{ relativePath: string; sha256: string; flags: number; packedLen: number }> = [];
 
   for (let i = 0; i < entryCount; i++) {
     const pathLen = uncompressed.readUInt8(off++);
@@ -230,7 +277,7 @@ function decodeBundle(buffer) {
     headers.push({ relativePath, sha256, flags, packedLen });
   }
 
-  const documents = {};
+  const documents: Record<string, ArchiveEntry> = {};
 
   for (const h of headers) {
     const packed = uncompressed.subarray(off, off + h.packedLen);
@@ -252,7 +299,7 @@ function decodeBundle(buffer) {
   return { version: 2, documents };
 }
 
-function encodeRepoArchive(container) {
+function encodeRepoArchive(container: ArchiveContainer): Buffer {
   const normalized = {
     version: 1,
     codec: ARCHIVE_CODEC,
@@ -272,7 +319,7 @@ function encodeRepoArchive(container) {
   return Buffer.concat([REPO_ARCHIVE_MAGIC, compressed]);
 }
 
-async function readArchiveContainerAt(absolutePath) {
+async function readArchiveContainerAt(absolutePath: string): Promise<ArchiveContainer> {
 
   try {
     const payload = await readFile(absolutePath);
@@ -311,7 +358,7 @@ async function readArchiveContainerAt(absolutePath) {
   }
 }
 
-async function writeRepoArchiveContainer(rootDir, container) {
+async function writeRepoArchiveContainer(rootDir: string, container: ArchiveContainer) {
   const absolutePath = getRepoArchiveAbsolutePath(rootDir);
   await mkdir(path.dirname(absolutePath), { recursive: true });
   const payload = encodeBundle(container);
@@ -324,15 +371,15 @@ async function writeRepoArchiveContainer(rootDir, container) {
   };
 }
 
-async function readRepoArchiveContainer(rootDir) {
+async function readRepoArchiveContainer(rootDir: string): Promise<ArchiveContainer> {
   return readArchiveContainerAt(getRepoArchiveAbsolutePath(rootDir));
 }
 
-async function readLocalArchiveContainer(rootDir) {
+async function readLocalArchiveContainer(rootDir: string): Promise<ArchiveContainer> {
   return readArchiveContainerAt(getLocalArchiveAbsolutePath(rootDir));
 }
 
-async function writeArchiveContainer(rootDir, relativePath, container) {
+async function writeArchiveContainer(rootDir: string, relativePath: string, container: ArchiveContainer) {
   const absolutePath = path.resolve(rootDir, relativePath);
   await mkdir(path.dirname(absolutePath), { recursive: true });
   const payload = encodeBundle(container);
@@ -345,12 +392,12 @@ async function writeArchiveContainer(rootDir, relativePath, container) {
   };
 }
 
-async function writeLocalArchiveContainer(rootDir, container) {
+async function writeLocalArchiveContainer(rootDir: string, container: ArchiveContainer) {
   await ensureGitIgnored(rootDir, LOCAL_ARCHIVE_GITIGNORE_ENTRY);
   return writeArchiveContainer(rootDir, LOCAL_ARCHIVE_RELATIVE_PATH, container);
 }
 
-async function ensureGitIgnored(rootDir, entry) {
+async function ensureGitIgnored(rootDir: string, entry: string) {
   const trimmedEntry = String(entry || '').trim();
   if (!trimmedEntry) {
     return;
@@ -374,7 +421,7 @@ async function ensureGitIgnored(rootDir, entry) {
   await writeFile(gitIgnorePath, `${current}${suffix}${trimmedEntry}\n`, 'utf8');
 }
 
-export function getDocArchiveMetadata(rootDir, absoluteDocPath) {
+export function getDocArchiveMetadata(rootDir: string, absoluteDocPath: string) {
   const relativeDocPath = toRelativePath(rootDir, absoluteDocPath);
 
   return {
@@ -385,14 +432,14 @@ export function getDocArchiveMetadata(rootDir, absoluteDocPath) {
   };
 }
 
-export async function writeDocArchive(rootDir, absoluteDocPath, document) {
+export async function writeDocArchive(rootDir: string, absoluteDocPath: string, document: ArchiveDocument) {
   const archiveMeta = getDocArchiveMetadata(rootDir, absoluteDocPath);
   const repoContainer = await readRepoArchiveContainer(rootDir);
   const gitState = getGitDocState(rootDir, absoluteDocPath);
   const packed = packDocument(document);
   const sha256 = createHash('sha256').update(packed).digest('hex');
 
-  const writeEntry = (container) => {
+  const writeEntry = (container: ArchiveContainer) => {
     container.documents[archiveMeta.key] = {
       sha256,
       packedBytes: packed.length,
@@ -453,7 +500,7 @@ export async function writeDocArchive(rootDir, absoluteDocPath, document) {
   };
 }
 
-export async function readDocArchive(rootDir, absoluteDocPath, explicitRelativeArchivePath = '') {
+export async function readDocArchive(rootDir: string, absoluteDocPath: string, explicitRelativeArchivePath = '') {
   const archiveMeta = getDocArchiveMetadata(rootDir, absoluteDocPath);
   const container = await readRepoArchiveContainer(rootDir);
   const key = archiveMeta.key;
@@ -498,6 +545,6 @@ export async function readDocArchive(rootDir, absoluteDocPath, explicitRelativeA
   throw new Error(`Archive entry not found for document key: ${key}`);
 }
 
-export function getLegacyCompanionArchivePath(absoluteDocPath) {
+export function getLegacyCompanionArchivePath(absoluteDocPath: string): string {
   return legacyCompanionArchivePath(absoluteDocPath);
 }

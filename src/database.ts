@@ -4,6 +4,89 @@ import { existsSync } from 'node:fs';
 import { packDocument, unpackDocument } from './doc-binary.js';
 import { normalizeDocInput, parseDocFile, stringifyDocFile } from './doc-format.js';
 
+type DatabaseConnection = InstanceType<typeof DatabaseSync>;
+
+type JsonObject = Record<string, string | number | boolean | null | undefined | object>;
+
+interface NormalizedSection {
+  id: string;
+  heading: string;
+  depth: number;
+  content: string;
+}
+
+interface NormalizedDocument {
+  filePath: string;
+  title: string;
+  summary: string;
+  tags: string[];
+  meta: JsonObject;
+  metadata: JsonObject;
+  source: string;
+  sections: NormalizedSection[];
+}
+
+interface DocumentStorageRow {
+  packed_blob?: Uint8Array | Buffer | null;
+  packed_bytes?: number | null;
+  source_bytes?: number | null;
+}
+
+interface DocumentRow {
+  id: number;
+  path: string;
+  title: string;
+  summary: string;
+  metadata_json: string;
+  body: string;
+  outline_json: string;
+  view_state_json?: string | null;
+  source_mtime_ms: number;
+  created_at: string;
+  updated_at: string;
+}
+
+interface SectionRow {
+  id: number;
+  slug: string;
+  heading: string;
+  depth: number;
+  position: number;
+  content: string;
+}
+
+interface WorkspaceRow {
+  id: number;
+  root_path: string;
+  name: string;
+  created_at: string;
+  updated_at: string;
+  document_count: number;
+}
+
+interface ScoredSearchRow {
+  document_id: number;
+  matched_terms: number;
+  total_hits: number;
+}
+
+interface SectionMatchRow {
+  heading: string;
+  slug: string;
+  content: string;
+  score: number;
+}
+
+interface LegacyTableRow {
+  name: string;
+}
+
+interface LegacyDocumentRow {
+  path: string;
+  body: string;
+  source_mtime_ms: number;
+}
+
 const STOP_WORDS = new Set([
   'a',
   'an',
@@ -34,7 +117,7 @@ const STOP_WORDS = new Set([
   'with',
 ]);
 
-function tokenize(text) {
+function tokenize(text: string) {
   const counts = new Map();
   const normalized = String(text || '').toLowerCase().match(/[a-z0-9][a-z0-9_-]{1,}/g) || [];
 
@@ -49,13 +132,13 @@ function tokenize(text) {
   return counts;
 }
 
-function mergeTokenCounts(target, tokenCounts, multiplier = 1) {
+function mergeTokenCounts(target: Map<string, number>, tokenCounts: Map<string, number>, multiplier = 1) {
   for (const [token, count] of tokenCounts.entries()) {
     target.set(token, (target.get(token) || 0) + count * multiplier);
   }
 }
 
-function getDocumentStorageRow(db, documentId) {
+function getDocumentStorageRow(db: DatabaseConnection, documentId: number) {
   return db.prepare(`
     SELECT packed_blob, packed_bytes, source_bytes
     FROM document_storage
@@ -63,7 +146,7 @@ function getDocumentStorageRow(db, documentId) {
   `).get(documentId);
 }
 
-function hydrateDocumentFromRow(db, row) {
+function hydrateDocumentFromRow(db: DatabaseConnection, row: DocumentRow) {
   const storage = getDocumentStorageRow(db, row.id);
   let normalized;
 
@@ -112,7 +195,7 @@ function hydrateDocumentFromRow(db, row) {
   };
 }
 
-export function createDatabase(dbPath) {
+export function createDatabase(dbPath: string) {
   const db = new DatabaseSync(dbPath);
 
   db.exec(`
@@ -204,7 +287,7 @@ export function createDatabase(dbPath) {
   return db;
 }
 
-export function getDocumentViewState(db, documentId) {
+export function getDocumentViewState(db: DatabaseConnection, documentId: number) {
   const row = db.prepare(`SELECT view_state_json FROM documents WHERE id = ?`).get(documentId);
   if (!row || !row.view_state_json) {
     return null;
@@ -216,13 +299,13 @@ export function getDocumentViewState(db, documentId) {
   }
 }
 
-export function saveDocumentViewState(db, documentId, viewState) {
+export function saveDocumentViewState(db: DatabaseConnection, documentId: number, viewState: string | number | boolean | null | undefined | object) {
   // Non-object values are intentionally normalized to null.
     const json = viewState && typeof viewState === 'object' ? JSON.stringify(viewState) : null;
   db.prepare(`UPDATE documents SET view_state_json = ? WHERE id = ?`).run(json, documentId);
 }
 
-export function getUserConfigValue(db, key, fallbackValue = null) {
+export function getUserConfigValue<T = string | null>(db: DatabaseConnection, key: string, fallbackValue: T = null as T): string | T {
   // Keys should always be strings; fallback is defensive.
     const row = db.prepare(`SELECT value FROM user_config WHERE key = ?`).get(String(key || ''));
 
@@ -233,7 +316,7 @@ export function getUserConfigValue(db, key, fallbackValue = null) {
   return row.value;
 }
 
-export function setUserConfigValue(db, key, value) {
+export function setUserConfigValue(db: DatabaseConnection, key: string, value: string | number | boolean | null | undefined | object) {
   const now = new Date().toISOString();
 
   db.prepare(`
@@ -251,7 +334,7 @@ export function setUserConfigValue(db, key, value) {
   );
 }
 
-function ensureWorkspace(db, workspaceRoot) {
+function ensureWorkspace(db: DatabaseConnection, workspaceRoot: string) {
   const normalizedRoot = String(workspaceRoot || '').trim();
 
   if (!normalizedRoot) {
@@ -275,7 +358,7 @@ function ensureWorkspace(db, workspaceRoot) {
   return Number(result.lastInsertRowid);
 }
 
-function getWorkspaceId(db, workspaceRoot) {
+function getWorkspaceId(db: DatabaseConnection, workspaceRoot: string): number | null {
   const normalizedRoot = String(workspaceRoot || '').trim();
 
   if (!normalizedRoot) {
@@ -286,7 +369,7 @@ function getWorkspaceId(db, workspaceRoot) {
   return row?.id ? Number(row.id) : null;
 }
 
-function insertTokensForDocument(db, documentId, document) {
+function insertTokensForDocument(db: DatabaseConnection, documentId: number, document: NormalizedDocument) {
   const insertToken = db.prepare(`
     INSERT INTO tokens (document_id, section_id, token, hits)
     VALUES (?, ?, ?, ?)
@@ -319,7 +402,7 @@ function insertTokensForDocument(db, documentId, document) {
   }
 }
 
-export function upsertDocument(db, workspaceRoot, document, sourceMtimeMs) {
+export function upsertDocument(db: DatabaseConnection, workspaceRoot: string, document: NormalizedDocument, sourceMtimeMs: number) {
   const now = new Date().toISOString();
   const existing = db.prepare(`SELECT id FROM documents WHERE path = ?`).get(document.filePath);
   // Normalized docs should already include source.
@@ -411,7 +494,7 @@ export function upsertDocument(db, workspaceRoot, document, sourceMtimeMs) {
       VALUES (?, ?, ?, ?, ?, ?)
     `);
 
-    document.sections.forEach((section, position) => {
+    document.sections.forEach((section, position: number) => {
       insertSection.run(
         documentId,
         section.id,
@@ -431,7 +514,7 @@ export function upsertDocument(db, workspaceRoot, document, sourceMtimeMs) {
   }
 }
 
-export function getDocumentById(db, documentId) {
+export function getDocumentById(db: DatabaseConnection, documentId: number) {
   const row = db.prepare(`SELECT * FROM documents WHERE id = ?`).get(documentId);
 
   if (!row) {
@@ -441,7 +524,7 @@ export function getDocumentById(db, documentId) {
   return hydrateDocumentFromRow(db, row);
 }
 
-export function getWorkspaceDocumentById(db, workspaceRoot, documentId) {
+export function getWorkspaceDocumentById(db: DatabaseConnection, workspaceRoot: string, documentId: number) {
   const workspaceId = getWorkspaceId(db, workspaceRoot);
 
   if (!workspaceId) {
@@ -462,7 +545,7 @@ export function getWorkspaceDocumentById(db, workspaceRoot, documentId) {
   return hydrateDocumentFromRow(db, row);
 }
 
-export function getDocumentByPath(db, workspaceRoot, documentPath) {
+export function getDocumentByPath(db: DatabaseConnection, workspaceRoot: string, documentPath: string) {
   const workspaceId = getWorkspaceId(db, workspaceRoot);
 
   if (!workspaceId) {
@@ -483,7 +566,7 @@ export function getDocumentByPath(db, workspaceRoot, documentPath) {
   return hydrateDocumentFromRow(db, row);
 }
 
-export function listDocuments(db, workspaceRoot) {
+export function listDocuments(db: DatabaseConnection, workspaceRoot: string) {
   const workspaceId = getWorkspaceId(db, workspaceRoot);
 
   if (!workspaceId) {
@@ -496,12 +579,12 @@ export function listDocuments(db, workspaceRoot) {
     JOIN workspace_documents wd ON wd.document_id = d.id
     WHERE wd.workspace_id = ?
     ORDER BY updated_at DESC, title COLLATE NOCASE ASC
-  `).all(workspaceId);
+  `).all(workspaceId) as DocumentRow[];
 
-  return rows.map((row) => hydrateDocumentFromRow(db, row));
+  return rows.map((row: DocumentRow) => hydrateDocumentFromRow(db, row));
 }
 
-export function searchDocuments(db, workspaceRoot, query) {
+export function searchDocuments(db: DatabaseConnection, workspaceRoot: string, query: string) {
   const workspaceId = getWorkspaceId(db, workspaceRoot);
 
   if (!workspaceId) {
@@ -511,7 +594,7 @@ export function searchDocuments(db, workspaceRoot, query) {
   const terms = Array.from(tokenize(query).keys());
 
   if (terms.length === 0) {
-    return listDocuments(db, workspaceRoot).map((document) => ({
+    return listDocuments(db, workspaceRoot).map((document: ReturnType<typeof hydrateDocumentFromRow>) => ({
       ...document,
       score: 0,
       matches: [],
@@ -529,9 +612,9 @@ export function searchDocuments(db, workspaceRoot, query) {
     WHERE wd.workspace_id = ? AND token IN (${placeholders})
     GROUP BY t.document_id
     ORDER BY matched_terms DESC, total_hits DESC
-  `).all(workspaceId, ...terms);
+  `).all(workspaceId, ...terms) as ScoredSearchRow[];
 
-  return scoredRows.map((row) => {
+  return scoredRows.map((row: ScoredSearchRow) => {
     const document = getWorkspaceDocumentById(db, workspaceRoot, row.document_id);
     const matches = db.prepare(`
       SELECT s.heading, s.slug, s.content, SUM(t.hits) AS score
@@ -542,12 +625,12 @@ export function searchDocuments(db, workspaceRoot, query) {
       GROUP BY s.id
       ORDER BY score DESC, s.position ASC
       LIMIT 3
-    `).all(workspaceId, row.document_id, ...terms);
+    `).all(workspaceId, row.document_id, ...terms) as SectionMatchRow[];
 
     return {
       ...document,
       score: Number(row.total_hits),
-      matches: matches.map((match) => ({
+      matches: matches.map((match: SectionMatchRow) => ({
         heading: match.heading,
         slug: match.slug,
         excerpt: match.content.slice(0, 220),
@@ -557,13 +640,13 @@ export function searchDocuments(db, workspaceRoot, query) {
   });
 }
 
-export function getDocumentSections(db, documentId) {
+export function getDocumentSections(db: DatabaseConnection, documentId: number) {
   return db.prepare(`
     SELECT id, slug, heading, depth, position, content
     FROM sections
     WHERE document_id = ?
     ORDER BY position ASC
-  `).all(documentId).map((row) => ({
+  `).all(documentId).map((row: SectionRow) => ({
     id: Number(row.id),
     slug: row.slug,
     heading: row.heading,
@@ -575,7 +658,7 @@ export function getDocumentSections(db, documentId) {
   }));
 }
 
-export function getDocumentSectionBySlug(db, documentId, slug) {
+export function getDocumentSectionBySlug(db: DatabaseConnection, documentId: number, slug: string) {
   const row = db.prepare(`
     SELECT id, slug, heading, depth, position, content
     FROM sections
@@ -594,7 +677,7 @@ export function getDocumentSectionBySlug(db, documentId, slug) {
   };
 }
 
-export function listWorkspaceProjects(db) {
+export function listWorkspaceProjects(db: DatabaseConnection) {
   const rows = db.prepare(`
     SELECT w.id, w.root_path, w.name, w.created_at, w.updated_at, COUNT(wd.document_id) AS document_count
     FROM workspaces w
@@ -603,7 +686,7 @@ export function listWorkspaceProjects(db) {
     ORDER BY w.updated_at DESC
   `).all();
 
-  return rows.map((row) => ({
+  return rows.map((row: WorkspaceRow) => ({
     id: Number(row.id),
     rootPath: row.root_path,
     name: row.name,
@@ -614,7 +697,7 @@ export function listWorkspaceProjects(db) {
   }));
 }
 
-export function migrateLegacyWorkspace(db, workspaceRoot, legacyDbPath) {
+export function migrateLegacyWorkspace(db: DatabaseConnection, workspaceRoot: string, legacyDbPath: string) {
   // Public callers should pass non-empty roots; fallback is defensive.
     const root = String(workspaceRoot || '').trim();
   // Public callers should pass non-empty paths; fallback is defensive.
@@ -629,7 +712,7 @@ export function migrateLegacyWorkspace(db, workspaceRoot, legacyDbPath) {
   try {
     legacyDb = new DatabaseSync(legacyPath);
     const tables = legacyDb.prepare(`SELECT name FROM sqlite_master WHERE type = ?`).all('table');
-    const hasDocuments = tables.some((row) => row.name === 'documents');
+    const hasDocuments = tables.some((row: LegacyTableRow) => row.name === 'documents');
 
     if (!hasDocuments) {
       return { imported: 0, skipped: 0 };
@@ -645,7 +728,7 @@ export function migrateLegacyWorkspace(db, workspaceRoot, legacyDbPath) {
     let imported = 0;
     let skipped = 0;
 
-    for (const row of rows) {
+    for (const row of rows as LegacyDocumentRow[]) {
       // Legacy body fallback for incomplete rows.
             const parsed = parseDocFile(row.path, row.body || '');
       const existing = getDocumentByPath(db, root, row.path);

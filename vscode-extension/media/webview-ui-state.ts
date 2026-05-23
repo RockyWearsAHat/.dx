@@ -1,14 +1,61 @@
-export function createUiStateController(options = {}) {
+type DocViewStateMap = Record<string, string>;
+
+interface UiAppearance {
+  paper: 'white' | 'cream' | 'slate';
+  density: 'comfortable' | 'compact';
+  scale: number;
+}
+
+interface UiStateControllerOptions {
+  appearanceStorageKey?: string;
+  editModeStorageKey?: string;
+  DOC_VIEW_STATES?: DocViewStateMap;
+  transitionDocViewState?: (event: string) => boolean;
+  getDocViewState?: () => string;
+  isEditModeState?: (state: string) => boolean;
+  syncEditModeIndicators?: (enabled: boolean) => void;
+  postMessage?: (payload: Record<string, string | number | boolean | null | undefined | object>) => void;
+  publishViewState?: (effectiveCss: string) => void;
+  getActiveScopedCss?: () => string;
+  closeInlineCssSurface?: (restoreFocus?: boolean) => void;
+  commitOpenSources?: (exceptIndex?: number) => void;
+  closeAutocomplete?: () => void;
+  setStatus?: (message: string) => void;
+  tryApplyPendingExternalSource?: () => void;
+}
+
+interface UiStateController {
+  applyAppearance: (persist?: boolean) => void;
+  applyTheme: (theme: string, persist?: boolean) => void;
+  getCurrentAppearance: () => UiAppearance;
+  getCurrentTheme: () => string;
+  isEditModeEnabled: () => boolean;
+  loadAppearance: () => void;
+  loadEditModePreference: () => boolean;
+  revealChromeBriefly: (durationMs?: number) => void;
+  setAppearance: (nextAppearance?: Partial<UiAppearance>) => void;
+  setControlsOpen: (isOpen: boolean) => void;
+  setEditMode: (enabled: boolean) => void;
+  setHelpOpen: (isOpen: boolean) => void;
+  toggleControls: (forceOpen?: boolean) => void;
+  toggleEditMode: () => void;
+  toggleHelp: () => void;
+  updateAppearance: (patch?: Partial<UiAppearance>, persist?: boolean) => void;
+}
+
+export function createUiStateController(options: UiStateControllerOptions = {}): UiStateController {
   const appearanceStorageKey = String(options.appearanceStorageKey || 'docdb.appearance.v1');
   const editModeStorageKey = String(options.editModeStorageKey || 'docdb.edit-mode.v1');
   const DOC_VIEW_STATES = options.DOC_VIEW_STATES || {};
+  const BOOTSTRAPPING_STATE = DOC_VIEW_STATES.BOOTSTRAPPING ?? 'BOOTSTRAPPING';
+  const LOAD_ERROR_STATE = DOC_VIEW_STATES.LOAD_ERROR ?? 'LOAD_ERROR';
 
   const transitionDocViewState = typeof options.transitionDocViewState === 'function'
     ? options.transitionDocViewState
     : () => false;
   const getDocViewState = typeof options.getDocViewState === 'function'
     ? options.getDocViewState
-    : () => DOC_VIEW_STATES.BOOTSTRAPPING;
+    : () => BOOTSTRAPPING_STATE;
   const isEditModeState = typeof options.isEditModeState === 'function'
     ? options.isEditModeState
     : () => false;
@@ -41,14 +88,24 @@ export function createUiStateController(options = {}) {
     : () => {};
 
   let currentTheme = 'auto';
-  let currentAppearance = {
+  let currentAppearance: UiAppearance = {
     paper: 'white',
     density: 'comfortable',
     scale: 100,
   };
-  let chromeRevealTimer = null;
+  let chromeRevealTimer: ReturnType<typeof setTimeout> | null = null;
 
-  function clampScale(value) {
+  function getSelect(id: string): HTMLSelectElement | null {
+    const node = document.getElementById(id);
+    return node instanceof HTMLSelectElement ? node : null;
+  }
+
+  function getInput(id: string): HTMLInputElement | null {
+    const node = document.getElementById(id);
+    return node instanceof HTMLInputElement ? node : null;
+  }
+
+  function clampScale(value: string | number | boolean | null | undefined | object): number {
     const numeric = Number(value);
 
     if (!Number.isFinite(numeric)) {
@@ -58,27 +115,27 @@ export function createUiStateController(options = {}) {
     return Math.min(115, Math.max(90, Math.round(numeric)));
   }
 
-  function getCurrentTheme() {
+  function getCurrentTheme(): string {
     return currentTheme;
   }
 
-  function getCurrentAppearance() {
+  function getCurrentAppearance(): UiAppearance {
     return { ...currentAppearance };
   }
 
-  function setAppearance(nextAppearance = {}) {
-    const paper = String(nextAppearance.paper || 'white');
-    const density = String(nextAppearance.density || 'comfortable');
+  function setAppearance(nextAppearance: Partial<UiAppearance> = {}): void {
+    const paperRaw = String(nextAppearance.paper || 'white');
+    const densityRaw = String(nextAppearance.density || 'comfortable');
     const scale = clampScale(nextAppearance.scale);
 
     currentAppearance = {
-      paper: ['white', 'cream', 'slate'].includes(paper) ? paper : 'white',
-      density: ['comfortable', 'compact'].includes(density) ? density : 'comfortable',
+      paper: ['white', 'cream', 'slate'].includes(paperRaw) ? paperRaw as UiAppearance['paper'] : 'white',
+      density: ['comfortable', 'compact'].includes(densityRaw) ? densityRaw as UiAppearance['density'] : 'comfortable',
       scale,
     };
   }
 
-  function updateAppearance(patch = {}, persist = false) {
+  function updateAppearance(patch: Partial<UiAppearance> = {}, persist = false): void {
     setAppearance({
       ...currentAppearance,
       ...(patch && typeof patch === 'object' ? patch : {}),
@@ -86,7 +143,7 @@ export function createUiStateController(options = {}) {
     applyAppearance(Boolean(persist));
   }
 
-  function loadAppearance() {
+  function loadAppearance(): void {
     try {
       const raw = window.localStorage.getItem(appearanceStorageKey);
 
@@ -94,26 +151,26 @@ export function createUiStateController(options = {}) {
         return;
       }
 
-      setAppearance(JSON.parse(raw));
+      setAppearance(JSON.parse(raw) as Partial<UiAppearance>);
     } catch {
     }
   }
 
-  function persistAppearance() {
+  function persistAppearance(): void {
     try {
       window.localStorage.setItem(appearanceStorageKey, JSON.stringify(currentAppearance));
     } catch {
     }
   }
 
-  function applyAppearance(persist = false) {
+  function applyAppearance(persist = false): void {
     document.body.dataset.paper = currentAppearance.paper;
     document.body.dataset.density = currentAppearance.density;
     document.documentElement.style.setProperty('--editor-scale', String(currentAppearance.scale / 100));
 
-    const paperSelect = document.getElementById('paper-select');
-    const densitySelect = document.getElementById('density-select');
-    const scaleSlider = document.getElementById('scale-slider');
+    const paperSelect = getSelect('paper-select');
+    const densitySelect = getSelect('density-select');
+    const scaleSlider = getInput('scale-slider');
 
     if (paperSelect) {
       paperSelect.value = currentAppearance.paper;
@@ -134,7 +191,7 @@ export function createUiStateController(options = {}) {
     publishViewState(getActiveScopedCss());
   }
 
-  function applyTheme(theme, persist = false) {
+  function applyTheme(theme: string, persist = false): void {
     const allowed = new Set(['auto', 'light', 'dark']);
     currentTheme = allowed.has(theme) ? theme : 'auto';
     document.body.dataset.theme = currentTheme;
@@ -143,7 +200,7 @@ export function createUiStateController(options = {}) {
     const resolved = currentTheme === 'auto' ? (prefersDark ? 'dark' : 'light') : currentTheme;
     document.body.dataset.resolvedTheme = resolved;
 
-    const select = document.getElementById('theme-select');
+    const select = getSelect('theme-select');
     if (select) {
       select.value = currentTheme;
     }
@@ -155,7 +212,7 @@ export function createUiStateController(options = {}) {
     publishViewState(getActiveScopedCss());
   }
 
-  function setControlsOpen(isOpen) {
+  function setControlsOpen(isOpen: boolean): void {
     const chrome = document.getElementById('ui-chrome');
     const toggle = document.getElementById('ui-chrome-toggle');
 
@@ -172,7 +229,7 @@ export function createUiStateController(options = {}) {
     }
   }
 
-  function setHelpOpen(isOpen) {
+  function setHelpOpen(isOpen: boolean): void {
     const chrome = document.getElementById('ui-chrome');
     const btn = document.getElementById('ui-chrome-help-btn');
 
@@ -190,7 +247,7 @@ export function createUiStateController(options = {}) {
     }
   }
 
-  function revealChromeBriefly(durationMs = 1400) {
+  function revealChromeBriefly(durationMs = 1400): void {
     document.body.classList.add('show-chrome');
 
     if (chromeRevealTimer) {
@@ -208,7 +265,7 @@ export function createUiStateController(options = {}) {
     }, durationMs);
   }
 
-  function toggleControls(forceOpen) {
+  function toggleControls(forceOpen?: boolean): void {
     const chrome = document.getElementById('ui-chrome');
     const isOpen = chrome ? chrome.dataset.open === 'true' : false;
     const opening = typeof forceOpen === 'boolean' ? forceOpen : !isOpen;
@@ -220,7 +277,7 @@ export function createUiStateController(options = {}) {
     setControlsOpen(opening);
   }
 
-  function toggleHelp() {
+  function toggleHelp(): void {
     const chrome = document.getElementById('ui-chrome');
     const isOpen = chrome ? chrome.dataset.help === 'true' : false;
 
@@ -231,11 +288,11 @@ export function createUiStateController(options = {}) {
     setHelpOpen(!isOpen);
   }
 
-  function isEditModeEnabled() {
+  function isEditModeEnabled(): boolean {
     return isEditModeState(getDocViewState());
   }
 
-  function loadEditModePreference() {
+  function loadEditModePreference(): boolean {
     try {
       const stored = window.localStorage.getItem(editModeStorageKey);
       if (stored === 'true') return true;
@@ -245,20 +302,20 @@ export function createUiStateController(options = {}) {
     return true;
   }
 
-  function persistEditModePreference(enabled) {
+  function persistEditModePreference(enabled: boolean): void {
     try {
       window.localStorage.setItem(editModeStorageKey, enabled ? 'true' : 'false');
     } catch {
     }
   }
 
-  function setEditMode(enabled) {
+  function setEditMode(enabled: boolean): void {
     const transitioned = enabled
       ? transitionDocViewState('SET_EDIT')
       : transitionDocViewState('SET_READ');
 
     const docViewState = getDocViewState();
-    if (!transitioned && (docViewState === DOC_VIEW_STATES.BOOTSTRAPPING || docViewState === DOC_VIEW_STATES.LOAD_ERROR)) {
+    if (!transitioned && (docViewState === BOOTSTRAPPING_STATE || docViewState === LOAD_ERROR_STATE)) {
       transitionDocViewState(enabled ? 'START_EDIT' : 'START_READ');
     }
 
@@ -267,7 +324,7 @@ export function createUiStateController(options = {}) {
     persistEditModePreference(editEnabled);
   }
 
-  function toggleEditMode() {
+  function toggleEditMode(): void {
     const nextEnabled = !isEditModeEnabled();
 
     if (!nextEnabled) {

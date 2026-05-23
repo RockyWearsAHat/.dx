@@ -1,6 +1,19 @@
 const AUTOCOMPLETE_HISTORY_MAX_ITEMS = 300;
 
-function addUniqueItems(target, values) {
+interface AutocompleteSchema {
+  blockTypes: string[];
+  attributeKeys: string[];
+  attributeValuesByKey: Record<string, string[]>;
+}
+
+type TokenKind = 'block' | 'attribute-key' | 'attribute-value';
+
+interface StorageLike {
+  getItem: (key: string) => string | null;
+  setItem: (key: string, value: string) => void;
+}
+
+function addUniqueItems(target: string[], values: Array<string | number | boolean | null | undefined>): void {
   const seen = new Set(target);
   for (const value of values || []) {
     const text = String(value || '').trim();
@@ -10,8 +23,8 @@ function addUniqueItems(target, values) {
   }
 }
 
-function normalizeHistory(raw) {
-  const history = {
+function normalizeHistory(raw: string | number | boolean | null | undefined | object): AutocompleteSchema {
+  const history: AutocompleteSchema = {
     blockTypes: [],
     attributeKeys: [],
     attributeValuesByKey: {},
@@ -21,15 +34,17 @@ function normalizeHistory(raw) {
     return history;
   }
 
-  history.blockTypes = Array.isArray(raw.blockTypes)
-    ? raw.blockTypes.map((value) => String(value || '').trim()).filter(Boolean)
+  const source = raw as Record<string, string | number | boolean | null | undefined | object | string[] | Record<string, string[]>>;
+
+  history.blockTypes = Array.isArray(source.blockTypes)
+    ? source.blockTypes.map((value) => String(value || '').trim()).filter(Boolean)
     : [];
-  history.attributeKeys = Array.isArray(raw.attributeKeys)
-    ? raw.attributeKeys.map((value) => String(value || '').trim()).filter(Boolean)
+  history.attributeKeys = Array.isArray(source.attributeKeys)
+    ? source.attributeKeys.map((value) => String(value || '').trim()).filter(Boolean)
     : [];
 
-  if (raw.attributeValuesByKey && typeof raw.attributeValuesByKey === 'object') {
-    for (const [key, values] of Object.entries(raw.attributeValuesByKey)) {
+  if (source.attributeValuesByKey && typeof source.attributeValuesByKey === 'object') {
+    for (const [key, values] of Object.entries(source.attributeValuesByKey)) {
       if (!Array.isArray(values)) continue;
       history.attributeValuesByKey[String(key).toLowerCase()] = values
         .map((value) => String(value || '').trim())
@@ -40,7 +55,7 @@ function normalizeHistory(raw) {
   return history;
 }
 
-function createEmptySchema() {
+function createEmptySchema(): AutocompleteSchema {
   return {
     blockTypes: [],
     attributeKeys: [],
@@ -48,10 +63,10 @@ function createEmptySchema() {
   };
 }
 
-export function buildAutocompleteSchemaFromHeaders(headers) {
+export function buildAutocompleteSchemaFromHeaders(headers: string[]): AutocompleteSchema {
   const schema = createEmptySchema();
-  const blockTypeSet = new Set();
-  const attributeKeySet = new Set();
+  const blockTypeSet = new Set<string>();
+  const attributeKeySet = new Set<string>();
 
   for (const headerLine of headers || []) {
     const line = String(headerLine || '').trim();
@@ -92,7 +107,7 @@ export function buildAutocompleteSchemaFromHeaders(headers) {
   return schema;
 }
 
-export function mergeAutocompleteSchemas(primary, secondary) {
+export function mergeAutocompleteSchemas(primary: AutocompleteSchema, secondary: AutocompleteSchema): AutocompleteSchema {
   const merged = createEmptySchema();
 
   addUniqueItems(merged.blockTypes, primary.blockTypes);
@@ -117,21 +132,21 @@ export function mergeAutocompleteSchemas(primary, secondary) {
   return merged;
 }
 
-export function createAutocompleteHistory(storage, storageKey) {
+export function createAutocompleteHistory(storage: StorageLike | null | undefined, storageKey: string) {
   const canStore = storage
     && typeof storage.getItem === 'function'
     && typeof storage.setItem === 'function';
   let persisted = createEmptySchema();
 
-  function load() {
-    if (!canStore) {
+  function load(): AutocompleteSchema {
+    if (!canStore || !storage) {
       persisted = createEmptySchema();
       return persisted;
     }
 
     try {
       const raw = storage.getItem(storageKey);
-      persisted = normalizeHistory(raw ? JSON.parse(raw) : null);
+      persisted = normalizeHistory(raw ? JSON.parse(raw) as string | number | boolean | null | undefined | object : null);
     } catch {
       persisted = createEmptySchema();
     }
@@ -139,8 +154,8 @@ export function createAutocompleteHistory(storage, storageKey) {
     return persisted;
   }
 
-  function save() {
-    if (!canStore) {
+  function save(): void {
+    if (!canStore || !storage) {
       return;
     }
 
@@ -150,11 +165,11 @@ export function createAutocompleteHistory(storage, storageKey) {
     }
   }
 
-  function getSchema() {
+  function getSchema(): AutocompleteSchema {
     return persisted;
   }
 
-  function rememberToken(kind, value, key = '') {
+  function rememberToken(kind: TokenKind, value: string | number | boolean | null | undefined, key = ''): void {
     const text = String(value || '').trim();
     if (!text) {
       return;

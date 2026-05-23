@@ -1,15 +1,15 @@
-function normalizeLineEndings(value) {
+function normalizeLineEndings(value: string | number | boolean | null | undefined | object): string {
   return String(value || '').replace(/\r\n/g, '\n').trimEnd();
 }
 
-function stripTagWrapper(source, tagName) {
+function stripTagWrapper(source: string, tagName: string): string {
   const pattern = new RegExp(`^<${tagName}>([\\s\\S]*)<\\/${tagName}>$`, 'i');
   const match = pattern.exec(source.trim());
   return match ? String(match[1] || '').trim() : '';
 }
 
-function parseMarkdownChecklist(lines) {
-  const items = [];
+function parseMarkdownChecklist(lines: string[]): string[] | null {
+  const items: string[] = [];
 
   for (const line of lines) {
     const match = /^\s*[-*]\s+\[([ xX])]\s+(.*)$/.exec(line);
@@ -27,8 +27,8 @@ function parseMarkdownChecklist(lines) {
   return items.length > 0 ? items : null;
 }
 
-function parseMarkdownBulleted(lines) {
-  const items = [];
+function parseMarkdownBulleted(lines: string[]): string[] | null {
+  const items: string[] = [];
 
   for (const line of lines) {
     const match = /^\s*[-*]\s+(.*)$/.exec(line);
@@ -45,8 +45,8 @@ function parseMarkdownBulleted(lines) {
   return items.length > 0 ? items : null;
 }
 
-function parseMarkdownNumbered(lines) {
-  const items = [];
+function parseMarkdownNumbered(lines: string[]): string[] | null {
+  const items: string[] = [];
 
   for (const line of lines) {
     const match = /^\s*\d+[.)]\s+(.*)$/.exec(line);
@@ -63,7 +63,7 @@ function parseMarkdownNumbered(lines) {
   return items.length > 0 ? items : null;
 }
 
-function normalizeCodeFence(source) {
+function normalizeCodeFence(source: string): string | null {
   const match = /^```([a-zA-Z0-9_-]*)\n([\s\S]*?)\n```$/.exec(source.trim());
   if (!match) {
     return null;
@@ -75,7 +75,7 @@ function normalizeCodeFence(source) {
   return `${header}\n${body}\n::end`;
 }
 
-function normalizeHtmlLike(source) {
+function normalizeHtmlLike(source: string): string | null {
   const trimmed = source.trim();
 
   const headingMatch = /^<h([1-6])>([\s\S]*?)<\/h\1>$/i.exec(trimmed);
@@ -110,13 +110,17 @@ function normalizeHtmlLike(source) {
   return null;
 }
 
-function normalizeMarkdownLike(source) {
+function normalizeMarkdownLike(source: string): string | null {
   const trimmed = source.trim();
 
   const headingMatch = /^(#{1,6})\s+(.*)$/.exec(trimmed);
-  if (headingMatch && !headingMatch[2].includes('\n')) {
-    const level = headingMatch[1].length;
-    const text = String(headingMatch[2] || '').trim();
+  if (headingMatch) {
+    const headingText = headingMatch[2] ?? '';
+    if (headingText.includes('\n')) {
+      return null;
+    }
+    const level = (headingMatch[1] ?? '').length;
+    const text = headingText.trim();
     return `::heading level=${level}\n${text}\n::end`;
   }
 
@@ -156,7 +160,7 @@ function normalizeMarkdownLike(source) {
   return null;
 }
 
-export function normalizeBlockSourceInput(rawSource) {
+export function normalizeBlockSourceInput(rawSource: string | number | boolean | null | undefined | object): string {
   const source = normalizeLineEndings(rawSource);
   const trimmed = source.trim();
 

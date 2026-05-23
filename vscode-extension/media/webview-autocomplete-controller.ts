@@ -4,6 +4,7 @@ import {
   DEFAULT_BLOCK_AUTOCOMPLETE,
   getLineContextFromValue,
 } from './webview-autocomplete-core.js';
+import type { AutocompleteModel, AutocompleteSuggestion } from './webview-autocomplete-core.js';
 import {
   buildAutocompleteSchemaFromHeaders,
   createAutocompleteHistory,
@@ -19,7 +20,39 @@ export {
   getLineContextFromValue,
 };
 
-function defaultEscapeHtml(value) {
+interface StorageLike {
+  getItem: (key: string) => string | null;
+  setItem: (key: string, value: string) => void;
+}
+
+interface AutocompleteSchema {
+  blockTypes: string[];
+  attributeKeys: string[];
+  attributeValuesByKey: Record<string, string[]>;
+}
+
+interface AutocompleteControllerOptions {
+  blockAutocomplete?: string[];
+  collectKnownIds?: () => string[];
+  collectKnownClasses?: () => string[];
+  collectKnownImageSources?: () => string[];
+  collectAutocompleteHeaders?: () => string[];
+  escapeHtml?: (value: string | number | boolean | null | undefined | object) => string;
+  storage?: StorageLike | null;
+  storageKey?: string;
+  requestAnimationFrame?: (callback: FrameRequestCallback) => number;
+}
+
+interface AutocompleteControllerState {
+  textarea: HTMLTextAreaElement | null;
+  suggestions: AutocompleteSuggestion[];
+  selectedIndex: number;
+  replaceStart: number;
+  replaceEnd: number;
+  typed: string;
+}
+
+function defaultEscapeHtml(value: string | number | boolean | null | undefined | object): string {
   return String(value || '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
@@ -28,7 +61,7 @@ function defaultEscapeHtml(value) {
     .replace(/'/g, '&#39;');
 }
 
-export function createAutocompleteController(options) {
+export function createAutocompleteController(options: AutocompleteControllerOptions = {}) {
   const config = options || {};
   const blockAutocomplete = Array.isArray(config.blockAutocomplete)
     ? config.blockAutocomplete
@@ -54,11 +87,14 @@ export function createAutocompleteController(options) {
   const storageKey = String(config.storageKey || AUTOCOMPLETE_HISTORY_STORAGE_KEY);
   const raf = typeof config.requestAnimationFrame === 'function'
     ? config.requestAnimationFrame
-    : (callback) => callback();
+    : ((callback: FrameRequestCallback) => {
+      callback(0);
+      return 0;
+    });
 
   const history = createAutocompleteHistory(storage, storageKey);
 
-  const state = {
+  const state: AutocompleteControllerState = {
     textarea: null,
     suggestions: [],
     selectedIndex: 0,
@@ -67,16 +103,16 @@ export function createAutocompleteController(options) {
     typed: '',
   };
 
-  let measurementCanvas = null;
+  let measurementCanvas: HTMLCanvasElement | null = null;
 
-  function getAutocompleteSuggestions(textarea, forceOpen = false) {
+  function getAutocompleteSuggestions(textarea: HTMLTextAreaElement | null, forceOpen = false): AutocompleteModel {
     if (!textarea) {
       return { suggestions: [], replaceStart: 0, replaceEnd: 0, typed: '' };
     }
 
     const context = getLineContextFromValue(textarea.value || '', textarea.selectionStart || 0);
     const runtimeSchema = buildAutocompleteSchemaFromHeaders(collectAutocompleteHeaders());
-    const schema = mergeAutocompleteSchemas(runtimeSchema, history.getSchema());
+    const schema = mergeAutocompleteSchemas(runtimeSchema as AutocompleteSchema, history.getSchema() as AutocompleteSchema);
     return computeAutocompleteSuggestions({
       context,
       forceOpen,
@@ -90,19 +126,22 @@ export function createAutocompleteController(options) {
     });
   }
 
-  function getAutocompleteEls(textarea) {
+  function getAutocompleteEls(textarea: HTMLTextAreaElement | null): { menuEl: HTMLDivElement | null; mirrorEl: HTMLDivElement | null } {
     const srcWrap = textarea ? textarea.closest('.block-src-wrapper') : null;
     if (!srcWrap) {
       return { menuEl: null, mirrorEl: null };
     }
 
+    const menuNode = srcWrap.querySelector('.autocomplete-menu');
+    const mirrorNode = srcWrap.querySelector('.block-src-mirror');
+
     return {
-      menuEl: srcWrap.querySelector('.autocomplete-menu'),
-      mirrorEl: srcWrap.querySelector('.block-src-mirror'),
+      menuEl: menuNode instanceof HTMLDivElement ? menuNode : null,
+      mirrorEl: mirrorNode instanceof HTMLDivElement ? mirrorNode : null,
     };
   }
 
-  function renderGhostText(textarea, mirrorEl) {
+  function renderGhostText(textarea: HTMLTextAreaElement, mirrorEl: HTMLDivElement | null): void {
     if (!mirrorEl || !state.suggestions.length) return;
 
     const selected = state.suggestions[state.selectedIndex];
@@ -127,13 +166,13 @@ export function createAutocompleteController(options) {
     mirrorEl.scrollTop = textarea.scrollTop;
 
     const srcWrap = textarea.closest('.block-src-wrapper');
-    if (srcWrap) {
+    if (srcWrap instanceof HTMLElement) {
       srcWrap.classList.add('ghost-active');
     }
     textarea.classList.add('ghost-active');
   }
 
-  function closeAutocomplete() {
+  function closeAutocomplete(): void {
     const textarea = state.textarea;
     if (!textarea) {
       return;
@@ -151,7 +190,7 @@ export function createAutocompleteController(options) {
       mirrorEl.textContent = '';
     }
 
-    if (srcWrap) {
+    if (srcWrap instanceof HTMLElement) {
       srcWrap.classList.remove('ghost-active');
     }
 
@@ -165,7 +204,7 @@ export function createAutocompleteController(options) {
     state.typed = '';
   }
 
-  function renderAutocomplete(textarea, forceOpen = false) {
+  function renderAutocomplete(textarea: HTMLTextAreaElement | null, forceOpen = false): boolean {
     if (!textarea) {
       closeAutocomplete();
       return false;
@@ -209,7 +248,7 @@ export function createAutocompleteController(options) {
     return true;
   }
 
-  function positionAutocompleteMenu(textarea, menuEl) {
+  function positionAutocompleteMenu(textarea: HTMLTextAreaElement | null, menuEl: HTMLDivElement | null): void {
     if (!textarea || !menuEl) {
       return;
     }
@@ -234,7 +273,7 @@ export function createAutocompleteController(options) {
     context.font = `${computed.fontWeight} ${computed.fontSize} ${computed.fontFamily}`;
     const textWidth = context.measureText(currentLine).width;
     const srcWrap = textarea.closest('.block-src-wrapper');
-    const wrapWidth = srcWrap ? srcWrap.clientWidth : textarea.clientWidth;
+    const wrapWidth = srcWrap instanceof HTMLElement ? srcWrap.clientWidth : textarea.clientWidth;
     const maxLeft = Math.max(0, wrapWidth - menuEl.offsetWidth);
     const left = Math.max(0, Math.min(maxLeft, paddingLeft + textWidth - textarea.scrollLeft));
     const top = Math.max(0, paddingTop + ((lineIndex + 1) * lineHeight) - textarea.scrollTop + 6);
@@ -243,7 +282,7 @@ export function createAutocompleteController(options) {
     menuEl.style.top = `${top}px`;
   }
 
-  function updateAutocompleteSelection(delta) {
+  function updateAutocompleteSelection(delta: number): boolean {
     if (!state.textarea || state.suggestions.length === 0) {
       return false;
     }
@@ -258,11 +297,13 @@ export function createAutocompleteController(options) {
     if (menuEl) {
       const items = menuEl.querySelectorAll('.autocomplete-item');
       items.forEach((item, index) => {
-        item.classList.toggle('selected', index === state.selectedIndex);
+        if (item instanceof HTMLElement) {
+          item.classList.toggle('selected', index === state.selectedIndex);
+        }
       });
 
       const activeItem = menuEl.querySelector('.autocomplete-item.selected');
-      if (activeItem) {
+      if (activeItem instanceof HTMLElement) {
         activeItem.scrollIntoView({ block: 'nearest' });
       }
     }
@@ -270,13 +311,13 @@ export function createAutocompleteController(options) {
     return true;
   }
 
-  function acceptAutocomplete(textarea, explicitIndex) {
+  function acceptAutocomplete(textarea: HTMLTextAreaElement | null, explicitIndex?: number): boolean {
     if (!textarea || state.textarea !== textarea || state.suggestions.length === 0) {
       return false;
     }
 
     const index = Number.isInteger(explicitIndex)
-      ? Math.max(0, Math.min(explicitIndex, state.suggestions.length - 1))
+      ? Math.max(0, Math.min(Number(explicitIndex), state.suggestions.length - 1))
       : state.selectedIndex;
     const choice = state.suggestions[index];
     if (!choice) {
@@ -288,7 +329,10 @@ export function createAutocompleteController(options) {
       const valueMatch = /\b([a-zA-Z0-9._-]+)=(?:"([^"]*)"|'([^']*)'|([^\s]*))$/i.exec(context.beforeCursor);
       history.rememberToken('attribute-value', choice.insertText, valueMatch ? valueMatch[1] : '');
     } else {
-      history.rememberToken(choice.kind, choice.insertText);
+      const kind = choice.kind === 'block' || choice.kind === 'attribute-key'
+        ? choice.kind
+        : 'attribute-value';
+      history.rememberToken(kind, choice.insertText);
     }
 
     const value = String(textarea.value || '');

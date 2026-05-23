@@ -1,5 +1,85 @@
 import path from 'node:path';
 
+type JsonLike = string | number | boolean | null | undefined | object;
+type MetadataMap = Record<string, JsonLike>;
+
+interface ListItem {
+  text: string;
+  indent?: number;
+  nested?: ListItem[];
+}
+
+interface ChecklistItem {
+  checked: boolean;
+  text: string;
+}
+
+interface DocBlock {
+  type: string;
+  id?: string;
+  className?: string;
+  class?: string;
+  level?: number;
+  text?: string;
+  items?: Array<string | ListItem | ChecklistItem>;
+  src?: string;
+  alt?: string;
+  href?: string;
+  media?: string;
+  language?: string;
+  [key: string]: JsonLike;
+}
+
+interface NormalizedDocBlock extends DocBlock {
+  id: string;
+  className: string;
+}
+
+interface SectionEntry {
+  id: string;
+  depth: number;
+  heading: string;
+  content: string;
+}
+
+interface ParsedDocInput {
+  metadata?: MetadataMap;
+  body?: string;
+  source?: string;
+  title?: string;
+  summary?: string;
+  tags?: JsonLike;
+  meta?: JsonLike;
+  blocks?: JsonLike;
+  [key: string]: JsonLike;
+}
+
+export interface NormalizedDocument {
+  filePath: string;
+  title: string;
+  summary: string;
+  tags: string[];
+  meta: MetadataMap;
+  metadata: MetadataMap;
+  blocks: NormalizedDocBlock[];
+  sections: SectionEntry[];
+  source: string;
+}
+
+interface LegacyListItem {
+  text: string;
+  indent: number;
+}
+
+interface LegacyListState {
+  type: 'bulleted-list' | 'numbered-list' | null;
+  items: LegacyListItem[];
+}
+
+interface StackListItem extends ListItem {
+  indent: number;
+}
+
 const BLOCK_TYPES = new Set([
   'heading',
   'paragraph',
@@ -14,7 +94,7 @@ const BLOCK_TYPES = new Set([
   'stylesheet',
 ]);
 
-function clampHeadingLevel(value) {
+function clampHeadingLevel(value: JsonLike): number {
   const level = Number(value);
 
   if (!Number.isFinite(level)) {
@@ -24,7 +104,7 @@ function clampHeadingLevel(value) {
   return Math.min(4, Math.max(1, Math.trunc(level)));
 }
 
-function parseValue(raw) {
+function parseValue(raw: JsonLike): JsonLike {
   const value = String(raw).trim();
 
   if (value === 'true') {
@@ -50,7 +130,7 @@ function parseValue(raw) {
   return value;
 }
 
-function parseFrontmatter(text) {
+function parseFrontmatter(text: string): { metadata: MetadataMap; body: string } {
   if (!text.startsWith('---\n')) {
     return { metadata: {}, body: text };
   }
@@ -61,7 +141,7 @@ function parseFrontmatter(text) {
     return { metadata: {}, body: text };
   }
 
-  const metadata = {};
+  const metadata: MetadataMap = {};
   const frontmatterBlock = text.slice(4, end);
   const body = text.slice(end + 5);
 
@@ -84,14 +164,14 @@ function parseFrontmatter(text) {
   return { metadata, body };
 }
 
-function slugifyHeading(heading) {
+function slugifyHeading(heading: JsonLike): string {
   return String(heading || '')
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '') || 'block';
 }
 
-function normalizeMeta(input) {
+function normalizeMeta(input: JsonLike): MetadataMap {
   if (!input || typeof input !== 'object' || Array.isArray(input)) {
     return {};
   }
@@ -99,7 +179,7 @@ function normalizeMeta(input) {
   return { ...input };
 }
 
-function normalizeTags(tags) {
+function normalizeTags(tags: JsonLike): string[] {
   if (!Array.isArray(tags)) {
     return [];
   }
@@ -109,7 +189,7 @@ function normalizeTags(tags) {
     .filter(Boolean);
 }
 
-function blockText(block) {
+function blockText(block: DocBlock): string {
   if (block.type === 'style' || block.type === 'stylesheet') {
     return '';
   }
@@ -121,7 +201,16 @@ function blockText(block) {
   }
 
   if (block.type === 'checklist') {
-    return block.items.map((item) => String(item.text).trim()).join('\n');
+    const items = Array.isArray(block.items) ? block.items : [];
+    return items
+      .map((item) => {
+        if (typeof item === 'object' && item !== null && 'text' in item) {
+          return String((item as ChecklistItem | ListItem).text || '').trim();
+        }
+        return String(item || '').trim();
+      })
+      .filter(Boolean)
+      .join('\n');
   }
 
   if (block.type === 'rule') {
@@ -129,20 +218,29 @@ function blockText(block) {
   }
 
   if (block.type === 'bulleted-list' || block.type === 'numbered-list') {
-    return block.items.join('\n');
+    const items = Array.isArray(block.items) ? block.items : [];
+    return items
+      .map((item) => {
+        if (typeof item === 'object' && item !== null && 'text' in item) {
+          return String((item as ListItem).text || '').trim();
+        }
+        return String(item || '').trim();
+      })
+      .filter(Boolean)
+      .join('\n');
   }
 
   return block.text || '';
 }
 
-function ensureUniqueId(seed, registry) {
+function ensureUniqueId(seed: JsonLike, registry: Map<string, number>): string {
   const base = slugifyHeading(seed);
   const seen = registry.get(base) || 0;
   registry.set(base, seen + 1);
   return seen === 0 ? base : `${base}-${seen + 1}`;
 }
 
-function normalizeClassName(value) {
+function normalizeClassName(value: JsonLike): string {
   return String(value || '')
     .split(/\s+/)
     .map((token) => token.trim())
@@ -150,15 +248,15 @@ function normalizeClassName(value) {
     .join(' ');
 }
 
-function parseAttributeString(rawAttributes) {
-  const attributes = {};
+function parseAttributeString(rawAttributes: JsonLike): Record<string, string> {
+  const attributes: Record<string, string> = {};
   const text = String(rawAttributes || '');
   const pattern = /([a-zA-Z0-9._-]+)=(?:"([^"]*)"|'([^']*)'|([^\s]+))/g;
   let match = pattern.exec(text);
 
   while (match) {
     const key = String(match[1]).trim();
-    const value = match[2] ?? match[3] ?? match[4];
+    const value = match[2] ?? match[3] ?? match[4] ?? '';
 
     if (key) {
       attributes[key] = value;
@@ -170,7 +268,7 @@ function parseAttributeString(rawAttributes) {
   return attributes;
 }
 
-function formatAttributeValue(value) {
+function formatAttributeValue(value: JsonLike): string {
   const text = String(value).trim();
 
   if (/^[^\s"'=]+$/.test(text)) {
@@ -180,36 +278,38 @@ function formatAttributeValue(value) {
   return `"${text.replace(/"/g, '')}"`;
 }
 
-function normalizeBlock(block, index, registry) {
-  const blockType = BLOCK_TYPES.has(block?.type) ? block.type : 'paragraph';
-  const idSeed = block?.id || (blockType === 'heading' ? block.text : `${blockType}-${index + 1}`);
+function normalizeBlock(block: DocBlock | null | undefined, index: number, registry: Map<string, number>): NormalizedDocBlock {
+  const sourceBlock: DocBlock = block || { type: 'paragraph' };
+  const blockType = BLOCK_TYPES.has(sourceBlock.type) ? sourceBlock.type : 'paragraph';
+  const idSeed = sourceBlock.id || (blockType === 'heading' ? sourceBlock.text : `${blockType}-${index + 1}`);
   const id = ensureUniqueId(idSeed, registry);
-  const className = normalizeClassName(block?.className || block?.class);
+  const className = normalizeClassName(sourceBlock.className || sourceBlock.class);
 
   if (blockType === 'heading') {
     return {
       id,
       className,
       type: 'heading',
-      level: clampHeadingLevel(block?.level),
-      text: String(block?.text || `Section ${index + 1}`).trim(),
+      level: clampHeadingLevel(sourceBlock.level),
+      text: String(sourceBlock.text || `Section ${index + 1}`).trim(),
     };
   }
 
   if (blockType === 'bulleted-list' || blockType === 'numbered-list') {
-    const items = Array.isArray(block?.items)
-      ? block.items.map((item) => {
+    const items = Array.isArray(sourceBlock.items)
+      ? sourceBlock.items.map((item) => {
           // Preserve nested structure: if item is an object with text/nested, keep it
-          if (typeof item === 'object' && item !== null && item.text !== undefined) {
+          if (typeof item === 'object' && item !== null && 'text' in item) {
+            const typedItem = item as ListItem;
             return {
-              text: String(item.text || '').trim(),
-              ...(item.nested && Array.isArray(item.nested) && { nested: item.nested }),
+              text: String(typedItem.text || '').trim(),
+              ...(typedItem.nested && Array.isArray(typedItem.nested) && { nested: typedItem.nested }),
             };
           }
           // Fallback: treat as string
           return { text: String(item).trim() };
         }).filter((item) => item.text.length > 0)
-      : String(block?.text ?? '')
+      : String(sourceBlock.text ?? '')
           .split('\n')
           .map((item) => ({ text: item.trim() }))
           .filter((item) => item.text.length > 0);
@@ -227,16 +327,17 @@ function normalizeBlock(block, index, registry) {
       id,
       className,
       type: 'image',
-      src: String(block?.src || '').trim(),
-      alt: String(block?.alt || '').trim(),
+      src: String(sourceBlock.src || '').trim(),
+      alt: String(sourceBlock.alt || '').trim(),
     };
   }
 
   if (blockType === 'checklist') {
-    const rawItems = Array.isArray(block?.items) ? block.items : [];
+    const rawItems = Array.isArray(sourceBlock.items) ? sourceBlock.items : [];
     const items = rawItems.map((item) => {
       if (typeof item === 'object' && item !== null) {
-        return { checked: Boolean(item.checked), text: String(item.text || '').trim() };
+        const typedItem = item as ChecklistItem;
+        return { checked: Boolean(typedItem.checked), text: String(typedItem.text || '').trim() };
       }
         return { checked: false, text: String(item ?? '').trim() };
     }).filter((item) => item.text.length > 0);
@@ -257,7 +358,7 @@ function normalizeBlock(block, index, registry) {
       id,
       className,
       type: 'style',
-      text: String(block?.text || '').trimEnd(),
+      text: String(sourceBlock.text || '').trimEnd(),
     };
   }
 
@@ -266,29 +367,29 @@ function normalizeBlock(block, index, registry) {
       id,
       className,
       type: 'stylesheet',
-      href: String(block?.href || block?.src || '').trim(),
-      media: String(block?.media || '').trim(),
+      href: String(sourceBlock.href || sourceBlock.src || '').trim(),
+      media: String(sourceBlock.media || '').trim(),
     };
   }
 
-  const normalized = {
+  const normalized: NormalizedDocBlock = {
     id,
     className,
     type: blockType,
-    text: String(block?.text || '').trim(),
+    text: String(sourceBlock.text || '').trim(),
   };
 
   if (blockType === 'code') {
-    normalized.language = String(block?.language || '').trim();
+    normalized.language = String(sourceBlock.language || '').trim();
   }
 
   return normalized;
 }
 
-function normalizeBlocks(blocks) {
+function normalizeBlocks(blocks: JsonLike): NormalizedDocBlock[] {
   const sourceBlocks = Array.isArray(blocks) ? blocks : [];
-  const registry = new Map();
-  const normalized = sourceBlocks.map((block, index) => normalizeBlock(block, index, registry));
+  const registry = new Map<string, number>();
+  const normalized = sourceBlocks.map((block, index) => normalizeBlock(block as DocBlock, index, registry));
 
   if (normalized.length > 0) {
     return normalized;
@@ -297,7 +398,7 @@ function normalizeBlocks(blocks) {
   return [normalizeBlock({ type: 'paragraph', text: 'Start writing here.' }, 0, registry)];
 }
 
-function parseDocsrcHeader(text) {
+function parseDocsrcHeader(text: string): { title: string; summary: string; tags: string[]; meta: MetadataMap; body: string } | null {
   const marker = '\n---\n';
   const separatorIndex = text.indexOf(marker);
 
@@ -311,11 +412,12 @@ function parseDocsrcHeader(text) {
     return null;
   }
 
-  const payload = {
+  const payload: { title: string; summary: string; tags: string[]; meta: MetadataMap; body: string } = {
     title: '',
     summary: '',
     tags: [],
     meta: {},
+    body: '',
   };
 
   for (const line of header.slice(1)) {
@@ -362,21 +464,21 @@ function parseDocsrcHeader(text) {
   return payload;
 }
 
-function parseBlockHeader(headerLine) {
+function parseBlockHeader(headerLine: string): { type: string; attributes: Record<string, string> } | null {
   const match = /^::([a-z-]+)(?:\s+(.*))?$/.exec(headerLine.trim());
 
   if (!match) {
     return null;
   }
 
-  const type = match[1];
+  const type = match[1] || '';
   const attributes = parseAttributeString(match[2] || '');
 
   return { type, attributes };
 }
 
-function parseLeadingAttributesAndRemainder(text) {
-  const attrs = {};
+function parseLeadingAttributesAndRemainder(text: JsonLike): { attrs: Record<string, string>; remainder: string } {
+  const attrs: Record<string, string> = {};
   let rest = String(text || '');
 
   while (true) {
@@ -387,7 +489,7 @@ function parseLeadingAttributesAndRemainder(text) {
     }
 
     const key = String(match[1]).trim().toLowerCase();
-    const value = match[2] ?? match[3] ?? match[4];
+    const value = match[2] ?? match[3] ?? match[4] ?? '';
 
     if (key) {
       attrs[key] = value;
@@ -402,9 +504,9 @@ function parseLeadingAttributesAndRemainder(text) {
   };
 }
 
-function unwrapSyntheticParagraphWrappers(sourceText) {
+function unwrapSyntheticParagraphWrappers(sourceText: JsonLike): string {
   const input = String(sourceText).replace(/\r\n/g, '\n').split('\n');
-  const output = [];
+  const output: string[] = [];
 
   for (let i = 0; i < input.length; i += 1) {
     const line = String(input[i] || '');
@@ -412,8 +514,8 @@ function unwrapSyntheticParagraphWrappers(sourceText) {
     const isSyntheticParagraphOpen = /^::paragraph\s+id=paragraph-\d+\s*$/i.test(trimmed);
 
     if (isSyntheticParagraphOpen && i + 2 < input.length) {
-      const wrappedLine = String(input[i + 1]);
-      const closeLine = String(input[i + 2]).trim();
+      const wrappedLine = String(input[i + 1] || '');
+      const closeLine = String(input[i + 2] || '').trim();
 
       if (closeLine === '::end') {
         output.push(wrappedLine);
@@ -428,11 +530,11 @@ function unwrapSyntheticParagraphWrappers(sourceText) {
   return output.join('\n');
 }
 
-function parseDocsrcBlocks(body) {
+function parseDocsrcBlocks(body: JsonLike): DocBlock[] {
   const lines = unwrapSyntheticParagraphWrappers(body).replace(/^\n+/, '').split('\n');
-  const blocks = [];
+  const blocks: DocBlock[] = [];
 
-  function pushBlock(type, attributes, contentLines) {
+  function pushBlock(type: string, attributes: Record<string, string>, contentLines: string[]): void {
     const content = contentLines.join('\n').trim();
 
     if (type === 'heading') {
@@ -490,11 +592,11 @@ function parseDocsrcBlocks(body) {
             // Fallback: no list marker, treat as-is
             const fallback = /^(\s*)(.+)$/.exec(line);
             if (!fallback) return null;
-            return { text: fallback[2].trim(), indent: fallback[1].length };
+              return { text: String(fallback[2] || '').trim(), indent: String(fallback[1] || '').length };
           }
-          return { text: match[2].trim(), indent: match[1].length };
+            return { text: String(match[2] || '').trim(), indent: String(match[1] || '').length };
         })
-        .filter(Boolean);
+        .filter((item): item is { text: string; indent: number } => item !== null);
       
       const nested = buildNestedListStructure(itemsWithIndent);
       blocks.push({
@@ -522,12 +624,14 @@ function parseDocsrcBlocks(body) {
         .map((line) => {
           const match = /^\s*\[(x| )\]\s*(.*)$/i.exec(line.trim());
           if (match) {
-            return { checked: match[1].toLowerCase() === 'x', text: match[2].trim() };
+              const checkedToken = match[1] || ' ';
+              const itemText = match[2] || '';
+              return { checked: checkedToken.toLowerCase() === 'x', text: itemText.trim() };
           }
           const trimmed = line.trim();
           return trimmed ? { checked: false, text: trimmed } : null;
         })
-        .filter(Boolean)
+        .filter((item): item is ChecklistItem => item !== null)
         .filter((item) => item.text.length > 0);
       blocks.push({
         type: 'checklist',
@@ -581,9 +685,9 @@ function parseDocsrcBlocks(body) {
 
     const inline = /^::([a-z-]+)(.*)\s+::end\s*$/i.exec(line);
     if (inline) {
-      const type = inline[1].toLowerCase();
+      const type = String(inline[1] || '').toLowerCase();
       if (type !== 'end') {
-          const parsed = parseLeadingAttributesAndRemainder(inline[2]);
+        const parsed = parseLeadingAttributesAndRemainder(inline[2] || '');
         const inlineContent = parsed.remainder ? [parsed.remainder] : [];
         pushBlock(type, parsed.attrs, inlineContent);
       }
@@ -614,7 +718,7 @@ function parseDocsrcBlocks(body) {
     let foundEnd = false;
 
     while (cursor < lines.length) {
-      const bodyLine = String(lines[cursor]);
+      const bodyLine = String(lines[cursor] || '');
       const bodyTrimmed = bodyLine.trim();
       const endIndex = bodyLine.indexOf('::end');
 
@@ -648,7 +752,7 @@ function parseDocsrcBlocks(body) {
   return blocks;
 }
 
-function flushBufferedParagraph(paragraphLines, blocks) {
+function flushBufferedParagraph(paragraphLines: string[], blocks: DocBlock[]): void {
   if (paragraphLines.length === 0) {
     return;
   }
@@ -660,7 +764,7 @@ function flushBufferedParagraph(paragraphLines, blocks) {
   paragraphLines.length = 0;
 }
 
-function buildNestedListStructure(flatItems) {
+function buildNestedListStructure(flatItems: LegacyListItem[]): ListItem[] {
   // Convert flat list with indent levels into nested structure
   // Each item is { text: string, indent: number }
   // Returns array of items with 'nested' field for children
@@ -669,14 +773,18 @@ function buildNestedListStructure(flatItems) {
     return [];
   }
 
-  const result = [];
-  const stack = [];
+  const result: ListItem[] = [];
+  const stack: StackListItem[] = [];
 
   for (const item of flatItems) {
     const indent = item.indent || 0;
     
     // Pop items from stack until we find the correct parent level
-    while (stack.length > 0 && stack[stack.length - 1].indent >= indent) {
+    while (stack.length > 0) {
+      const top = stack[stack.length - 1];
+      if (!top || top.indent < indent) {
+        break;
+      }
       stack.pop();
     }
 
@@ -685,6 +793,11 @@ function buildNestedListStructure(flatItems) {
     if (stack.length > 0) {
       // This item should be nested under the last item in stack
       const parent = stack[stack.length - 1];
+      if (!parent) {
+        result.push(processed);
+        stack.push({ ...processed, indent });
+        continue;
+      }
       if (!parent.nested) {
         parent.nested = [];
       }
@@ -694,13 +807,13 @@ function buildNestedListStructure(flatItems) {
       result.push(processed);
     }
 
-    stack.push(Object.assign({}, processed, { indent }));
+    stack.push({ ...processed, indent });
   }
 
   return result;
 }
 
-function flushBufferedList(listState, blocks) {
+function flushBufferedList(listState: LegacyListState, blocks: DocBlock[]): void {
   if (!listState.type || listState.items.length === 0) {
     listState.type = null;
     listState.items = [];
@@ -717,7 +830,7 @@ function flushBufferedList(listState, blocks) {
   listState.items = [];
 }
 
-function flushBufferedQuote(quoteLines, blocks) {
+function flushBufferedQuote(quoteLines: string[], blocks: DocBlock[]): void {
   if (quoteLines.length === 0) {
     return;
   }
@@ -730,14 +843,14 @@ function flushBufferedQuote(quoteLines, blocks) {
   quoteLines.length = 0;
 }
 
-function parseLegacyBlocks(body) {
-  const blocks = [];
-  const paragraphLines = [];
-  const quoteLines = [];
-  const listState = { type: null, items: [] };
+function parseLegacyBlocks(body: string): DocBlock[] {
+  const blocks: DocBlock[] = [];
+  const paragraphLines: string[] = [];
+  const quoteLines: string[] = [];
+  const listState: LegacyListState = { type: null, items: [] };
   const lines = body.replace(/^\n+/, '').split('\n');
-  let codeFence = null;
-  let codeLines = [];
+  let codeFence: string | null = null;
+  let codeLines: string[] = [];
 
   for (const line of lines) {
     const headingMatch = /^(#{1,4})\s+(.*)$/.exec(line);
@@ -766,7 +879,7 @@ function parseLegacyBlocks(body) {
       flushBufferedParagraph(paragraphLines, blocks);
       flushBufferedList(listState, blocks);
       flushBufferedQuote(quoteLines, blocks);
-      codeFence = codeFenceMatch[1].trim();
+      codeFence = String(codeFenceMatch[1] || '').trim();
       codeLines = [];
       continue;
     }
@@ -777,8 +890,8 @@ function parseLegacyBlocks(body) {
       flushBufferedQuote(quoteLines, blocks);
       blocks.push({
         type: 'heading',
-        level: headingMatch[1].length,
-        text: headingMatch[2].trim(),
+          level: String(headingMatch[1] || '').length,
+          text: String(headingMatch[2] || '').trim(),
       });
       continue;
     }
@@ -791,9 +904,9 @@ function parseLegacyBlocks(body) {
         flushBufferedList(listState, blocks);
       }
 
-      const indent = bulletListMatch[1].length;
+      const indent = String(bulletListMatch[1] || '').length;
       listState.type = 'bulleted-list';
-      listState.items.push({ text: bulletListMatch[2].trim(), indent });
+      listState.items.push({ text: String(bulletListMatch[2] || '').trim(), indent });
       continue;
     }
 
@@ -805,16 +918,16 @@ function parseLegacyBlocks(body) {
         flushBufferedList(listState, blocks);
       }
 
-      const indent = numberedListMatch[1].length;
+      const indent = String(numberedListMatch[1] || '').length;
       listState.type = 'numbered-list';
-      listState.items.push({ text: numberedListMatch[2].trim(), indent });
+      listState.items.push({ text: String(numberedListMatch[2] || '').trim(), indent });
       continue;
     }
 
     if (quoteMatch) {
       flushBufferedParagraph(paragraphLines, blocks);
       flushBufferedList(listState, blocks);
-      quoteLines.push(quoteMatch[1]);
+      quoteLines.push(String(quoteMatch[1] || ''));
       continue;
     }
 
@@ -843,13 +956,13 @@ function parseLegacyBlocks(body) {
   return blocks;
 }
 
-function buildSections(blocks) {
-  const sections = [];
+function buildSections(blocks: DocBlock[]): SectionEntry[] {
+  const sections: SectionEntry[] = [];
   let currentSection = {
     id: 'overview',
     depth: 0,
     heading: 'Overview',
-    content: [],
+    content: [] as string[],
   };
 
   for (const block of blocks) {
@@ -862,9 +975,9 @@ function buildSections(blocks) {
       }
 
       currentSection = {
-        id: block.id,
-        depth: block.level,
-        heading: block.text,
+          id: String(block.id || 'overview'),
+          depth: Number(block.level || 1),
+          heading: String(block.text || 'Section'),
         content: [],
       };
       continue;
@@ -887,7 +1000,7 @@ function buildSections(blocks) {
   return sections;
 }
 
-function extractSummary(blocks) {
+function extractSummary(blocks: DocBlock[]): string {
   for (const block of blocks) {
     if (block.type === 'heading') {
       continue;
@@ -896,14 +1009,14 @@ function extractSummary(blocks) {
     const content = blockText(block).trim();
 
     if (content) {
-      return content.split('\n')[0];
+      return content.split('\n')[0] || '';
     }
   }
 
   return '';
 }
 
-function parseDocSource(text) {
+function parseDocSource(text: string): ParsedDocInput {
   const docsrcHeader = parseDocsrcHeader(text);
 
   if (docsrcHeader) {
@@ -932,7 +1045,7 @@ function parseDocSource(text) {
   }
 
   if (trimmed.startsWith('{')) {
-    const parsed = JSON.parse(trimmed);
+    const parsed = JSON.parse(trimmed) as ParsedDocInput;
     return {
       title: parsed.title,
       summary: parsed.summary,
@@ -952,12 +1065,13 @@ function parseDocSource(text) {
   };
 }
 
-export function normalizeDocInput(filePath, input = {}) {
-  const legacyMetadata = normalizeMeta(input.metadata);
-  const title = String(input.title || legacyMetadata.title || path.basename(filePath, path.extname(filePath))).trim();
-  const tags = normalizeTags(input.tags || legacyMetadata.tags);
+export function normalizeDocInput(filePath: string, input: object = {}): NormalizedDocument {
+  const normalizedInput = (input && typeof input === 'object' ? input : {}) as Record<string, JsonLike>;
+  const legacyMetadata = normalizeMeta(normalizedInput.metadata);
+  const title = String(normalizedInput.title || legacyMetadata.title || path.basename(filePath, path.extname(filePath))).trim();
+  const tags = normalizeTags(normalizedInput.tags || legacyMetadata.tags);
   const meta = {
-    ...normalizeMeta(input.meta),
+    ...normalizeMeta(normalizedInput.meta),
   };
 
   for (const [key, value] of Object.entries(legacyMetadata)) {
@@ -968,11 +1082,11 @@ export function normalizeDocInput(filePath, input = {}) {
     meta[key] = value;
   }
 
-  const blocks = normalizeBlocks(input.blocks || parseLegacyBlocks(String(input.body || '')));
-  const summary = String(input.summary || legacyMetadata.summary || extractSummary(blocks)).trim();
+  const blocks = normalizeBlocks(normalizedInput.blocks || parseLegacyBlocks(String(normalizedInput.body || '')));
+  const summary = String(normalizedInput.summary || legacyMetadata.summary || extractSummary(blocks)).trim();
   const sections = buildSections(blocks);
 
-  const document = {
+  const document: NormalizedDocument = {
     filePath,
     title,
     summary,
@@ -995,12 +1109,12 @@ export function normalizeDocInput(filePath, input = {}) {
   return document;
 }
 
-export function parseDocFile(filePath, text) {
+export function parseDocFile(filePath: string, text: string): NormalizedDocument {
   const parsed = parseDocSource(text);
   return normalizeDocInput(filePath, parsed);
 }
 
-export function createDefaultBlocks(title) {
+export function createDefaultBlocks(title: string): NormalizedDocBlock[] {
   return normalizeBlocks([
     {
       type: 'heading',
@@ -1014,7 +1128,7 @@ export function createDefaultBlocks(title) {
   ]);
 }
 
-function blockHeader(block) {
+function blockHeader(block: DocBlock): string {
   const blockId = block.id || slugifyHeading(block.text || block.type || 'block');
   const attributes = [`id=${formatAttributeValue(blockId)}`];
 
@@ -1056,14 +1170,14 @@ function blockHeader(block) {
   return `::${block.type} ${attributes.join(' ')}`;
 }
 
-function blockBody(block) {
+function blockBody(block: DocBlock): string {
   if (block.type === 'bulleted-list' || block.type === 'numbered-list') {
-    const toLines = (items, depth = 0) => {
+    const toLines = (items: JsonLike, depth = 0): string[] => {
       if (!Array.isArray(items)) {
         return [];
       }
 
-      const lines = [];
+      const lines: string[] = [];
       const indent = '  '.repeat(Math.max(0, depth));
 
       for (const item of items) {
@@ -1073,8 +1187,9 @@ function blockBody(block) {
             lines.push(`${indent}- ${text}`);
           }
 
-          if (Array.isArray(item.nested) && item.nested.length > 0) {
-            lines.push(...toLines(item.nested, depth + 1));
+          const nestedItems = (item as ListItem).nested;
+          if (Array.isArray(nestedItems) && nestedItems.length > 0) {
+            lines.push(...toLines(nestedItems, depth + 1));
           }
 
           continue;
@@ -1107,8 +1222,12 @@ function blockBody(block) {
   return block.text || '';
 }
 
-export function stringifyDocFile(document) {
-  const blockChunks = (document.blocks || []).map((block) => {
+export function stringifyDocFile(document: object): string {
+  const blocksInput = document && typeof document === 'object' && 'blocks' in document
+    ? (document as { blocks?: JsonLike }).blocks
+    : undefined;
+  const normalizedBlocks = normalizeBlocks(blocksInput);
+  const blockChunks = normalizedBlocks.map((block) => {
     const lines = [blockHeader(block), blockBody(block), '::end'];
     return lines.join('\n');
   });

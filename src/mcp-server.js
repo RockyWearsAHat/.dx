@@ -6,7 +6,7 @@
 import path from 'node:path';
 import readline from 'node:readline';
 import { mkdir } from 'node:fs/promises';
-import { createDatabase, migrateLegacyWorkspace, saveDocumentViewState, } from './database.js';
+import { createDatabase, migrateLegacyWorkspace, } from './database.js';
 import { createDocument, getDocument, getDocumentByRelativePath, ingestWorkspace, listOrSearchDocuments, saveDocumentSourceByRelativePath, } from './doc-service.js';
 import { renderDocumentViewHtml } from './doc-view.js';
 import { captureDocumentViewPng } from './doc-view-capture.js';

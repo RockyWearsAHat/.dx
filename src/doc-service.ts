@@ -9,7 +9,46 @@ import { findDocFiles } from './file-discovery.js';
 const DOC_STUB_VERSION = 3;
 const DOC_STUB_PREFIX = '@docstub';
 
-function assertWithinRoot(rootDir, absolutePath) {
+type DbConnection = Parameters<typeof getDocumentByPath>[0];
+type NormalizedDocument = Parameters<typeof upsertDocument>[2];
+type StoredDocument = NonNullable<ReturnType<typeof getWorkspaceDocumentById>>;
+type BlockInput = Array<Record<string, string | number | boolean | null | string[]>>;
+type SearchResult = ReturnType<typeof searchDocuments>[number];
+
+type ClientDocument = StoredDocument & { relativePath: string };
+
+interface DocInput {
+  path: string;
+  title?: string;
+  summary?: string;
+  tags?: string[];
+  meta?: Record<string, string | number | boolean | null>;
+  blocks?: BlockInput;
+}
+
+interface ArchiveInfo {
+  codec: string;
+  relativePath: string;
+  key: string;
+  sha256: string;
+  packedBytes: number;
+  repoArtifactBytes: number;
+  localOnly?: boolean;
+}
+
+interface StubTarget {
+  version: number;
+  absolutePath: string;
+  artifactRelativePath: string;
+  key: string;
+  archiveRelativePath: string;
+  codec: string;
+  sha256: string;
+  packedBytes: number;
+  archiveBytes: number;
+}
+
+function assertWithinRoot(rootDir: string, absolutePath: string): string {
   const relative = path.relative(rootDir, absolutePath);
 
   if (relative.startsWith('..') || path.isAbsolute(relative)) {
@@ -19,16 +58,15 @@ function assertWithinRoot(rootDir, absolutePath) {
   return relative || '.';
 }
 
-function toClientDocument(rootDir, document) {
+function toClientDocument<T extends { path: string }>(rootDir: string, document: T): T & { relativePath: string } {
   return {
     ...document,
     relativePath: path.relative(rootDir, document.path),
   };
 }
 
-function parseStubTarget(rootDir, currentPath, sourceText) {
-  // In production flows sourceText is always provided by readFile.
-    const lines = String(sourceText || '').split('\n').map((line) => line.trim());
+function parseStubTarget(rootDir: string, currentPath: string, sourceText: string): StubTarget | null {
+  const lines = String(sourceText || '').split('\n').map((line) => line.trim());
 
   if (!lines[0] || !lines[0].startsWith(DOC_STUB_PREFIX)) {
     return null;
@@ -62,7 +100,7 @@ function parseStubTarget(rootDir, currentPath, sourceText) {
   };
 }
 
-function buildDocStub(rootDir, absolutePath, archiveInfo = null) {
+function buildDocStub(rootDir: string, absolutePath: string, archiveInfo: ArchiveInfo | null = null): string {
   const relativePath = assertWithinRoot(rootDir, absolutePath);
   const lines = [
     `${DOC_STUB_PREFIX} ${DOC_STUB_VERSION}`,
@@ -76,19 +114,19 @@ function buildDocStub(rootDir, absolutePath, archiveInfo = null) {
     lines.push(`codec: ${archiveInfo.codec}`);
     lines.push(`sha256: ${archiveInfo.sha256}`);
     lines.push(`packed_bytes: ${archiveInfo.packedBytes}`);
-    lines.push(`archive_bytes: ${archiveInfo.archiveBytes}`);
+    lines.push(`archive_bytes: ${archiveInfo.repoArtifactBytes}`);
   }
 
   return `${lines.join('\n')}\n`;
 }
 
-async function writeDocStub(rootDir, absolutePath, archiveInfo = null) {
+async function writeDocStub(rootDir: string, absolutePath: string, archiveInfo: ArchiveInfo | null = null): Promise<void> {
   await mkdir(path.dirname(absolutePath), { recursive: true });
   await writeFile(absolutePath, buildDocStub(rootDir, absolutePath, archiveInfo), 'utf8');
 }
 
-async function persistDocumentArtifacts(rootDir, absolutePath, document) {
-  const archiveInfo = await writeDocArchive(rootDir, absolutePath, document);
+async function persistDocumentArtifacts(rootDir: string, absolutePath: string, document: NormalizedDocument): Promise<void> {
+  const archiveInfo = await writeDocArchive(rootDir, absolutePath, document) as ArchiveInfo;
   await writeDocStub(rootDir, absolutePath, archiveInfo);
 
   const legacyCompanion = getLegacyCompanionArchivePath(absolutePath);
@@ -99,9 +137,8 @@ async function persistDocumentArtifacts(rootDir, absolutePath, document) {
   }
 }
 
-function normalizeRelativeDocPath(relativePath) {
-  // Public APIs validate input before calling this helper.
-    const trimmed = String(relativePath || '').trim().replace(/^\/+/, '');
+function normalizeRelativeDocPath(relativePath: string): string {
+  const trimmed = String(relativePath || '').trim().replace(/^\/+/, '');
 
   if (!trimmed || !trimmed.endsWith('.dx')) {
     throw new Error('A valid .dx path is required.');
@@ -110,13 +147,13 @@ function normalizeRelativeDocPath(relativePath) {
   return trimmed;
 }
 
-function resolveDocumentPath(rootDir, relativePath) {
+function resolveDocumentPath(rootDir: string, relativePath: string): string {
   const absolutePath = path.resolve(rootDir, normalizeRelativeDocPath(relativePath));
   assertWithinRoot(rootDir, absolutePath);
   return absolutePath;
 }
 
-export async function ingestWorkspace(rootDir, db) {
+export async function ingestWorkspace(rootDir: string, db: DbConnection): Promise<ClientDocument[]> {
   const docFiles = await findDocFiles(rootDir);
   const ingested = [];
 
@@ -136,7 +173,7 @@ export async function ingestWorkspace(rootDir, db) {
                 const fromDbSource = parseDocFile(existing.path, existing.source || '');
         const normalizedId = upsertDocument(db, rootDir, fromDbSource, Math.trunc(fileStats.mtimeMs));
         await persistDocumentArtifacts(rootDir, stub.absolutePath, fromDbSource);
-        const normalized = getWorkspaceDocumentById(db, rootDir, normalizedId);
+        const normalized = getWorkspaceDocumentById(db, rootDir, normalizedId) as ClientDocument;
         ingested.push(toClientDocument(rootDir, normalized));
         continue;
       }
@@ -146,7 +183,7 @@ export async function ingestWorkspace(rootDir, db) {
             const reconstructed = await readDocArchive(rootDir, stub.absolutePath, stub.archiveRelativePath);
           const documentId = upsertDocument(db, rootDir, reconstructed, Math.trunc(fileStats.mtimeMs));
           await persistDocumentArtifacts(rootDir, stub.absolutePath, reconstructed);
-          const hydrated = getWorkspaceDocumentById(db, rootDir, documentId);
+          const hydrated = getWorkspaceDocumentById(db, rootDir, documentId) as ClientDocument;
           ingested.push(toClientDocument(rootDir, hydrated));
         } catch {
           // Leave unresolved stubs untouched; they can be repaired from another peer.
@@ -159,14 +196,14 @@ export async function ingestWorkspace(rootDir, db) {
     const parsed = parseDocFile(filePath, text);
     const documentId = upsertDocument(db, rootDir, parsed, Math.trunc(fileStats.mtimeMs));
     await persistDocumentArtifacts(rootDir, filePath, parsed);
-    const hydrated = getWorkspaceDocumentById(db, rootDir, documentId);
+    const hydrated = getWorkspaceDocumentById(db, rootDir, documentId) as ClientDocument;
     ingested.push(toClientDocument(rootDir, hydrated));
   }
 
   return ingested;
 }
 
-export async function createDocument(rootDir, db, input) {
+export async function createDocument(rootDir: string, db: DbConnection, input: DocInput): Promise<ClientDocument> {
   const relativePath = normalizeRelativeDocPath(input.path);
 
   const absolutePath = resolveDocumentPath(rootDir, relativePath);
@@ -182,11 +219,11 @@ export async function createDocument(rootDir, db, input) {
   });
   const documentId = upsertDocument(db, rootDir, document, Date.now());
   await persistDocumentArtifacts(rootDir, absolutePath, document);
-  return toClientDocument(rootDir, getWorkspaceDocumentById(db, rootDir, documentId));
+  return toClientDocument(rootDir, getWorkspaceDocumentById(db, rootDir, documentId) as ClientDocument);
 }
 
-export async function saveDocument(rootDir, db, documentId, input) {
-  const current = getWorkspaceDocumentById(db, rootDir, documentId);
+export async function saveDocument(rootDir: string, db: DbConnection, documentId: number, input: Partial<DocInput>): Promise<ClientDocument> {
+  const current = getWorkspaceDocumentById(db, rootDir, documentId) as ClientDocument | null;
 
   if (!current) {
     throw new Error('Document not found.');
@@ -201,21 +238,21 @@ export async function saveDocument(rootDir, db, documentId, input) {
   });
   upsertDocument(db, rootDir, document, Date.now());
   await persistDocumentArtifacts(rootDir, current.path, document);
-  return toClientDocument(rootDir, getWorkspaceDocumentById(db, rootDir, documentId));
+  return toClientDocument(rootDir, getWorkspaceDocumentById(db, rootDir, documentId) as ClientDocument);
 }
 
-export async function getDocumentByRelativePath(rootDir, db, relativePath) {
+export async function getDocumentByRelativePath(rootDir: string, db: DbConnection, relativePath: string): Promise<ClientDocument | null> {
   const absolutePath = resolveDocumentPath(rootDir, relativePath);
   const document = getDocumentByPath(db, rootDir, absolutePath);
   return document ? toClientDocument(rootDir, document) : null;
 }
 
-export async function saveDocumentSourceByRelativePath(rootDir, db, relativePath, sourceText) {
+export async function saveDocumentSourceByRelativePath(rootDir: string, db: DbConnection, relativePath: string, sourceText: string): Promise<ClientDocument> {
   const absolutePath = resolveDocumentPath(rootDir, relativePath);
   const parsed = parseDocFile(absolutePath, String(sourceText || ''));
   const documentId = upsertDocument(db, rootDir, parsed, Date.now());
   await persistDocumentArtifacts(rootDir, absolutePath, parsed);
-  return toClientDocument(rootDir, getWorkspaceDocumentById(db, rootDir, documentId));
+  return toClientDocument(rootDir, getWorkspaceDocumentById(db, rootDir, documentId) as ClientDocument);
 }
 
 /**
@@ -224,29 +261,32 @@ export async function saveDocumentSourceByRelativePath(rootDir, db, relativePath
  * The caller is responsible for writing the stub to disk; this function never
  * touches the filesystem directly so there is no double-write race.
  */
-export async function saveDocumentSourceToDbAndArchive(rootDir, db, relativePath, sourceText) {
+export async function saveDocumentSourceToDbAndArchive(rootDir: string, db: DbConnection, relativePath: string, sourceText: string): Promise<{ document: ClientDocument; stubText: string }> {
   const absolutePath = resolveDocumentPath(rootDir, relativePath);
   const parsed = parseDocFile(absolutePath, String(sourceText || ''));
   const documentId = upsertDocument(db, rootDir, parsed, Date.now());
-  const archiveInfo = await writeDocArchive(rootDir, absolutePath, parsed);
+  const archiveInfo = await writeDocArchive(rootDir, absolutePath, parsed) as ArchiveInfo;
   const stubText = buildDocStub(rootDir, absolutePath, archiveInfo);
+  const saved = getWorkspaceDocumentById(db, rootDir, documentId) as StoredDocument;
   return {
-    document: toClientDocument(rootDir, getWorkspaceDocumentById(db, rootDir, documentId)),
+    document: toClientDocument(rootDir, saved),
     stubText,
   };
 }
 
-export async function getDocument(rootDir, db, documentId) {
-  const document = getWorkspaceDocumentById(db, rootDir, documentId);
+export async function getDocument(rootDir: string, db: DbConnection, documentId: number): Promise<ClientDocument | null> {
+  const document = getWorkspaceDocumentById(db, rootDir, documentId) as StoredDocument | null;
   return document ? toClientDocument(rootDir, document) : null;
 }
 
-export async function listOrSearchDocuments(rootDir, db, query = '') {
-  return searchDocuments(db, rootDir, query).map((document) => toClientDocument(rootDir, document));
+export async function listOrSearchDocuments(rootDir: string, db: DbConnection, query = '') {
+  return searchDocuments(db, rootDir, query)
+    .filter((document): document is SearchResult & { path: string } => typeof document?.path === 'string')
+    .map((document) => toClientDocument(rootDir, document));
 }
 
-export async function reconstructDocument(rootDir, db, documentId) {
-  const document = getWorkspaceDocumentById(db, rootDir, documentId);
+export async function reconstructDocument(rootDir: string, db: DbConnection, documentId: number): Promise<string> {
+  const document = getWorkspaceDocumentById(db, rootDir, documentId) as StoredDocument | null;
 
   if (!document) {
     throw new Error('Document not found.');

@@ -1,7 +1,22 @@
 import { parseSourceBlocks } from './doc-pipeline.js';
+import type { ChecklistItem, PipelineBlock } from './doc-pipeline.js';
 
-export function parseAttributes(args) {
-  const attributes = {};
+type Attributes = Record<string, string>;
+
+type ListItemLike =
+  | string
+  | ChecklistItem
+  | {
+      text?: string;
+      nested?: ListItemLike[];
+    };
+
+interface DocumentModel {
+  blocks: PipelineBlock[];
+}
+
+export function parseAttributes(args: string | number | boolean | null | undefined | object): Attributes {
+  const attributes: Attributes = {};
   const pattern = /([a-zA-Z0-9._-]+)=(?:"([^"]*)"|'([^']*)'|([^\s]+))/g;
   const text = String(args || '');
   let match = pattern.exec(text);
@@ -25,7 +40,7 @@ export const KNOWN_BLOCK_TYPES = new Set([
   'checklist', 'quote', 'code', 'image', 'rule', 'style', 'stylesheet',
 ]);
 
-const LEGACY_LIST_ITEM_FALLBACKS = {
+const LEGACY_LIST_ITEM_FALLBACKS: Record<string, string[]> = {
   'how-it-works-steps': [
     'Every document is a sequence of typed blocks. There is no markdown, no inline HTML, and no implicit formatting.',
     'Blocks are stored in SQLite and packed into a compact binary bundle at .doc/.repo-docs.bin that commits with your code.',
@@ -34,7 +49,7 @@ const LEGACY_LIST_ITEM_FALLBACKS = {
   ],
 };
 
-function normalizeClassName(value) {
+function normalizeClassName(value: string | number | boolean | null | undefined | object): string {
   return String(value || '')
     .split(/\s+/)
     .map((token) => token.trim())
@@ -42,7 +57,7 @@ function normalizeClassName(value) {
     .join(' ');
 }
 
-function formatAttributeValue(value) {
+function formatAttributeValue(value: string | number | boolean | null | undefined | object): string {
   const text = String(value || '').trim();
 
   if (!text) {
@@ -56,22 +71,22 @@ function formatAttributeValue(value) {
   return '"' + text.replace(/"/g, '') + '"';
 }
 
-function isLegacyObjectMarker(text) {
+function isLegacyObjectMarker(text: string | number | boolean | null | undefined | object): boolean {
   return String(text || '').trim() === '[object Object]';
 }
 
-function containsLegacyObjectMarker(lines) {
+function containsLegacyObjectMarker(lines: string[]): boolean {
   return Array.isArray(lines) && lines.some((line) => isLegacyObjectMarker(String(line || '').replace(/^\s*(?:[-*]|\d+[.)])\s+/, '')));
 }
 
-function parseLegacyListObjectText(text) {
+function parseLegacyListObjectText(text: string | number | boolean | null | undefined | object): string {
   const trimmed = String(text || '').trim();
   if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) {
     return '';
   }
 
   try {
-    const parsed = JSON.parse(trimmed);
+    const parsed = JSON.parse(trimmed) as { text?: string | number | boolean | null | undefined | object };
     if (parsed && typeof parsed === 'object') {
       return String(parsed.text || '').trim();
     }
@@ -82,8 +97,8 @@ function parseLegacyListObjectText(text) {
   return '';
 }
 
-function repairLegacyListItems(items, blockId) {
-  const cleaned = [];
+function repairLegacyListItems(items: string[], blockId: string): string[] {
+  const cleaned: string[] = [];
 
   for (const item of items || []) {
     if (isLegacyObjectMarker(item)) {
@@ -100,7 +115,7 @@ function repairLegacyListItems(items, blockId) {
   return Array.isArray(fallback) ? [...fallback] : [];
 }
 
-export function listItemText(item) {
+export function listItemText(item: ListItemLike): string {
   if (typeof item === 'object' && item !== null) {
     return String(item.text || '').trim();
   }
@@ -108,12 +123,12 @@ export function listItemText(item) {
   return String(item || '').trim();
 }
 
-function flattenListItems(items, depth = 0) {
+function flattenListItems(items: ListItemLike[], depth = 0): string[] {
   if (!Array.isArray(items)) {
     return [];
   }
 
-  const lines = [];
+  const lines: string[] = [];
   const indent = '  '.repeat(Math.max(0, depth));
 
   for (const item of items) {
@@ -123,7 +138,7 @@ function flattenListItems(items, depth = 0) {
         lines.push(`${indent}- ${text}`);
       }
 
-      if (Array.isArray(item.nested) && item.nested.length > 0) {
+      if ('nested' in item && Array.isArray(item.nested) && item.nested.length > 0) {
         lines.push(...flattenListItems(item.nested, depth + 1));
       }
 
@@ -139,15 +154,15 @@ function flattenListItems(items, depth = 0) {
   return lines;
 }
 
-function isBulletedListType(type) {
+function isBulletedListType(type: string): boolean {
   return type === 'list' || type === 'bulleted-list';
 }
 
-function isNumberedListType(type) {
+function isNumberedListType(type: string): boolean {
   return type === 'numbered-list';
 }
 
-function parseListItems(lines, blockId = '') {
+function parseListItems(lines: string[], blockId = ''): string[] {
   const parsedItems = (lines || [])
     .map((line) => {
       const text = String(line || '').replace(/^\s*(?:[-*]|\d+[.)])\s+/, '').trim();
@@ -162,12 +177,12 @@ function parseListItems(lines, blockId = '') {
       const recoveredText = parseLegacyListObjectText(text);
       return recoveredText || text;
     })
-    .filter(Boolean);
+    .filter((value): value is string => Boolean(value));
 
   return repairLegacyListItems(parsedItems, blockId);
 }
 
-function buildBlockHeader(type, attributes) {
+function buildBlockHeader(type: string, attributes: Record<string, string | number | boolean | null | undefined | object>): string {
   const parts = Object.entries(attributes || {})
     .filter(([, value]) => String(value || '').trim())
     .map(([key, value]) => `${key}=${formatAttributeValue(value)}`);
@@ -175,7 +190,21 @@ function buildBlockHeader(type, attributes) {
   return parts.length > 0 ? `::${type} ${parts.join(' ')}` : `::${type}`;
 }
 
-export function stringifyBlock(block) {
+function toChecklistItem(item: string | ChecklistItem): ChecklistItem {
+  if (typeof item === 'string') {
+    const match = /^\s*\[(x| )\]\s*(.*)$/i.exec(item.trim());
+    if (match) {
+      const checkedToken = match[1] ?? ' ';
+      const text = match[2] ?? '';
+      return { checked: checkedToken.toLowerCase() === 'x', text };
+    }
+    return { checked: false, text: item };
+  }
+
+  return item;
+}
+
+export function stringifyBlock(block: PipelineBlock | null | undefined): string {
   if (!block) return '';
 
   if (block.rawSource) {
@@ -186,7 +215,7 @@ export function stringifyBlock(block) {
     return source;
   }
 
-  const attributes = {};
+  const attributes: Record<string, string> = {};
 
   if (block.id) {
     attributes.id = block.id;
@@ -208,15 +237,18 @@ export function stringifyBlock(block) {
   }
 
   if (isBulletedListType(block.type)) {
-    return buildBlockHeader('bulleted-list', attributes) + '\n' + flattenListItems(block.items || []).join('\n') + '\n::end';
+    return buildBlockHeader('bulleted-list', attributes) + '\n' + flattenListItems((block.items || []) as ListItemLike[]).join('\n') + '\n::end';
   }
 
   if (isNumberedListType(block.type)) {
-    return buildBlockHeader('numbered-list', attributes) + '\n' + flattenListItems(block.items || []).join('\n') + '\n::end';
+    return buildBlockHeader('numbered-list', attributes) + '\n' + flattenListItems((block.items || []) as ListItemLike[]).join('\n') + '\n::end';
   }
 
   if (block.type === 'checklist') {
-    return buildBlockHeader('checklist', attributes) + '\n' + (block.items || []).map((item) => '[' + (item.checked ? 'x' : ' ') + '] ' + item.text).join('\n') + '\n::end';
+    return buildBlockHeader('checklist', attributes) + '\n' + (block.items || []).map((item) => {
+      const normalized = toChecklistItem(item as string | ChecklistItem);
+      return '[' + (normalized.checked ? 'x' : ' ') + '] ' + normalized.text;
+    }).join('\n') + '\n::end';
   }
 
   if (block.type === 'image') {
@@ -249,27 +281,29 @@ export function stringifyBlock(block) {
   return buildBlockHeader(block.type, attributes) + '\n' + (block.text || '') + '\n::end';
 }
 
-export function parseBlock(raw) {
+export function parseBlock(raw: string | number | boolean | null | undefined | object): PipelineBlock {
   const original = String(raw || '').replace(/\r\n/g, '\n');
   const trimmed = original.trim();
 
   if (!trimmed.startsWith('::')) {
-    return { type: 'paragraph', text: original, rawSource: original };
+    return { type: 'paragraph', id: '', className: '', text: original, rawSource: original };
   }
 
   const lines = trimmed.split('\n');
-  const open = /^::([a-z-]+)(.*)$/i.exec(lines[0].trim());
+  const firstLine = lines[0] ?? '';
+  const open = /^::([a-z-]+)(.*)$/i.exec(firstLine.trim());
 
   if (!open) {
-    return { type: 'paragraph', text: trimmed, rawSource: original };
+    return { type: 'paragraph', id: '', className: '', text: trimmed, rawSource: original };
   }
 
-  const type = open[1].toLowerCase();
-  const attrs = parseAttributes(open[2] || '');
+  const type = String(open[1] ?? '').toLowerCase();
+  const attrs = parseAttributes(open[2] ?? '');
   let endIdx = lines.length;
 
   for (let i = 1; i < lines.length; i += 1) {
-    if (lines[i].trim() === '::end') {
+    const line = lines[i] ?? '';
+    if (line.trim() === '::end') {
       endIdx = i;
       break;
     }
@@ -323,7 +357,12 @@ export function parseBlock(raw) {
       items: content
         .map((line) => {
           const match = /^\s*\[(x| )\]\s*(.*)$/i.exec(line.trim());
-          return match ? { checked: match[1].toLowerCase() === 'x', text: match[2] } : { checked: false, text: line.trim() };
+          if (match) {
+            const checkedToken = match[1] ?? ' ';
+            const text = match[2] ?? '';
+            return { checked: checkedToken.toLowerCase() === 'x', text };
+          }
+          return { checked: false, text: line.trim() };
         })
         .filter((item) => item.text.length > 0),
       rawSource: original,
@@ -401,12 +440,12 @@ export function parseBlock(raw) {
   };
 }
 
-export function parseDoc(source) {
+export function parseDoc(source: string | number | boolean | null | undefined | object): DocumentModel {
   return { blocks: parseSourceBlocks(source) };
 }
 
-export function stringifyDoc(model) {
-  const lines = [];
+export function stringifyDoc(model: DocumentModel): string {
+  const lines: string[] = [];
 
   for (let i = 0; i < model.blocks.length; i += 1) {
     lines.push(stringifyBlock(model.blocks[i]));
@@ -419,12 +458,12 @@ export function stringifyDoc(model) {
   return lines.join('\n').trimEnd() + '\n';
 }
 
-export function extractCssFromDocumentModel(model) {
+export function extractCssFromDocumentModel(model: DocumentModel | null | undefined): string {
   if (!model || !Array.isArray(model.blocks)) {
     return '';
   }
 
-  const chunks = [];
+  const chunks: string[] = [];
 
   for (const block of model.blocks) {
     if (!block) {
@@ -457,12 +496,12 @@ export function extractCssFromDocumentModel(model) {
   return chunks.join('\n\n');
 }
 
-export function extractStylesheetLinksFromDocumentModel(model) {
+export function extractStylesheetLinksFromDocumentModel(model: DocumentModel | null | undefined): Array<{ href: string; media: string }> {
   if (!model || !Array.isArray(model.blocks)) {
     return [];
   }
 
-  const links = [];
+  const links: Array<{ href: string; media: string }> = [];
 
   for (const block of model.blocks) {
     if (!block || block.type !== 'stylesheet') {
@@ -482,7 +521,7 @@ export function extractStylesheetLinksFromDocumentModel(model) {
   return links;
 }
 
-export function findCssBlockIndex(model) {
+export function findCssBlockIndex(model: DocumentModel | null | undefined): number {
   if (!model || !Array.isArray(model.blocks)) {
     return -1;
   }
