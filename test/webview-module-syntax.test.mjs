@@ -30,6 +30,7 @@ test('extension webview module files parse without syntax errors', () => {
   checkSyntax('vscode-extension/media/webview-events.js');
   checkSyntax('vscode-extension/media/webview-fsm.mjs');
   checkSyntax('vscode-extension/media/webview-state-core.js');
+  checkSyntax('vscode-extension/media/webview-surface-controller.js');
   checkSyntax('vscode-extension/media/webview.js');
   checkSyntax('vscode-extension/media/webview-main.js');
 });
