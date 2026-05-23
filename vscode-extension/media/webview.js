@@ -1,4 +1,7 @@
 import { DOC_SAVE_STATES, DOC_SAVE_TRANSITIONS, DOC_VIEW_STATES, DOC_VIEW_TRANSITIONS } from './webview-fsm.mjs';
+import { createAutocompleteController } from './webview-autocomplete-controller.js';
+import { createBlockRenderer } from './webview-block-renderer.js';
+import { applyBlockViewPresentation } from './webview-block-presentation.js';
 import {
   extractCssFromDocumentModel as extractCssFromModel,
   extractStylesheetLinksFromDocumentModel as extractStylesheetLinksFromModel,
@@ -12,6 +15,7 @@ import {
   stringifyDoc,
 } from './webview-doc-model.js';
 import { BlockSourceController, InlineCssSurfaceController } from './webview-edit-controllers.js';
+import { registerBlockInteractionEvents } from './webview-events.js';
 import {
   CallbackUndoRedoController,
   TableDrivenStateMachine,
@@ -77,7 +81,66 @@ const documentHistory = new CallbackUndoRedoController({
 let documentLifecycleController = null;
 let inlineCssController = null;
 let blockSourceController = null;
+let blockRendererController = null;
+let autocompleteController = null;
 let uiStateController = null;
+
+function collectAutocompleteHeaders() {
+  if (!docModel || !Array.isArray(docModel.blocks)) {
+    return [];
+  }
+
+  const headers = [];
+
+  for (const block of docModel.blocks) {
+    const raw = String(block && block.rawSource ? block.rawSource : '').trim();
+    if (!raw) {
+      continue;
+    }
+
+    const header = raw.split('\n')[0] || '';
+    if (header.trim()) {
+      headers.push(header);
+    }
+  }
+
+  return headers;
+}
+
+function ensureBlockRendererController() {
+  if (blockRendererController) {
+    return blockRendererController;
+  }
+
+  blockRendererController = createBlockRenderer({
+    applyBlockViewPresentation,
+    listItemText,
+    splitClassNames,
+    getWorkspaceBaseUri: () => workspaceBaseUri,
+  });
+
+  return blockRendererController;
+}
+
+function ensureAutocompleteController() {
+  if (autocompleteController) {
+    return autocompleteController;
+  }
+
+  autocompleteController = createAutocompleteController({
+    blockAutocomplete: BLOCK_AUTOCOMPLETE,
+    collectKnownIds,
+    collectKnownClasses,
+    collectKnownImageSources,
+    collectAutocompleteHeaders,
+    escapeHtml,
+    storage: window.localStorage,
+    storageKey: 'docdb.autocomplete-history.v1',
+  });
+  autocompleteState = autocompleteController.state;
+
+  return autocompleteController;
+}
 
 function ensureDocumentLifecycleController() {
   if (documentLifecycleController) {
@@ -495,14 +558,7 @@ const BLOCK_AUTOCOMPLETE = [
   '::end',
 ];
 
-let autocompleteState = {
-  textarea: null,
-  suggestions: [],
-  selectedIndex: 0,
-  replaceStart: 0,
-  replaceEnd: 0,
-  typed: '',
-};
+let autocompleteState = null;
 
 function setStatus(text) {
   const el = document.getElementById('status');
@@ -811,106 +867,7 @@ function getLineContext(textarea) {
 }
 
 function getAutocompleteSuggestions(textarea, forceOpen = false) {
-  if (!textarea) {
-    return { suggestions: [], replaceStart: 0, replaceEnd: 0, typed: '' };
-  }
-
-  const ctx = getLineContext(textarea);
-  const suggestions = [];
-  let replaceStart = ctx.cursor;
-  let replaceEnd = ctx.cursor;
-  let typed = '';
-
-  const commandMatch = /::[a-z-]*$/i.exec(ctx.beforeCursor);
-  if (commandMatch) {
-    typed = commandMatch[0];
-    replaceStart = ctx.cursor - typed.length;
-    replaceEnd = ctx.cursor;
-
-    for (const candidate of BLOCK_AUTOCOMPLETE) {
-      if (!candidate.startsWith(typed)) continue;
-      suggestions.push({
-        label: candidate,
-        insertText: candidate,
-        kind: 'block',
-        detail: 'Block',
-      });
-    }
-  } else {
-    const idMatch = /\bid=([^\s]*)$/i.exec(ctx.beforeCursor);
-    if (idMatch) {
-      typed = idMatch[1] || '';
-      replaceStart = ctx.cursor - typed.length;
-      const afterLine = ctx.value.slice(ctx.cursor, ctx.lineEnd);
-      const right = /^([^\s]*)/.exec(afterLine);
-      replaceEnd = ctx.cursor + (right ? right[1].length : 0);
-      const knownIds = collectKnownIds();
-
-      for (const id of knownIds) {
-        if (id.startsWith(typed)) {
-          suggestions.push({
-            label: id,
-            insertText: id,
-            kind: 'id',
-            detail: 'Known id',
-          });
-        }
-      }
-    } else {
-      const classMatch = /\bclass=(?:"([^"]*)|'([^']*)'|([^\s]*))$/i.exec(ctx.beforeCursor);
-      if (classMatch) {
-        const classValue = classMatch[1] ?? classMatch[2] ?? classMatch[3] ?? '';
-        const currentToken = classValue.split(/\s+/).pop() || '';
-        typed = currentToken;
-        replaceStart = ctx.cursor - currentToken.length;
-        const afterClass = ctx.value.slice(ctx.cursor, ctx.lineEnd);
-        const rightClass = /^([^\s"']*)/.exec(afterClass);
-        replaceEnd = ctx.cursor + (rightClass ? rightClass[1].length : 0);
-
-        for (const token of collectKnownClasses()) {
-          if (!token.startsWith(currentToken) || token === currentToken) continue;
-          suggestions.push({
-            label: token,
-            insertText: token,
-            kind: 'class',
-            detail: 'Known class',
-          });
-        }
-      } else {
-      const imageSrcMatch = /::image\s+[^\n]*\bsrc=([^\s]*)$/i.exec(ctx.beforeCursor);
-      if (imageSrcMatch) {
-        typed = imageSrcMatch[1] || '';
-        replaceStart = ctx.cursor - typed.length;
-        const afterSrc = ctx.value.slice(ctx.cursor, ctx.lineEnd);
-        const rightSrc = /^([^\s]*)/.exec(afterSrc);
-        replaceEnd = ctx.cursor + (rightSrc ? rightSrc[1].length : 0);
-        const knownSources = collectKnownImageSources();
-
-        for (const source of knownSources) {
-          if (source.startsWith(typed)) {
-            suggestions.push({
-              label: source,
-              insertText: source,
-              kind: 'src',
-              detail: 'Image source',
-            });
-          }
-        }
-      } else if (forceOpen) {
-        for (const candidate of BLOCK_AUTOCOMPLETE) {
-          suggestions.push({
-            label: candidate,
-            insertText: candidate,
-            kind: 'block',
-            detail: 'Block',
-          });
-        }
-      }
-      }
-    }
-  }
-
-  return { suggestions, replaceStart, replaceEnd, typed };
+  return ensureAutocompleteController().getAutocompleteSuggestions(textarea, forceOpen);
 }
 
 function getAutocompleteEls(textarea) {
@@ -948,154 +905,23 @@ function renderGhostText(textarea, mirrorEl) {
 }
 
 function closeAutocomplete() {
-  const textarea = autocompleteState.textarea;
-  if (!textarea) return;
-
-  const { menuEl, mirrorEl } = getAutocompleteEls(textarea);
-  const srcWrap = textarea.closest('.block-src-wrapper');
-
-  if (menuEl) {
-    menuEl.innerHTML = '';
-    menuEl.style.display = 'none';
-  }
-  if (mirrorEl) mirrorEl.textContent = '';
-  if (srcWrap) srcWrap.classList.remove('ghost-active');
-  textarea.classList.remove('ghost-active');
-
-  autocompleteState = {
-    textarea: null,
-    suggestions: [],
-    selectedIndex: 0,
-    replaceStart: 0,
-    replaceEnd: 0,
-    typed: '',
-  };
+  ensureAutocompleteController().closeAutocomplete();
 }
 
 function renderAutocomplete(textarea, forceOpen = false) {
-  if (!textarea) {
-    closeAutocomplete();
-    return false;
-  }
-
-  const { menuEl, mirrorEl } = getAutocompleteEls(textarea);
-  if (!menuEl) {
-    closeAutocomplete();
-    return false;
-  }
-
-  const model = getAutocompleteSuggestions(textarea, forceOpen);
-  const suggestions = model.suggestions.slice(0, 20);
-
-  autocompleteState.textarea = textarea;
-  autocompleteState.suggestions = suggestions;
-  autocompleteState.selectedIndex = 0;
-  autocompleteState.replaceStart = model.replaceStart;
-  autocompleteState.replaceEnd = model.replaceEnd;
-  autocompleteState.typed = model.typed;
-
-  if (suggestions.length === 0) {
-    closeAutocomplete();
-    return false;
-  }
-
-  renderGhostText(textarea, mirrorEl);
-
-  menuEl.innerHTML = suggestions
-    .map((item, index) => {
-      const cls = index === 0 ? ' selected' : '';
-      return '<button type="button" class="autocomplete-item' + cls + '" data-index="' + index + '"><span class="autocomplete-item-label">' + escapeHtml(item.label) + '</span><span class="autocomplete-item-detail">' + escapeHtml(item.detail) + '</span></button>';
-    })
-    .join('');
-  menuEl.style.display = 'block';
-  requestAnimationFrame(() => {
-    positionAutocompleteMenu(textarea, menuEl);
-  });
-
-  return true;
+  return ensureAutocompleteController().renderAutocomplete(textarea, forceOpen);
 }
 
 function positionAutocompleteMenu(textarea, menuEl) {
-  if (!textarea || !menuEl) return;
-
-  const computed = window.getComputedStyle(textarea);
-  const lineHeight = Number.parseFloat(computed.lineHeight) || 20;
-  const paddingTop = Number.parseFloat(computed.paddingTop) || 0;
-  const paddingLeft = Number.parseFloat(computed.paddingLeft) || 0;
-  const beforeCursor = String(textarea.value || '').slice(0, textarea.selectionStart || 0);
-  const currentLine = beforeCursor.slice(beforeCursor.lastIndexOf('\n') + 1);
-  const lineIndex = beforeCursor.split('\n').length - 1;
-  const canvas = positionAutocompleteMenu.canvas || (positionAutocompleteMenu.canvas = document.createElement('canvas'));
-  const context = canvas.getContext('2d');
-
-  if (!context) {
-    return;
-  }
-
-  context.font = `${computed.fontWeight} ${computed.fontSize} ${computed.fontFamily}`;
-  const textWidth = context.measureText(currentLine).width;
-  const srcWrap = textarea.closest('.block-src-wrapper');
-  const wrapWidth = srcWrap ? srcWrap.clientWidth : textarea.clientWidth;
-  const maxLeft = Math.max(0, wrapWidth - menuEl.offsetWidth);
-  const left = Math.max(0, Math.min(maxLeft, paddingLeft + textWidth - textarea.scrollLeft));
-  const top = Math.max(0, paddingTop + ((lineIndex + 1) * lineHeight) - textarea.scrollTop + 6);
-
-  menuEl.style.left = `${left}px`;
-  menuEl.style.top = `${top}px`;
+  return ensureAutocompleteController().positionAutocompleteMenu(textarea, menuEl);
 }
 
 function updateAutocompleteSelection(delta) {
-  if (!autocompleteState.textarea || autocompleteState.suggestions.length === 0) {
-    return false;
-  }
-
-  const count = autocompleteState.suggestions.length;
-  autocompleteState.selectedIndex = (autocompleteState.selectedIndex + delta + count) % count;
-
-  const textarea = autocompleteState.textarea;
-  const { menuEl, mirrorEl } = getAutocompleteEls(textarea);
-
-  renderGhostText(textarea, mirrorEl);
-
-  if (menuEl) {
-    const items = menuEl.querySelectorAll('.autocomplete-item');
-    items.forEach((item, index) => {
-      item.classList.toggle('selected', index === autocompleteState.selectedIndex);
-    });
-
-    const activeItem = menuEl.querySelector('.autocomplete-item.selected');
-    if (activeItem) {
-      activeItem.scrollIntoView({ block: 'nearest' });
-    }
-  }
-
-  return true;
+  return ensureAutocompleteController().updateAutocompleteSelection(delta);
 }
 
 function acceptAutocomplete(textarea, explicitIndex) {
-  if (!textarea || autocompleteState.textarea !== textarea || autocompleteState.suggestions.length === 0) {
-    return false;
-  }
-
-  const index = Number.isInteger(explicitIndex)
-    ? Math.max(0, Math.min(explicitIndex, autocompleteState.suggestions.length - 1))
-    : autocompleteState.selectedIndex;
-  const choice = autocompleteState.suggestions[index];
-  if (!choice) {
-    return false;
-  }
-
-  const value = String(textarea.value || '');
-  const insertText = String(choice.insertText || '');
-  const before = value.slice(0, autocompleteState.replaceStart);
-  const after = value.slice(autocompleteState.replaceEnd);
-  textarea.value = before + insertText + after;
-
-  const nextCursor = autocompleteState.replaceStart + insertText.length;
-  textarea.setSelectionRange(nextCursor, nextCursor);
-  textarea.dispatchEvent(new Event('input', { bubbles: true }));
-  closeAutocomplete();
-  return true;
+  return ensureAutocompleteController().acceptAutocomplete(textarea, explicitIndex);
 }
 
 function isBulletedListType(type) {
@@ -1151,367 +977,51 @@ function setInlineContent(el, text) {
 }
 
 function buildRenderedContent(block) {
-  function applyBlockDecorations(element) {
-    if (!element) return element;
-    if (block.id) {
-      element.id = block.id;
-      element.dataset.blockId = block.id;
-    }
-    for (const token of splitClassNames(block.className)) {
-      element.classList.add(token);
-    }
-    return element;
-  }
-
-  if (block.type === 'heading') {
-    const level = Math.min(6, Math.max(1, Number(block.level || 1)));
-    const heading = document.createElement('h' + level);
-    heading.textContent = block.text || '';
-    return applyBlockDecorations(heading);
-  }
-
-  if (block.type === 'paragraph') {
-    const paragraph = document.createElement('p');
-    setInlineContent(paragraph, block.text || '');
-    return applyBlockDecorations(paragraph);
-  }
-
-  if (block.type === 'image') {
-    const figure = document.createElement('figure');
-    figure.className = 'image-wrap';
-
-    const image = document.createElement('img');
-    const rawSrc = String(block.src || '');
-    if (rawSrc.startsWith('data:') || rawSrc.startsWith('http://') || rawSrc.startsWith('https://') || rawSrc.startsWith('vscode-')) {
-      image.src = rawSrc;
-    } else if (rawSrc && workspaceBaseUri) {
-      image.src = workspaceBaseUri + '/' + rawSrc.replace(/^\//, '');
-    } else {
-      image.src = rawSrc;
-    }
-    image.alt = block.alt || '';
-    image.loading = 'lazy';
-    figure.appendChild(image);
-
-    if (block.alt) {
-      const figcaption = document.createElement('figcaption');
-      figcaption.textContent = block.alt;
-      figure.appendChild(figcaption);
-    }
-
-    return applyBlockDecorations(figure);
-  }
-
-  if (block.type === 'code') {
-    const pre = document.createElement('pre');
-    pre.textContent = block.text || '';
-    return applyBlockDecorations(pre);
-  }
-
-  if (block.type === 'style' || block.type === 'stylesheet') {
-    const hidden = document.createElement('span');
-    hidden.hidden = true;
-    hidden.setAttribute('aria-hidden', 'true');
-    return applyBlockDecorations(hidden);
-  }
-
-  if (block.type === 'rule') {
-    return applyBlockDecorations(document.createElement('hr'));
-  }
-
-  if (block.type === 'quote') {
-    const quote = document.createElement('blockquote');
-    const paragraph = document.createElement('p');
-    setInlineContent(paragraph, block.text || '');
-    quote.appendChild(paragraph);
-    return applyBlockDecorations(quote);
-  }
-
-  if (isBulletedListType(block.type)) {
-    const ul = document.createElement('ul');
-    (block.items || []).forEach((item) => {
-      const li = document.createElement('li');
-      setInlineContent(li, listItemText(item));
-      ul.appendChild(li);
-    });
-    return applyBlockDecorations(ul);
-  }
-
-  if (isNumberedListType(block.type)) {
-    const ol = document.createElement('ol');
-    (block.items || []).forEach((item) => {
-      const li = document.createElement('li');
-      setInlineContent(li, listItemText(item));
-      ol.appendChild(li);
-    });
-    return applyBlockDecorations(ol);
-  }
-
-  if (block.type === 'checklist') {
-    const ul = document.createElement('ul');
-    ul.className = 'checklist-wrap';
-    (block.items || []).forEach((item, itemIndex) => {
-      const li = document.createElement('li');
-      const checkbox = document.createElement('input');
-      checkbox.type = 'checkbox';
-      checkbox.checked = Boolean(item.checked);
-      checkbox.dataset.itemIndex = String(itemIndex);
-      const span = document.createElement('span');
-      setInlineContent(span, item.text);
-      if (item.checked) {
-        span.className = 'check-done';
-      }
-      li.appendChild(checkbox);
-      li.appendChild(span);
-      ul.appendChild(li);
-    });
-    return applyBlockDecorations(ul);
-  }
-
-  const fallback = document.createElement('p');
-  fallback.textContent = block.text || '';
-  return applyBlockDecorations(fallback);
+  return ensureBlockRendererController().buildRenderedContent(block);
 }
 
 function buildBlockWrap(block, index) {
-  const wrap = document.createElement('div');
-  wrap.className = 'block-wrap';
-  wrap.dataset.blockIndex = String(index);
-
-  for (const token of splitClassNames(block && block.className)) {
-    wrap.classList.add(token);
-  }
-
-  if (block && block.id) {
-    wrap.dataset.blockId = String(block.id);
-  }
-
-  const view = document.createElement('div');
-  view.className = 'block-view';
-  view.setAttribute('role', 'article');
-  view.setAttribute('tabindex', '0');
-  view.setAttribute('aria-label', `Block ${index + 1}: ${block.type}`);
-  view.appendChild(buildRenderedContent(block));
-
-  const srcWrap = document.createElement('div');
-  srcWrap.className = 'block-src-wrapper';
-  srcWrap.style.display = 'none';
-
-  const header = document.createElement('textarea');
-  header.className = 'block-edit-header';
-  header.setAttribute('aria-label', 'Edit block header');
-  header.spellcheck = false;
-  header.wrap = 'off';
-  header.style.display = 'none';
-
-  const bodyWrap = document.createElement('div');
-  bodyWrap.className = 'block-src-body-wrap';
-
-  const mirror = document.createElement('div');
-  mirror.className = 'block-src-mirror';
-  mirror.setAttribute('aria-hidden', 'true');
-
-  const source = document.createElement('textarea');
-  source.className = 'block-src';
-  source.setAttribute('aria-label', 'Edit block content');
-  source.spellcheck = false;
-  source.wrap = 'off';
-
-  const menu = document.createElement('div');
-  menu.className = 'autocomplete-menu';
-  menu.setAttribute('role', 'listbox');
-  menu.setAttribute('aria-label', 'Autocomplete suggestions');
-  menu.style.display = 'none';
-
-  bodyWrap.appendChild(mirror);
-  bodyWrap.appendChild(source);
-  bodyWrap.appendChild(menu);
-
-  srcWrap.appendChild(header);
-  srcWrap.appendChild(bodyWrap);
-
-  wrap.appendChild(view);
-  wrap.appendChild(srcWrap);
-  return wrap;
+  return ensureBlockRendererController().buildBlockWrap(block, index);
 }
 
 function autosizeBlockSrc(textarea) {
-  if (!textarea) return;
-
-  textarea.style.height = '0px';
-  textarea.style.height = textarea.scrollHeight + 'px';
+  return ensureBlockRendererController().autosizeBlockSrc(textarea);
 }
 
 function getRawSourceForEditor(rawSource) {
-  return String(rawSource || '')
-    .replace(/\r\n/g, '\n')
-    .replace(/\n::end\s*$/, '');  // Strip implicit ::end tag from editor view
+  return ensureBlockRendererController().getRawSourceForEditor(rawSource);
 }
 
 function getRawSourceFromEditor(editorValue) {
-  return String(editorValue || '').replace(/\r\n/g, '\n');
+  return ensureBlockRendererController().getRawSourceFromEditor(editorValue);
 }
 
 function splitBlockSourceForEditor(rawSource, blockType) {
-  const normalized = String(rawSource || '').replace(/\r\n/g, '\n');
-  const trimmed = normalized.trim();
-
-  if (!trimmed.startsWith('::')) {
-    return {
-      headerSource: '',
-      bodySource: normalized,
-      footerSource: '',
-    };
-  }
-
-  const lines = normalized.split('\n');
-  const headerSource = String(lines[0] || '').trimEnd();
-  let endIdx = lines.length;
-
-  for (let index = 1; index < lines.length; index += 1) {
-    if (lines[index].trim() === '::end') {
-      endIdx = index;
-      break;
-    }
-  }
-
-  return {
-    headerSource,
-    bodySource: lines.slice(1, endIdx).join('\n'),
-    footerSource: blockType === 'rule' ? '' : (endIdx < lines.length ? '::end' : ''),
-  };
+  return ensureBlockRendererController().splitBlockSourceForEditor(rawSource, blockType);
 }
 
 function buildRawSourceFromEditorParts(headerSource, bodySource, footerSource) {
-  const header = String(headerSource || '').trimEnd();
-  const body = String(bodySource || '').replace(/\r\n/g, '\n');
-  const footer = String(footerSource || '').trim();
-
-  if (!header) {
-    return body;
-  }
-
-  const parts = [header];
-  if (body.length > 0) {
-    parts.push(body);
-  }
-  if (footer) {
-    parts.push(footer);
-  }
-
-  return parts.join('\n');
+  return ensureBlockRendererController().buildRawSourceFromEditorParts(headerSource, bodySource, footerSource);
 }
 
 function getBlockHeaderEditor(textarea) {
-  if (!textarea) return null;
-  if (textarea.classList && textarea.classList.contains('block-edit-header')) {
-    return textarea;
-  }
-  const srcWrap = textarea.closest('.block-src-wrapper');
-  return srcWrap ? srcWrap.querySelector('.block-edit-header') : null;
+  return ensureBlockRendererController().getBlockHeaderEditor(textarea);
 }
 
 function getHeaderSourceFromEditor(textarea) {
-  const headerEditor = getBlockHeaderEditor(textarea);
-  if (!headerEditor) {
-    return String(textarea?.dataset?.headerSource || '');
-  }
-  return getRawSourceFromEditor(headerEditor.value || '');
+  return ensureBlockRendererController().getHeaderSourceFromEditor(textarea);
 }
 
 function renderEditableHeader(textarea) {
-  if (!textarea) return;
-
-  const headerEl = getBlockHeaderEditor(textarea);
-  const headerSource = String(textarea.dataset.headerSource || '');
-
-  if (!headerEl) {
-    return;
-  }
-
-  if (!headerSource.trim()) {
-    headerEl.value = '';
-    headerEl.style.display = 'none';
-    headerEl.classList.remove('tag-mode', 'paragraph-mode');
-    headerEl.removeAttribute('title');
-    headerEl.style.height = '0px';
-    return;
-  }
-
-  headerEl.value = headerSource;
-  headerEl.style.display = 'block';
-  headerEl.setAttribute('title', 'Type block tag (for example ::heading level=1) or plain text');
-  headerEl.style.height = '0px';
-  headerEl.style.height = headerEl.scrollHeight + 'px';
-
-  const inTagMode = String(headerEl.value || '').startsWith(':');
-  headerEl.classList.toggle('tag-mode', inTagMode);
-  headerEl.classList.toggle('paragraph-mode', !inTagMode);
+  return ensureBlockRendererController().renderEditableHeader(textarea);
 }
 
 function applyEditableBodyPresentation(wrap, block) {
-  if (!wrap || !block) return;
-
-  const view = wrap.querySelector('.block-view');
-  const source = wrap.querySelector('.block-src');
-  if (!view || !source) return;
-
-  const rendered = view.firstElementChild;
-  if (rendered && rendered.id) {
-    rendered.dataset.originalEditingId = rendered.id;
-    rendered.removeAttribute('id');
-  }
-
-  const previousClasses = String(source.dataset.editPresentationClasses || '').split(' ').filter(Boolean);
-  if (previousClasses.length > 0) {
-    source.classList.remove(...previousClasses);
-  }
-
-  const nextClasses = [`block-src-type-${String(block.type || 'paragraph').toLowerCase()}`];
-  if (block.type === 'heading') {
-    nextClasses.push(`block-src-heading-${Math.min(6, Math.max(1, Number(block.level || 1)))}`);
-  }
-
-  const customClasses = splitClassNames(block.className);
-  nextClasses.push(...customClasses);
-  source.classList.add(...nextClasses);
-  source.dataset.editPresentationClasses = nextClasses.join(' ');
-
-  if (block.id) {
-    source.id = block.id;
-  } else {
-    source.removeAttribute('id');
-  }
-
-  renderEditableHeader(source);
+  return ensureBlockRendererController().applyEditableBodyPresentation(wrap, block);
 }
 
 function clearEditableBodyPresentation(wrap) {
-  if (!wrap) return;
-
-  const view = wrap.querySelector('.block-view');
-  const source = wrap.querySelector('.block-src');
-  const header = wrap.querySelector('.block-edit-header');
-  if (!source) return;
-
-  const previousClasses = String(source.dataset.editPresentationClasses || '').split(' ').filter(Boolean);
-  if (previousClasses.length > 0) {
-    source.classList.remove(...previousClasses);
-  }
-
-  delete source.dataset.editPresentationClasses;
-  source.removeAttribute('id');
-
-  if (header) {
-    header.textContent = '';
-    header.style.display = 'none';
-  }
-
-  const rendered = view ? view.firstElementChild : null;
-  if (rendered && rendered.dataset.originalEditingId) {
-    rendered.id = rendered.dataset.originalEditingId;
-    delete rendered.dataset.originalEditingId;
-  }
+  return ensureBlockRendererController().clearEditableBodyPresentation(wrap);
 }
 
 function findAttributeTargetAtCursor(textarea) {
@@ -1724,6 +1234,9 @@ function upsertCssBlock(cssText) {
 }
 
 function ensureControllers() {
+  ensureBlockRendererController();
+  ensureAutocompleteController();
+
   if (!inlineCssController) {
     inlineCssController = new InlineCssSurfaceController({
       applyCustomCss,
@@ -2504,7 +2017,7 @@ function initializeDocument() {
 
   const blocksContainer = document.getElementById('blocks');
 
-  if (blocksContainer) {
+  if (false && blocksContainer) {
     blocksContainer.addEventListener('click', (event) => {
       const target = getEventElementTarget(event);
       if (!target) return;
@@ -3012,6 +2525,41 @@ function initializeDocument() {
       const target = getEventElementTarget(event);
       if (!target || !target.classList.contains('block-src')) return;
       updateInlineCssAffordance(target);
+    });
+  }
+
+  if (blocksContainer) {
+    ensureControllers();
+    registerBlockInteractionEvents({
+      blocksContainer,
+      pageEl: document.querySelector('.page'),
+      documentRef: document,
+      windowRef: window,
+      getEventElementTarget,
+      autocompleteState,
+      acceptAutocomplete,
+      closeAutocomplete,
+      closeInlineCssSurface,
+      commitBlockSourceForHistory,
+      commitOpenSources,
+      commitOpenSourcesForHistory,
+      closeBlockSrc,
+      openBlockSrc,
+      isEditModeEnabled,
+      isRedoShortcut,
+      performGlobalUndo,
+      performGlobalRedo,
+      saveDoc,
+      renderAutocomplete,
+      updateInlineCssAffordance,
+      ensureDocumentUndoSeed,
+      autosizeBlockSrc,
+      renderEditableHeader,
+      getRawSourceFromEditor,
+      getBlockHeaderEditor,
+      findAttributeTargetAtCursor,
+      openInlineCssSurface,
+      setStatus,
     });
   }
 

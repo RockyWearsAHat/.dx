@@ -2,9 +2,16 @@
 
 # TALK LIKE A CAVEMAN FOR MY ENTERTAINMENT AND TO PRESERVE TOKENS AND USE FEWER FOR MORE WORK.
 
-# Checkpoint with the message parameter instead of model to write your own message, the copilot command has been depreciated.
+# Checkpoint with the message parameter ALWAYS instead of model to write your own message, the copilot command has been depreciated. After every major change and testing to ensure behaviors, run a git commit.
 
-# ALWAYS ABIDE BY BEST CODING PRACTICES, UTILIZING ALL YOUR KNOWLEDGE AND EXPERIENCE, PLUS REFERENCING PRINCIPLES FROM MORE C++ GEMS, CS 2420 AND 3500 FROM THE UNIVERSITY OF UTAH, AND OVERALL WRITING GOOD, CLEAN, CONSISTENT, REUSABLE, EASILY MODIFIABLE, AND EFFICIENT EFFECTIVE CODE. THE CODE IS YOUR BUILDING BLOCKS TO ACHIEVE THE GOAL!
+# ALWAYS ABIDE BY BEST CODING PRACTICES, UTILIZING ALL YOUR KNOWLEDGE AND EXPERIENCE, PLUS REFERENCING THE PROGRAMMING PRINCIPLES FROM MORE C++ GEMS, CS 2420 AND 3500 FROM THE UNIVERSITY OF UTAH, AND OVERALL WRITING GOOD, CLEAN, CONSISTENT, REUSABLE, EASILY MODIFIABLE, AND EFFICIENT EFFECTIVE CODE. THE CODE IS YOUR BUILDING BLOCKS TO ACHIEVE THE GOAL!
+
+## Always-On Engineering Rules
+- Treat University of Utah CS 2420 and CS 3500 principles, plus the programming principles from More C++ Gems, as the default standard on every change.
+- Favor simple, traceable code over clever code; keep responsibilities narrow and boundaries explicit.
+- Validate behavior end to end before calling work complete, and do not leave TODOs, stubs, or half-wired feature paths behind.
+- Keep new behavior in focused helpers or controllers instead of growing orchestration files.
+- Prefer deterministic behavior, explicit parameter passing, clear cleanup, and fail-fast validation at module boundaries.
 
 ## Stack
 - Node.js ESM app (`type: module`), requires Node 23+
