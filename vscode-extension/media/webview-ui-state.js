@@ -78,6 +78,14 @@ export function createUiStateController(options = {}) {
     };
   }
 
+  function updateAppearance(patch = {}, persist = false) {
+    setAppearance({
+      ...currentAppearance,
+      ...(patch && typeof patch === 'object' ? patch : {}),
+    });
+    applyAppearance(Boolean(persist));
+  }
+
   function loadAppearance() {
     try {
       const raw = window.localStorage.getItem(appearanceStorageKey);
@@ -289,5 +297,6 @@ export function createUiStateController(options = {}) {
     toggleControls,
     toggleEditMode,
     toggleHelp,
+    updateAppearance,
   };
 }
