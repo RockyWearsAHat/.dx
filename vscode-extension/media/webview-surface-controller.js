@@ -1,10 +1,13 @@
+"use strict";
 // webview-surface-controller.ts
 // Source: edit this file, then run `npm run build:surface` to regenerate the
 // compiled JS that the webview loads at runtime.
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.createSurfaceController = createSurfaceController;
 // ---------------------------------------------------------------------------
 // Factory
 // ---------------------------------------------------------------------------
-export function createSurfaceController(options) {
+function createSurfaceController(options) {
     const { getDocModel, getCurrentDocPath, getFsmViewState, getDocumentHistoryDepths, getCurrentTheme, getResolvedTheme, isEditModeEnabled, getFocusedBlockIndex, summarizeBlockTypeCounts, setEditMode, openBlockSource, closeBlockSource, undoLastFsmTransition, commitOpenSourcesForHistory, performGlobalUndo, performGlobalRedo, } = options;
     // --- Private DOM helpers ------------------------------------------------
     function findBlockWrap(index) {
