@@ -1,12 +1,25 @@
-function isBulletedListType(type) {
+interface PresentationBlock {
+  type?: string;
+  level?: number;
+  language?: string;
+}
+
+interface BlockPresentationMeta {
+  blockType: string;
+  markdownToken: string;
+  htmlOpenTag: string;
+  htmlCloseTag: string;
+}
+
+function isBulletedListType(type: string): boolean {
   return type === 'list' || type === 'bulleted-list';
 }
 
-function isNumberedListType(type) {
+function isNumberedListType(type: string): boolean {
   return type === 'numbered-list';
 }
 
-export function getBlockPresentationMeta(block) {
+export function getBlockPresentationMeta(block: PresentationBlock): BlockPresentationMeta {
   const type = String(block && block.type ? block.type : 'paragraph').toLowerCase();
 
   if (type === 'heading') {
@@ -109,7 +122,7 @@ export function getBlockPresentationMeta(block) {
   };
 }
 
-export function applyBlockViewPresentation(view, block) {
+export function applyBlockViewPresentation(view: HTMLElement | null, block: PresentationBlock): void {
   if (!view) return;
   const meta = getBlockPresentationMeta(block);
   view.dataset.blockType = meta.blockType;

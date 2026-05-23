@@ -3,23 +3,21 @@
  * These are intentionally UI-agnostic so behavior can be tested in isolation.
  */
 
-/**
- * @template TItem
- */
-export class BoundedHistory {
-  /**
-   * @param {number} limit
-   */
+type SnapshotValue = string | number | boolean | null | undefined | object;
+
+export class BoundedHistory<TItem> {
+  limit: number;
+  items: TItem[];
+
   constructor(limit = 100) {
     this.limit = Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : 100;
-    /** @type {TItem[]} */
     this.items = [];
   }
 
   /**
    * @param {TItem} item
    */
-  push(item) {
+  push(item: TItem): void {
     this.items.push(item);
     if (this.items.length > this.limit) {
       this.items = this.items.slice(-this.limit);
@@ -29,18 +27,18 @@ export class BoundedHistory {
   /**
    * @returns {TItem | undefined}
    */
-  pop() {
+  pop(): TItem | undefined {
     return this.items.pop();
   }
 
   /**
    * @returns {TItem | undefined}
    */
-  peek() {
+  peek(): TItem | undefined {
     return this.items.length > 0 ? this.items[this.items.length - 1] : undefined;
   }
 
-  clear() {
+  clear(): void {
     this.items = [];
   }
 
@@ -54,22 +52,16 @@ export class BoundedHistory {
   /**
    * @returns {TItem[]}
    */
-  toArray() {
+  toArray(): TItem[] {
     return [...this.items];
   }
 }
 
-/**
- * @template TState
- * @template TEvent
- * @abstract
- */
 export class AbstractStateMachine {
-  /**
-   * @param {string} name
-   * @param {TState} initialState
-   */
-  constructor(name, initialState) {
+  name: string;
+  state: SnapshotValue;
+
+  constructor(name: string, initialState: SnapshotValue) {
     if (new.target === AbstractStateMachine) {
       throw new Error('AbstractStateMachine cannot be instantiated directly.');
     }
@@ -85,7 +77,7 @@ export class AbstractStateMachine {
    * @param {TEvent} event
    * @returns {TState | null}
    */
-  resolveNextState(currentState, event) {
+  resolveNextState(currentState: SnapshotValue, event: SnapshotValue): SnapshotValue | null {
     throw new Error('resolveNextState must be implemented by subclasses.');
   }
 
@@ -93,7 +85,7 @@ export class AbstractStateMachine {
    * @param {TEvent} event
    * @returns {boolean}
    */
-  transition(event) {
+  transition(event: SnapshotValue): boolean {
     const nextState = this.resolveNextState(this.state, event);
 
     if (!nextState) {
@@ -110,18 +102,10 @@ export class AbstractStateMachine {
   }
 }
 
-/**
- * @template TState
- * @template TEvent
- * @extends {AbstractStateMachine<TState, TEvent>}
- */
 export class TableDrivenStateMachine extends AbstractStateMachine {
-  /**
-   * @param {string} name
-   * @param {TState} initialState
-   * @param {Record<string, Record<string, TState>>} transitionTable
-   */
-  constructor(name, initialState, transitionTable) {
+  transitionTable: Record<string, Record<string, SnapshotValue>>;
+
+  constructor(name: string, initialState: SnapshotValue, transitionTable: Record<string, Record<string, SnapshotValue>>) {
     super(name, initialState);
     this.transitionTable = transitionTable || {};
   }
@@ -132,7 +116,7 @@ export class TableDrivenStateMachine extends AbstractStateMachine {
    * @param {TEvent} event
    * @returns {TState | null}
    */
-  resolveNextState(currentState, event) {
+  resolveNextState(currentState: SnapshotValue, event: SnapshotValue): SnapshotValue | null {
     const stateTransitions = this.transitionTable[String(currentState)] || null;
     if (!stateTransitions) {
       return null;
@@ -142,19 +126,12 @@ export class TableDrivenStateMachine extends AbstractStateMachine {
   }
 }
 
-/**
- * @template TSnapshot
- * @typedef {{ action: string, at: string, snapshot: TSnapshot }} SnapshotHistoryEntry
- */
+export type SnapshotHistoryEntry = { action: string; at: string; snapshot: SnapshotValue };
 
-/**
- * @template TSnapshot
- * @abstract
- */
 export class AbstractUndoRedoController {
-  /**
-   * @param {number} limit
-   */
+  past: BoundedHistory<SnapshotHistoryEntry>;
+  future: BoundedHistory<SnapshotHistoryEntry>;
+
   constructor(limit = 100) {
     if (new.target === AbstractUndoRedoController) {
       throw new Error('AbstractUndoRedoController cannot be instantiated directly.');
@@ -169,7 +146,7 @@ export class AbstractUndoRedoController {
    * @abstract
    * @returns {TSnapshot}
    */
-  captureSnapshot() {
+  captureSnapshot(): SnapshotValue {
     throw new Error('captureSnapshot must be implemented by subclasses.');
   }
 
@@ -179,7 +156,7 @@ export class AbstractUndoRedoController {
    * @param {TSnapshot} snapshot
    * @returns {boolean}
    */
-  restoreSnapshot(snapshot) {
+  restoreSnapshot(snapshot: SnapshotValue): boolean {
     throw new Error('restoreSnapshot must be implemented by subclasses.');
   }
 
@@ -207,7 +184,7 @@ export class AbstractUndoRedoController {
   /**
    * @returns {SnapshotHistoryEntry<TSnapshot> | null}
    */
-  undo() {
+  undo(): SnapshotHistoryEntry | null {
     if (this.past.length === 0) {
       return null;
     }
@@ -219,19 +196,19 @@ export class AbstractUndoRedoController {
       snapshot: currentSnapshot,
     });
 
-    const previous = this.past.pop();
+    const previous = this.past.pop() as SnapshotHistoryEntry | undefined;
     if (!previous) {
       return null;
     }
 
     const restored = this.restoreSnapshot(previous.snapshot);
-    return restored ? previous : null;
+    return restored ? (previous as SnapshotHistoryEntry) : null;
   }
 
   /**
    * @returns {SnapshotHistoryEntry<TSnapshot> | null}
    */
-  redo() {
+  redo(): SnapshotHistoryEntry | null {
     if (this.future.length === 0) {
       return null;
     }
@@ -243,13 +220,13 @@ export class AbstractUndoRedoController {
       snapshot: currentSnapshot,
     });
 
-    const next = this.future.pop();
+    const next = this.future.pop() as SnapshotHistoryEntry | undefined;
     if (!next) {
       return null;
     }
 
     const restored = this.restoreSnapshot(next.snapshot);
-    return restored ? next : null;
+    return restored ? (next as SnapshotHistoryEntry) : null;
   }
 
   /**
@@ -269,31 +246,27 @@ export class AbstractUndoRedoController {
   /**
    * @returns {SnapshotHistoryEntry<TSnapshot> | null}
    */
-  peekUndo() {
-    return this.past.peek() || null;
+  peekUndo(): SnapshotHistoryEntry | null {
+    return (this.past.peek() as SnapshotHistoryEntry) || null;
   }
 
   /**
    * @returns {SnapshotHistoryEntry<TSnapshot> | null}
    */
-  popUndo() {
-    return this.past.pop() || null;
+  popUndo(): SnapshotHistoryEntry | null {
+    return (this.past.pop() as SnapshotHistoryEntry) || null;
   }
 }
 
-/**
- * @template TSnapshot
- * @extends {AbstractUndoRedoController<TSnapshot>}
- */
 export class CallbackUndoRedoController extends AbstractUndoRedoController {
-  /**
-   * @param {{
-   *   limit?: number,
-   *   captureSnapshot: () => TSnapshot,
-   *   restoreSnapshot: (snapshot: TSnapshot) => boolean,
-   * }} options
-   */
-  constructor(options) {
+  captureSnapshotFn: () => SnapshotValue;
+  restoreSnapshotFn: (snapshot: SnapshotValue) => boolean;
+
+  constructor(options: {
+    limit?: number;
+    captureSnapshot: () => SnapshotValue;
+    restoreSnapshot: (snapshot: SnapshotValue) => boolean;
+  }) {
     super(options?.limit || 100);
     this.captureSnapshotFn = options.captureSnapshot;
     this.restoreSnapshotFn = options.restoreSnapshot;
@@ -303,7 +276,7 @@ export class CallbackUndoRedoController extends AbstractUndoRedoController {
    * @protected
    * @returns {TSnapshot}
    */
-  captureSnapshot() {
+  captureSnapshot(): SnapshotValue {
     return this.captureSnapshotFn();
   }
 
@@ -312,29 +285,23 @@ export class CallbackUndoRedoController extends AbstractUndoRedoController {
    * @param {TSnapshot} snapshot
    * @returns {boolean}
    */
-  restoreSnapshot(snapshot) {
+  restoreSnapshot(snapshot: SnapshotValue): boolean {
     return this.restoreSnapshotFn(snapshot);
   }
 }
 
-/**
- * @template TSnapshot
- * @typedef {{
- *   ts: string,
- *   machine: string,
- *   event: string,
- *   before: TSnapshot,
- *   after: TSnapshot,
- * }} TransitionHistoryEntry
- */
+export type TransitionHistoryEntry = {
+  ts: string;
+  machine: string;
+  event: string;
+  before: SnapshotValue;
+  after: SnapshotValue;
+};
 
-/**
- * @template TSnapshot
- */
 export class TransitionHistory {
-  /**
-   * @param {number} limit
-   */
+  past: BoundedHistory<TransitionHistoryEntry>;
+  future: BoundedHistory<TransitionHistoryEntry>;
+
   constructor(limit = 32) {
     this.past = new BoundedHistory(limit);
     this.future = new BoundedHistory(limit);
@@ -343,7 +310,7 @@ export class TransitionHistory {
   /**
    * @param {{ machine: string, event: string, before: TSnapshot, after: TSnapshot }} entry
    */
-  record(entry) {
+  record(entry: { machine: string; event: string; before: SnapshotValue; after: SnapshotValue }): void {
     this.past.push({
       ts: new Date().toISOString(),
       machine: String(entry.machine || ''),
@@ -358,8 +325,8 @@ export class TransitionHistory {
    * @param {(snapshot: TSnapshot) => boolean} restore
    * @returns {boolean}
    */
-  undo(restore) {
-    const lastEntry = this.past.pop();
+  undo(restore: (snapshot: SnapshotValue) => boolean): boolean {
+    const lastEntry = this.past.pop() as TransitionHistoryEntry | undefined;
     if (!lastEntry || !lastEntry.before) {
       return false;
     }
@@ -372,8 +339,8 @@ export class TransitionHistory {
    * @param {(snapshot: TSnapshot) => boolean} restore
    * @returns {boolean}
    */
-  redo(restore) {
-    const entry = this.future.pop();
+  redo(restore: (snapshot: SnapshotValue) => boolean): boolean {
+    const entry = this.future.pop() as TransitionHistoryEntry | undefined;
     if (!entry || !entry.after) {
       return false;
     }
@@ -392,7 +359,7 @@ export class TransitionHistory {
   /**
    * @returns {TransitionHistoryEntry<TSnapshot> | null}
    */
-  get lastTransition() {
-    return this.past.peek() || null;
+  get lastTransition(): TransitionHistoryEntry | null {
+    return (this.past.peek() as TransitionHistoryEntry) || null;
   }
 }

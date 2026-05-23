@@ -4,19 +4,22 @@
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "strict": true,
+    "noImplicitAny": true,
+    "noUncheckedIndexedAccess": true,
     "noEmitOnError": false,
     "declaration": false,
     "allowJs": false,
     "skipLibCheck": true,
     "isolatedModules": true,
-    "verbatimModuleSyntax": true,
+    "verbatimModuleSyntax": false,
     "resolveJsonModule": true,
     "lib": ["ES2022", "DOM"],
     "types": ["node"]
   },
   "include": [
     "src/**/*.ts",
-    "vscode-extension/media/**/*.ts"
+    "vscode-extension/media/**/*.ts",
+    "vscode-extension/media/**/*.d.ts"
   ],
   "exclude": [
     "build/**",

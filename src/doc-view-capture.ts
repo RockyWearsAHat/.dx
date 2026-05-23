@@ -4,10 +4,31 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { renderDocumentViewHtml } from './doc-view.js';
+import type { DocumentViewState } from './view-state.js';
 
 const execFileAsync = promisify(execFile);
 
-function sanitizeStem(value) {
+interface CaptureDocument {
+  title?: string;
+  relativePath?: string;
+  source?: string;
+}
+
+interface CaptureOptions {
+  size?: number;
+  viewState?: DocumentViewState | null;
+}
+
+interface CaptureResult {
+  mimeType: string;
+  base64: string;
+  bytes: number;
+  mode: string;
+  engine: string;
+  viewport?: { width: number; height: number; deviceScaleFactor: number };
+}
+
+function sanitizeStem(value: string | number | boolean | null | undefined | object): string {
   const stem = String(value || 'document')
     .toLowerCase()
     .replace(/[^a-z0-9_-]+/g, '-')
@@ -15,16 +36,16 @@ function sanitizeStem(value) {
   return stem || 'document';
 }
 
-function toFiniteNumber(value) {
+function toFiniteNumber(value: string | number | boolean | null | undefined | object): number | null {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-function clamp(value, min, max) {
+function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
-function resolveViewport({ size = 1000, viewState = null } = {}) {
+function resolveViewport({ size = 1000, viewState = null }: CaptureOptions = {}): { width: number; height: number; deviceScaleFactor: number } {
   const stateViewport = viewState && typeof viewState === 'object' ? viewState.viewport : null;
   const stateWidth = toFiniteNumber(stateViewport?.width);
   const stateHeight = toFiniteNumber(stateViewport?.height);
@@ -40,7 +61,7 @@ function resolveViewport({ size = 1000, viewState = null } = {}) {
   return { width, height, deviceScaleFactor };
 }
 
-async function captureRenderedWithPlaywright(html, { size = 1000, viewState = null } = {}) {
+async function captureRenderedWithPlaywright(html: string, { size = 1000, viewState = null }: CaptureOptions = {}): Promise<CaptureResult> {
   const { chromium } = await import('playwright');
   const { width, height, deviceScaleFactor } = resolveViewport({ size, viewState });
   const browser = await chromium.launch({ headless: true });
@@ -68,7 +89,7 @@ async function captureRenderedWithPlaywright(html, { size = 1000, viewState = nu
           return null;
         }
 
-        return new Promise((resolve) => {
+        return new Promise<void>((resolve) => {
           const done = () => resolve();
           image.addEventListener('load', done, { once: true });
           image.addEventListener('error', done, { once: true });
@@ -94,7 +115,7 @@ async function captureRenderedWithPlaywright(html, { size = 1000, viewState = nu
   }
 }
 
-async function captureRenderedWithQuickLook(html, { size = 1000, stem = 'document' } = {}) {
+async function captureRenderedWithQuickLook(html: string, { size = 1000, stem = 'document' }: { size?: number; stem?: string } = {}): Promise<CaptureResult> {
   if (process.platform !== 'darwin') {
     throw new Error('Rendered fallback capture currently supports macOS only (requires qlmanage).');
   }
@@ -133,7 +154,7 @@ async function captureRenderedWithQuickLook(html, { size = 1000, stem = 'documen
  * Primary path: Playwright Chromium (closest to VS Code webview rendering).
  * Fallback: Quick Look on macOS if Playwright is unavailable.
  */
-export async function captureDocumentViewPng(document, { size = 1000, viewState = null } = {}) {
+export async function captureDocumentViewPng(document: CaptureDocument, { size = 1000, viewState = null }: CaptureOptions = {}): Promise<CaptureResult> {
   const stem = sanitizeStem(document?.title || document?.relativePath || 'document');
   const hasInlineSource = String(document?.source || '').trim().length > 0;
   const captureDocument = hasInlineSource

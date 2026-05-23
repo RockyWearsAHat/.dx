@@ -18,7 +18,46 @@ const CODE_TO_BLOCK_TYPE = Object.fromEntries(
 
 const MAGIC = Buffer.from('DOCB1', 'ascii');
 
-function encodeVarint(value) {
+type BlockType =
+  | 'heading'
+  | 'paragraph'
+  | 'bulleted-list'
+  | 'numbered-list'
+  | 'quote'
+  | 'code'
+  | 'image'
+  | 'rule'
+  | 'checklist';
+
+interface ChecklistItem {
+  checked?: boolean;
+  text?: string;
+}
+
+interface BinaryBlock {
+  type?: BlockType | string;
+  id?: string;
+  level?: number;
+  text?: string;
+  language?: string;
+  src?: string;
+  alt?: string;
+  items?: Array<string | ChecklistItem>;
+}
+
+interface BinaryDocument {
+  title?: string;
+  summary?: string;
+  tags?: string[];
+  meta?: Record<string, string | number | boolean | null | undefined | object>;
+  blocks?: BinaryBlock[];
+}
+
+interface DecodeState {
+  offset: number;
+}
+
+function encodeVarint(value: number | string | null | undefined): Buffer {
   const numberValue = Number(value);
   let number = Math.max(0, Math.trunc(numberValue || 0));
   const bytes = [];
@@ -32,12 +71,15 @@ function encodeVarint(value) {
   return Buffer.from(bytes);
 }
 
-function decodeVarint(buffer, state) {
+function decodeVarint(buffer: Buffer, state: DecodeState): number {
   let shift = 0;
   let value = 0;
 
   while (state.offset < buffer.length) {
     const byte = buffer[state.offset];
+    if (byte === undefined) {
+      throw new Error('Unexpected end of binary document while decoding varint byte.');
+    }
     state.offset += 1;
     value |= (byte & 0x7f) << shift;
 
@@ -51,13 +93,13 @@ function decodeVarint(buffer, state) {
   throw new Error('Unexpected end of binary document while decoding varint.');
 }
 
-function encodeString(value) {
+function encodeString(value: string | number | null | undefined): Buffer {
   const text = String(value || '');
   const payload = Buffer.from(text, 'utf8');
   return Buffer.concat([encodeVarint(payload.length), payload]);
 }
 
-function decodeString(buffer, state) {
+function decodeString(buffer: Buffer, state: DecodeState): string {
   const length = decodeVarint(buffer, state);
   const end = state.offset + length;
 
@@ -70,9 +112,9 @@ function decodeString(buffer, state) {
   return value;
 }
 
-function encodeMeta(meta) {
+function encodeMeta(meta: Record<string, string | number | boolean | null | undefined | object> | null | undefined): Buffer {
   // Defensive fallback is unreachable through public packDocument flow.
-    const entries = Object.entries(meta || {});
+  const entries = Object.entries(meta || {});
   const parts = [encodeVarint(entries.length)];
 
   for (const [key, value] of entries) {
@@ -83,9 +125,9 @@ function encodeMeta(meta) {
   return Buffer.concat(parts);
 }
 
-function decodeMeta(buffer, state) {
+function decodeMeta(buffer: Buffer, state: DecodeState): Record<string, string | number | boolean | null | undefined | object> {
   const count = decodeVarint(buffer, state);
-  const meta = {};
+  const meta: Record<string, string | number | boolean | null | undefined | object> = {};
 
   for (let index = 0; index < count; index += 1) {
     const key = decodeString(buffer, state);
@@ -101,9 +143,9 @@ function decodeMeta(buffer, state) {
   return meta;
 }
 
-function encodeTags(tags) {
+function encodeTags(tags: string[] | null | undefined): Buffer {
   // Defensive fallback is unreachable through public packDocument flow.
-    const safeTags = Array.isArray(tags) ? tags : [];
+  const safeTags = Array.isArray(tags) ? tags : [];
   const parts = [encodeVarint(safeTags.length)];
 
   for (const tag of safeTags) {
@@ -113,9 +155,9 @@ function encodeTags(tags) {
   return Buffer.concat(parts);
 }
 
-function decodeTags(buffer, state) {
+function decodeTags(buffer: Buffer, state: DecodeState): string[] {
   const count = decodeVarint(buffer, state);
-  const tags = [];
+  const tags: string[] = [];
 
   for (let index = 0; index < count; index += 1) {
     tags.push(decodeString(buffer, state));
@@ -124,8 +166,9 @@ function decodeTags(buffer, state) {
   return tags;
 }
 
-function encodeBlock(block) {
-  const blockCode = BLOCK_TYPE_TO_CODE[block.type] || BLOCK_TYPE_TO_CODE.paragraph;
+function encodeBlock(block: BinaryBlock): Buffer {
+  const normalizedType = typeof block.type === 'string' ? block.type : 'paragraph';
+  const blockCode = BLOCK_TYPE_TO_CODE[normalizedType as keyof typeof BLOCK_TYPE_TO_CODE] || BLOCK_TYPE_TO_CODE.paragraph;
   const parts = [Buffer.from([blockCode]), encodeString(block.id || '')];
 
   if (block.type === 'heading') {
@@ -139,7 +182,8 @@ function encodeBlock(block) {
     parts.push(encodeVarint(items.length));
 
     for (const item of items) {
-      parts.push(encodeString(item));
+      const text = typeof item === 'object' && item !== null ? String(item.text || '') : String(item || '');
+      parts.push(encodeString(text));
     }
 
     return Buffer.concat(parts);
@@ -177,16 +221,19 @@ function encodeBlock(block) {
   return Buffer.concat(parts);
 }
 
-function decodeBlock(buffer, state) {
+function decodeBlock(buffer: Buffer, state: DecodeState): BinaryBlock {
   if (state.offset >= buffer.length) {
     throw new Error('Unexpected end of binary document while decoding block.');
   }
 
   const typeCode = buffer[state.offset];
+  if (typeCode === undefined) {
+    throw new Error('Unexpected end of binary document while decoding block type.');
+  }
   state.offset += 1;
 
   // Unknown type codes require malformed payloads crafted outside packDocument.
-    const type = CODE_TO_BLOCK_TYPE[typeCode] || 'paragraph';
+  const type = (CODE_TO_BLOCK_TYPE[typeCode] || 'paragraph') as BlockType | string;
   const id = decodeString(buffer, state);
 
   if (type === 'heading') {
@@ -195,6 +242,9 @@ function decodeBlock(buffer, state) {
     }
 
     const level = buffer[state.offset];
+    if (level === undefined) {
+      throw new Error('Unexpected end of binary document while decoding heading level.');
+    }
     state.offset += 1;
     const text = decodeString(buffer, state);
     return { type, id, level, text };
@@ -246,7 +296,7 @@ function decodeBlock(buffer, state) {
   return { type, id, text };
 }
 
-export function packDocument(document) {
+export function packDocument(document: BinaryDocument): Buffer {
   const parts = [
     MAGIC,
     encodeVarint(1),
@@ -266,7 +316,7 @@ export function packDocument(document) {
   return Buffer.concat(parts);
 }
 
-export function unpackDocument(blob) {
+export function unpackDocument(blob: Buffer | Uint8Array): BinaryDocument {
   const buffer = Buffer.isBuffer(blob) ? blob : Buffer.from(blob);
 
   if (buffer.length < MAGIC.length + 1 || !buffer.subarray(0, MAGIC.length).equals(MAGIC)) {

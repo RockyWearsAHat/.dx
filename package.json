@@ -5,7 +5,11 @@
   "type": "module",
   "scripts": {
     "build:native": "node-gyp rebuild || node -e \"console.warn('Native SQLite bridge build failed; falling back to node:sqlite.')\"",
-    "build:ts": "npx tsc --project tsconfig.json",
+    "build:ts": "npx tsc --project tsconfig.json --noCheck",
+    "typecheck": "npx tsc --project tsconfig.json --noEmit",
+    "typecheck:all": "npx tsc --project tsconfig.json --noEmit",
+    "typecheck:surface": "npx tsc --project tsconfig.surface.json --noEmit",
+    "typecheck:full": "npm run -s typecheck:all",
     "build:surface": "npm run build:ts",
     "build:artifacts": "node scripts/build-artifacts.mjs",
     "build:release": "npm run build:artifacts",

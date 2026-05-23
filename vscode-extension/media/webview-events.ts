@@ -1,11 +1,106 @@
-export function registerBlockInteractionEvents(options = {}) {
-  const getEventElementTarget = typeof options.getEventElementTarget === 'function'
-    ? options.getEventElementTarget
-    : (event) => (event && event.target instanceof Element ? event.target : null);
-  const documentRef = options.documentRef || document;
-  const windowRef = options.windowRef || window;
+interface AutocompleteState {
+  textarea: HTMLTextAreaElement | null;
+  suggestions: string[];
+}
+
+interface AttributeTarget {
+  selector: string;
+}
+
+interface BlockInteractionOptions {
+  getEventElementTarget?: (event: Event) => Element | null;
+  documentRef?: Document;
+  windowRef?: Window;
+  blocksContainer?: HTMLElement | null;
+  pageEl?: HTMLElement | null;
+  autocompleteState?: AutocompleteState;
+  acceptAutocomplete?: (textarea: HTMLTextAreaElement, index?: number) => void;
+  isEditModeEnabled?: () => boolean;
+  commitOpenSources?: (index?: number) => void;
+  openBlockSrc?: (index: number) => void;
+  closeAutocomplete?: () => void;
+  closeInlineCssSurface?: () => void;
+  commitBlockSourceForHistory?: (index: number) => void;
+  isRedoShortcut?: (event: KeyboardEvent) => boolean;
+  performGlobalRedo?: () => boolean;
+  performGlobalUndo?: () => boolean;
+  setStatus?: (message: string) => void;
+  commitBlockSrc?: (index: number) => void;
+  saveDoc?: () => void;
+  ensureDocumentUndoSeed?: (textarea: HTMLTextAreaElement | null, reason: string) => void;
+  autosizeBlockSrc?: (textarea: HTMLTextAreaElement) => void;
+  updateInlineCssAffordance?: (textarea: HTMLTextAreaElement) => void;
+  debouncedAutosave?: () => void;
+  getRawSourceFromEditor?: (text: string) => string;
+  renderEditableHeader?: (textarea: HTMLTextAreaElement) => void;
+  closeBlockSrc?: (index: number, shouldCommit: boolean) => void;
+  renderAutocomplete?: (textarea: HTMLTextAreaElement, forceShow: boolean) => void;
+  getBlockHeaderEditor?: (textarea: HTMLTextAreaElement) => HTMLTextAreaElement | null;
+  updateAutocompleteSelection?: (delta: number) => void;
+  findAttributeTargetAtCursor?: (textarea: HTMLTextAreaElement) => AttributeTarget | null;
+  openInlineCssSurface?: (textarea: HTMLTextAreaElement, selector: string) => void;
+  getAutocompleteEls?: (textarea: HTMLTextAreaElement) => { mirrorEl?: HTMLElement | null };
+  isBlankPageClickTarget?: (target: Element, pageEl: HTMLElement, blocksContainer: HTMLElement) => boolean;
+  hasOpenBlockSources?: () => boolean;
+  inlineCssHasOpenSurface?: () => boolean;
+  getInsertIndexForY?: (blocksContainer: HTMLElement, clientY: number) => number;
+  insertParagraphBlock?: (index: number) => void;
+}
+
+export function registerBlockInteractionEvents(rawOptions: BlockInteractionOptions = {}): void {
+  const fallbackAutocompleteState: AutocompleteState = { textarea: null, suggestions: [] };
+  const options: Required<BlockInteractionOptions> = {
+    getEventElementTarget: (event: Event): Element | null => (event.target instanceof Element ? event.target : null),
+    documentRef: document,
+    windowRef: window,
+    blocksContainer: null,
+    pageEl: null,
+    acceptAutocomplete: (_textarea: HTMLTextAreaElement, _index?: number): void => {},
+    isEditModeEnabled: (): boolean => false,
+    commitOpenSources: (_index?: number): void => {},
+    openBlockSrc: (_index: number): void => {},
+    closeAutocomplete: (): void => {},
+    closeInlineCssSurface: (): void => {},
+    commitBlockSourceForHistory: (_index: number): void => {},
+    isRedoShortcut: (_event: KeyboardEvent): boolean => false,
+    performGlobalRedo: (): boolean => false,
+    performGlobalUndo: (): boolean => false,
+    setStatus: (_message: string): void => {},
+    commitBlockSrc: (_index: number): void => {},
+    saveDoc: (): void => {},
+    ensureDocumentUndoSeed: (_textarea: HTMLTextAreaElement | null, _reason: string): void => {},
+    autosizeBlockSrc: (_textarea: HTMLTextAreaElement): void => {},
+    updateInlineCssAffordance: (_textarea: HTMLTextAreaElement): void => {},
+    debouncedAutosave: (): void => {},
+    getRawSourceFromEditor: (text: string): string => String(text || ''),
+    renderEditableHeader: (_textarea: HTMLTextAreaElement): void => {},
+    closeBlockSrc: (_index: number, _shouldCommit: boolean): void => {},
+    renderAutocomplete: (_textarea: HTMLTextAreaElement, _forceShow: boolean): void => {},
+    getBlockHeaderEditor: (_textarea: HTMLTextAreaElement): HTMLTextAreaElement | null => null,
+    updateAutocompleteSelection: (_delta: number): void => {},
+    findAttributeTargetAtCursor: (_textarea: HTMLTextAreaElement): AttributeTarget | null => null,
+    openInlineCssSurface: (_textarea: HTMLTextAreaElement, _selector: string): void => {},
+    getAutocompleteEls: (_textarea: HTMLTextAreaElement): { mirrorEl?: HTMLElement | null } => ({ mirrorEl: null }),
+    isBlankPageClickTarget: (_target: Element, _pageEl: HTMLElement, _blocksContainer: HTMLElement): boolean => false,
+    hasOpenBlockSources: (): boolean => false,
+    inlineCssHasOpenSurface: (): boolean => false,
+    getInsertIndexForY: (_blocksContainer: HTMLElement, _clientY: number): number => 0,
+    insertParagraphBlock: (_index: number): void => {},
+    ...rawOptions,
+    autocompleteState: rawOptions.autocompleteState || fallbackAutocompleteState,
+  };
+
+  const getEventElementTarget = options.getEventElementTarget;
+  const documentRef = options.documentRef;
+  const windowRef = options.windowRef;
   const blocksContainer = options.blocksContainer || documentRef.getElementById('blocks');
-  const pageEl = options.pageEl || documentRef.querySelector('.page');
+  const pageEl = options.pageEl || documentRef.querySelector<HTMLElement>('.page');
+  const toHtmlElement = (value: EventTarget | Element | null): HTMLElement | null => {
+    return value instanceof HTMLElement ? value : null;
+  };
+  const toTextArea = (value: EventTarget | Element | null): HTMLTextAreaElement | null => {
+    return value instanceof HTMLTextAreaElement ? value : null;
+  };
 
   if (!blocksContainer) {
     return;
@@ -26,7 +121,8 @@ export function registerBlockInteractionEvents(options = {}) {
       event.preventDefault();
       event.stopPropagation();
 
-      const index = Number.parseInt(completionItem.dataset.index, 10);
+        const completionEl = toHtmlElement(completionItem);
+        const index = Number.parseInt(String(completionEl?.dataset.index || ''), 10);
       const active = options.autocompleteState.textarea;
       if (!Number.isNaN(index) && active) {
         options.acceptAutocomplete(active, index);
@@ -51,12 +147,17 @@ export function registerBlockInteractionEvents(options = {}) {
       return;
     }
 
-    view.focus();
+      const viewElement = toHtmlElement(view);
+      if (!viewElement) {
+        return;
+      }
+      viewElement.focus();
 
     const wrap = view.closest('.block-wrap');
     if (!wrap) return;
 
-    const index = Number.parseInt(wrap.dataset.blockIndex, 10);
+      const wrapElement = toHtmlElement(wrap);
+      const index = Number.parseInt(String(wrapElement?.dataset.blockIndex || ''), 10);
     if (Number.isNaN(index)) return;
     options.commitOpenSources(index);
     options.openBlockSrc(index);
@@ -71,7 +172,8 @@ export function registerBlockInteractionEvents(options = {}) {
     const wrap = view.closest('.block-wrap');
     if (!wrap) return;
 
-    const index = Number.parseInt(wrap.dataset.blockIndex, 10);
+    const wrapElement = toHtmlElement(wrap);
+    const index = Number.parseInt(String(wrapElement?.dataset.blockIndex || ''), 10);
     if (Number.isNaN(index)) return;
 
     event.preventDefault();
@@ -80,9 +182,11 @@ export function registerBlockInteractionEvents(options = {}) {
   });
 
   blocksContainer.addEventListener('focusout', (event) => {
-    if (!event.target.classList.contains('block-src')) return;
+    const target = toTextArea(event.target);
+    if (!target || !target.classList.contains('block-src')) return;
 
-    if (event.relatedTarget && event.relatedTarget.closest && event.relatedTarget.closest('.autocomplete-menu')) {
+    const related = toHtmlElement(event.relatedTarget);
+    if (related && related.closest('.autocomplete-menu')) {
       return;
     }
 
@@ -90,8 +194,9 @@ export function registerBlockInteractionEvents(options = {}) {
   });
 
   blocksContainer.addEventListener('keydown', (event) => {
-    if (!event.target.classList.contains('block-src') && !event.target.classList.contains('block-edit-header')) return;
-    const textarea = event.target;
+    const textarea = toTextArea(event.target);
+    if (!textarea) return;
+    if (!textarea.classList.contains('block-src') && !textarea.classList.contains('block-edit-header')) return;
 
     if ((event.metaKey || event.ctrlKey) && (event.key.toLowerCase() === 'z' || event.key.toLowerCase() === 'y')) {
       event.preventDefault();
@@ -100,7 +205,8 @@ export function registerBlockInteractionEvents(options = {}) {
 
       const wrap = textarea.closest('.block-wrap');
       if (wrap) {
-        const index = Number.parseInt(wrap.dataset.blockIndex, 10);
+        const wrapElement = toHtmlElement(wrap);
+        const index = Number.parseInt(String(wrapElement?.dataset.blockIndex || ''), 10);
         if (!Number.isNaN(index)) {
           options.commitBlockSourceForHistory(index);
         }
@@ -118,14 +224,15 @@ export function registerBlockInteractionEvents(options = {}) {
 
     if (textarea.classList.contains('block-edit-header')) {
       const srcWrap = textarea.closest('.block-src-wrapper');
-      const bodyEditor = srcWrap ? srcWrap.querySelector('.block-src') : null;
+      const bodyEditor = srcWrap ? toTextArea(srcWrap.querySelector('.block-src')) : null;
 
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') {
         event.preventDefault();
         event.stopPropagation();
         const wrap = textarea.closest('.block-wrap');
         if (wrap) {
-          const index = Number.parseInt(wrap.dataset.blockIndex, 10);
+          const wrapElement = toHtmlElement(wrap);
+          const index = Number.parseInt(String(wrapElement?.dataset.blockIndex || ''), 10);
           if (!Number.isNaN(index)) {
             options.commitBlockSrc(index);
           }
@@ -212,7 +319,8 @@ export function registerBlockInteractionEvents(options = {}) {
         event.stopPropagation();
         const wrap = textarea.closest('.block-wrap');
         if (!wrap) return;
-        const index = Number.parseInt(wrap.dataset.blockIndex, 10);
+        const wrapElement = toHtmlElement(wrap);
+        const index = Number.parseInt(String(wrapElement?.dataset.blockIndex || ''), 10);
         if (Number.isNaN(index)) return;
         options.closeBlockSrc(index, true);
         return;
@@ -223,7 +331,8 @@ export function registerBlockInteractionEvents(options = {}) {
         event.stopPropagation();
         const wrap = textarea.closest('.block-wrap');
         if (!wrap) return;
-        const index = Number.parseInt(wrap.dataset.blockIndex, 10);
+        const wrapElement = toHtmlElement(wrap);
+        const index = Number.parseInt(String(wrapElement?.dataset.blockIndex || ''), 10);
         if (Number.isNaN(index)) return;
         options.closeBlockSrc(index, true);
         return;
@@ -310,7 +419,8 @@ export function registerBlockInteractionEvents(options = {}) {
       event.stopPropagation();
       const wrap = textarea.closest('.block-wrap');
       if (!wrap) return;
-      const index = Number.parseInt(wrap.dataset.blockIndex, 10);
+      const wrapElement = toHtmlElement(wrap);
+      const index = Number.parseInt(String(wrapElement?.dataset.blockIndex || ''), 10);
       if (Number.isNaN(index)) return;
       options.closeBlockSrc(index, true);
       return;
@@ -321,7 +431,8 @@ export function registerBlockInteractionEvents(options = {}) {
       event.stopPropagation();
       const wrap = textarea.closest('.block-wrap');
       if (!wrap) return;
-      const index = Number.parseInt(wrap.dataset.blockIndex, 10);
+      const wrapElement = toHtmlElement(wrap);
+      const index = Number.parseInt(String(wrapElement?.dataset.blockIndex || ''), 10);
       if (Number.isNaN(index)) return;
       options.closeBlockSrc(index, true);
       return;
@@ -332,7 +443,8 @@ export function registerBlockInteractionEvents(options = {}) {
       event.stopPropagation();
       const wrap = textarea.closest('.block-wrap');
       if (wrap) {
-        const index = Number.parseInt(wrap.dataset.blockIndex, 10);
+        const wrapElement = toHtmlElement(wrap);
+        const index = Number.parseInt(String(wrapElement?.dataset.blockIndex || ''), 10);
         if (!Number.isNaN(index)) {
           options.commitBlockSrc(index);
         }
@@ -342,10 +454,15 @@ export function registerBlockInteractionEvents(options = {}) {
   });
 
   blocksContainer.addEventListener('input', (event) => {
-    if (event.target.classList.contains('block-edit-header')) {
-      const header = event.target;
+    const textareaTarget = toTextArea(event.target);
+    if (!textareaTarget) {
+      return;
+    }
+
+    if (textareaTarget.classList.contains('block-edit-header')) {
+      const header = textareaTarget;
       const srcWrap = header.closest('.block-src-wrapper');
-      const source = srcWrap ? srcWrap.querySelector('.block-src') : null;
+      const source = srcWrap ? toTextArea(srcWrap.querySelector('.block-src')) : null;
       options.ensureDocumentUndoSeed(source, 'header-live-edit');
       if (source) {
         source.dataset.headerSource = options.getRawSourceFromEditor(header.value);
@@ -357,9 +474,9 @@ export function registerBlockInteractionEvents(options = {}) {
       return;
     }
 
-    if (!event.target.classList.contains('block-src')) return;
+    if (!textareaTarget.classList.contains('block-src')) return;
 
-    const source = event.target;
+    const source = textareaTarget;
     options.ensureDocumentUndoSeed(source, 'block-live-edit');
     const headerEditor = options.getBlockHeaderEditor(source);
     const hasHeader = Boolean(String(source.dataset.headerSource || '').trim());
@@ -377,42 +494,47 @@ export function registerBlockInteractionEvents(options = {}) {
       return;
     }
 
-    options.autosizeBlockSrc(event.target);
-    options.renderAutocomplete(event.target, false);
-    options.updateInlineCssAffordance(event.target);
+    options.autosizeBlockSrc(textareaTarget);
+    options.renderAutocomplete(textareaTarget, false);
+    options.updateInlineCssAffordance(textareaTarget);
     options.debouncedAutosave();
   });
 
   blocksContainer.addEventListener('keyup', (event) => {
-    if (event.target.classList.contains('block-edit-header')) {
-      options.updateInlineCssAffordance(event.target);
+    const textareaTarget = toTextArea(event.target);
+    if (!textareaTarget) return;
+
+    if (textareaTarget.classList.contains('block-edit-header')) {
+      options.updateInlineCssAffordance(textareaTarget);
       return;
     }
 
-    if (!event.target.classList.contains('block-src')) return;
+    if (!textareaTarget.classList.contains('block-src')) return;
     if (event.key === 'ArrowLeft' || event.key === 'ArrowRight' || event.key === 'Home' || event.key === 'End') {
-      options.renderAutocomplete(event.target, false);
+      options.renderAutocomplete(textareaTarget, false);
     }
-    options.updateInlineCssAffordance(event.target);
+    options.updateInlineCssAffordance(textareaTarget);
   });
 
   blocksContainer.addEventListener('click', (event) => {
     const target = getEventElementTarget(event);
-    if (!target || !target.classList.contains('block-edit-header')) return;
-    options.updateInlineCssAffordance(target);
+    const header = toTextArea(target);
+    if (!header || !header.classList.contains('block-edit-header')) return;
+    options.updateInlineCssAffordance(header);
   });
 
   blocksContainer.addEventListener('click', (event) => {
     const target = getEventElementTarget(event);
-    if (!target || !target.classList.contains('block-src')) return;
-    options.renderAutocomplete(target, false);
-    options.updateInlineCssAffordance(target);
+    const source = toTextArea(target);
+    if (!source || !source.classList.contains('block-src')) return;
+    options.renderAutocomplete(source, false);
+    options.updateInlineCssAffordance(source);
   });
 
   blocksContainer.addEventListener('mouseup', (event) => {
     const target = getEventElementTarget(event);
-    if (!target || !target.classList.contains('block-edit-header')) return;
-    const textarea = target;
+    const textarea = toTextArea(target);
+    if (!textarea || !textarea.classList.contains('block-edit-header')) return;
 
     const wantsScopedStyleEdit = Boolean(event.altKey || event.metaKey || event.ctrlKey);
     if (!wantsScopedStyleEdit) {
@@ -430,7 +552,7 @@ export function registerBlockInteractionEvents(options = {}) {
     requestAnimationFrame(() => {
       const styleTarget = options.findAttributeTargetAtCursor(textarea);
       const srcWrap = textarea.closest('.block-src-wrapper');
-      const source = srcWrap ? srcWrap.querySelector('.block-src') : null;
+      const source = srcWrap ? toTextArea(srcWrap.querySelector('.block-src')) : null;
 
       if (styleTarget && styleTarget.selector && source) {
         options.openInlineCssSurface(source, styleTarget.selector);
@@ -442,8 +564,8 @@ export function registerBlockInteractionEvents(options = {}) {
 
   blocksContainer.addEventListener('mouseup', (event) => {
     const target = getEventElementTarget(event);
-    if (!target || !target.classList.contains('block-src')) return;
-    const textarea = target;
+    const textarea = toTextArea(target);
+    if (!textarea || !textarea.classList.contains('block-src')) return;
 
     const wantsScopedStyleEdit = Boolean(event.altKey || event.metaKey || event.ctrlKey);
     if (!wantsScopedStyleEdit) {
@@ -470,8 +592,8 @@ export function registerBlockInteractionEvents(options = {}) {
 
   blocksContainer.addEventListener('wheel', (event) => {
     const target = getEventElementTarget(event);
-    if (!target || !target.classList.contains('block-src')) return;
-    const textarea = target;
+    const textarea = toTextArea(target);
+    if (!textarea || !textarea.classList.contains('block-src')) return;
 
     if (event.deltaY >= 0 || textarea.scrollTop > 0) {
       return;
@@ -496,7 +618,8 @@ export function registerBlockInteractionEvents(options = {}) {
 
     event.preventDefault();
     const active = options.autocompleteState.textarea;
-    const index = Number.parseInt(item.dataset.index, 10);
+    const itemElement = toHtmlElement(item);
+    const index = Number.parseInt(String(itemElement?.dataset.index || ''), 10);
     if (active && !Number.isNaN(index)) {
       options.acceptAutocomplete(active, index);
       active.focus();
@@ -504,15 +627,17 @@ export function registerBlockInteractionEvents(options = {}) {
   });
 
   blocksContainer.addEventListener('scroll', (event) => {
-    if (!event.target.classList.contains('block-src')) return;
-    const { mirrorEl } = options.getAutocompleteEls(event.target);
-    if (mirrorEl) mirrorEl.scrollTop = event.target.scrollTop;
+    const textarea = toTextArea(event.target);
+    if (!textarea || !textarea.classList.contains('block-src')) return;
+    const { mirrorEl } = options.getAutocompleteEls(textarea);
+    if (mirrorEl) mirrorEl.scrollTop = textarea.scrollTop;
   }, true);
 
   blocksContainer.addEventListener('mousemove', (event) => {
     const target = getEventElementTarget(event);
-    if (!target || !target.classList.contains('block-src')) return;
-    options.updateInlineCssAffordance(target);
+    const source = toTextArea(target);
+    if (!source || !source.classList.contains('block-src')) return;
+    options.updateInlineCssAffordance(source);
   });
 
   if (pageEl) {

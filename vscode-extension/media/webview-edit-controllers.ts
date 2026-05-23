@@ -1,5 +1,62 @@
+import type { PipelineBlock } from './doc-pipeline.js';
+
+type CssCursorTarget = { selector?: string } | null;
+
+type InlineCssSurfaceOptions = {
+  getScopedCssForSelector: (cssText: string, selector: string) => string;
+  mergeScopedCssForSelector: (baseCssText: string, selector: string, declarations: string) => string;
+  applyCustomCss: (cssText: string) => boolean;
+  recordDocumentUndo: (action: string) => void;
+  upsertCssBlock: (cssText: string) => void;
+  markDocumentDirty: () => void;
+  publishViewState: (effectiveCss: string) => void;
+  extractCssFromDocumentModel: () => string;
+  getScopedCssDeclarations: (cssText: string, selector: string) => string;
+  findAttributeTargetAtCursor: (textarea: HTMLTextAreaElement) => CssCursorTarget;
+  renderEditableHeader: (textarea: HTMLTextAreaElement) => void;
+};
+
+type InlineCssSurfaceState = {
+  source: HTMLTextAreaElement | null;
+  selector: string;
+  baseCssText: string;
+  selectionStart: number;
+  selectionEnd: number;
+  undoSeeded: boolean;
+};
+
+type BlockSourceControllerOptions = {
+  buildRawSourceFromEditorParts: (headerSource: string, bodySource: string, footerSource: string) => string;
+  getHeaderSourceFromEditor: (source: HTMLTextAreaElement) => string;
+  getRawSourceFromEditor: (text: string) => string;
+  closeInlineCssSurface: (restoreFocus?: boolean) => void;
+  clearDocumentUndoSeed: (source: HTMLTextAreaElement, options?: { discardIfNoop?: boolean }) => void;
+  clearEditableBodyPresentation: (wrap: HTMLElement) => void;
+  tryApplyPendingExternalSource: () => void;
+  getDocModel: () => { blocks?: PipelineBlock[] } | null;
+  stringifyBlock: (block: PipelineBlock | null | undefined) => string;
+  splitBlockSourceForEditor: (rawSource: string, blockType: string) => { headerSource: string; bodySource: string; footerSource: string };
+  getRawSourceForEditor: (bodySource: string) => string;
+  applyEditableBodyPresentation: (wrap: HTMLElement, block: PipelineBlock | null | undefined) => void;
+  autosizeBlockSrc: (source: HTMLTextAreaElement) => void;
+  updateInlineCssAffordance: (source: HTMLTextAreaElement) => void;
+  normalizeBlockSourceInput?: (source: string) => string;
+  parseBlock: (source: string) => PipelineBlock;
+  knownBlockTypes: Set<string>;
+  recordDocumentUndo: (action: string) => void;
+  renderDocument: () => void;
+  setStatus: (message: string) => void;
+  debouncedAutosave: () => void;
+  buildRenderedContent: (block: PipelineBlock | null | undefined) => Node;
+  refreshDocumentCss: () => void;
+  applyBlockViewPresentation?: (view: HTMLElement, block: PipelineBlock | null | undefined) => void;
+};
+
 export class InlineCssSurfaceController {
-  constructor(options) {
+  options: InlineCssSurfaceOptions;
+  state: InlineCssSurfaceState;
+
+  constructor(options: InlineCssSurfaceOptions) {
     this.options = options;
     this.state = {
       source: null,
@@ -23,7 +80,7 @@ export class InlineCssSurfaceController {
     return this.options.getScopedCssForSelector(this.state.baseCssText, this.state.selector);
   }
 
-  autosizeInlineCssEditor(editor) {
+  autosizeInlineCssEditor(editor: HTMLTextAreaElement | null) {
     if (!editor) return;
 
     const lineHeight = Number.parseFloat(window.getComputedStyle(editor).lineHeight) || 18;
@@ -40,19 +97,19 @@ export class InlineCssSurfaceController {
     editor.style.overflowY = desiredHeight > maxHeight ? 'auto' : 'hidden';
   }
 
-  ensureInlineCssSurface(source) {
+  ensureInlineCssSurface(source: HTMLTextAreaElement | null): HTMLElement | null {
     const srcWrap = source ? source.closest('.block-src-wrapper') : null;
     if (!srcWrap) {
       return null;
     }
 
-    const sourceArea = srcWrap.querySelector('.block-src');
+    const sourceArea = srcWrap.querySelector<HTMLTextAreaElement>('.block-src');
     const bodyWrap = sourceArea ? sourceArea.closest('.block-src-body-wrap') : null;
     if (!sourceArea) {
       return null;
     }
 
-    let surface = srcWrap.querySelector('.inline-css-surface');
+    let surface = srcWrap.querySelector<HTMLElement>('.inline-css-surface');
 
     if (surface) {
       if (bodyWrap && surface.nextElementSibling !== bodyWrap) {
@@ -66,7 +123,7 @@ export class InlineCssSurfaceController {
     surface.style.display = 'none';
     surface.innerHTML = '<div class="inline-css-meta inline-css-head" aria-hidden="true"></div><textarea class="inline-css-src" spellcheck="false" aria-label="Inline CSS declarations"></textarea><div class="inline-css-meta inline-css-tail" aria-hidden="true">}</div>';
 
-    const editor = surface.querySelector('.inline-css-src');
+    const editor = surface.querySelector<HTMLTextAreaElement>('.inline-css-src');
     if (editor) {
       editor.addEventListener('input', () => {
         const cssText = this.options.mergeScopedCssForSelector(
@@ -88,7 +145,7 @@ export class InlineCssSurfaceController {
         }
       });
 
-      editor.addEventListener('keydown', (event) => {
+      editor.addEventListener('keydown', (event: KeyboardEvent) => {
         if (event.key !== 'Escape') return;
         event.preventDefault();
         event.stopPropagation();
@@ -111,8 +168,8 @@ export class InlineCssSurfaceController {
     const selectionEnd = this.state.selectionEnd;
     const srcWrap = activeSource ? activeSource.closest('.block-src-wrapper') : null;
     const surface = srcWrap
-      ? srcWrap.querySelector('.inline-css-surface')
-      : document.querySelector('.block-src-wrapper .inline-css-surface');
+      ? srcWrap.querySelector<HTMLElement>('.inline-css-surface')
+      : document.querySelector<HTMLElement>('.block-src-wrapper .inline-css-surface');
 
     if (surface) {
       surface.style.display = 'none';
@@ -140,13 +197,13 @@ export class InlineCssSurfaceController {
     }
   }
 
-  openInlineCssSurface(source, selector) {
+  openInlineCssSurface(source: HTMLTextAreaElement | null, selector: string) {
     if (!source) return;
 
     const surface = this.ensureInlineCssSurface(source);
     if (!surface) return;
 
-    const editor = surface.querySelector('.inline-css-src');
+    const editor = surface.querySelector<HTMLTextAreaElement>('.inline-css-src');
     if (!editor) return;
 
     const requestedSelector = String(selector || '').trim();
@@ -159,7 +216,7 @@ export class InlineCssSurfaceController {
       return;
     }
 
-    const meta = surface.querySelector('.inline-css-meta');
+    const meta = surface.querySelector<HTMLElement>('.inline-css-meta');
     if (meta) {
       meta.textContent = requestedSelector ? `${requestedSelector} {` : '{';
     }
@@ -190,7 +247,7 @@ export class InlineCssSurfaceController {
     editor.scrollTop = editor.scrollHeight;
   }
 
-  updateInlineCssAffordance(textarea) {
+  updateInlineCssAffordance(textarea: HTMLTextAreaElement | null) {
     if (!textarea) return;
     const target = this.options.findAttributeTargetAtCursor(textarea);
     if (target && target.selector) {
@@ -206,11 +263,13 @@ export class InlineCssSurfaceController {
 }
 
 export class BlockSourceController {
-  constructor(options) {
+  options: BlockSourceControllerOptions;
+
+  constructor(options: BlockSourceControllerOptions) {
     this.options = options;
   }
 
-  hasPendingBlockSourceChanges(source) {
+  hasPendingBlockSourceChanges(source: HTMLTextAreaElement | null) {
     if (!source) {
       return false;
     }
@@ -225,13 +284,13 @@ export class BlockSourceController {
     return nextSource !== originalSource;
   }
 
-  closeBlockSrc(index, commitChanges) {
-    const wrap = document.querySelector('.block-wrap[data-block-index="' + index + '"]');
+  closeBlockSrc(index: number, commitChanges: boolean) {
+    const wrap = document.querySelector<HTMLElement>('.block-wrap[data-block-index="' + index + '"]');
     if (!wrap) return;
 
-    const view = wrap.querySelector('.block-view');
-    const srcWrap = wrap.querySelector('.block-src-wrapper');
-    const source = wrap.querySelector('.block-src');
+    const view = wrap.querySelector<HTMLElement>('.block-view');
+    const srcWrap = wrap.querySelector<HTMLElement>('.block-src-wrapper');
+    const source = wrap.querySelector<HTMLTextAreaElement>('.block-src');
 
     if (!view || !srcWrap || !source || srcWrap.style.display !== 'block') {
       return;
@@ -249,13 +308,13 @@ export class BlockSourceController {
     view.style.display = '';
   }
 
-  commitBlockSourceForHistory(index) {
-    const wrap = document.querySelector('.block-wrap[data-block-index="' + index + '"]');
+  commitBlockSourceForHistory(index: number) {
+    const wrap = document.querySelector<HTMLElement>('.block-wrap[data-block-index="' + index + '"]');
     if (!wrap) {
       return;
     }
 
-    const source = wrap.querySelector('.block-src');
+    const source = wrap.querySelector<HTMLTextAreaElement>('.block-src');
     if (this.hasPendingBlockSourceChanges(source)) {
       this.commitBlockSrc(index);
       return;
@@ -264,19 +323,19 @@ export class BlockSourceController {
     this.closeBlockSrc(index, false);
   }
 
-  getOpenSourceIndices(exceptIndex) {
-    const openWraps = Array.from(document.querySelectorAll('.block-wrap .block-src-wrapper'))
+  getOpenSourceIndices(exceptIndex?: number) {
+    const openWraps = Array.from(document.querySelectorAll<HTMLElement>('.block-wrap .block-src-wrapper'))
       .filter((node) => node.style.display === 'block')
       .map((node) => node.closest('.block-wrap'))
-      .filter(Boolean);
+      .filter(Boolean) as HTMLElement[];
 
     return openWraps
-      .map((wrap) => Number.parseInt(wrap.dataset.blockIndex, 10))
+        .map((wrap) => Number.parseInt(wrap.dataset.blockIndex || '', 10))
       .filter((value) => !Number.isNaN(value) && value !== exceptIndex)
       .sort((a, b) => b - a);
   }
 
-  commitOpenSources(exceptIndex) {
+      commitOpenSources(exceptIndex?: number) {
     const indices = this.getOpenSourceIndices(exceptIndex);
 
     for (const index of indices) {
@@ -286,7 +345,7 @@ export class BlockSourceController {
     this.options.tryApplyPendingExternalSource();
   }
 
-  commitOpenSourcesForHistory(exceptIndex) {
+  commitOpenSourcesForHistory(exceptIndex?: number) {
     const indices = this.getOpenSourceIndices(exceptIndex);
 
     for (const index of indices) {
@@ -297,17 +356,17 @@ export class BlockSourceController {
   }
 
   hasOpenBlockSources() {
-    return Boolean(Array.from(document.querySelectorAll('.block-wrap .block-src-wrapper'))
+    return Boolean(Array.from(document.querySelectorAll<HTMLElement>('.block-wrap .block-src-wrapper'))
       .find((node) => node.style.display === 'block'));
   }
 
-  openBlockSrc(index) {
-    const wrap = document.querySelector('.block-wrap[data-block-index="' + index + '"]');
+  openBlockSrc(index: number) {
+    const wrap = document.querySelector<HTMLElement>('.block-wrap[data-block-index="' + index + '"]');
     if (!wrap) return;
 
-    const view = wrap.querySelector('.block-view');
-    const srcWrap = wrap.querySelector('.block-src-wrapper');
-    const source = wrap.querySelector('.block-src');
+    const view = wrap.querySelector<HTMLElement>('.block-view');
+    const srcWrap = wrap.querySelector<HTMLElement>('.block-src-wrapper');
+    const source = wrap.querySelector<HTMLTextAreaElement>('.block-src');
 
     if (!view || !source || !srcWrap || srcWrap.style.display === 'block') {
       return;
@@ -318,7 +377,7 @@ export class BlockSourceController {
     if (!block) return;
 
     const rawSource = typeof block.rawSource === 'string' ? block.rawSource : this.options.stringifyBlock(block);
-    const editorParts = this.options.splitBlockSourceForEditor(rawSource, block.type);
+    const editorParts = this.options.splitBlockSourceForEditor(rawSource, String(block.type || 'paragraph'));
     source.value = this.options.getRawSourceForEditor(editorParts.bodySource);
     source.dataset.originalSource = rawSource;
     source.dataset.headerSource = editorParts.headerSource;
@@ -334,13 +393,13 @@ export class BlockSourceController {
     source.focus();
   }
 
-  commitBlockSrc(index) {
-    const wrap = document.querySelector('.block-wrap[data-block-index="' + index + '"]');
+  commitBlockSrc(index: number) {
+    const wrap = document.querySelector<HTMLElement>('.block-wrap[data-block-index="' + index + '"]');
     if (!wrap) return;
 
-    const view = wrap.querySelector('.block-view');
-    const srcWrap = wrap.querySelector('.block-src-wrapper');
-    const source = wrap.querySelector('.block-src');
+    const view = wrap.querySelector<HTMLElement>('.block-view');
+    const srcWrap = wrap.querySelector<HTMLElement>('.block-src-wrapper');
+    const source = wrap.querySelector<HTMLTextAreaElement>('.block-src');
 
     if (!view || !source || !srcWrap) {
       return;
@@ -396,7 +455,7 @@ export class BlockSourceController {
       srcWrap.style.display = 'none';
       view.style.display = '';
       this.options.clearDocumentUndoSeed(source, { discardIfNoop: true });
-      this.options.setStatus('Reverted - unknown block type');
+      this.options.setStatus('Reverted - string | number | boolean | null | undefined | object block type');
       return;
     }
 

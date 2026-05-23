@@ -57,7 +57,7 @@ export interface FsmViewState {
   documentState: string;
   saveState: string;
   historyLength: number;
-  lastTransition: unknown;
+  lastTransition: string | number | boolean | null | undefined | object;
 }
 
 export interface DocumentHistoryDepths {
@@ -211,7 +211,7 @@ export function createSurfaceController(options: SurfaceControllerOptions): Surf
       return {
         index: Number.isFinite(index) ? index : -1,
         id: block?.id ?? '',
-        type: block?.type ?? 'unknown',
+        type: block?.type ?? 'string | number | boolean | null | undefined | object',
         rect: {
           x: Math.round(rect.x),
           y: Math.round(rect.y),

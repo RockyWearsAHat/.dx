@@ -117,7 +117,18 @@ function decodeRepoArchive(buffer) {
 function encodeBundle(container) {
     const entries = Object.entries(container.documents || {});
     const pathBufs = entries.map(([k]) => Buffer.from(k, 'utf8'));
-    const packedBufs = entries.map(([, v]) => Buffer.from(v._packed));
+    const packedBufs = entries.map(([, v]) => {
+        if (v._packed) {
+            return Buffer.isBuffer(v._packed) ? v._packed : Buffer.from(v._packed);
+        }
+        if (v.payload) {
+            const archiveBuffer = Buffer.from(String(v.payload), 'base64');
+            const packedLen = archiveBuffer.readUInt32LE(ARCHIVE_MAGIC.length);
+            const compressed = archiveBuffer.subarray(ARCHIVE_MAGIC.length + 4);
+            return brotliDecompressSync(compressed).subarray(0, packedLen);
+        }
+        throw new Error('Archive entry is missing packed bytes and payload data.');
+    });
     const shas = entries.map(([, v]) => Buffer.from(v.sha256, 'hex'));
     const gitFlagsBufs = entries.map(([, v]) => {
         const g = v.git || {};

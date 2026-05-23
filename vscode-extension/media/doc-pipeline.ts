@@ -1,4 +1,26 @@
-export function normalizeClassName(value) {
+export interface ChecklistItem {
+  checked: boolean;
+  text: string;
+}
+
+export interface PipelineBlock {
+  type: string;
+  id: string;
+  className: string;
+  rawSource?: string;
+  text?: string;
+  level?: number;
+  items?: Array<string | ChecklistItem>;
+  src?: string;
+  alt?: string;
+  href?: string;
+  media?: string;
+  language?: string;
+}
+
+type Attributes = Record<string, string>;
+
+export function normalizeClassName(value: string | number | boolean | null | undefined | object): string {
   return String(value || '')
     .split(/\s+/)
     .map((token) => token.trim())
@@ -6,20 +28,20 @@ export function normalizeClassName(value) {
     .join(' ');
 }
 
-export function splitClassNames(value) {
+export function splitClassNames(value: string | number | boolean | null | undefined | object): string[] {
   const className = normalizeClassName(value);
   return className ? className.split(/\s+/) : [];
 }
 
-export function parseAttributes(args) {
-  const attributes = {};
+export function parseAttributes(args: string | number | boolean | null | undefined | object): Attributes {
+  const attributes: Attributes = {};
   const pattern = /([a-zA-Z0-9._-]+)=(?:"([^"]*)"|'([^']*)'|([^\s]+))/g;
   const text = String(args || '');
   let match = pattern.exec(text);
 
   while (match) {
     const key = String(match[1]).trim().toLowerCase();
-    const value = match[2] ?? match[3] ?? match[4];
+    const value = match[2] ?? match[3] ?? match[4] ?? '';
 
     if (key) {
       attributes[key] = value;
@@ -31,22 +53,22 @@ export function parseAttributes(args) {
   return attributes;
 }
 
-export function isBulletedListType(type) {
+export function isBulletedListType(type: string): boolean {
   return type === 'list' || type === 'bulleted-list';
 }
 
-export function isNumberedListType(type) {
+export function isNumberedListType(type: string): boolean {
   return type === 'numbered-list';
 }
 
-export function parseListItems(lines) {
+export function parseListItems(lines: string[]): string[] {
   return (lines || [])
     .map((line) => String(line || '').replace(/^\s*(?:[-*]|\d+[.)])\s+/, '').trim())
     .filter(Boolean);
 }
 
-function parseLeadingAttributesAndRemainder(text) {
-  const attrs = {};
+function parseLeadingAttributesAndRemainder(text: string | number | boolean | null | undefined | object): { attrs: Attributes; remainder: string } {
+  const attrs: Attributes = {};
   let rest = String(text || '');
 
   while (true) {
@@ -56,7 +78,7 @@ function parseLeadingAttributesAndRemainder(text) {
     }
 
     const key = String(match[1]).trim().toLowerCase();
-    const value = match[2] ?? match[3] ?? match[4];
+    const value = match[2] ?? match[3] ?? match[4] ?? '';
 
     if (key) {
       attrs[key] = value;
@@ -71,9 +93,9 @@ function parseLeadingAttributesAndRemainder(text) {
   };
 }
 
-function unwrapSyntheticParagraphWrappers(sourceText) {
+function unwrapSyntheticParagraphWrappers(sourceText: string | number | boolean | null | undefined | object): string {
   const input = String(sourceText || '').replace(/\r\n/g, '\n').split('\n');
-  const output = [];
+  const output: string[] = [];
 
   for (let i = 0; i < input.length; i += 1) {
     const line = String(input[i] || '');
@@ -81,10 +103,8 @@ function unwrapSyntheticParagraphWrappers(sourceText) {
     const isSyntheticParagraphOpen = /^::paragraph\s+id=paragraph-\d+\s*$/i.test(trimmed);
 
     if (isSyntheticParagraphOpen && i + 2 < input.length) {
-      // Guard for malformed wrappers.
-            const wrappedLine = String(input[i + 1] || '');
-      // Guard for malformed wrappers.
-            const closeLine = String(input[i + 2] || '').trim();
+      const wrappedLine = String(input[i + 1] || '');
+      const closeLine = String(input[i + 2] || '').trim();
 
       if (closeLine === '::end') {
         output.push(wrappedLine);
@@ -99,18 +119,37 @@ function unwrapSyntheticParagraphWrappers(sourceText) {
   return output.join('\n');
 }
 
-export function parseSourceBlocks(source) {
+function makeBaseBlock(type: string, attrs: Attributes): PipelineBlock {
+  return {
+    type,
+    id: String(attrs.id || '').trim(),
+    className: normalizeClassName(attrs.class),
+  };
+}
+
+function parseChecklistLine(itemLine: string): ChecklistItem {
+  const match = /^\s*\[(x| )\]\s*(.*)$/i.exec(itemLine.trim());
+  if (match) {
+    const checkedToken = match[1] ?? ' ';
+    const text = match[2] ?? '';
+    return { checked: checkedToken.toLowerCase() === 'x', text };
+  }
+  return { checked: false, text: itemLine.trim() };
+}
+
+export function parseSourceBlocks(source: string | number | boolean | null | undefined | object): PipelineBlock[] {
   const text = unwrapSyntheticParagraphWrappers(String(source || ''));
   const lines = text.split('\n');
-  const blocks = [];
+  const blocks: PipelineBlock[] = [];
   let cursor = 0;
 
-  if (lines[0] && lines[0].startsWith('@doc')) {
+  const firstLine = lines[0] ?? '';
+  if (firstLine.startsWith('@doc')) {
     cursor = 1;
   }
 
   for (; cursor < lines.length; cursor += 1) {
-    const line = lines[cursor].trim();
+    const line = (lines[cursor] ?? '').trim();
     if (line === '---') {
       cursor += 1;
       break;
@@ -125,7 +164,8 @@ export function parseSourceBlocks(source) {
   }
 
   while (cursor < lines.length) {
-    const line = lines[cursor].trim();
+    const currentLine = lines[cursor] ?? '';
+    const line = currentLine.trim();
 
     if (!line) {
       cursor += 1;
@@ -133,26 +173,23 @@ export function parseSourceBlocks(source) {
     }
 
     if (!line.startsWith('::')) {
-      blocks.push({ type: 'paragraph', text: lines[cursor], rawSource: lines[cursor], className: '', id: '' });
+      blocks.push({ type: 'paragraph', text: currentLine, rawSource: currentLine, className: '', id: '' });
       cursor += 1;
       continue;
     }
 
     const inline = /^::([a-z-]+)(.*)\s+::end\s*$/i.exec(line);
     if (inline) {
-      const type = inline[1].toLowerCase();
-      const parsed = parseLeadingAttributesAndRemainder(inline[2] || '');
+      const type = String(inline[1] ?? '').toLowerCase();
+      const parsed = parseLeadingAttributesAndRemainder(inline[2] ?? '');
       const attrs = parsed.attrs;
       const inlineText = parsed.remainder;
-      const rawSource = lines[cursor];
+      const rawSource = currentLine;
 
       if (type === 'rule') {
         blocks.push({
-          type: 'rule',
+          ...makeBaseBlock('rule', attrs),
           rawSource,
-            // Inline rule may omit id.
-                      id: String(attrs.id || '').trim(),
-          className: normalizeClassName(attrs.class),
         });
         cursor += 1;
         continue;
@@ -160,9 +197,7 @@ export function parseSourceBlocks(source) {
 
       if (type === 'style') {
         blocks.push({
-          type: 'style',
-          id: String(attrs.id || '').trim(),
-          className: normalizeClassName(attrs.class),
+          ...makeBaseBlock('style', attrs),
           text: inlineText,
           rawSource,
         });
@@ -172,10 +207,8 @@ export function parseSourceBlocks(source) {
 
       if (type === 'stylesheet') {
         blocks.push({
-          type: 'stylesheet',
-          id: String(attrs.id || '').trim(),
-          className: normalizeClassName(attrs.class),
-                    href: String(attrs.href || attrs.src || inlineText || '').trim(),
+          ...makeBaseBlock('stylesheet', attrs),
+          href: String(attrs.href || attrs.src || inlineText || '').trim(),
           media: String(attrs.media || '').trim(),
           rawSource,
         });
@@ -186,9 +219,7 @@ export function parseSourceBlocks(source) {
       if (type === 'heading') {
         const level = Number(attrs.level || 1);
         blocks.push({
-          type,
-          id: String(attrs.id || '').trim(),
-          className: normalizeClassName(attrs.class),
+          ...makeBaseBlock(type, attrs),
           level: Math.min(6, Math.max(1, level)),
           text: inlineText,
           rawSource,
@@ -199,9 +230,7 @@ export function parseSourceBlocks(source) {
 
       if (isBulletedListType(type)) {
         blocks.push({
-          type: 'bulleted-list',
-          id: String(attrs.id || '').trim(),
-          className: normalizeClassName(attrs.class),
+          ...makeBaseBlock('bulleted-list', attrs),
           items: parseListItems(inlineText ? [inlineText] : []),
           rawSource,
         });
@@ -211,9 +240,7 @@ export function parseSourceBlocks(source) {
 
       if (isNumberedListType(type)) {
         blocks.push({
-          type: 'numbered-list',
-          id: String(attrs.id || '').trim(),
-          className: normalizeClassName(attrs.class),
+          ...makeBaseBlock('numbered-list', attrs),
           items: parseListItems(inlineText ? [inlineText] : []),
           rawSource,
         });
@@ -223,15 +250,10 @@ export function parseSourceBlocks(source) {
 
       if (type === 'checklist') {
         const checklistItem = inlineText.trim();
-        const match = /^\s*\[(x| )\]\s*(.*)$/i.exec(checklistItem);
-        const items = checklistItem
-          ? [match ? { checked: match[1].toLowerCase() === 'x', text: match[2] } : { checked: false, text: checklistItem }]
-          : [];
+        const items = checklistItem ? [parseChecklistLine(checklistItem)] : [];
 
         blocks.push({
-          type,
-          id: String(attrs.id || '').trim(),
-          className: normalizeClassName(attrs.class),
+          ...makeBaseBlock(type, attrs),
           items,
           rawSource,
         });
@@ -241,9 +263,7 @@ export function parseSourceBlocks(source) {
 
       if (type === 'image') {
         blocks.push({
-          type,
-          id: String(attrs.id || '').trim(),
-          className: normalizeClassName(attrs.class),
+          ...makeBaseBlock(type, attrs),
           src: String(attrs.src || '').trim(),
           alt: inlineText,
           rawSource,
@@ -252,20 +272,17 @@ export function parseSourceBlocks(source) {
         continue;
       }
 
-      const block = {
-        type,
-        id: String(attrs.id || '').trim(),
-        className: normalizeClassName(attrs.class),
+      const block: PipelineBlock = {
+        ...makeBaseBlock(type, attrs),
         text: type === 'paragraph' ? inlineText : inlineText.trimEnd(),
         rawSource,
       };
 
       if (type === 'code') {
-          // Either attr may be present depending on source shape.
-                  block.language = String(attrs.language || attrs.lang || '').trim();
+        block.language = String(attrs.language || attrs.lang || '').trim();
       }
 
-      if (type !== 'paragraph' || block.text.trim()) {
+      if (type !== 'paragraph' || String(block.text || '').trim()) {
         blocks.push(block);
       }
 
@@ -280,14 +297,14 @@ export function parseSourceBlocks(source) {
       continue;
     }
 
-    const type = open[1].toLowerCase();
+    const type = String(open[1] ?? '').toLowerCase();
     if (type === 'end') {
       cursor += 1;
       continue;
     }
-    const parsedOpen = parseLeadingAttributesAndRemainder(open[2] || '');
+    const parsedOpen = parseLeadingAttributesAndRemainder(open[2] ?? '');
     const attrs = parsedOpen.attrs;
-    const content = [];
+    const content: string[] = [];
     const blockStart = cursor;
     const openingLineContent = String(parsedOpen.remainder || '').trim();
     if (openingLineContent) {
@@ -297,10 +314,8 @@ export function parseSourceBlocks(source) {
 
     if (type === 'rule') {
       blocks.push({
-        type: 'rule',
-        rawSource: lines[blockStart],
-        id: String(attrs.id || '').trim(),
-        className: normalizeClassName(attrs.class),
+        ...makeBaseBlock('rule', attrs),
+        rawSource: lines[blockStart] ?? '',
       });
       continue;
     }
@@ -335,12 +350,9 @@ export function parseSourceBlocks(source) {
     const rawSource = lines.slice(blockStart, blockEnd + 1).join('\n');
 
     if (type === 'heading') {
-        // Default heading level for implicit headings.
-              const level = Number(attrs.level || 1);
+      const level = Number(attrs.level || 1);
       blocks.push({
-        type,
-        id: String(attrs.id || '').trim(),
-        className: normalizeClassName(attrs.class),
+        ...makeBaseBlock(type, attrs),
         level: Math.min(6, Math.max(1, level)),
         text: content.join('\n').trim(),
         rawSource,
@@ -350,9 +362,7 @@ export function parseSourceBlocks(source) {
 
     if (isBulletedListType(type)) {
       blocks.push({
-        type: 'bulleted-list',
-        id: String(attrs.id || '').trim(),
-        className: normalizeClassName(attrs.class),
+        ...makeBaseBlock('bulleted-list', attrs),
         items: parseListItems(content),
         rawSource,
       });
@@ -361,9 +371,7 @@ export function parseSourceBlocks(source) {
 
     if (isNumberedListType(type)) {
       blocks.push({
-        type: 'numbered-list',
-        id: String(attrs.id || '').trim(),
-        className: normalizeClassName(attrs.class),
+        ...makeBaseBlock('numbered-list', attrs),
         items: parseListItems(content),
         rawSource,
       });
@@ -372,14 +380,9 @@ export function parseSourceBlocks(source) {
 
     if (type === 'checklist') {
       blocks.push({
-        type,
-        id: String(attrs.id || '').trim(),
-        className: normalizeClassName(attrs.class),
+        ...makeBaseBlock(type, attrs),
         items: content
-          .map((itemLine) => {
-            const match = /^\s*\[(x| )\]\s*(.*)$/i.exec(itemLine.trim());
-            return match ? { checked: match[1].toLowerCase() === 'x', text: match[2] } : { checked: false, text: itemLine.trim() };
-          })
+          .map((itemLine) => parseChecklistLine(itemLine))
           .filter((item) => item.text.length > 0),
         rawSource,
       });
@@ -388,9 +391,7 @@ export function parseSourceBlocks(source) {
 
     if (type === 'image') {
       blocks.push({
-        type,
-        id: String(attrs.id || '').trim(),
-        className: normalizeClassName(attrs.class),
+        ...makeBaseBlock(type, attrs),
         src: String(attrs.src || '').trim(),
         alt: content.join('\n').trim(),
         rawSource,
@@ -400,9 +401,7 @@ export function parseSourceBlocks(source) {
 
     if (type === 'style') {
       blocks.push({
-        type: 'style',
-        id: String(attrs.id || '').trim(),
-        className: normalizeClassName(attrs.class),
+        ...makeBaseBlock('style', attrs),
         text: content.join('\n').trimEnd(),
         rawSource,
       });
@@ -411,10 +410,8 @@ export function parseSourceBlocks(source) {
 
     if (type === 'stylesheet') {
       blocks.push({
-        type: 'stylesheet',
-        id: String(attrs.id || '').trim(),
-        className: normalizeClassName(attrs.class),
-                href: String(attrs.href || attrs.src || content.join('\n').trim() || '').trim(),
+        ...makeBaseBlock('stylesheet', attrs),
+        href: String(attrs.href || attrs.src || content.join('\n').trim() || '').trim(),
         media: String(attrs.media || '').trim(),
         rawSource,
       });
@@ -427,10 +424,8 @@ export function parseSourceBlocks(source) {
       continue;
     }
 
-    const block = {
-      type,
-      id: String(attrs.id || '').trim(),
-      className: normalizeClassName(attrs.class),
+    const block: PipelineBlock = {
+      ...makeBaseBlock(type, attrs),
       text: blockText,
       rawSource,
     };

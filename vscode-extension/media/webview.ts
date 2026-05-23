@@ -1,4 +1,4 @@
-import { DOC_SAVE_STATES, DOC_SAVE_TRANSITIONS, DOC_VIEW_STATES, DOC_VIEW_TRANSITIONS } from './webview-fsm.mjs';
+import { DOC_SAVE_STATES, DOC_SAVE_TRANSITIONS, DOC_VIEW_STATES, DOC_VIEW_TRANSITIONS } from './webview-fsm.js';
 import { createAutocompleteController } from './webview-autocomplete-controller.js';
 import { createBlockRenderer } from './webview-block-renderer.js';
 import { applyBlockViewPresentation } from './webview-block-presentation.js';
@@ -24,27 +24,57 @@ import {
 import { createDocumentLifecycle } from './webview-document-lifecycle.js';
 import { createUiStateController } from './webview-ui-state.js';
 import { createSurfaceController } from './webview-surface-controller.js';
+import type { PipelineBlock } from './doc-pipeline.js';
 
 const vscode = typeof acquireVsCodeApi === 'function' ? acquireVsCodeApi() : { postMessage: () => {} };
 
-let docModel = null;
-let loadNoteEl = null;
+type JsonLike = string | number | boolean | null | undefined | object;
+type DocModel = ReturnType<typeof parseDoc>;
+type FsmSnapshot = {
+  docViewState?: string;
+  docSaveState?: string;
+  pendingExternalSource?: string | null;
+  inFlightSaveRequestId?: number;
+  lastSavedDoc?: string;
+  lastSaveErrorMessage?: string;
+};
+
+type BlockRendererController = ReturnType<typeof createBlockRenderer>;
+type AutocompleteController = ReturnType<typeof createAutocompleteController>;
+type DocumentLifecycleController = ReturnType<typeof createDocumentLifecycle>;
+type UiStateController = ReturnType<typeof createUiStateController>;
+type SurfaceController = ReturnType<typeof createSurfaceController>;
+
+interface VsCodeMessagePayload {
+  type?: string;
+  text?: string;
+  requestId?: number;
+  payload?: Record<string, JsonLike>;
+  theme?: string;
+  path?: string;
+  alt?: string;
+  insertAt?: number;
+  error?: string;
+}
+
+let docModel: DocModel | null = null;
+let loadNoteEl: HTMLElement | null = null;
 let currentDocPath = 'unknown.dx';
 let workspaceBaseUri = '';
 const appearanceStorageKey = 'docdb.appearance.v1';
 const editModeStorageKey = 'docdb.edit-mode.v1';
-let loadingGuardTimer = null;
-let customCssSheet = null;
+let loadingGuardTimer: ReturnType<typeof setTimeout> | null = null;
+let customCssSheet: CSSStyleSheet | null = null;
 
 let blankPagePointerDownHadOpenEditors = false;
 
-let docViewState = DOC_VIEW_STATES.BOOTSTRAPPING;
-let docSaveState = DOC_SAVE_STATES.IDLE;
+let docViewState: string = DOC_VIEW_STATES.BOOTSTRAPPING;
+let docSaveState: string = DOC_SAVE_STATES.IDLE;
 let lastSavedDoc = '';
 let lastSaveErrorMessage = '';
 let inFlightSaveRequestId = 0;
 let nextSaveRequestId = 1;
-let pendingExternalSource = null;
+let pendingExternalSource: string | null = null;
 const FSM_HISTORY_LIMIT = 32;
 const DOC_HISTORY_LIMIT = 120;
 const DOC_EDITOR_UNDO_ACTIONS = new Set([
@@ -70,22 +100,22 @@ const fsmTransitionHistory = new TransitionHistory(FSM_HISTORY_LIMIT);
 const documentHistory = new CallbackUndoRedoController({
   limit: DOC_HISTORY_LIMIT,
   captureSnapshot: () => cloneDocModel(docModel),
-  restoreSnapshot: (snapshot) => applyDocumentSnapshot(snapshot, null),
+  restoreSnapshot: (snapshot) => applyDocumentSnapshot(asDocModelSnapshot(snapshot), null),
 });
-let documentLifecycleController = null;
-let inlineCssController = null;
-let blockSourceController = null;
-let blockRendererController = null;
-let autocompleteController = null;
-let uiStateController = null;
-let surfaceController = null;
+let documentLifecycleController: DocumentLifecycleController | null = null;
+let inlineCssController: InlineCssSurfaceController | null = null;
+let blockSourceController: BlockSourceController | null = null;
+let blockRendererController: BlockRendererController | null = null;
+let autocompleteController: AutocompleteController | null = null;
+let uiStateController: UiStateController | null = null;
+let surfaceController: SurfaceController | null = null;
 
-function collectAutocompleteHeaders() {
+function collectAutocompleteHeaders(): string[] {
   if (!docModel || !Array.isArray(docModel.blocks)) {
     return [];
   }
 
-  const headers = [];
+  const headers: string[] = [];
 
   for (const block of docModel.blocks) {
     const raw = String(block && block.rawSource ? block.rawSource : '').trim();
@@ -102,7 +132,7 @@ function collectAutocompleteHeaders() {
   return headers;
 }
 
-function ensureBlockRendererController() {
+function ensureBlockRendererController(): BlockRendererController {
   if (blockRendererController) {
     return blockRendererController;
   }
@@ -117,7 +147,7 @@ function ensureBlockRendererController() {
   return blockRendererController;
 }
 
-function ensureAutocompleteController() {
+function ensureAutocompleteController(): AutocompleteController {
   if (autocompleteController) {
     return autocompleteController;
   }
@@ -137,14 +167,14 @@ function ensureAutocompleteController() {
   return autocompleteController;
 }
 
-function ensureDocumentLifecycleController() {
+function ensureDocumentLifecycleController(): DocumentLifecycleController {
   if (documentLifecycleController) {
     return documentLifecycleController;
   }
 
   documentLifecycleController = createDocumentLifecycle({
     getDocModel: () => docModel,
-    setDocModel: (nextDocModel) => {
+    setDocModel: (nextDocModel: DocModel) => {
       docModel = nextDocModel;
     },
     stringifyDoc,
@@ -154,7 +184,7 @@ function ensureDocumentLifecycleController() {
       lastSavedDoc = String(nextLastSavedDoc || '');
     },
     getPendingExternalSource: () => pendingExternalSource,
-    setPendingExternalSource: (nextPendingExternalSource) => {
+    setPendingExternalSource: (nextPendingExternalSource: string | null) => {
       pendingExternalSource = nextPendingExternalSource;
     },
     getIsApplyingDocHistory: () => isApplyingDocHistory,
@@ -168,15 +198,15 @@ function ensureDocumentLifecycleController() {
     setStatusPersistent,
     setStatus,
     markDocumentDirty,
-    setHasDirtyWorkingCopySignal: (nextHasDirtyWorkingCopySignal) => {
+    setHasDirtyWorkingCopySignal: (nextHasDirtyWorkingCopySignal: boolean) => {
       hasDirtyWorkingCopySignal = Boolean(nextHasDirtyWorkingCopySignal);
     },
     postMessage: (message) => vscode.postMessage(message),
     getNextSaveRequestId: () => nextSaveRequestId,
-    setNextSaveRequestId: (nextRequestId) => {
+    setNextSaveRequestId: (nextRequestId: number) => {
       nextSaveRequestId = Number(nextRequestId || 0);
     },
-    setInFlightSaveRequestId: (nextInFlightSaveRequestId) => {
+    setInFlightSaveRequestId: (nextInFlightSaveRequestId: number) => {
       inFlightSaveRequestId = Number(nextInFlightSaveRequestId || 0);
     },
     commitOpenSources,
@@ -189,7 +219,7 @@ function ensureDocumentLifecycleController() {
   return documentLifecycleController;
 }
 
-function captureFsmSnapshot() {
+function captureFsmSnapshot(): FsmSnapshot {
   return {
     docViewState,
     docSaveState,
@@ -200,19 +230,21 @@ function captureFsmSnapshot() {
   };
 }
 
-function restoreFsmSnapshot(snapshot) {
+function restoreFsmSnapshot(snapshot: JsonLike): boolean {
   if (!snapshot || typeof snapshot !== 'object') {
     return false;
   }
 
-  docViewState = snapshot.docViewState || DOC_VIEW_STATES.BOOTSTRAPPING;
-  docSaveState = snapshot.docSaveState || DOC_SAVE_STATES.IDLE;
+  const state = snapshot as FsmSnapshot;
+
+  docViewState = state.docViewState || DOC_VIEW_STATES.BOOTSTRAPPING;
+  docSaveState = state.docSaveState || DOC_SAVE_STATES.IDLE;
   docViewMachine.state = docViewState;
   docSaveMachine.state = docSaveState;
-  pendingExternalSource = typeof snapshot.pendingExternalSource === 'string' ? snapshot.pendingExternalSource : null;
-  inFlightSaveRequestId = Number(snapshot.inFlightSaveRequestId || 0);
-  lastSavedDoc = String(snapshot.lastSavedDoc || '');
-  lastSaveErrorMessage = String(snapshot.lastSaveErrorMessage || '');
+  pendingExternalSource = typeof state.pendingExternalSource === 'string' ? state.pendingExternalSource : null;
+  inFlightSaveRequestId = Number(state.inFlightSaveRequestId || 0);
+  lastSavedDoc = String(state.lastSavedDoc || '');
+  lastSaveErrorMessage = String(state.lastSaveErrorMessage || '');
   updateRuntimeStateAttributes();
   syncVisibleStateFromMachine();
 
@@ -227,7 +259,7 @@ function redoLastFsmTransition() {
   return fsmTransitionHistory.redo(restoreFsmSnapshot);
 }
 
-function performGlobalUndo() {
+function performGlobalUndo(): 'document' | 'fsm' | null {
   if (undoDocumentChange()) {
     return 'document';
   }
@@ -240,7 +272,7 @@ function performGlobalUndo() {
   return null;
 }
 
-function performGlobalRedo() {
+function performGlobalRedo(): 'document' | 'fsm' | null {
   if (redoDocumentChange()) {
     return 'document';
   }
@@ -253,7 +285,7 @@ function performGlobalRedo() {
   return null;
 }
 
-function isRedoShortcut(event) {
+function isRedoShortcut(event: KeyboardEvent): boolean {
   if (!event || !(event.metaKey || event.ctrlKey)) {
     return false;
   }
@@ -262,7 +294,7 @@ function isRedoShortcut(event) {
   return key === 'y' || (key === 'z' && event.shiftKey);
 }
 
-function syncEditModeIndicators(editEnabled) {
+function syncEditModeIndicators(editEnabled: boolean): void {
   const toggle = document.getElementById('ui-chrome-edit-toggle');
   const modePill = document.getElementById('mode-pill');
 
@@ -276,7 +308,7 @@ function syncEditModeIndicators(editEnabled) {
   }
 }
 
-function syncVisibleStateFromMachine() {
+function syncVisibleStateFromMachine(): void {
   const editEnabled = isEditModeState(docViewState);
 
   syncEditModeIndicators(editEnabled);
@@ -294,11 +326,24 @@ function syncVisibleStateFromMachine() {
   }
 }
 
-function cloneDocModel(model) {
-  return JSON.parse(JSON.stringify(model || { blocks: [] }));
+function cloneDocModel(model: DocModel | null): DocModel {
+  return JSON.parse(JSON.stringify(model || { blocks: [] })) as DocModel;
 }
 
-function applyDocumentSnapshot(snapshot, mode = null) {
+function asDocModelSnapshot(snapshot: JsonLike): DocModel | null {
+  if (!snapshot || typeof snapshot !== 'object') {
+    return null;
+  }
+
+  const candidate = snapshot as { blocks?: PipelineBlock[] };
+  if (!Array.isArray(candidate.blocks)) {
+    return null;
+  }
+
+  return { blocks: candidate.blocks };
+}
+
+function applyDocumentSnapshot(snapshot: DocModel | null, mode: 'undo' | 'redo' | null = null): boolean {
   if (!snapshot) {
     return false;
   }
@@ -320,19 +365,19 @@ function applyDocumentSnapshot(snapshot, mode = null) {
   return true;
 }
 
-function resetDocumentHistory() {
+function resetDocumentHistory(): void {
   documentHistory.clear();
 }
 
-function markDocumentDirty() {
+function markDocumentDirty(): void {
   reconcileSaveStateFromModel(true);
 }
 
-function syncDocumentSaveStateFromModel() {
+function syncDocumentSaveStateFromModel(): void {
   reconcileSaveStateFromModel(true);
 }
 
-function reconcileSaveStateFromModel(emitDirtySync = true) {
+function reconcileSaveStateFromModel(emitDirtySync = true): void {
   const latestSource = currentDocSourceText();
   const isDirty = latestSource !== lastSavedDoc;
   const hadDirtyWorkingCopySignal = hasDirtyWorkingCopySignal;
@@ -365,7 +410,7 @@ function reconcileSaveStateFromModel(emitDirtySync = true) {
   }
 }
 
-function recordDocumentUndo(action = 'edit') {
+function recordDocumentUndo(action = 'edit'): void {
   if (!docModel || isApplyingDocHistory) {
     return;
   }
@@ -373,7 +418,7 @@ function recordDocumentUndo(action = 'edit') {
   documentHistory.push(String(action || 'edit'));
 }
 
-function ensureDocumentUndoSeed(source, action = 'live-edit') {
+function ensureDocumentUndoSeed(source: HTMLTextAreaElement | null, action = 'live-edit'): void {
   if (!source) {
     return;
   }
@@ -388,7 +433,7 @@ function ensureDocumentUndoSeed(source, action = 'live-edit') {
   source.dataset.undoSeedDepth = String(documentHistory.undoDepth);
 }
 
-function clearDocumentUndoSeed(source, options = {}) {
+function clearDocumentUndoSeed(source: HTMLTextAreaElement | null, options: { discardIfNoop?: boolean } = {}): void {
   if (!source) {
     return;
   }
@@ -417,15 +462,15 @@ function clearDocumentUndoSeed(source, options = {}) {
   source.dataset.undoSeedDepth = '';
 }
 
-function applyDocumentHistorySnapshot(entry, mode) {
+function applyDocumentHistorySnapshot(entry: { snapshot?: JsonLike } | null, mode: 'undo' | 'redo'): boolean {
   if (!entry || !entry.snapshot) {
     return false;
   }
 
-  return applyDocumentSnapshot(entry.snapshot, mode);
+  return applyDocumentSnapshot(asDocModelSnapshot(entry.snapshot), mode);
 }
 
-function undoDocumentChange() {
+function undoDocumentChange(): boolean {
   if (!docModel) {
     return false;
   }
@@ -437,7 +482,7 @@ function undoDocumentChange() {
   return Boolean(previous);
 }
 
-function redoDocumentChange() {
+function redoDocumentChange(): boolean {
   if (!docModel) {
     return false;
   }
@@ -449,16 +494,16 @@ function redoDocumentChange() {
   return Boolean(next);
 }
 
-function isEditModeState(state) {
+function isEditModeState(state: string): boolean {
   return state === DOC_VIEW_STATES.LOADING_EDIT || state === DOC_VIEW_STATES.READY_EDIT;
 }
 
-function isReadyViewState(state) {
+function isReadyViewState(state: string): boolean {
   return state === DOC_VIEW_STATES.READY_EDIT || state === DOC_VIEW_STATES.READY_READ;
 }
 
-function updateRuntimeStateAttributes() {
-  const page = document.querySelector('.page');
+function updateRuntimeStateAttributes(): void {
+  const page = document.querySelector<HTMLElement>('.page');
   if (!page) {
     return;
   }
@@ -473,13 +518,13 @@ function updateRuntimeStateAttributes() {
   page.setAttribute('aria-busy', isReady ? 'false' : 'true');
 }
 
-function transitionDocViewState(event) {
+function transitionDocViewState(event: string): boolean {
   if (!docViewMachine.transition(event)) {
     return false;
   }
 
   const before = captureFsmSnapshot();
-  docViewState = docViewMachine.state;
+  docViewState = String(docViewMachine.state || DOC_VIEW_STATES.BOOTSTRAPPING);
   updateRuntimeStateAttributes();
   fsmTransitionHistory.record({
     machine: 'doc-view',
@@ -490,13 +535,13 @@ function transitionDocViewState(event) {
   return true;
 }
 
-function transitionDocSaveState(event) {
+function transitionDocSaveState(event: string): boolean {
   if (!docSaveMachine.transition(event)) {
     return false;
   }
 
   const before = captureFsmSnapshot();
-  docSaveState = docSaveMachine.state;
+  docSaveState = String(docSaveMachine.state || DOC_SAVE_STATES.IDLE);
   updateRuntimeStateAttributes();
   fsmTransitionHistory.record({
     machine: 'doc-save',
@@ -507,7 +552,7 @@ function transitionDocSaveState(event) {
   return true;
 }
 
-function currentDocSourceText() {
+function currentDocSourceText(): string {
   if (!docModel) {
     return '';
   }
@@ -515,29 +560,29 @@ function currentDocSourceText() {
   return stringifyDoc(docModel);
 }
 
-function canApplyExternalSourceNow() {
+function canApplyExternalSourceNow(): boolean {
   return ensureDocumentLifecycleController().canApplyExternalSourceNow();
 }
 
-function applyIncomingSourceText(sourceText) {
+function applyIncomingSourceText(sourceText: string): void {
   ensureDocumentLifecycleController().applyIncomingSourceText(sourceText);
 }
 
-function tryApplyPendingExternalSource() {
+function tryApplyPendingExternalSource(): void {
   ensureDocumentLifecycleController().tryApplyPendingExternalSource();
 }
 
-function startSaveRequest(sourceText) {
+function startSaveRequest(sourceText: string): void {
   ensureDocumentLifecycleController().startSaveRequest(sourceText);
 }
 
-function debouncedAutosave() {
+function debouncedAutosave(): void {
   ensureDocumentLifecycleController().debouncedAutosave();
 }
 
 function hasActiveEditingSurface() {
   ensureControllers();
-  return hasOpenBlockSources() || inlineCssController.hasOpenSurface();
+  return hasOpenBlockSources() || Boolean(inlineCssController && inlineCssController.hasOpenSurface());
 }
 
 const BLOCK_AUTOCOMPLETE = [
@@ -553,9 +598,9 @@ const BLOCK_AUTOCOMPLETE = [
   '::end',
 ];
 
-let autocompleteState = null;
+let autocompleteState: AutocompleteController['state'] | null = null;
 
-function setStatus(text) {
+function setStatus(text: string): void {
   const el = document.getElementById('status');
   if (!el) return;
 
@@ -570,7 +615,7 @@ function setStatus(text) {
   }, 2600);
 }
 
-function setStatusPersistent(text, state = 'idle') {
+function setStatusPersistent(text: string, state = 'idle'): void {
   const el = document.getElementById('status');
   if (!el) return;
 
@@ -579,33 +624,34 @@ function setStatusPersistent(text, state = 'idle') {
   el.dataset.state = state;
 }
 
-function clearStatusPersistent() {
+function clearStatusPersistent(): void {
   const el = document.getElementById('status');
   if (!el) return;
   el.dataset.state = 'transient';
   el.style.display = 'none';
 }
 
-function isTypingTarget(element) {
+function isTypingTarget(element: Element | null): boolean {
   if (!element) return false;
   const tag = String(element.tagName || '').toLowerCase();
-  return tag === 'textarea' || tag === 'input' || tag === 'select' || element.isContentEditable;
+  const isContentEditable = element instanceof HTMLElement ? element.isContentEditable : false;
+  return tag === 'textarea' || tag === 'input' || tag === 'select' || isContentEditable;
 }
 
-function getEventElementTarget(event) {
+function getEventElementTarget(event: Event): Element | null {
   const target = event && event.target;
   if (target instanceof Element) {
     return target;
   }
 
-  if (target && target.parentElement instanceof Element) {
+  if (target instanceof Node && target.parentElement instanceof Element) {
     return target.parentElement;
   }
 
   return null;
 }
 
-function escapeHtml(value) {
+function escapeHtml(value: JsonLike): string {
   return String(value || '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
@@ -614,7 +660,7 @@ function escapeHtml(value) {
     .replace(/'/g, '&#39;');
 }
 
-function normalizeClassName(value) {
+function normalizeClassName(value: JsonLike): string {
   return String(value || '')
     .split(/\s+/)
     .map((token) => token.trim())
@@ -622,13 +668,13 @@ function normalizeClassName(value) {
     .join(' ');
 }
 
-function splitClassNames(value) {
+function splitClassNames(value: JsonLike): string[] {
   const className = normalizeClassName(value);
   return className ? className.split(/\s+/) : [];
 }
 
 
-function ensureCustomCssSheet() {
+function ensureCustomCssSheet(): CSSStyleSheet {
   if (customCssSheet) {
     return customCssSheet;
   }
@@ -638,7 +684,7 @@ function ensureCustomCssSheet() {
   return customCssSheet;
 }
 
-function applyCustomCss(cssText) {
+function applyCustomCss(cssText: JsonLike): boolean {
   try {
     ensureCustomCssSheet().replaceSync(String(cssText || ''));
     return true;
@@ -651,18 +697,18 @@ function applyCustomCss(cssText) {
 
 function getActiveScopedCss() {
   ensureControllers();
-  return inlineCssController.getActiveScopedCss();
+  return inlineCssController ? inlineCssController.getActiveScopedCss() : '';
 }
 
-function extractCssFromDocumentModel() {
+function extractCssFromDocumentModel(): string {
   return extractCssFromModel(docModel);
 }
 
-function extractStylesheetLinksFromDocumentModel() {
+function extractStylesheetLinksFromDocumentModel(): Array<{ href: string; media: string }> {
   return extractStylesheetLinksFromModel(docModel);
 }
 
-function resolveStylesheetHref(href) {
+function resolveStylesheetHref(href: JsonLike): string {
   const raw = String(href || '').trim();
 
   if (!raw) {
@@ -681,7 +727,7 @@ function resolveStylesheetHref(href) {
   return workspaceBaseUri + '/' + normalized;
 }
 
-function applyExternalStylesheetLinks(entries) {
+function applyExternalStylesheetLinks(entries: Array<{ href: string; media: string }>): void {
   const head = document.head;
 
   if (!head) {
@@ -701,7 +747,7 @@ function applyExternalStylesheetLinks(entries) {
     const key = media ? resolvedHref + '|' + media : resolvedHref;
     activeKeys.add(key);
 
-    let linkEl = head.querySelector(`link[data-doc-stylesheet-key="${CSS.escape(key)}"]`);
+    let linkEl = head.querySelector<HTMLLinkElement>(`link[data-doc-stylesheet-key="${CSS.escape(key)}"]`);
 
     if (!linkEl) {
       linkEl = document.createElement('link');
@@ -719,7 +765,7 @@ function applyExternalStylesheetLinks(entries) {
     }
   }
 
-  head.querySelectorAll('link[data-doc-stylesheet-key]').forEach((node) => {
+  head.querySelectorAll<HTMLLinkElement>('link[data-doc-stylesheet-key]').forEach((node) => {
     const key = String(node.dataset.docStylesheetKey || '');
     if (!activeKeys.has(key)) {
       node.remove();
@@ -727,14 +773,14 @@ function applyExternalStylesheetLinks(entries) {
   });
 }
 
-function refreshDocumentCss() {
+function refreshDocumentCss(): void {
   const effectiveCss = extractCssFromDocumentModel();
   applyExternalStylesheetLinks(extractStylesheetLinksFromDocumentModel());
   applyCustomCss(effectiveCss);
   publishViewState(effectiveCss);
 }
 
-function publishViewState(effectiveCss) {
+function publishViewState(effectiveCss: JsonLike): void {
   const resolvedTheme = String(document.body && document.body.dataset ? document.body.dataset.resolvedTheme || 'dark' : 'dark');
   const sourceText = docModel ? stringifyDoc(docModel) : '';
   const viewportWidth = Number.isFinite(window.innerWidth) ? Math.max(1, Math.round(window.innerWidth)) : null;
@@ -774,12 +820,12 @@ function publishViewState(effectiveCss) {
   });
 }
 
-function collectKnownIds() {
+function collectKnownIds(): string[] {
   if (!docModel || !Array.isArray(docModel.blocks)) {
     return [];
   }
 
-  const known = new Set();
+  const known = new Set<string>();
 
   for (const block of docModel.blocks) {
     const raw = String(block && block.rawSource ? block.rawSource : '');
@@ -799,12 +845,12 @@ function collectKnownIds() {
   return Array.from(known).sort((a, b) => a.localeCompare(b));
 }
 
-function collectKnownImageSources() {
+function collectKnownImageSources(): string[] {
   if (!docModel || !Array.isArray(docModel.blocks)) {
     return [];
   }
 
-  const known = new Set();
+  const known = new Set<string>();
 
   for (const block of docModel.blocks) {
     if (!block || block.type !== 'image') continue;
@@ -817,12 +863,12 @@ function collectKnownImageSources() {
   return Array.from(known).sort((a, b) => a.localeCompare(b));
 }
 
-function collectKnownClasses() {
+function collectKnownClasses(): string[] {
   if (!docModel || !Array.isArray(docModel.blocks)) {
     return [];
   }
 
-  const known = new Set();
+  const known = new Set<string>();
 
   for (const block of docModel.blocks) {
     for (const token of splitClassNames(block && block.className)) {
@@ -841,7 +887,7 @@ function collectKnownClasses() {
   return Array.from(known).sort((a, b) => a.localeCompare(b));
 }
 
-function getLineContext(textarea) {
+function getLineContext(textarea: HTMLTextAreaElement) {
   const value = String(textarea.value || '');
   const cursor = Number(textarea.selectionStart || 0);
   const lineStart = value.lastIndexOf('\n', Math.max(0, cursor - 1)) + 1;
@@ -862,23 +908,26 @@ function getLineContext(textarea) {
   };
 }
 
-function getAutocompleteSuggestions(textarea, forceOpen = false) {
+function getAutocompleteSuggestions(textarea: HTMLTextAreaElement | null, forceOpen = false) {
   return ensureAutocompleteController().getAutocompleteSuggestions(textarea, forceOpen);
 }
 
-function getAutocompleteEls(textarea) {
+function getAutocompleteEls(textarea: HTMLTextAreaElement | null): { menuEl: HTMLDivElement | null; mirrorEl: HTMLDivElement | null } {
   const srcWrap = textarea ? textarea.closest('.block-src-wrapper') : null;
   if (!srcWrap) return { menuEl: null, mirrorEl: null };
+  const menuEl = srcWrap.querySelector<HTMLDivElement>('.autocomplete-menu');
+  const mirrorEl = srcWrap.querySelector<HTMLDivElement>('.block-src-mirror');
   return {
-    menuEl: srcWrap.querySelector('.autocomplete-menu'),
-    mirrorEl: srcWrap.querySelector('.block-src-mirror'),
+    menuEl,
+    mirrorEl,
   };
 }
 
-function renderGhostText(textarea, mirrorEl) {
-  if (!mirrorEl || !autocompleteState.suggestions.length) return;
+function renderGhostText(textarea: HTMLTextAreaElement, mirrorEl: HTMLDivElement | null): void {
+  if (!mirrorEl || !autocompleteState || !autocompleteState.suggestions.length) return;
   const { suggestions, selectedIndex, replaceStart, replaceEnd, typed } = autocompleteState;
   const selected = suggestions[selectedIndex];
+  if (!selected) return;
   const value = String(textarea.value || '');
   const ghostSuffix = selected.insertText.startsWith(typed)
     ? selected.insertText.slice(typed.length)
@@ -896,35 +945,35 @@ function renderGhostText(textarea, mirrorEl) {
   mirrorEl.scrollTop = textarea.scrollTop;
 
   const srcWrap = textarea.closest('.block-src-wrapper');
-  if (srcWrap) srcWrap.classList.add('ghost-active');
+  if (srcWrap instanceof HTMLElement) srcWrap.classList.add('ghost-active');
   textarea.classList.add('ghost-active');
 }
 
-function closeAutocomplete() {
+function closeAutocomplete(): void {
   ensureAutocompleteController().closeAutocomplete();
 }
 
-function renderAutocomplete(textarea, forceOpen = false) {
+function renderAutocomplete(textarea: HTMLTextAreaElement | null, forceOpen = false): boolean {
   return ensureAutocompleteController().renderAutocomplete(textarea, forceOpen);
 }
 
-function positionAutocompleteMenu(textarea, menuEl) {
+function positionAutocompleteMenu(textarea: HTMLTextAreaElement | null, menuEl: HTMLDivElement | null): void {
   return ensureAutocompleteController().positionAutocompleteMenu(textarea, menuEl);
 }
 
-function updateAutocompleteSelection(delta) {
+function updateAutocompleteSelection(delta: number): boolean {
   return ensureAutocompleteController().updateAutocompleteSelection(delta);
 }
 
-function acceptAutocomplete(textarea, explicitIndex) {
+function acceptAutocomplete(textarea: HTMLTextAreaElement | null, explicitIndex?: number): boolean {
   return ensureAutocompleteController().acceptAutocomplete(textarea, explicitIndex);
 }
 
-function isBulletedListType(type) {
+function isBulletedListType(type: string): boolean {
   return type === 'list' || type === 'bulleted-list';
 }
 
-function isNumberedListType(type) {
+function isNumberedListType(type: string): boolean {
   return type === 'numbered-list';
 }
 
@@ -932,8 +981,8 @@ function isNumberedListType(type) {
 // Inline link support — [label](relative/path.dx) syntax in paragraph/quote/list text
 // ---------------------------------------------------------------------------
 
-function parseInlineLinks(text) {
-  const tokens = [];
+function parseInlineLinks(text: string): Array<{ type: 'text'; value: string } | { type: 'link'; label: string; href: string }> {
+  const tokens: Array<{ type: 'text'; value: string } | { type: 'link'; label: string; href: string }> = [];
   const pattern = /\[([^\]]+)\]\(([^)]+)\)/g;
   let lastIndex = 0;
   let match = pattern.exec(text);
@@ -941,7 +990,7 @@ function parseInlineLinks(text) {
     if (match.index > lastIndex) {
       tokens.push({ type: 'text', value: text.slice(lastIndex, match.index) });
     }
-    tokens.push({ type: 'link', label: match[1], href: match[2] });
+    tokens.push({ type: 'link', label: match[1] || '', href: match[2] || '' });
     lastIndex = match.index + match[0].length;
     match = pattern.exec(text);
   }
@@ -951,10 +1000,11 @@ function parseInlineLinks(text) {
   return tokens;
 }
 
-function setInlineContent(el, text) {
+function setInlineContent(el: HTMLElement, text: string): void {
   const tokens = parseInlineLinks(String(text || ''));
-  if (tokens.length === 1 && tokens[0].type === 'text') {
-    el.textContent = tokens[0].value;
+  const firstToken = tokens[0];
+  if (tokens.length === 1 && firstToken && firstToken.type === 'text') {
+    el.textContent = firstToken.value;
     return;
   }
   el.textContent = '';
@@ -972,55 +1022,62 @@ function setInlineContent(el, text) {
   }
 }
 
-function buildRenderedContent(block) {
+function buildRenderedContent(block: PipelineBlock | null | undefined): Node {
+  if (!block) {
+    return document.createTextNode('');
+  }
   return ensureBlockRendererController().buildRenderedContent(block);
 }
 
-function buildBlockWrap(block, index) {
+function buildBlockWrap(block: PipelineBlock, index: number): HTMLDivElement {
   return ensureBlockRendererController().buildBlockWrap(block, index);
 }
 
-function autosizeBlockSrc(textarea) {
-  return ensureBlockRendererController().autosizeBlockSrc(textarea);
+function autosizeBlockSrc(textarea: HTMLTextAreaElement): void {
+  if (!textarea) {
+    return;
+  }
+  textarea.style.height = '0px';
+  textarea.style.height = `${textarea.scrollHeight}px`;
 }
 
-function getRawSourceForEditor(rawSource) {
+function getRawSourceForEditor(rawSource: JsonLike): string {
   return ensureBlockRendererController().getRawSourceForEditor(rawSource);
 }
 
-function getRawSourceFromEditor(editorValue) {
+function getRawSourceFromEditor(editorValue: JsonLike): string {
   return ensureBlockRendererController().getRawSourceFromEditor(editorValue);
 }
 
-function splitBlockSourceForEditor(rawSource, blockType) {
+function splitBlockSourceForEditor(rawSource: JsonLike, blockType: string) {
   return ensureBlockRendererController().splitBlockSourceForEditor(rawSource, blockType);
 }
 
-function buildRawSourceFromEditorParts(headerSource, bodySource, footerSource) {
+function buildRawSourceFromEditorParts(headerSource: JsonLike, bodySource: JsonLike, footerSource: JsonLike): string {
   return ensureBlockRendererController().buildRawSourceFromEditorParts(headerSource, bodySource, footerSource);
 }
 
-function getBlockHeaderEditor(textarea) {
+function getBlockHeaderEditor(textarea: HTMLTextAreaElement | null): HTMLTextAreaElement | null {
   return ensureBlockRendererController().getBlockHeaderEditor(textarea);
 }
 
-function getHeaderSourceFromEditor(textarea) {
+function getHeaderSourceFromEditor(textarea: HTMLTextAreaElement): string {
   return ensureBlockRendererController().getHeaderSourceFromEditor(textarea);
 }
 
-function renderEditableHeader(textarea) {
+function renderEditableHeader(textarea: HTMLTextAreaElement): void {
   return ensureBlockRendererController().renderEditableHeader(textarea);
 }
 
-function applyEditableBodyPresentation(wrap, block) {
-  return ensureBlockRendererController().applyEditableBodyPresentation(wrap, block);
+function applyEditableBodyPresentation(wrap: HTMLElement, block: PipelineBlock | null | undefined): void {
+  return ensureBlockRendererController().applyEditableBodyPresentation(wrap, block || null);
 }
 
-function clearEditableBodyPresentation(wrap) {
+function clearEditableBodyPresentation(wrap: HTMLElement): void {
   return ensureBlockRendererController().clearEditableBodyPresentation(wrap);
 }
 
-function findAttributeTargetAtCursor(textarea) {
+function findAttributeTargetAtCursor(textarea: HTMLTextAreaElement): { selector: string; kind: string } | null {
   const ctx = getLineContext(textarea);
   const cursorInLine = ctx.cursor - ctx.lineStart;
   const pattern = /([a-zA-Z0-9._-]+)=(?:"([^"]*)"|'([^']*)'|([^\s]+))/g;
@@ -1030,7 +1087,7 @@ function findAttributeTargetAtCursor(textarea) {
     const key = String(match[1] || '').toLowerCase();
     const value = match[2] ?? match[3] ?? match[4] ?? '';
     const quoted = match[2] != null || match[3] != null;
-    const valueStart = match.index + match[1].length + 1 + (quoted ? 1 : 0);
+    const valueStart = match.index + String(match[1] || '').length + 1 + (quoted ? 1 : 0);
     const valueEnd = valueStart + value.length;
 
     if (cursorInLine >= valueStart && cursorInLine <= valueEnd) {
@@ -1062,18 +1119,18 @@ function findAttributeTargetAtCursor(textarea) {
   return null;
 }
 
-function findCssBlockIndex() {
+function findCssBlockIndex(): number {
   return findCssBlockIndexInModel(docModel);
 }
 
-function splitRuleSelectors(selectorText) {
+function splitRuleSelectors(selectorText: JsonLike): string[] {
   return String(selectorText || '')
     .split(',')
     .map((token) => token.trim())
     .filter(Boolean);
 }
 
-function isSelectorForTarget(selector, target) {
+function isSelectorForTarget(selector: JsonLike, target: JsonLike): boolean {
   const normalizedSelector = String(selector || '').trim();
   const normalizedTarget = String(target || '').trim();
 
@@ -1086,7 +1143,7 @@ function isSelectorForTarget(selector, target) {
     || normalizedSelector.startsWith(normalizedTarget + '::');
 }
 
-function getScopedCssForSelector(cssText, selector) {
+function getScopedCssForSelector(cssText: JsonLike, selector: JsonLike): string {
   const source = String(cssText || '');
   const target = String(selector || '').trim();
   if (!target) {
@@ -1111,7 +1168,7 @@ function getScopedCssForSelector(cssText, selector) {
   return chunks.join('\n\n').trim();
 }
 
-function getScopedCssDeclarations(cssText, selector) {
+function getScopedCssDeclarations(cssText: JsonLike, selector: JsonLike): string {
   const source = String(cssText || '');
   const target = String(selector || '').trim();
   if (!target) {
@@ -1138,7 +1195,7 @@ function getScopedCssDeclarations(cssText, selector) {
   return '';
 }
 
-function buildScopedRule(selector, declarationsText) {
+function buildScopedRule(selector: JsonLike, declarationsText: JsonLike): string {
   const target = String(selector || '').trim();
   if (!target) {
     return '';
@@ -1161,7 +1218,7 @@ function buildScopedRule(selector, declarationsText) {
   return `${target} {\n${body}\n}`;
 }
 
-function mergeScopedCssForSelector(baseCssText, selector, declarationsText) {
+function mergeScopedCssForSelector(baseCssText: JsonLike, selector: JsonLike, declarationsText: JsonLike): string {
   const base = String(baseCssText || '');
   const target = String(selector || '').trim();
   const scoped = buildScopedRule(target, declarationsText);
@@ -1201,7 +1258,7 @@ function mergeScopedCssForSelector(baseCssText, selector, declarationsText) {
   return compactBase ? `${compactBase}\n\n${scoped}` : scoped;
 }
 
-function upsertCssBlock(cssText) {
+function upsertCssBlock(cssText: JsonLike): void {
   if (!docModel || !Array.isArray(docModel.blocks)) {
     return;
   }
@@ -1210,7 +1267,7 @@ function upsertCssBlock(cssText) {
   let cssIndex = findCssBlockIndex();
 
   if (cssIndex < 0) {
-    const block = {
+    const block: PipelineBlock = {
       type: 'code',
       language: 'css',
       text,
@@ -1224,12 +1281,15 @@ function upsertCssBlock(cssText) {
   }
 
   const block = docModel.blocks[cssIndex];
+  if (!block) {
+    return;
+  }
   block.language = 'css';
   block.text = text;
   block.rawSource = stringifyBlock({ ...block, rawSource: '' });
 }
 
-function ensureControllers() {
+function ensureControllers(): void {
   ensureBlockRendererController();
   ensureAutocompleteController();
 
@@ -1272,52 +1332,68 @@ function ensureControllers() {
       splitBlockSourceForEditor,
       stringifyBlock,
       tryApplyPendingExternalSource,
-      updateInlineCssAffordance: (textarea) => inlineCssController.updateInlineCssAffordance(textarea),
+      updateInlineCssAffordance: (textarea) => {
+        if (inlineCssController) {
+          inlineCssController.updateInlineCssAffordance(textarea);
+        }
+      },
     });
   }
 }
 
-function closeInlineCssSurface(restoreFocus) {
+function closeInlineCssSurface(restoreFocus?: boolean): void {
   ensureControllers();
-  inlineCssController.closeInlineCssSurface(Boolean(restoreFocus));
+  if (inlineCssController) {
+    inlineCssController.closeInlineCssSurface(Boolean(restoreFocus));
+  }
 }
 
-function openInlineCssSurface(source, selector) {
+function openInlineCssSurface(source: HTMLTextAreaElement | null, selector: string): void {
   ensureControllers();
-  inlineCssController.openInlineCssSurface(source, selector);
+  if (inlineCssController) {
+    inlineCssController.openInlineCssSurface(source, selector);
+  }
 }
 
-function closeBlockSrc(index, commitChanges) {
+function closeBlockSrc(index: number, commitChanges: boolean): void {
   ensureControllers();
-  blockSourceController.closeBlockSrc(index, commitChanges);
+  if (blockSourceController) {
+    blockSourceController.closeBlockSrc(index, commitChanges);
+  }
 }
 
-function hasPendingBlockSourceChanges(source) {
+function hasPendingBlockSourceChanges(source: HTMLTextAreaElement | null): boolean {
   ensureControllers();
-  return blockSourceController.hasPendingBlockSourceChanges(source);
+  return blockSourceController ? blockSourceController.hasPendingBlockSourceChanges(source) : false;
 }
 
-function commitBlockSourceForHistory(index) {
+function commitBlockSourceForHistory(index: number): void {
   ensureControllers();
-  blockSourceController.commitBlockSourceForHistory(index);
+  if (blockSourceController) {
+    blockSourceController.commitBlockSourceForHistory(index);
+  }
 }
 
-function commitOpenSources(exceptIndex) {
+function commitOpenSources(exceptIndex?: number): void {
   ensureControllers();
-  blockSourceController.commitOpenSources(exceptIndex);
+  if (blockSourceController) {
+    blockSourceController.commitOpenSources(exceptIndex);
+  }
 }
 
-function commitOpenSourcesForHistory(exceptIndex) {
+function commitOpenSourcesForHistory(exceptIndex?: number): void {
   ensureControllers();
-  blockSourceController.commitOpenSourcesForHistory(exceptIndex);
+  if (blockSourceController) {
+    blockSourceController.commitOpenSourcesForHistory(exceptIndex);
+  }
 }
 
-function hasOpenBlockSources() {
+function hasOpenBlockSources(): boolean {
   ensureControllers();
-  return blockSourceController.hasOpenBlockSources();
+  return blockSourceController ? blockSourceController.hasOpenBlockSources() : false;
 }
 
-function isBlankPageClickTarget(target, pageEl, blocksContainer) {
+function isBlankPageClickTarget(target: Element | null, pageEl: Element | null, blocksContainer: Element | null): boolean {
   if (!target || !pageEl || !blocksContainer) return false;
   if (target.closest('.ui-chrome')) return false;
   if (target.closest('.meta-rendered') || target.closest('.meta-input')) return false;
@@ -1330,38 +1406,48 @@ function isBlankPageClickTarget(target, pageEl, blocksContainer) {
   return target === pageEl || target === blocksContainer;
 }
 
-function updateInlineCssAffordance(textarea) {
+function updateInlineCssAffordance(textarea: HTMLTextAreaElement): void {
   ensureControllers();
-  inlineCssController.updateInlineCssAffordance(textarea);
+  if (inlineCssController) {
+    inlineCssController.updateInlineCssAffordance(textarea);
+  }
 }
 
-function openBlockSrc(index) {
+function openBlockSrc(index: number): void {
   ensureControllers();
-  blockSourceController.openBlockSrc(index);
+  if (blockSourceController) {
+    blockSourceController.openBlockSrc(index);
+  }
 }
 
-function commitBlockSrc(index) {
+function commitBlockSrc(index: number): void {
   ensureControllers();
-  blockSourceController.commitBlockSrc(index);
+  if (blockSourceController) {
+    blockSourceController.commitBlockSrc(index);
+  }
 }
 
-function renderDocument() {
+function renderDocument(): void {
   ensureDocumentLifecycleController().renderDocument();
 }
 
-function saveDoc() {
+function saveDoc(): void {
   ensureDocumentLifecycleController().saveDoc();
 }
 
-function saveDocAuto() {
+function saveDocAuto(): void {
   ensureDocumentLifecycleController().saveDocAuto();
 }
 
-function getInsertIndexForY(container, clientY) {
+function getInsertIndexForY(container: HTMLElement, clientY: number): number {
   const wraps = Array.from(container.querySelectorAll('.block-wrap'));
 
   for (let index = 0; index < wraps.length; index += 1) {
-    const rect = wraps[index].getBoundingClientRect();
+    const wrap = wraps[index];
+    if (!(wrap instanceof HTMLElement)) {
+      continue;
+    }
+    const rect = wrap.getBoundingClientRect();
 
     if (clientY < rect.top + rect.height / 2) {
       return index;
@@ -1371,14 +1457,16 @@ function getInsertIndexForY(container, clientY) {
   return wraps.length;
 }
 
-function insertParagraphBlock(index) {
+function insertParagraphBlock(index: number): void {
   if (!docModel || !Array.isArray(docModel.blocks)) return;
 
   recordDocumentUndo('insert-paragraph');
 
-  const next = {
+  const next: PipelineBlock = {
     type: 'paragraph',
     text: '',
+    id: '',
+    className: '',
     rawSource: '',
   };
 
@@ -1406,7 +1494,7 @@ function ensureUiStateController() {
     getDocViewState: () => docViewState,
     isEditModeState,
     syncEditModeIndicators,
-    postMessage: (message) => vscode.postMessage(message),
+    postMessage: (message: Record<string, JsonLike>) => vscode.postMessage(message),
     publishViewState,
     getActiveScopedCss,
     closeInlineCssSurface,
@@ -1419,15 +1507,15 @@ function ensureUiStateController() {
   return uiStateController;
 }
 
-function applyTheme(theme, persist = false) {
+function applyTheme(theme: string, persist = false): void {
   ensureUiStateController().applyTheme(theme, Boolean(persist));
 }
 
-function setControlsOpen(isOpen) {
+function setControlsOpen(isOpen: boolean): void {
   ensureUiStateController().setControlsOpen(Boolean(isOpen));
 }
 
-function setHelpOpen(isOpen) {
+function setHelpOpen(isOpen: boolean): void {
   ensureUiStateController().setHelpOpen(Boolean(isOpen));
 }
 
@@ -1435,27 +1523,27 @@ function revealChromeBriefly(durationMs = 1400) {
   ensureUiStateController().revealChromeBriefly(durationMs);
 }
 
-function toggleControls(forceOpen) {
+function toggleControls(forceOpen?: boolean): void {
   ensureUiStateController().toggleControls(forceOpen);
 }
 
-function toggleHelp() {
+function toggleHelp(): void {
   ensureUiStateController().toggleHelp();
 }
 
-function isEditModeEnabled() {
+function isEditModeEnabled(): boolean {
   return ensureUiStateController().isEditModeEnabled();
 }
 
-function loadEditModePreference() {
+function loadEditModePreference(): boolean {
   return ensureUiStateController().loadEditModePreference();
 }
 
-function setEditMode(enabled) {
+function setEditMode(enabled: boolean): void {
   ensureUiStateController().setEditMode(Boolean(enabled));
 }
 
-function getFocusedBlockIndex() {
+function getFocusedBlockIndex(): number | null {
   const active = document.activeElement;
   if (!active || !(active instanceof Element)) {
     return null;
@@ -1466,7 +1554,7 @@ function getFocusedBlockIndex() {
     return null;
   }
 
-  const index = Number.parseInt(wrap.dataset.blockIndex, 10);
+  const index = Number.parseInt((wrap as HTMLElement).dataset.blockIndex || '', 10);
   return Number.isFinite(index) ? index : null;
 }
 
@@ -1539,7 +1627,7 @@ function toggleEditMode() {
 
 function hideLoadingScreen() {
   const loadingScreen = document.getElementById('loading-screen');
-  const page = document.querySelector('.page');
+  const page = document.querySelector<HTMLElement>('.page');
 
   if (loadingGuardTimer) {
     clearTimeout(loadingGuardTimer);
@@ -1596,15 +1684,18 @@ function armLoadingGuard(preferredEditMode = true) {
   }, 2500);
 }
 
-function insertImageBlock(imagePath, altText, atIndex) {
+function insertImageBlock(imagePath: string, altText: string, atIndex?: number) {
   if (!docModel) return;
 
   recordDocumentUndo('insert-image');
 
-  const block = {
+  const block: PipelineBlock = {
     type: 'image',
     src: String(imagePath || '').trim(),
     alt: String(altText || '').trim(),
+    id: '',
+    className: '',
+    rawSource: '',
   };
 
   block.rawSource = stringifyBlock(block);
@@ -1620,7 +1711,13 @@ function insertImageBlock(imagePath, altText, atIndex) {
   setStatus('Image added');
 }
 
-function readFileAsPayload(file) {
+type ImageUploadPayload = {
+  name: string;
+  mimeType: string;
+  base64Data: string;
+};
+
+function readFileAsPayload(file: File): Promise<ImageUploadPayload> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
 
@@ -1646,11 +1743,11 @@ function readFileAsPayload(file) {
   });
 }
 
-function wireDragAndDrop() {
+function wireDragAndDrop(): void {
   let pendingDropIndex = -1;
-  let ghostEl = null;
+  let ghostEl: HTMLDivElement | null = null;
 
-  function ensureGhost() {
+  function ensureGhost(): HTMLDivElement {
     if (!ghostEl) {
       ghostEl = document.createElement('div');
       ghostEl.className = 'drop-ghost';
@@ -1662,27 +1759,28 @@ function wireDragAndDrop() {
     return ghostEl;
   }
 
-  function removeGhost() {
+  function removeGhost(): void {
     if (ghostEl && ghostEl.parentNode) {
       ghostEl.parentNode.removeChild(ghostEl);
     }
     pendingDropIndex = -1;
   }
 
-  function isDraggedImages(event) {
+  function isDraggedImages(event: DragEvent): boolean {
     const dt = event.dataTransfer;
     if (!dt) return false;
     if (dt.items && dt.items.length > 0) {
       for (let i = 0; i < dt.items.length; i += 1) {
-        if (String(dt.items[i].type || '').startsWith('image/')) return true;
+        const item = dt.items[i];
+        if (item && String(item.type || '').startsWith('image/')) return true;
       }
     }
     return Array.from(dt.types || []).includes('Files');
   }
 
-  function positionGhost(event) {
+  function positionGhost(event: DragEvent): void {
     const container = document.getElementById('blocks');
-    if (!container) return;
+    if (!(container instanceof HTMLElement)) return;
     const insertIdx = getInsertIndexForY(container, event.clientY);
     if (insertIdx !== pendingDropIndex) {
       pendingDropIndex = insertIdx;
@@ -1691,12 +1789,12 @@ function wireDragAndDrop() {
       if (insertIdx >= wraps.length) {
         container.appendChild(ghost);
       } else {
-        container.insertBefore(ghost, wraps[insertIdx]);
+        container.insertBefore(ghost, wraps[insertIdx] || null);
       }
     }
   }
 
-  function clearDropState() {
+  function clearDropState(): void {
     document.body.classList.remove('drag-active');
     removeGhost();
   }
@@ -1758,7 +1856,9 @@ function initializeDocument() {
   const initEl = document.getElementById('doc-init');
   const sourceEl = document.getElementById('doc-init-source');
   const docPath = initEl && initEl.dataset && initEl.dataset.docPath ? initEl.dataset.docPath : 'unknown.dx';
-  const sourceText = sourceEl ? sourceEl.value : '';
+  const sourceText = (sourceEl instanceof HTMLTextAreaElement || sourceEl instanceof HTMLInputElement)
+    ? sourceEl.value
+    : '';
   const errorText = initEl && initEl.dataset && initEl.dataset.docError ? initEl.dataset.docError : '';
   const initialTheme = initEl && initEl.dataset && initEl.dataset.initialTheme ? initEl.dataset.initialTheme : 'auto';
   const initialPaper = initEl && initEl.dataset && initEl.dataset.initialPaper ? initEl.dataset.initialPaper : 'white';
@@ -1794,537 +1894,19 @@ function initializeDocument() {
     const raw = String(sourceText || '').trim();
 
     if (!raw) {
-      docModel = {
-        metadata: {
-          title: '',
-          summary: '',
-          tags: '',
-        },
-        blocks: [],
-      };
+      docModel = { blocks: [] };
     } else {
       docModel = parseDoc(sourceText);
     }
 
     renderDocument();
-    lastSavedDoc = stringifyDoc(docModel);
+    lastSavedDoc = stringifyDoc(docModel || { blocks: [] });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     setStatus('Parse error: ' + message);
   }
 
   const blocksContainer = document.getElementById('blocks');
-
-  if (false && blocksContainer) {
-    blocksContainer.addEventListener('click', (event) => {
-      const target = getEventElementTarget(event);
-      if (!target) return;
-
-      // Never handle clicks if an editor textarea is currently focused
-      if (document.activeElement && document.activeElement.classList.contains('block-src')) {
-        return;
-      }
-
-      const completionItem = target.closest('.autocomplete-item');
-      if (completionItem) {
-        event.preventDefault();
-        event.stopPropagation();
-
-        const index = Number.parseInt(completionItem.dataset.index, 10);
-        const active = autocompleteState.textarea;
-        if (!Number.isNaN(index) && active) {
-          acceptAutocomplete(active, index);
-          active.focus();
-        }
-        return;
-      }
-
-      const view = target.closest('.block-view');
-      if (!view) return;
-
-      if (!isEditModeEnabled()) {
-        return;
-      }
-
-      // Do not hijack clicks on interactive child content in rendered blocks.
-      if (target.closest('a, button, input, select, textarea, label, .autocomplete-menu')) {
-        return;
-      }
-
-      // Preserve text selection behavior instead of forcing edit-open.
-      const selection = window.getSelection ? window.getSelection() : null;
-      if (selection && !selection.isCollapsed) {
-        return;
-      }
-
-      // Click to open edit mode (single click activates edit)
-      view.focus();
-
-      const wrap = view.closest('.block-wrap');
-      if (!wrap) return;
-
-      const index = Number.parseInt(wrap.dataset.blockIndex, 10);
-      if (Number.isNaN(index)) return;
-      commitOpenSources(index);
-      openBlockSrc(index);
-    });
-
-    blocksContainer.addEventListener('keydown', (event) => {
-      if (event.key !== 'Enter') return;
-      const view = document.activeElement?.closest('.block-view');
-      if (!view) return;
-      if (!isEditModeEnabled()) return;
-
-      const wrap = view.closest('.block-wrap');
-      if (!wrap) return;
-
-      const index = Number.parseInt(wrap.dataset.blockIndex, 10);
-      if (Number.isNaN(index)) return;
-
-      event.preventDefault();
-      commitOpenSources(index);
-      openBlockSrc(index);
-    });
-
-    blocksContainer.addEventListener('focusout', (event) => {
-      if (!event.target.classList.contains('block-src')) return;
-
-      if (event.relatedTarget && event.relatedTarget.closest && event.relatedTarget.closest('.autocomplete-menu')) {
-        return;
-      }
-
-      closeAutocomplete();
-    });
-
-    blocksContainer.addEventListener('keydown', (event) => {
-      if (!event.target.classList.contains('block-src') && !event.target.classList.contains('block-edit-header')) return;
-      const textarea = event.target;
-
-      if ((event.metaKey || event.ctrlKey) && (event.key.toLowerCase() === 'z' || event.key.toLowerCase() === 'y')) {
-        event.preventDefault();
-        event.stopPropagation();
-        closeInlineCssSurface();
-
-        const wrap = textarea.closest('.block-wrap');
-        if (wrap) {
-          const index = Number.parseInt(wrap.dataset.blockIndex, 10);
-          if (!Number.isNaN(index)) {
-            commitBlockSourceForHistory(index);
-          }
-        }
-
-        if (isRedoShortcut(event)) {
-          if (!performGlobalRedo()) {
-            setStatus('Nothing to redo');
-          }
-        } else if (!performGlobalUndo()) {
-          setStatus('Nothing to undo');
-        }
-        return;
-      }
-
-      if (textarea.classList.contains('block-edit-header')) {
-        const srcWrap = textarea.closest('.block-src-wrapper');
-        const bodyEditor = srcWrap ? srcWrap.querySelector('.block-src') : null;
-
-        if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') {
-          event.preventDefault();
-          event.stopPropagation();
-          const wrap = textarea.closest('.block-wrap');
-          if (wrap) {
-            const index = Number.parseInt(wrap.dataset.blockIndex, 10);
-            if (!Number.isNaN(index)) {
-              commitBlockSrc(index);
-            }
-          }
-          saveDoc();
-        }
-
-        if (event.key === 'ArrowDown' && bodyEditor) {
-          const value = String(textarea.value || '');
-          const start = typeof textarea.selectionStart === 'number' ? textarea.selectionStart : value.length;
-          const end = typeof textarea.selectionEnd === 'number' ? textarea.selectionEnd : value.length;
-          if (start === end && end === value.length) {
-            event.preventDefault();
-            bodyEditor.focus();
-            bodyEditor.setSelectionRange(0, 0);
-            return;
-          }
-        }
-
-        if (event.key === 'ArrowRight' && bodyEditor) {
-          const value = String(textarea.value || '');
-          const start = typeof textarea.selectionStart === 'number' ? textarea.selectionStart : value.length;
-          const end = typeof textarea.selectionEnd === 'number' ? textarea.selectionEnd : value.length;
-          if (start === end && end === value.length) {
-            event.preventDefault();
-            bodyEditor.focus();
-            bodyEditor.setSelectionRange(0, 0);
-            return;
-          }
-        }
-
-        if (event.key === 'Delete' && bodyEditor) {
-          const headerValue = String(textarea.value || '');
-          const start = typeof textarea.selectionStart === 'number' ? textarea.selectionStart : headerValue.length;
-          const end = typeof textarea.selectionEnd === 'number' ? textarea.selectionEnd : headerValue.length;
-
-          if (start === end && end === headerValue.length) {
-            const bodyValue = String(bodyEditor.value || '');
-            if (bodyValue.length > 0) {
-              event.preventDefault();
-              event.stopPropagation();
-              ensureDocumentUndoSeed(bodyEditor, 'header-delete-join');
-              bodyEditor.value = bodyValue.slice(1);
-              autosizeBlockSrc(bodyEditor);
-              updateInlineCssAffordance(textarea);
-              debouncedAutosave();
-              return;
-            }
-          }
-        }
-
-        if (event.key === 'Enter' && !event.metaKey && !event.ctrlKey) {
-          event.preventDefault();
-          event.stopPropagation();
-
-          if (!bodyEditor) {
-            return;
-          }
-
-          const headerText = getRawSourceFromEditor(textarea.value || '');
-          const trimmedHeaderText = headerText.trim();
-
-          if (trimmedHeaderText.startsWith('::')) {
-            bodyEditor.dataset.headerSource = headerText;
-          } else if (trimmedHeaderText.length > 0) {
-            // Not a block tag: treat typed text as body content.
-            bodyEditor.value = bodyEditor.value.length > 0
-              ? `${headerText}\n${bodyEditor.value}`
-              : headerText;
-            bodyEditor.dataset.headerSource = '';
-            textarea.value = '';
-            autosizeBlockSrc(bodyEditor);
-          } else {
-            bodyEditor.dataset.headerSource = '';
-          }
-
-          renderEditableHeader(bodyEditor);
-          bodyEditor.focus();
-          bodyEditor.setSelectionRange(0, 0);
-          return;
-        }
-
-        if (event.key === 'Escape') {
-          event.preventDefault();
-          event.stopPropagation();
-          const wrap = textarea.closest('.block-wrap');
-          if (!wrap) return;
-          const index = Number.parseInt(wrap.dataset.blockIndex, 10);
-          if (Number.isNaN(index)) return;
-          closeBlockSrc(index, true);
-          return;
-        }
-
-        if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
-          event.preventDefault();
-          event.stopPropagation();
-          const wrap = textarea.closest('.block-wrap');
-          if (!wrap) return;
-          const index = Number.parseInt(wrap.dataset.blockIndex, 10);
-          if (Number.isNaN(index)) return;
-          closeBlockSrc(index, true);
-          return;
-        }
-
-        return;
-      }
-
-      if ((event.ctrlKey || event.metaKey) && event.code === 'Space') {
-        event.preventDefault();
-        renderAutocomplete(textarea, true);
-        return;
-      }
-
-      if (event.key === 'ArrowUp' && !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey) {
-        const start = typeof textarea.selectionStart === 'number' ? textarea.selectionStart : 0;
-        const end = typeof textarea.selectionEnd === 'number' ? textarea.selectionEnd : 0;
-        if (start === 0 && end === 0) {
-          const headerEditor = getBlockHeaderEditor(textarea);
-          if (headerEditor && headerEditor.style.display !== 'none') {
-            event.preventDefault();
-            const caret = String(headerEditor.value || '').length;
-            headerEditor.focus();
-            headerEditor.setSelectionRange(caret, caret);
-            return;
-          }
-        }
-      }
-
-      if (event.key === 'ArrowLeft' && !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey) {
-        const start = typeof textarea.selectionStart === 'number' ? textarea.selectionStart : 0;
-        const end = typeof textarea.selectionEnd === 'number' ? textarea.selectionEnd : 0;
-        if (start === 0 && end === 0) {
-          const headerEditor = getBlockHeaderEditor(textarea);
-          if (headerEditor && headerEditor.style.display !== 'none') {
-            event.preventDefault();
-            const caret = String(headerEditor.value || '').length;
-            headerEditor.focus();
-            headerEditor.setSelectionRange(caret, caret);
-            return;
-          }
-        }
-      }
-
-      if (event.key === 'ArrowDown' && autocompleteState.textarea === textarea) {
-        if (autocompleteState.suggestions.length > 0) {
-          event.preventDefault();
-          updateAutocompleteSelection(1);
-          return;
-        }
-      }
-
-      if (event.key === 'ArrowUp' && autocompleteState.textarea === textarea) {
-        if (autocompleteState.suggestions.length > 0) {
-          event.preventDefault();
-          updateAutocompleteSelection(-1);
-          return;
-        }
-      }
-
-      if (event.key === 'Enter' && autocompleteState.textarea === textarea && autocompleteState.suggestions.length > 0) {
-        event.preventDefault();
-        acceptAutocomplete(textarea);
-        return;
-      }
-
-      if (event.key === 'Tab') {
-        if (autocompleteState.textarea === textarea && autocompleteState.suggestions.length > 0) {
-          event.preventDefault();
-          acceptAutocomplete(textarea);
-          return;
-        }
-      }
-
-      if (event.key === 'Escape' && autocompleteState.textarea === textarea && autocompleteState.suggestions.length > 0) {
-        event.preventDefault();
-        event.stopPropagation();
-        closeAutocomplete();
-        return;
-      }
-
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        event.stopPropagation();
-        const wrap = textarea.closest('.block-wrap');
-        if (!wrap) return;
-        const index = Number.parseInt(wrap.dataset.blockIndex, 10);
-        if (Number.isNaN(index)) return;
-        closeBlockSrc(index, true);
-        return;
-      }
-
-      if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
-        event.preventDefault();
-        event.stopPropagation();
-        const wrap = textarea.closest('.block-wrap');
-        if (!wrap) return;
-        const index = Number.parseInt(wrap.dataset.blockIndex, 10);
-        if (Number.isNaN(index)) return;
-        closeBlockSrc(index, true);
-        return;
-      }
-
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') {
-        event.preventDefault();
-        event.stopPropagation();
-        const wrap = textarea.closest('.block-wrap');
-        if (wrap) {
-          const index = Number.parseInt(wrap.dataset.blockIndex, 10);
-          if (!Number.isNaN(index)) {
-            commitBlockSrc(index);
-          }
-        }
-        saveDoc();
-      }
-    });
-
-    blocksContainer.addEventListener('input', (event) => {
-      if (event.target.classList.contains('block-edit-header')) {
-        const header = event.target;
-        const srcWrap = header.closest('.block-src-wrapper');
-        const source = srcWrap ? srcWrap.querySelector('.block-src') : null;
-        ensureDocumentUndoSeed(source, 'header-live-edit');
-        if (source) {
-          source.dataset.headerSource = getRawSourceFromEditor(header.value);
-        }
-        header.style.height = '0px';
-        header.style.height = header.scrollHeight + 'px';
-        updateInlineCssAffordance(header);
-        debouncedAutosave();
-        return;
-      }
-
-      if (!event.target.classList.contains('block-src')) return;
-
-      // Seamless "one-part" editing: if a blank block starts with ':', transition that line into header mode.
-      const source = event.target;
-      ensureDocumentUndoSeed(source, 'block-live-edit');
-      const headerEditor = getBlockHeaderEditor(source);
-      const hasHeader = Boolean(String(source.dataset.headerSource || '').trim());
-      const bodyText = String(source.value || '');
-      if (!hasHeader && headerEditor && bodyText.startsWith(':') && !bodyText.includes('\n')) {
-        source.dataset.headerSource = bodyText;
-        source.value = '';
-        renderEditableHeader(source);
-        autosizeBlockSrc(source);
-        headerEditor.focus();
-        const caret = headerEditor.value.length;
-        headerEditor.setSelectionRange(caret, caret);
-        updateInlineCssAffordance(headerEditor);
-        debouncedAutosave();
-        return;
-      }
-
-      autosizeBlockSrc(event.target);
-      renderAutocomplete(event.target, false);
-      updateInlineCssAffordance(event.target);
-      debouncedAutosave();
-    });
-
-    blocksContainer.addEventListener('keyup', (event) => {
-      if (event.target.classList.contains('block-edit-header')) {
-        updateInlineCssAffordance(event.target);
-        return;
-      }
-
-      if (!event.target.classList.contains('block-src')) return;
-      if (event.key === 'ArrowLeft' || event.key === 'ArrowRight' || event.key === 'Home' || event.key === 'End') {
-        renderAutocomplete(event.target, false);
-      }
-      updateInlineCssAffordance(event.target);
-    });
-
-    blocksContainer.addEventListener('click', (event) => {
-      const target = getEventElementTarget(event);
-      if (!target || !target.classList.contains('block-edit-header')) return;
-      updateInlineCssAffordance(target);
-    });
-
-    blocksContainer.addEventListener('click', (event) => {
-      const target = getEventElementTarget(event);
-      if (!target || !target.classList.contains('block-src')) return;
-      renderAutocomplete(target, false);
-      updateInlineCssAffordance(target);
-    });
-
-    blocksContainer.addEventListener('mouseup', (event) => {
-      const target = getEventElementTarget(event);
-      if (!target || !target.classList.contains('block-edit-header')) return;
-      const textarea = target;
-
-      const wantsScopedStyleEdit = Boolean(event.altKey || event.metaKey || event.ctrlKey);
-      if (!wantsScopedStyleEdit) {
-        updateInlineCssAffordance(textarea);
-        return;
-      }
-
-      const selectionStart = typeof textarea.selectionStart === 'number' ? textarea.selectionStart : -1;
-      const selectionEnd = typeof textarea.selectionEnd === 'number' ? textarea.selectionEnd : -1;
-      if (selectionStart !== selectionEnd) {
-        updateInlineCssAffordance(textarea);
-        return;
-      }
-
-      requestAnimationFrame(() => {
-        const styleTarget = findAttributeTargetAtCursor(textarea);
-        const srcWrap = textarea.closest('.block-src-wrapper');
-        const source = srcWrap ? srcWrap.querySelector('.block-src') : null;
-
-        if (styleTarget && styleTarget.selector && source) {
-          openInlineCssSurface(source, styleTarget.selector);
-          return;
-        }
-        updateInlineCssAffordance(textarea);
-      });
-    });
-
-    blocksContainer.addEventListener('mouseup', (event) => {
-      const target = getEventElementTarget(event);
-      if (!target || !target.classList.contains('block-src')) return;
-      const textarea = target;
-
-      // Keep style editing explicit to avoid popups while cursoring/selecting text.
-      const wantsScopedStyleEdit = Boolean(event.altKey || event.metaKey || event.ctrlKey);
-      if (!wantsScopedStyleEdit) {
-        updateInlineCssAffordance(textarea);
-        return;
-      }
-
-      const selectionStart = typeof textarea.selectionStart === 'number' ? textarea.selectionStart : -1;
-      const selectionEnd = typeof textarea.selectionEnd === 'number' ? textarea.selectionEnd : -1;
-      if (selectionStart !== selectionEnd) {
-        updateInlineCssAffordance(textarea);
-        return;
-      }
-
-      requestAnimationFrame(() => {
-        const target = findAttributeTargetAtCursor(textarea);
-        if (target && target.selector) {
-          openInlineCssSurface(textarea, target.selector);
-          return;
-        }
-        updateInlineCssAffordance(textarea);
-      });
-    });
-
-    blocksContainer.addEventListener('wheel', (event) => {
-      const target = getEventElementTarget(event);
-      if (!target || !target.classList.contains('block-src')) return;
-      const textarea = target;
-
-      if (event.deltaY >= 0 || textarea.scrollTop > 0) {
-        return;
-      }
-
-      const headerEditor = getBlockHeaderEditor(textarea);
-      if (!headerEditor) return;
-      if (headerEditor.style.display === 'none') return;
-
-      event.preventDefault();
-      const caret = String(headerEditor.value || '').length;
-      headerEditor.focus();
-      headerEditor.setSelectionRange(caret, caret);
-    }, { passive: false });
-
-    blocksContainer.addEventListener('mousedown', (event) => {
-      const target = getEventElementTarget(event);
-      if (!target) return;
-
-      const item = target.closest('.autocomplete-item');
-      if (!item) return;
-
-      event.preventDefault();
-      const active = autocompleteState.textarea;
-      const index = Number.parseInt(item.dataset.index, 10);
-      if (active && !Number.isNaN(index)) {
-        acceptAutocomplete(active, index);
-        active.focus();
-      }
-    });
-
-    blocksContainer.addEventListener('scroll', (event) => {
-      if (!event.target.classList.contains('block-src')) return;
-      const { mirrorEl } = getAutocompleteEls(event.target);
-      if (mirrorEl) mirrorEl.scrollTop = event.target.scrollTop;
-    }, true);
-
-    blocksContainer.addEventListener('mousemove', (event) => {
-      const target = getEventElementTarget(event);
-      if (!target || !target.classList.contains('block-src')) return;
-      updateInlineCssAffordance(target);
-    });
-  }
 
   if (blocksContainer) {
     ensureControllers();
@@ -2334,19 +1916,23 @@ function initializeDocument() {
       documentRef: document,
       windowRef: window,
       getEventElementTarget,
-      autocompleteState,
+      autocompleteState: autocompleteState
+        ? {
+            textarea: autocompleteState.textarea,
+            suggestions: autocompleteState.suggestions.map((entry) => String(entry.insertText || '')),
+          }
+        : undefined,
       acceptAutocomplete,
       closeAutocomplete,
       closeInlineCssSurface,
       commitBlockSourceForHistory,
       commitOpenSources,
-      commitOpenSourcesForHistory,
       closeBlockSrc,
       openBlockSrc,
       isEditModeEnabled,
       isRedoShortcut,
-      performGlobalUndo,
-      performGlobalRedo,
+      performGlobalUndo: () => Boolean(performGlobalUndo()),
+      performGlobalRedo: () => Boolean(performGlobalRedo()),
       saveDoc,
       renderAutocomplete,
       updateInlineCssAffordance,
@@ -2376,7 +1962,7 @@ function initializeDocument() {
       }
 
       ensureControllers();
-      blankPagePointerDownHadOpenEditors = hasOpenBlockSources() || inlineCssController.hasOpenSurface();
+      blankPagePointerDownHadOpenEditors = hasOpenBlockSources() || Boolean(inlineCssController && inlineCssController.hasOpenSurface());
     });
 
     pageEl.addEventListener('click', (event) => {
@@ -2393,7 +1979,7 @@ function initializeDocument() {
 
       const hadOpenSources = hasOpenBlockSources();
       ensureControllers();
-      const hadOpenInlineCss = inlineCssController.hasOpenSurface();
+      const hadOpenInlineCss = Boolean(inlineCssController && inlineCssController.hasOpenSurface());
       const shouldOnlyCloseEditors = blankPagePointerDownHadOpenEditors || hadOpenSources || hadOpenInlineCss;
 
       closeInlineCssSurface();
@@ -2409,7 +1995,8 @@ function initializeDocument() {
         return;
       }
 
-      const index = getInsertIndexForY(blocksContainer, event.clientY);
+      const pointerY = event instanceof MouseEvent ? event.clientY : 0;
+      const index = getInsertIndexForY(blocksContainer, pointerY);
       insertParagraphBlock(index);
     });
   }
@@ -2417,15 +2004,22 @@ function initializeDocument() {
   const themeSelect = document.getElementById('theme-select');
   if (themeSelect) {
     themeSelect.addEventListener('change', (event) => {
-      applyTheme(event.target.value, true);
+      const target = event.target;
+      if (target instanceof HTMLSelectElement) {
+        applyTheme(target.value, true);
+      }
     });
   }
 
   const paperSelect = document.getElementById('paper-select');
   if (paperSelect) {
     paperSelect.addEventListener('change', (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLSelectElement)) {
+        return;
+      }
       ensureUiStateController().updateAppearance({
-        paper: String(event.target.value || 'white'),
+        paper: target.value === 'cream' || target.value === 'slate' ? target.value : 'white',
       }, true);
     });
   }
@@ -2433,8 +2027,12 @@ function initializeDocument() {
   const densitySelect = document.getElementById('density-select');
   if (densitySelect) {
     densitySelect.addEventListener('change', (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLSelectElement)) {
+        return;
+      }
       ensureUiStateController().updateAppearance({
-        density: String(event.target.value || 'comfortable'),
+        density: target.value === 'compact' ? 'compact' : 'comfortable',
       }, true);
     });
   }
@@ -2442,8 +2040,12 @@ function initializeDocument() {
   const scaleSlider = document.getElementById('scale-slider');
   if (scaleSlider) {
     scaleSlider.addEventListener('input', (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLInputElement)) {
+        return;
+      }
       ensureUiStateController().updateAppearance({
-        scale: event.target.value,
+        scale: Number(target.value || 100),
       }, true);
     });
   }
@@ -2505,7 +2107,7 @@ function initializeDocument() {
     const docLink = target.closest('.doc-link');
     if (docLink) {
       event.preventDefault();
-      const href = String(docLink.dataset.docHref || '').trim();
+      const href = String((docLink as HTMLElement).dataset.docHref || '').trim();
       if (href && !href.includes('..') && /\.dx$/.test(href)) {
         vscode.postMessage({ type: 'open-doc', path: href });
       }
@@ -2553,8 +2155,8 @@ function initializeDocument() {
   try {
     applyTheme(initialTheme, false);
     ensureUiStateController().updateAppearance({
-      paper: ['white', 'cream', 'slate'].includes(String(initialPaper || 'white')) ? String(initialPaper || 'white') : 'white',
-      density: ['comfortable', 'compact'].includes(String(initialDensity || 'comfortable')) ? String(initialDensity || 'comfortable') : 'comfortable',
+      paper: initialPaper === 'cream' || initialPaper === 'slate' ? initialPaper : 'white',
+      density: initialDensity === 'compact' ? 'compact' : 'comfortable',
       scale: initialScale,
     }, false);
     refreshDocumentCss();
@@ -2569,7 +2171,7 @@ function initializeDocument() {
 
   document.addEventListener('change', (event) => {
     const checkbox = event.target;
-    if (!checkbox || checkbox.type !== 'checkbox') return;
+    if (!(checkbox instanceof HTMLInputElement) || checkbox.type !== 'checkbox') return;
 
     const li = checkbox.parentElement;
     const ul = li && li.parentElement;
@@ -2579,8 +2181,8 @@ function initializeDocument() {
     const blockWrap = blockView && blockView.closest('.block-wrap');
     if (!blockWrap) return;
 
-    const blockIndex = Number.parseInt(blockWrap.dataset.blockIndex, 10);
-    const itemIndex = Number.parseInt(checkbox.dataset.itemIndex, 10);
+    const blockIndex = Number.parseInt((blockWrap as HTMLElement).dataset.blockIndex || '', 10);
+    const itemIndex = Number.parseInt(String(checkbox.dataset.itemIndex || ''), 10);
     if (!Number.isFinite(blockIndex) || !Number.isFinite(itemIndex)) return;
 
     const block = docModel && docModel.blocks && docModel.blocks[blockIndex];
@@ -2589,14 +2191,16 @@ function initializeDocument() {
     const item = block.items[itemIndex];
     if (!item) return;
 
-    item.checked = checkbox.checked;
+    if (typeof item === 'object' && item !== null) {
+      item.checked = checkbox.checked;
+    }
 
     const span = li.querySelector('span');
     if (span) {
       span.classList.toggle('check-done', checkbox.checked);
     }
 
-    block.rawSource = null;
+    block.rawSource = '';
     block.rawSource = stringifyBlock(block);
     recordDocumentUndo('toggle-checklist');
     markDocumentDirty();
@@ -2692,14 +2296,20 @@ function initializeDocument() {
       const blocksContainer = document.getElementById('blocks');
       if (!blocksContainer) return;
 
-      const blockViews = Array.from(blocksContainer.querySelectorAll('.block-view'));
+      const blockViews = Array.from(blocksContainer.querySelectorAll<HTMLElement>('.block-view'));
       const focused = blockViews.findIndex((block) => block.contains(document.activeElement) || block === document.activeElement);
 
       if (focused === -1 && blockViews.length > 0) {
-        blockViews[0].focus();
+        const first = blockViews[0];
+        if (first) {
+          first.focus();
+        }
       } else if (focused !== -1) {
         const nextFocus = event.shiftKey ? Math.max(0, focused - 1) : Math.min(blockViews.length - 1, focused + 1);
-        blockViews[nextFocus].focus();
+        const next = blockViews[nextFocus];
+        if (next) {
+          next.focus();
+        }
       }
     }
   });
@@ -2800,7 +2410,7 @@ function initializeDocument() {
 
       transitionDocSaveState('SAVE_COMPLETE');
       lastSaveErrorMessage = '';
-      lastSavedDoc = stringifyDoc(docModel || { metadata: {}, blocks: [] });
+      lastSavedDoc = stringifyDoc(docModel || { blocks: [] });
       hasDirtyWorkingCopySignal = false;
       setStatusPersistent('Saved', 'saved');
       setTimeout(() => {

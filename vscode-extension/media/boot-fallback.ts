@@ -1,8 +1,16 @@
 (() => {
+  interface BootFallback {
+    markBooted: () => void;
+  }
+
+  interface WindowWithDocBootFallback extends Window {
+    __docBootFallback?: BootFallback;
+  }
+
   let booted = false;
   let bootError = '';
 
-  function updateBootError(message) {
+  function updateBootError(message: string | number | boolean | null | undefined | object): void {
     const text = String(message || '').trim();
     if (!text) {
       return;
@@ -16,7 +24,7 @@
     },
   };
 
-  window.__docBootFallback = fallback;
+  (window as WindowWithDocBootFallback).__docBootFallback = fallback;
 
   const moduleScript = document.getElementById('doc-main-module');
   if (moduleScript) {
@@ -52,7 +60,7 @@
     const loadingScreen = document.getElementById('loading-screen');
     let loadNote = document.getElementById('load-note');
 
-    if (page) {
+    if (page instanceof HTMLElement) {
       page.dataset.ready = 'true';
       page.dataset.editMode = 'true';
       page.setAttribute('aria-busy', 'false');
@@ -63,7 +71,7 @@
       loadingScreen.style.display = 'none';
     }
 
-    if (!loadNote && page) {
+    if (!loadNote && page instanceof HTMLElement) {
       loadNote = document.createElement('div');
       loadNote.id = 'load-note';
       loadNote.className = 'load-note error';
