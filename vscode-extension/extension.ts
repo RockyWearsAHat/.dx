@@ -1071,7 +1071,19 @@ class DocDbCustomEditorProvider {
           dirtySyncTimer = null;
         }
         pendingDirtySource = null;
-        void replaceWorkingCopyText(savedStubText);
+        await replaceWorkingCopyText(savedStubText);
+
+        // VS Code dirty tracking is version-based, not text-equality-based.
+        // After undo/redo churn, a document can remain dirty even when logical
+        // content is back at the saved point, so persist the clean point when
+        // the webview explicitly signals mark-clean.
+        if (document.isDirty) {
+          try {
+            await document.save();
+          } catch {
+            // Non-fatal; clean sync still restored buffer text.
+          }
+        }
         return;
       }
 
