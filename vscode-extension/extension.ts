@@ -880,6 +880,9 @@ class DocDbCustomEditorProvider {
     let suppressNextChangePush = false;
     let dirtySyncTimer = null;
     let pendingDirtySource = null;
+    // The stub pointer text last written to the on-disk working copy. Used to
+    // restore the buffer when the webview signals that all edits were reverted.
+    let savedStubText = document.getText();
 
     const replaceWorkingCopyText = async (nextText) => {
       const desiredText = String(nextText || '');
@@ -1061,6 +1064,17 @@ class DocDbCustomEditorProvider {
         return;
       }
 
+      if (message.type === 'mark-clean') {
+        // Restore the buffer to the saved stub so VS Code's SCM status clears.
+        if (dirtySyncTimer) {
+          clearTimeout(dirtySyncTimer);
+          dirtySyncTimer = null;
+        }
+        pendingDirtySource = null;
+        void replaceWorkingCopyText(savedStubText);
+        return;
+      }
+
       if (message.type !== 'save') {
         return;
       }
@@ -1088,7 +1102,9 @@ class DocDbCustomEditorProvider {
 
         // Write the stub pointer (or raw source as last resort) into the
         // VS Code document buffer, then let VS Code flush it to disk.
-        await replaceWorkingCopyText(stubText ?? saveText);
+        const writtenStub = stubText ?? saveText;
+        await replaceWorkingCopyText(writtenStub);
+        savedStubText = writtenStub;
 
         const saved = await document.save();
         if (!saved) {

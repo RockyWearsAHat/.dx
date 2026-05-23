@@ -232,8 +232,9 @@ test('parseDocFile ignores --- separator when header does not start with @doc', 
   ].join('\n');
 
   const parsed = parseDocFile('/tmp/no-at-doc.dx', source);
-  assert.ok(parsed.title !== undefined);
-  assert.ok(parsed.blocks.length >= 0);
+  assert.equal(parsed.title, 'no-at-doc');
+  const para = parsed.blocks.find((b) => b.type === 'paragraph' && b.text.includes('Body content.'));
+  assert.ok(para, 'Expected body paragraph to survive non-@doc separator');
 });
 
 test('parseDocFile calls parseFrontmatter with YAML-style header and plain body', () => {
@@ -250,8 +251,14 @@ test('parseDocFile calls parseFrontmatter with YAML-style header and plain body'
   ].join('\n');
 
   const parsed = parseDocFile('/tmp/frontmatter.dx', source);
-  assert.ok(parsed);
-  assert.ok(parsed.metadata !== undefined || parsed.body !== undefined);
+  assert.equal(parsed.title, 'My YAML Title');
+  assert.equal(parsed.metadata.draft, true);
+  assert.equal(parsed.metadata.published, false);
+  assert.equal(parsed.metadata.priority, 42);
+  assert.deepEqual(parsed.metadata.data, [1, 2, 3]);
+  assert.equal(parsed.metadata.config, '{invalid_json}');
+  const para = parsed.blocks.find((b) => b.type === 'paragraph' && b.text.includes('Plain text content with no block syntax.'));
+  assert.ok(para, 'Expected body text paragraph after frontmatter');
 });
   test('parseDocFile parseFrontmatter handles blank lines and non-colon lines inside block', () => {
     // blank line hits continue at 68-69; "just-a-word" (no colon) hits continue at 74-75
@@ -266,7 +273,9 @@ test('parseDocFile calls parseFrontmatter with YAML-style header and plain body'
     ].join('\n');
 
     const parsed = parseDocFile('/tmp/frontmatter-blanks.dx', source);
-    assert.ok(parsed);
+    assert.equal(parsed.title, 'With Blanks');
+    assert.equal(parsed.metadata.priority, 7);
+    assert.equal(parsed.metadata['just-a-word'], undefined);
   });
 
   test('parseDocFile parseFrontmatter handles missing closing --- (returns early)', () => {
@@ -279,7 +288,9 @@ test('parseDocFile calls parseFrontmatter with YAML-style header and plain body'
     ].join('\n');
 
     const parsed = parseDocFile('/tmp/frontmatter-unclosed.dx', source);
-    assert.ok(parsed);
+    assert.equal(parsed.title, 'frontmatter-unclosed');
+    const para = parsed.blocks.find((b) => b.type === 'paragraph' && b.text.includes('title: Unclosed'));
+    assert.ok(para, 'Expected unclosed frontmatter text to be treated as body content');
   });
 
 test('parseDocFile handles heading with non-numeric level (clamps to 1)', () => {

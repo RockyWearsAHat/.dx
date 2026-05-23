@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   BoundedHistory,
   CallbackUndoRedoController,
+  computeDirtyReconcileResult,
   TableDrivenStateMachine,
   TransitionHistory,
 } from '#runtime-media/webview-state-core.js';
@@ -90,4 +91,46 @@ test('TransitionHistory records and replays before/after snapshots', () => {
   });
   assert.equal(redoWorked, true);
   assert.equal(state.mode, 'ready');
+});
+
+test('computeDirtyReconcileResult marks clean whenever source matches saved snapshot', () => {
+  const result = computeDirtyReconcileResult({
+    latestSource: 'same text',
+    lastSavedSource: 'same text',
+    hadDirtyWorkingCopySignal: true,
+    emitDirtySync: true,
+  });
+
+  assert.equal(result.isDirty, false);
+  assert.equal(result.shouldPostMarkDirty, false);
+  assert.equal(result.shouldPostMarkClean, true);
+  assert.equal(result.nextHasDirtyWorkingCopySignal, false);
+});
+
+test('computeDirtyReconcileResult still emits clean when already synchronized at source level', () => {
+  const result = computeDirtyReconcileResult({
+    latestSource: 'saved text',
+    lastSavedSource: 'saved text',
+    hadDirtyWorkingCopySignal: false,
+    emitDirtySync: true,
+  });
+
+  assert.equal(result.isDirty, false);
+  assert.equal(result.shouldPostMarkDirty, false);
+  assert.equal(result.shouldPostMarkClean, true);
+  assert.equal(result.nextHasDirtyWorkingCopySignal, false);
+});
+
+test('computeDirtyReconcileResult posts dirty update while source differs from saved snapshot', () => {
+  const result = computeDirtyReconcileResult({
+    latestSource: 'changed',
+    lastSavedSource: 'original',
+    hadDirtyWorkingCopySignal: false,
+    emitDirtySync: true,
+  });
+
+  assert.equal(result.isDirty, true);
+  assert.equal(result.shouldPostMarkDirty, true);
+  assert.equal(result.shouldPostMarkClean, false);
+  assert.equal(result.nextHasDirtyWorkingCopySignal, true);
 });

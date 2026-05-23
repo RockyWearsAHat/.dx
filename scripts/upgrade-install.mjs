@@ -84,14 +84,12 @@ async function sleep(ms) {
 }
 
 async function runSmokeTest() {
-  // Verify native SQLite bridge builds and basic database access works
+  // Verify basic database access works (native addon was already built by npm install).
+  // NOTE: Do not run node-gyp rebuild here — it calls node-gyp clean which deletes
+  // build/runtime/ (created by ingest/build:ts above), breaking the ESM import below.
   const { execFileSync } = await import('node:child_process');
 
   try {
-    // Build native addon
-    console.log('🔨 Building native SQLite bridge...');
-    execFileSync(process.execPath, ['node_modules/node-gyp/bin/node-gyp.js', 'rebuild'], { cwd: rootDir, stdio: 'inherit' });
-
     // Verify database can be created and accessed
     console.log('📊 Verifying database access...');
     execFileSync(process.execPath, ['--input-type=module', '--eval', "import path from 'node:path'; import { tmpdir } from 'node:os'; import { createDatabase } from './build/runtime/src/database.js'; const smokePath = path.join(tmpdir(), 'docdb-smoke-' + Date.now() + '.sqlite'); createDatabase(smokePath); console.log('✓ Database initialized');"], {
@@ -129,10 +127,13 @@ async function main() {
   const versionInfo = await runCapture('node', ['-e', "const fs=require('fs');const pkg=JSON.parse(fs.readFileSync('vscode-extension/package.json','utf8'));process.stdout.write(pkg.version);"]);
   const version = versionInfo.stdout.trim();
 
-  console.log('[upgrade-install] packaging VSIX');
-  await run('npx', ['@vscode/vsce', 'package', '--no-dependencies'], { cwd: extensionDir });
+  // build:artifacts compiles TypeScript, emits the minified webview bundle,
+  // stages the extension (rewriting package.json main to the in-VSIX path),
+  // and packages the VSIX — all from the correct locations.
+  console.log('[upgrade-install] building and packaging VSIX via build:artifacts');
+  await run('npm', ['run', 'build:artifacts']);
 
-  const vsixPath = path.join(extensionDir, `docdb-virtual-files-${version}.vsix`);
+  const vsixPath = path.join(rootDir, 'build', `docdb-virtual-files-${version}.vsix`);
   console.log('[upgrade-install] installing extension');
   const codeCmd = process.platform === 'darwin' ? 'code-insiders' : 'code';
   await run(codeCmd, ['--install-extension', vsixPath, '--force']);

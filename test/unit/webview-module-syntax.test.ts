@@ -16,7 +16,7 @@ function checkSyntax(relativePath) {
   );
 }
 
-test('extension webview module files parse without syntax errors', () => {
+test('compiled extension webview runtime files parse without syntax errors', () => {
   checkSyntax('build/runtime/vscode-extension/media/webview-autocomplete-controller.js');
   checkSyntax('build/runtime/vscode-extension/media/webview-autocomplete-core.js');
   checkSyntax('build/runtime/vscode-extension/media/webview-autocomplete-history.js');
