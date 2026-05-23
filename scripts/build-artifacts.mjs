@@ -1,4 +1,4 @@
-import { mkdir, readdir, rename, copyFile, unlink, readFile } from 'node:fs/promises';
+import { mkdir, readdir, unlink, readFile, writeFile, cp, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
@@ -8,23 +8,9 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, '..');
 const buildDir = path.join(repoRoot, 'build');
-const oldBuildsDir = path.join(buildDir, 'old_builds');
-const extensionDir = path.join(repoRoot, 'vscode-extension');
+const extensionSourceDir = path.join(repoRoot, 'vscode-extension');
 const bundleOutput = path.join(buildDir, 'docdb-webview.bundle.min.js');
-
-function timestampLabel() {
-  const now = new Date();
-  const parts = [
-    now.getUTCFullYear(),
-    String(now.getUTCMonth() + 1).padStart(2, '0'),
-    String(now.getUTCDate()).padStart(2, '0'),
-    '-',
-    String(now.getUTCHours()).padStart(2, '0'),
-    String(now.getUTCMinutes()).padStart(2, '0'),
-    String(now.getUTCSeconds()).padStart(2, '0'),
-  ];
-  return parts.join('');
-}
+const stagingExtensionDir = path.join(buildDir, '.vsix-staging', 'vscode-extension');
 
 function run(command, args, options = {}) {
   return new Promise((resolve, reject) => {
@@ -78,23 +64,8 @@ function runQuiet(command, args, options = {}) {
   });
 }
 
-async function moveFileSafe(source, target) {
-  try {
-    await rename(source, target);
-  } catch (error) {
-    if (error && error.code === 'EXDEV') {
-      await copyFile(source, target);
-      await unlink(source);
-      return;
-    }
-
-    throw error;
-  }
-}
-
-async function archiveOldArtifacts() {
+async function clearPreviousArtifacts() {
   await mkdir(buildDir, { recursive: true });
-  await mkdir(oldBuildsDir, { recursive: true });
 
   const entries = await readdir(buildDir, { withFileTypes: true });
   const artifactNames = entries
@@ -103,31 +74,43 @@ async function archiveOldArtifacts() {
     .filter((name) => name.endsWith('.vsix') || name.endsWith('.bundle.min.js'));
 
   if (artifactNames.length === 0) {
-    return null;
+    return 0;
   }
-
-  const archiveDir = path.join(oldBuildsDir, timestampLabel());
-  await mkdir(archiveDir, { recursive: true });
 
   for (const name of artifactNames) {
-    const source = path.join(buildDir, name);
-    const target = path.join(archiveDir, name);
-    await moveFileSafe(source, target);
+    await unlink(path.join(buildDir, name));
   }
 
-  return archiveDir;
+  return artifactNames.length;
 }
 
 async function readExtensionVersion() {
-  const packageJsonPath = path.join(extensionDir, 'package.json');
+  const packageJsonPath = path.join(extensionSourceDir, 'package.json');
   const raw = await readFile(packageJsonPath, 'utf8');
   const parsed = JSON.parse(raw);
   return String(parsed.version || '0.0.0');
 }
 
+async function stageExtensionForPackaging() {
+  await rm(path.join(buildDir, '.vsix-staging'), { recursive: true, force: true });
+  await mkdir(path.dirname(stagingExtensionDir), { recursive: true });
+
+  await cp(extensionSourceDir, stagingExtensionDir, { recursive: true, force: true });
+  await cp(path.join(buildDir, 'runtime'), path.join(stagingExtensionDir, 'build', 'runtime'), { recursive: true, force: true });
+  await cp(path.join(buildDir, 'Release'), path.join(stagingExtensionDir, 'build', 'Release'), { recursive: true, force: true });
+
+  const stagedPackageJsonPath = path.join(stagingExtensionDir, 'package.json');
+  const raw = await readFile(stagedPackageJsonPath, 'utf8');
+  const parsed = JSON.parse(raw);
+  parsed.main = 'build/runtime/vscode-extension/extension.cjs';
+  await writeFile(stagedPackageJsonPath, `${JSON.stringify(parsed, null, 2)}\n`, 'utf8');
+
+  return stagingExtensionDir;
+}
+
 async function emitMinifiedBundle() {
   await esbuild.build({
-    entryPoints: [path.join(repoRoot, 'vscode-extension', 'media', 'webview-main.js')],
+    entryPoints: [path.join(repoRoot, 'build', 'runtime', 'vscode-extension', 'media', 'webview-main.js')],
     outfile: bundleOutput,
     bundle: true,
     minify: true,
@@ -139,33 +122,31 @@ async function emitMinifiedBundle() {
   });
 }
 
-async function emitVsix(vsixOutputPath) {
+async function emitVsix(vsixOutputPath, packageCwd) {
   await run('npx', ['@vscode/vsce', 'package', '--out', vsixOutputPath], {
-    cwd: extensionDir,
+    cwd: packageCwd,
   });
 }
 
 async function main() {
   console.log('[build:artifacts] Starting artifact build...');
-  const archiveDir = await archiveOldArtifacts();
+  const removedCount = await clearPreviousArtifacts();
+  console.log(`[build:artifacts] Removed ${removedCount} previous bundle/vsix artifact(s).`);
 
-  if (archiveDir) {
-    console.log(`[build:artifacts] Archived previous artifacts to ${archiveDir}`);
-  } else {
-    console.log('[build:artifacts] No existing bundle/vsix artifacts to archive.');
-  }
+  await run('npm', ['run', 'build:native']);
 
-  try {
-    await runQuiet('npm', ['run', 'build:ts']);
-  } catch (error) {
-    console.warn(`[build:artifacts] TypeScript build reported errors, continuing artifact packaging: ${error.message}`);
-  }
+  await runQuiet('npm', ['run', 'build:ts']);
 
   await emitMinifiedBundle();
 
+  const packageCwd = await stageExtensionForPackaging();
   const extensionVersion = await readExtensionVersion();
   const vsixOutputPath = path.join(buildDir, `docdb-virtual-files-${extensionVersion}.vsix`);
-  await emitVsix(vsixOutputPath);
+  try {
+    await emitVsix(vsixOutputPath, packageCwd);
+  } finally {
+    await rm(path.join(buildDir, '.vsix-staging'), { recursive: true, force: true });
+  }
 
   console.log(`[build:artifacts] Bundle: ${bundleOutput}`);
   console.log(`[build:artifacts] VSIX:   ${vsixOutputPath}`);

@@ -41,7 +41,7 @@ export function parseAttributes(args: string | number | boolean | null | undefin
 
   while (match) {
     const key = String(match[1]).trim().toLowerCase();
-    const value = match[2] ?? match[3] ?? match[4] ?? '';
+    const value = (match[2] ?? match[3] ?? match[4]) as string;
 
     if (key) {
       attributes[key] = value;
@@ -78,7 +78,7 @@ function parseLeadingAttributesAndRemainder(text: string | number | boolean | nu
     }
 
     const key = String(match[1]).trim().toLowerCase();
-    const value = match[2] ?? match[3] ?? match[4] ?? '';
+    const value = (match[2] ?? match[3] ?? match[4]) as string;
 
     if (key) {
       attrs[key] = value;
@@ -130,8 +130,8 @@ function makeBaseBlock(type: string, attrs: Attributes): PipelineBlock {
 function parseChecklistLine(itemLine: string): ChecklistItem {
   const match = /^\s*\[(x| )\]\s*(.*)$/i.exec(itemLine.trim());
   if (match) {
-    const checkedToken = match[1] ?? ' ';
-    const text = match[2] ?? '';
+    const checkedToken = match[1];
+    const text = match[2];
     return { checked: checkedToken.toLowerCase() === 'x', text };
   }
   return { checked: false, text: itemLine.trim() };
@@ -143,13 +143,13 @@ export function parseSourceBlocks(source: string | number | boolean | null | und
   const blocks: PipelineBlock[] = [];
   let cursor = 0;
 
-  const firstLine = lines[0] ?? '';
+  const firstLine = lines[0];
   if (firstLine.startsWith('@doc')) {
     cursor = 1;
   }
 
   for (; cursor < lines.length; cursor += 1) {
-    const line = (lines[cursor] ?? '').trim();
+    const line = lines[cursor].trim();
     if (line === '---') {
       cursor += 1;
       break;
@@ -164,7 +164,7 @@ export function parseSourceBlocks(source: string | number | boolean | null | und
   }
 
   while (cursor < lines.length) {
-    const currentLine = lines[cursor] ?? '';
+    const currentLine = lines[cursor];
     const line = currentLine.trim();
 
     if (!line) {
@@ -180,8 +180,8 @@ export function parseSourceBlocks(source: string | number | boolean | null | und
 
     const inline = /^::([a-z-]+)(.*)\s+::end\s*$/i.exec(line);
     if (inline) {
-      const type = String(inline[1] ?? '').toLowerCase();
-      const parsed = parseLeadingAttributesAndRemainder(inline[2] ?? '');
+      const type = inline[1].toLowerCase();
+      const parsed = parseLeadingAttributesAndRemainder(inline[2]);
       const attrs = parsed.attrs;
       const inlineText = parsed.remainder;
       const rawSource = currentLine;
@@ -297,12 +297,12 @@ export function parseSourceBlocks(source: string | number | boolean | null | und
       continue;
     }
 
-    const type = String(open[1] ?? '').toLowerCase();
+    const type = open[1].toLowerCase();
     if (type === 'end') {
       cursor += 1;
       continue;
     }
-    const parsedOpen = parseLeadingAttributesAndRemainder(open[2] ?? '');
+    const parsedOpen = parseLeadingAttributesAndRemainder(open[2]);
     const attrs = parsedOpen.attrs;
     const content: string[] = [];
     const blockStart = cursor;
@@ -315,7 +315,7 @@ export function parseSourceBlocks(source: string | number | boolean | null | und
     if (type === 'rule') {
       blocks.push({
         ...makeBaseBlock('rule', attrs),
-        rawSource: lines[blockStart] ?? '',
+        rawSource: lines[blockStart],
       });
       continue;
     }

@@ -18,8 +18,7 @@
   },
   "include": [
     "src/**/*.ts",
-    "vscode-extension/media/**/*.ts",
-    "vscode-extension/media/**/*.d.ts"
+    "vscode-extension/media/**/*.ts"
   ],
   "exclude": [
     "build/**",

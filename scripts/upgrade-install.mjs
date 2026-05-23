@@ -94,7 +94,7 @@ async function runSmokeTest() {
 
     // Verify database can be created and accessed
     console.log('📊 Verifying database access...');
-    execFileSync(process.execPath, ['--input-type=module', '--eval', "import path from 'node:path'; import { tmpdir } from 'node:os'; import { createDatabase } from './src/database.js'; const smokePath = path.join(tmpdir(), 'docdb-smoke-' + Date.now() + '.sqlite'); createDatabase(smokePath); console.log('✓ Database initialized');"], {
+    execFileSync(process.execPath, ['--input-type=module', '--eval', "import path from 'node:path'; import { tmpdir } from 'node:os'; import { createDatabase } from './build/runtime/src/database.js'; const smokePath = path.join(tmpdir(), 'docdb-smoke-' + Date.now() + '.sqlite'); createDatabase(smokePath); console.log('✓ Database initialized');"], {
       cwd: rootDir,
       stdio: 'inherit',
     });

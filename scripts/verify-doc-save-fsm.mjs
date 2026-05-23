@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 
 // Verifies the DOC save-state FSM table used by the webview.
-// Keep this in sync with vscode-extension/media/webview-fsm.mjs.
+// Keep this in sync with vscode-extension/media/webview-fsm.ts.
 
-import { DOC_SAVE_STATES, DOC_SAVE_TRANSITIONS } from '../vscode-extension/media/webview-fsm.mjs';
+import { DOC_SAVE_STATES, DOC_SAVE_TRANSITIONS } from '../build/runtime/vscode-extension/media/webview-fsm.js';
 
 function verifySaveFsm(states, transitions) {
   const errors = [];

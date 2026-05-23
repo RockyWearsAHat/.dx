@@ -1,1 +1,0 @@
-cmd_Release/doc_sqlite.node := c++ -bundle -undefined dynamic_lookup -Wl,-search_paths_first -mmacosx-version-min=11.0 -arch arm64 -L./Release -stdlib=libc++  -o Release/doc_sqlite.node Release/obj.target/doc_sqlite/native/sqlite_bridge.o Release/nothing.a -lsqlite3

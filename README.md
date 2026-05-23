@@ -25,13 +25,30 @@ path: research/grill-with-docs.dx
 ## Quick start
 
 1. **Run guided setup:** `npm run setup` to ingest docs and print behavior-focused editor tips.
-2. **Ingest workspace (repeat when needed):** `npm run ingest` to migrate/reindex all `.dx` files into SQLite.
-3. **Compile TypeScript runtime artifacts:** `npm run build:ts`.
-4. **Run strict TypeScript diagnostics for the stabilized surface:** `npm run typecheck`.
-5. **Run full migration diagnostics across all TypeScript files:** `npm run typecheck:full`.
-6. **Run MCP server:** `npm run mcp` to start the MCP server (exposes document operations to AI tools).
-7. **Edit in VS Code:** Open `vscode-extension/` and press `F5` to launch the extension with virtual `docdb:/` filesystem.
-8. **Reconstruct:** `npm run reconstruct -- <document-id>` to emit SQLite-backed DOCSRC source.
+2. **(Optional) Seed example docs:** `npm run docs:seed` to rewrite baseline welcome/tutorial/reference docs.
+3. **Ingest workspace (repeat when needed):** `npm run ingest` to migrate/reindex all `.dx` files into SQLite.
+4. **Compile TypeScript runtime artifacts:** `npm run build:ts`.
+5. **Run strict TypeScript diagnostics for the stabilized surface:** `npm run typecheck`.
+6. **Run full migration diagnostics across all TypeScript files:** `npm run typecheck:full`.
+7. **Run MCP server:** `npm run mcp` to start the MCP server (exposes document operations to AI tools).
+8. **Edit in VS Code:** Open `vscode-extension/` and press `F5` to launch the extension with virtual `docdb:/` filesystem.
+9. **Reconstruct:** `npm run reconstruct -- <document-id>` to emit SQLite-backed DOCSRC source.
+10. **Re-clean generated outputs (when needed):** `npm run clean`.
+
+## Project layout
+
+- `src/` core runtime services, storage, parser, and MCP server logic.
+- `vscode-extension/` extension host and webview source.
+- `test/unit/` focused unit tests.
+- `test/integration/` cross-module workflow and integration tests.
+- `test/coverage/` edge and threshold-focused coverage tests.
+- `test/helpers/` shared test utilities.
+- `test/types/` ambient type declarations used by TypeScript tests.
+- `build/runtime/` compiled runtime JavaScript.
+- `build/test/` compiled test JavaScript.
+- `build/coverage/` generated coverage reports and c8 temp output.
+
+This structure keeps authored sources in `src/`, test sources in `test/`, and all generated artifacts under `build/`.
 
 The MCP server is the standard interface for AI agents and tools to query and manipulate documents. The VS Code extension connects directly to the local SQLite database via the native C++ bridge — no HTTP server required.
 
@@ -135,12 +152,13 @@ The reparsed transcript makes the core complaint clear: Markdown is attractive b
 
 ## Architecture
 
-- `src/doc-format.js` handles DOCSRC parsing, legacy migration, block normalization, and reconstruction.
-- `src/doc-binary.js` packs normalized documents into compact SQLite blobs.
-- `src/database.js` stores source, compact storage blobs, and searchable semantic sections.
-- `src/doc-service.js` enforces SQLite-first storage and writes tiny link stubs to disk.
-- `src/mcp-server.js` exposes stdio MCP tools/resources for document read/write/search/view workflows.
-- `src/doc-view-capture.js` captures rendered document surfaces as PNG via Playwright (Quick Look fallback on macOS).
+- `src/doc-format.ts` handles DOCSRC parsing, legacy migration, block normalization, and reconstruction.
+- `src/doc-binary.ts` packs normalized documents into compact SQLite blobs.
+- `src/database.ts` stores source, compact storage blobs, and searchable semantic sections.
+- `src/doc-service.ts` enforces SQLite-first storage and writes tiny link stubs to disk.
+- `src/mcp-server.ts` defines stdio MCP tools/resources for document read/write/search/view workflows.
+- `src/doc-view-capture.ts` captures rendered document surfaces as PNG via Playwright (Quick Look fallback on macOS).
+- Runtime `.js` files are emitted from TypeScript into `build/runtime/` for Node/webview execution compatibility.
 - `vscode-extension/` provides the `docdb:/` virtual filesystem and `.dx` stub custom editor.
 
 ## Limits
