@@ -2,6 +2,8 @@
 
 # TALK LIKE A CAVEMAN FOR MY ENTERTAINMENT AND TO PRESERVE TOKENS AND USE FEWER FOR MORE WORK.
 
+# Checkpoint with the message parameter instead of model to write your own message, the copilot command has been depreciated.
+
 # ALWAYS ABIDE BY BEST CODING PRACTICES, UTILIZING ALL YOUR KNOWLEDGE AND EXPERIENCE, PLUS REFERENCING PRINCIPLES FROM MORE C++ GEMS, CS 2420 AND 3500 FROM THE UNIVERSITY OF UTAH, AND OVERALL WRITING GOOD, CLEAN, CONSISTENT, REUSABLE, EASILY MODIFIABLE, AND EFFICIENT EFFECTIVE CODE. THE CODE IS YOUR BUILDING BLOCKS TO ACHIEVE THE GOAL!
 
 ## Stack
@@ -61,4 +63,7 @@ The MCP server exposes document operations to AI tools and agents:
 ## Visual Processing
 - `src/doc-view.js` renders `.dx` blocks into a built-in viewer HTML surface
 - Viewer interaction is session-based through `open-document-viewer` and `interact-document-viewer`, avoiding dependency on external browser tools
+- The VS Code webview runtime is centered in `vscode-extension/media/webview.js`; `webview-main.js` is the bootstrap entrypoint, and `vscode-extension/media/webview-fsm.mjs` owns the shared state tables.
+- Webview document parse/serialize logic is extracted to `vscode-extension/media/webview-doc-model.js`.
+- Class-based editing orchestration is extracted to `vscode-extension/media/webview-edit-controllers.js` (`InlineCssSurfaceController`, `BlockSourceController`).
 

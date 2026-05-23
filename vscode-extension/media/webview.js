@@ -1,4 +1,23 @@
-import { parseSourceBlocks } from './doc-pipeline.js';
+import { DOC_SAVE_STATES, DOC_SAVE_TRANSITIONS, DOC_VIEW_STATES, DOC_VIEW_TRANSITIONS } from './webview-fsm.mjs';
+import {
+  extractCssFromDocumentModel as extractCssFromModel,
+  extractStylesheetLinksFromDocumentModel as extractStylesheetLinksFromModel,
+  findCssBlockIndex as findCssBlockIndexInModel,
+  KNOWN_BLOCK_TYPES,
+  listItemText,
+  parseAttributes,
+  parseBlock,
+  parseDoc,
+  stringifyBlock,
+  stringifyDoc,
+} from './webview-doc-model.js';
+import { BlockSourceController, InlineCssSurfaceController } from './webview-edit-controllers.js';
+import {
+  CallbackUndoRedoController,
+  TableDrivenStateMachine,
+  TransitionHistory,
+} from './webview-state-core.js';
+import { createUiStateController } from './webview-ui-state.js';
 
 const vscode = typeof acquireVsCodeApi === 'function' ? acquireVsCodeApi() : { postMessage: () => {} };
 
@@ -15,95 +34,10 @@ let currentAppearance = {
   scale: 100,
 };
 let chromeRevealTimer = null;
+let loadingGuardTimer = null;
 let customCssSheet = null;
-let inlineCssSurfaceState = {
-  source: null,
-  selector: '',
-  baseCssText: '',
-  selectionStart: 0,
-  selectionEnd: 0,
-  undoSeeded: false,
-};
 
 let blankPagePointerDownHadOpenEditors = false;
-const DOC_VIEW_STATES = Object.freeze({
-  BOOTSTRAPPING: 'bootstrapping',
-  LOADING_READ: 'loading-read',
-  LOADING_EDIT: 'loading-edit',
-  READY_READ: 'ready-read',
-  READY_EDIT: 'ready-edit',
-  LOAD_ERROR: 'load-error',
-});
-
-const DOC_VIEW_TRANSITIONS = Object.freeze({
-  [DOC_VIEW_STATES.BOOTSTRAPPING]: {
-    START_READ: DOC_VIEW_STATES.LOADING_READ,
-    START_EDIT: DOC_VIEW_STATES.LOADING_EDIT,
-  },
-  [DOC_VIEW_STATES.LOADING_READ]: {
-    SET_EDIT: DOC_VIEW_STATES.LOADING_EDIT,
-    MARK_READY: DOC_VIEW_STATES.READY_READ,
-    MARK_FAILED: DOC_VIEW_STATES.LOAD_ERROR,
-  },
-  [DOC_VIEW_STATES.LOADING_EDIT]: {
-    SET_READ: DOC_VIEW_STATES.LOADING_READ,
-    MARK_READY: DOC_VIEW_STATES.READY_EDIT,
-    MARK_FAILED: DOC_VIEW_STATES.LOAD_ERROR,
-  },
-  [DOC_VIEW_STATES.READY_READ]: {
-    SET_EDIT: DOC_VIEW_STATES.READY_EDIT,
-    RELOAD_READ: DOC_VIEW_STATES.LOADING_READ,
-    RELOAD_EDIT: DOC_VIEW_STATES.LOADING_EDIT,
-    MARK_FAILED: DOC_VIEW_STATES.LOAD_ERROR,
-  },
-  [DOC_VIEW_STATES.READY_EDIT]: {
-    SET_READ: DOC_VIEW_STATES.READY_READ,
-    RELOAD_READ: DOC_VIEW_STATES.LOADING_READ,
-    RELOAD_EDIT: DOC_VIEW_STATES.LOADING_EDIT,
-    MARK_FAILED: DOC_VIEW_STATES.LOAD_ERROR,
-  },
-  [DOC_VIEW_STATES.LOAD_ERROR]: {
-    START_READ: DOC_VIEW_STATES.LOADING_READ,
-    START_EDIT: DOC_VIEW_STATES.LOADING_EDIT,
-  },
-});
-
-const DOC_SAVE_STATES = Object.freeze({
-  IDLE: 'idle',
-  DIRTY: 'dirty',
-  SAVING: 'saving',
-  SAVED: 'saved',
-  ERROR: 'error',
-});
-
-const DOC_SAVE_TRANSITIONS = Object.freeze({
-  [DOC_SAVE_STATES.IDLE]: {
-    MARK_DIRTY: DOC_SAVE_STATES.DIRTY,
-    START_SAVE: DOC_SAVE_STATES.SAVING,
-    SYNC_CLEAN: DOC_SAVE_STATES.IDLE,
-  },
-  [DOC_SAVE_STATES.DIRTY]: {
-    MARK_DIRTY: DOC_SAVE_STATES.DIRTY,
-    START_SAVE: DOC_SAVE_STATES.SAVING,
-    SYNC_CLEAN: DOC_SAVE_STATES.IDLE,
-  },
-  [DOC_SAVE_STATES.SAVING]: {
-    MARK_DIRTY: DOC_SAVE_STATES.DIRTY,
-    SAVE_COMPLETE: DOC_SAVE_STATES.SAVED,
-    SAVE_FAILED: DOC_SAVE_STATES.ERROR,
-  },
-  [DOC_SAVE_STATES.SAVED]: {
-    MARK_DIRTY: DOC_SAVE_STATES.DIRTY,
-    START_SAVE: DOC_SAVE_STATES.SAVING,
-    CLEAR_SAVED: DOC_SAVE_STATES.IDLE,
-    SYNC_CLEAN: DOC_SAVE_STATES.IDLE,
-  },
-  [DOC_SAVE_STATES.ERROR]: {
-    MARK_DIRTY: DOC_SAVE_STATES.DIRTY,
-    START_SAVE: DOC_SAVE_STATES.SAVING,
-    SYNC_CLEAN: DOC_SAVE_STATES.IDLE,
-  },
-});
 
 let docViewState = DOC_VIEW_STATES.BOOTSTRAPPING;
 let docSaveState = DOC_SAVE_STATES.IDLE;
@@ -113,9 +47,6 @@ let inFlightSaveRequestId = 0;
 let nextSaveRequestId = 1;
 let pendingExternalSource = null;
 const FSM_HISTORY_LIMIT = 32;
-let fsmHistory = [];
-let fsmFuture = [];
-let suppressFsmHistory = false;
 const DOC_HISTORY_LIMIT = 120;
 const DOC_EDITOR_UNDO_ACTIONS = new Set([
   'live-edit',
@@ -123,10 +54,28 @@ const DOC_EDITOR_UNDO_ACTIONS = new Set([
   'header-live-edit',
   'header-delete-join',
 ]);
-let docUndoStack = [];
-let docRedoStack = [];
 let isApplyingDocHistory = false;
 let hasDirtyWorkingCopySignal = false;
+
+const docViewMachine = new TableDrivenStateMachine(
+  'doc-view',
+  DOC_VIEW_STATES.BOOTSTRAPPING,
+  DOC_VIEW_TRANSITIONS,
+);
+const docSaveMachine = new TableDrivenStateMachine(
+  'doc-save',
+  DOC_SAVE_STATES.IDLE,
+  DOC_SAVE_TRANSITIONS,
+);
+const fsmTransitionHistory = new TransitionHistory(FSM_HISTORY_LIMIT);
+const documentHistory = new CallbackUndoRedoController({
+  limit: DOC_HISTORY_LIMIT,
+  captureSnapshot: () => cloneDocModel(docModel),
+  restoreSnapshot: (snapshot) => applyDocumentSnapshot(snapshot, null),
+});
+let inlineCssController = null;
+let blockSourceController = null;
+let uiStateController = null;
 
 function captureFsmSnapshot() {
   return {
@@ -139,72 +88,31 @@ function captureFsmSnapshot() {
   };
 }
 
-function pushFsmHistory(entry) {
-  if (suppressFsmHistory) {
-    return;
-  }
-
-  fsmHistory.push({
-    ts: new Date().toISOString(),
-    ...entry,
-  });
-
-  if (fsmHistory.length > FSM_HISTORY_LIMIT) {
-    fsmHistory = fsmHistory.slice(-FSM_HISTORY_LIMIT);
-  }
-
-  fsmFuture = [];
-}
-
 function restoreFsmSnapshot(snapshot) {
   if (!snapshot || typeof snapshot !== 'object') {
     return false;
   }
 
-  suppressFsmHistory = true;
-  try {
-    docViewState = snapshot.docViewState || DOC_VIEW_STATES.BOOTSTRAPPING;
-    docSaveState = snapshot.docSaveState || DOC_SAVE_STATES.IDLE;
-    pendingExternalSource = typeof snapshot.pendingExternalSource === 'string' ? snapshot.pendingExternalSource : null;
-    inFlightSaveRequestId = Number(snapshot.inFlightSaveRequestId || 0);
-    lastSavedDoc = String(snapshot.lastSavedDoc || '');
-    lastSaveErrorMessage = String(snapshot.lastSaveErrorMessage || '');
-    updateRuntimeStateAttributes();
-    syncVisibleStateFromMachine();
-  } finally {
-    suppressFsmHistory = false;
-  }
+  docViewState = snapshot.docViewState || DOC_VIEW_STATES.BOOTSTRAPPING;
+  docSaveState = snapshot.docSaveState || DOC_SAVE_STATES.IDLE;
+  docViewMachine.state = docViewState;
+  docSaveMachine.state = docSaveState;
+  pendingExternalSource = typeof snapshot.pendingExternalSource === 'string' ? snapshot.pendingExternalSource : null;
+  inFlightSaveRequestId = Number(snapshot.inFlightSaveRequestId || 0);
+  lastSavedDoc = String(snapshot.lastSavedDoc || '');
+  lastSaveErrorMessage = String(snapshot.lastSaveErrorMessage || '');
+  updateRuntimeStateAttributes();
+  syncVisibleStateFromMachine();
 
   return true;
 }
 
 function undoLastFsmTransition() {
-  if (fsmHistory.length === 0) {
-    return false;
-  }
-
-  const lastEntry = fsmHistory.pop();
-  if (!lastEntry || !lastEntry.before) {
-    return false;
-  }
-
-  fsmFuture.push(lastEntry);
-
-  return restoreFsmSnapshot(lastEntry.before);
+  return fsmTransitionHistory.undo(restoreFsmSnapshot);
 }
 
 function redoLastFsmTransition() {
-  if (fsmFuture.length === 0) {
-    return false;
-  }
-
-  const entry = fsmFuture.pop();
-  if (!entry || !entry.after) {
-    return false;
-  }
-
-  fsmHistory.push(entry);
-  return restoreFsmSnapshot(entry.after);
+  return fsmTransitionHistory.redo(restoreFsmSnapshot);
 }
 
 function performGlobalUndo() {
@@ -242,11 +150,9 @@ function isRedoShortcut(event) {
   return key === 'y' || (key === 'z' && event.shiftKey);
 }
 
-function syncVisibleStateFromMachine() {
+function syncEditModeIndicators(editEnabled) {
   const toggle = document.getElementById('ui-chrome-edit-toggle');
   const modePill = document.getElementById('mode-pill');
-
-  const editEnabled = isEditModeState(docViewState);
 
   if (toggle) {
     toggle.setAttribute('aria-pressed', editEnabled ? 'true' : 'false');
@@ -256,6 +162,12 @@ function syncVisibleStateFromMachine() {
     modePill.dataset.mode = editEnabled ? 'edit' : 'read';
     modePill.textContent = editEnabled ? 'Editing' : 'Read only';
   }
+}
+
+function syncVisibleStateFromMachine() {
+  const editEnabled = isEditModeState(docViewState);
+
+  syncEditModeIndicators(editEnabled);
 
   if (docSaveState === DOC_SAVE_STATES.IDLE) {
     clearStatusPersistent();
@@ -274,9 +186,30 @@ function cloneDocModel(model) {
   return JSON.parse(JSON.stringify(model || { blocks: [] }));
 }
 
+function applyDocumentSnapshot(snapshot, mode = null) {
+  if (!snapshot) {
+    return false;
+  }
+
+  isApplyingDocHistory = true;
+  try {
+    docModel = cloneDocModel(snapshot);
+    renderDocument();
+    syncDocumentSaveStateFromModel();
+    if (mode === 'redo') {
+      setStatus('Redid change');
+    } else if (mode === 'undo') {
+      setStatus('Undid change');
+    }
+  } finally {
+    isApplyingDocHistory = false;
+  }
+
+  return true;
+}
+
 function resetDocumentHistory() {
-  docUndoStack = [];
-  docRedoStack = [];
+  documentHistory.clear();
 }
 
 function markDocumentDirty() {
@@ -325,17 +258,7 @@ function recordDocumentUndo(action = 'edit') {
     return;
   }
 
-  docUndoStack.push({
-    action: String(action || 'edit'),
-    at: new Date().toISOString(),
-    snapshot: cloneDocModel(docModel),
-  });
-
-  if (docUndoStack.length > DOC_HISTORY_LIMIT) {
-    docUndoStack = docUndoStack.slice(-DOC_HISTORY_LIMIT);
-  }
-
-  docRedoStack = [];
+  documentHistory.push(String(action || 'edit'));
 }
 
 function ensureDocumentUndoSeed(source, action = 'live-edit') {
@@ -350,7 +273,7 @@ function ensureDocumentUndoSeed(source, action = 'live-edit') {
   recordDocumentUndo(action);
   source.dataset.undoSeeded = '1';
   source.dataset.undoSeedAction = String(action || 'live-edit');
-  source.dataset.undoSeedDepth = String(docUndoStack.length);
+  source.dataset.undoSeedDepth = String(documentHistory.undoDepth);
 }
 
 function clearDocumentUndoSeed(source, options = {}) {
@@ -367,13 +290,13 @@ function clearDocumentUndoSeed(source, options = {}) {
     discardIfNoop
     && hasSeededUndo
     && Number.isInteger(seedDepth)
-    && seedDepth === docUndoStack.length
-    && docUndoStack.length > 0
+    && seedDepth === documentHistory.undoDepth
+    && documentHistory.undoDepth > 0
     && DOC_EDITOR_UNDO_ACTIONS.has(seedAction)
   ) {
-    const lastEntry = docUndoStack[docUndoStack.length - 1];
+    const lastEntry = documentHistory.peekUndo();
     if (lastEntry && String(lastEntry.action || '') === seedAction) {
-      docUndoStack.pop();
+      documentHistory.popUndo();
     }
   }
 
@@ -387,62 +310,31 @@ function applyDocumentHistorySnapshot(entry, mode) {
     return false;
   }
 
-  isApplyingDocHistory = true;
-  try {
-    docModel = cloneDocModel(entry.snapshot);
-    renderDocument();
-    syncDocumentSaveStateFromModel();
-    setStatus(mode === 'redo' ? 'Redid change' : 'Undid change');
-  } finally {
-    isApplyingDocHistory = false;
-  }
-
-  return true;
+  return applyDocumentSnapshot(entry.snapshot, mode);
 }
 
 function undoDocumentChange() {
-  if (!docModel || docUndoStack.length === 0) {
+  if (!docModel) {
     return false;
   }
 
-  docRedoStack.push({
-    action: 'redo-anchor',
-    at: new Date().toISOString(),
-    snapshot: cloneDocModel(docModel),
-  });
-
-  const previous = docUndoStack.pop();
-  return applyDocumentHistorySnapshot(previous, 'undo');
+  const previous = documentHistory.undo();
+  if (previous) {
+    setStatus('Undid change');
+  }
+  return Boolean(previous);
 }
 
 function redoDocumentChange() {
-  if (!docModel || docRedoStack.length === 0) {
+  if (!docModel) {
     return false;
   }
 
-  docUndoStack.push({
-    action: 'undo-anchor',
-    at: new Date().toISOString(),
-    snapshot: cloneDocModel(docModel),
-  });
-
-  const next = docRedoStack.pop();
-  return applyDocumentHistorySnapshot(next, 'redo');
-}
-
-function resolveTransition(table, currentState, event, machineName) {
-  const nextState = table[currentState] ? table[currentState][event] : undefined;
-
-  if (!nextState) {
-    console.warn('[fsm] invalid transition', {
-      machine: machineName,
-      currentState,
-      event,
-    });
-    return null;
+  const next = documentHistory.redo();
+  if (next) {
+    setStatus('Redid change');
   }
-
-  return nextState;
+  return Boolean(next);
 }
 
 function isEditModeState(state) {
@@ -470,15 +362,14 @@ function updateRuntimeStateAttributes() {
 }
 
 function transitionDocViewState(event) {
-  const nextState = resolveTransition(DOC_VIEW_TRANSITIONS, docViewState, event, 'doc-view');
-  if (!nextState) {
+  if (!docViewMachine.transition(event)) {
     return false;
   }
 
   const before = captureFsmSnapshot();
-  docViewState = nextState;
+  docViewState = docViewMachine.state;
   updateRuntimeStateAttributes();
-  pushFsmHistory({
+  fsmTransitionHistory.record({
     machine: 'doc-view',
     event,
     before,
@@ -488,15 +379,14 @@ function transitionDocViewState(event) {
 }
 
 function transitionDocSaveState(event) {
-  const nextState = resolveTransition(DOC_SAVE_TRANSITIONS, docSaveState, event, 'doc-save');
-  if (!nextState) {
+  if (!docSaveMachine.transition(event)) {
     return false;
   }
 
   const before = captureFsmSnapshot();
-  docSaveState = nextState;
+  docSaveState = docSaveMachine.state;
   updateRuntimeStateAttributes();
-  pushFsmHistory({
+  fsmTransitionHistory.record({
     machine: 'doc-save',
     event,
     before,
@@ -528,7 +418,7 @@ function applyIncomingSourceText(sourceText) {
   }
 
   docModel = parseDoc(incomingText);
-  docRedoStack = [];
+  documentHistory.clearRedo();
   lastSavedDoc = stringifyDoc(docModel);
   pendingExternalSource = null;
   transitionDocSaveState('SYNC_CLEAN');
@@ -565,7 +455,8 @@ function debouncedAutosave() {
 }
 
 function hasActiveEditingSurface() {
-  return hasOpenBlockSources() || Boolean(inlineCssSurfaceState.source);
+  ensureControllers();
+  return hasOpenBlockSources() || inlineCssController.hasOpenSurface();
 }
 
 const BLOCK_AUTOCOMPLETE = [
@@ -662,111 +553,6 @@ function splitClassNames(value) {
   return className ? className.split(/\s+/) : [];
 }
 
-const LEGACY_LIST_ITEM_FALLBACKS = {
-  'how-it-works-steps': [
-    'Every document is a sequence of typed blocks. There is no markdown, no inline HTML, and no implicit formatting.',
-    'Blocks are stored in SQLite and packed into a compact binary bundle at .doc/.repo-docs.bin that commits with your code.',
-    'The .dx file on disk is a stub pointer - a few lines that reference the archive. The real content never lives in the stub.',
-    'An MCP server exposes every document to any connected agent for search, retrieval, and structured editing.',
-  ],
-};
-
-function isLegacyObjectMarker(text) {
-  return String(text || '').trim() === '[object Object]';
-}
-
-function containsLegacyObjectMarker(lines) {
-  return Array.isArray(lines) && lines.some((line) => isLegacyObjectMarker(String(line || '').replace(/^\s*(?:[-*]|\d+[.)])\s+/, ''));
-}
-
-function parseLegacyListObjectText(text) {
-  const trimmed = String(text || '').trim();
-  if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) {
-    return '';
-  }
-
-  try {
-    const parsed = JSON.parse(trimmed);
-    if (parsed && typeof parsed === 'object') {
-      return String(parsed.text || '').trim();
-    }
-  } catch {
-    return '';
-  }
-
-  return '';
-}
-
-function repairLegacyListItems(items, blockId) {
-  const cleaned = [];
-
-  for (const item of items || []) {
-    if (isLegacyObjectMarker(item)) {
-      continue;
-    }
-    cleaned.push(item);
-  }
-
-  if (cleaned.length > 0) {
-    return cleaned;
-  }
-
-  const fallback = LEGACY_LIST_ITEM_FALLBACKS[String(blockId || '').trim()];
-  return Array.isArray(fallback) ? [...fallback] : [];
-}
-
-function listItemText(item) {
-  if (typeof item === 'object' && item !== null) {
-    return String(item.text || '').trim();
-  }
-
-  return String(item || '').trim();
-}
-
-function flattenListItems(items, depth = 0) {
-  if (!Array.isArray(items)) {
-    return [];
-  }
-
-  const lines = [];
-  const indent = '  '.repeat(Math.max(0, depth));
-
-  for (const item of items) {
-    if (typeof item === 'object' && item !== null) {
-      const text = listItemText(item);
-      if (text) {
-        lines.push(`${indent}- ${text}`);
-      }
-
-      if (Array.isArray(item.nested) && item.nested.length > 0) {
-        lines.push(...flattenListItems(item.nested, depth + 1));
-      }
-
-      continue;
-    }
-
-    const text = listItemText(item);
-    if (text) {
-      lines.push(`${indent}- ${text}`);
-    }
-  }
-
-  return lines;
-}
-
-function formatAttributeValue(value) {
-  const text = String(value || '').trim();
-
-  if (!text) {
-    return '';
-  }
-
-  if (/^[^\s"'=]+$/.test(text)) {
-    return text;
-  }
-
-  return '"' + text.replace(/"/g, '') + '"';
-}
 
 function ensureCustomCssSheet() {
   if (customCssSheet) {
@@ -790,77 +576,16 @@ function applyCustomCss(cssText) {
 }
 
 function getActiveScopedCss() {
-  if (!inlineCssSurfaceState.selector || !inlineCssSurfaceState.baseCssText) {
-    return '';
-  }
-
-  return getScopedCssForSelector(
-    inlineCssSurfaceState.baseCssText,
-    inlineCssSurfaceState.selector,
-  );
+  ensureControllers();
+  return inlineCssController.getActiveScopedCss();
 }
 
 function extractCssFromDocumentModel() {
-  if (!docModel || !Array.isArray(docModel.blocks)) {
-    return '';
-  }
-
-  const chunks = [];
-
-  for (const block of docModel.blocks) {
-    if (!block) {
-      continue;
-    }
-
-    if (block.type === 'style') {
-      const css = String(block.text || '').trim();
-      if (css) {
-        chunks.push(css);
-      }
-      continue;
-    }
-
-    if (block.type !== 'code') {
-      continue;
-    }
-
-    const language = String(block.language || '').trim().toLowerCase();
-    if (language !== 'css' && language !== 'stylesheet') {
-      continue;
-    }
-
-    const css = String(block.text || '').trim();
-    if (css) {
-      chunks.push(css);
-    }
-  }
-
-  return chunks.join('\n\n');
+  return extractCssFromModel(docModel);
 }
 
 function extractStylesheetLinksFromDocumentModel() {
-  if (!docModel || !Array.isArray(docModel.blocks)) {
-    return [];
-  }
-
-  const links = [];
-
-  for (const block of docModel.blocks) {
-    if (!block || block.type !== 'stylesheet') {
-      continue;
-    }
-
-    const href = String(block.href || block.src || '').trim();
-    const media = String(block.media || '').trim();
-
-    if (!href) {
-      continue;
-    }
-
-    links.push({ href, media });
-  }
-
-  return links;
+  return extractStylesheetLinksFromModel(docModel);
 }
 
 function resolveStylesheetHref(href) {
@@ -951,12 +676,12 @@ function publishViewState(effectiveCss) {
       fsm: {
         documentState: docViewState,
         saveState: docSaveState,
-        historyLength: fsmHistory.length,
-        lastTransition: fsmHistory.length > 0 ? fsmHistory[fsmHistory.length - 1] : null,
+        historyLength: fsmTransitionHistory.length,
+        lastTransition: fsmTransitionHistory.lastTransition,
       },
       documentHistory: {
-        undoDepth: docUndoStack.length,
-        redoDepth: docRedoStack.length,
+        undoDepth: documentHistory.undoDepth,
+        redoDepth: documentHistory.redoDepth,
       },
       sourceText,
       appearance: {
@@ -1350,319 +1075,12 @@ function acceptAutocomplete(textarea, explicitIndex) {
   return true;
 }
 
-function parseAttributes(args) {
-  const attributes = {};
-  const pattern = /([a-zA-Z0-9._-]+)=(?:"([^"]*)"|'([^']*)'|([^\s]+))/g;
-  const text = String(args || '');
-  let match = pattern.exec(text);
-
-  while (match) {
-    const key = String(match[1] || '').trim().toLowerCase();
-    const value = match[2] ?? match[3] ?? match[4] ?? '';
-
-    if (key) {
-      attributes[key] = value;
-    }
-
-    match = pattern.exec(text);
-  }
-
-  return attributes;
-}
-
-const KNOWN_BLOCK_TYPES = new Set([
-  'paragraph', 'heading', 'bulleted-list', 'numbered-list', 'list',
-  'checklist', 'quote', 'code', 'image', 'rule', 'style', 'stylesheet',
-]);
-
-function blockHasContent(block) {
-  if (!block) return false;
-  if (block.type === 'rule') return true;
-  if (block.type === 'stylesheet') return String(block.href || '').trim().length > 0;
-  if (block.type === 'image') return String(block.src || '').trim().length > 0;
-  if (Array.isArray(block.items)) return block.items.length > 0;
-  return String(block.text || '').trim().length > 0;
-}
-
 function isBulletedListType(type) {
   return type === 'list' || type === 'bulleted-list';
 }
 
 function isNumberedListType(type) {
   return type === 'numbered-list';
-}
-
-function parseListItems(lines, blockId = '') {
-  const parsedItems = (lines || [])
-    .map((line) => {
-      const text = String(line || '').replace(/^\s*(?:[-*]|\d+[.)])\s+/, '').trim();
-      if (!text) {
-        return '';
-      }
-
-      if (isLegacyObjectMarker(text)) {
-        return text;
-      }
-
-      const recoveredText = parseLegacyListObjectText(text);
-      return recoveredText || text;
-    })
-    .filter(Boolean);
-
-  return repairLegacyListItems(parsedItems, blockId);
-}
-
-function buildBlockHeader(type, attributes) {
-  const parts = Object.entries(attributes || {})
-    .filter(([, value]) => String(value || '').trim())
-    .map(([key, value]) => `${key}=${formatAttributeValue(value)}`);
-
-  return parts.length > 0 ? `::${type} ${parts.join(' ')}` : `::${type}`;
-}
-
-function stringifyBlock(block) {
-  if (!block) return '';
-
-  if (block.rawSource) {
-    const source = String(block.rawSource).trimEnd();
-    // Ensure ::end is present for blocks that require it (non-paragraph, non-rule)
-    if (block.type !== 'paragraph' && block.type !== 'rule' && !source.endsWith('::end')) {
-      return source + '\n::end';
-    }
-    return source;
-  }
-
-  const attributes = {};
-
-  if (block.id) {
-    attributes.id = block.id;
-  }
-
-  if (normalizeClassName(block.className)) {
-    attributes.class = normalizeClassName(block.className);
-  }
-
-  if (block.type === 'code' && String(block.language || '').trim()) {
-    attributes.language = String(block.language || '').trim();
-  }
-
-  if (block.type === 'heading') {
-    return buildBlockHeader('heading', {
-      ...attributes,
-      level: String(block.level || 1),
-    }) + '\n' + (block.text || '') + '\n::end';
-  }
-
-  if (isBulletedListType(block.type)) {
-    return buildBlockHeader('bulleted-list', attributes) + '\n' + flattenListItems(block.items || []).join('\n') + '\n::end';
-  }
-
-  if (isNumberedListType(block.type)) {
-    return buildBlockHeader('numbered-list', attributes) + '\n' + flattenListItems(block.items || []).join('\n') + '\n::end';
-  }
-
-  if (block.type === 'checklist') {
-    return buildBlockHeader('checklist', attributes) + '\n' + (block.items || []).map((item) => '[' + (item.checked ? 'x' : ' ') + '] ' + item.text).join('\n') + '\n::end';
-  }
-
-  if (block.type === 'image') {
-    const src = String(block.src || '').trim();
-    const alt = String(block.alt || '').trim();
-    return buildBlockHeader('image', {
-      ...attributes,
-      src,
-    }) + '\n' + alt + '\n::end';
-  }
-
-  if (block.type === 'stylesheet') {
-    if (String(block.media || '').trim()) {
-      attributes.media = String(block.media || '').trim();
-    }
-    if (String(block.href || '').trim()) {
-      attributes.href = String(block.href || '').trim();
-    }
-    return buildBlockHeader('stylesheet', attributes) + '\n::end';
-  }
-
-  if (block.type === 'style') {
-    return buildBlockHeader('style', attributes) + '\n' + (block.text || '') + '\n::end';
-  }
-
-  if (block.type === 'rule') {
-    return buildBlockHeader('rule', attributes);
-  }
-
-  return buildBlockHeader(block.type, attributes) + '\n' + (block.text || '') + '\n::end';
-}
-
-function parseBlock(raw) {
-  const original = String(raw || '').replace(/\r\n/g, '\n');
-  const trimmed = original.trim();
-
-  if (!trimmed.startsWith('::')) {
-    return { type: 'paragraph', text: original, rawSource: original };
-  }
-
-  const lines = trimmed.split('\n');
-  const open = /^::([a-z-]+)(.*)$/i.exec(lines[0].trim());
-
-  if (!open) {
-    return { type: 'paragraph', text: trimmed, rawSource: original };
-  }
-
-  const type = open[1].toLowerCase();
-  const attrs = parseAttributes(open[2] || '');
-  let endIdx = lines.length;
-
-  for (let i = 1; i < lines.length; i += 1) {
-    if (lines[i].trim() === '::end') {
-      endIdx = i;
-      break;
-    }
-  }
-
-  const content = lines.slice(1, endIdx);
-
-  if (type === 'heading') {
-    const level = Number(attrs.level || 1);
-    return {
-      type,
-      id: String(attrs.id || '').trim(),
-      className: normalizeClassName(attrs.class),
-      level: Math.min(6, Math.max(1, level)),
-      text: content.join('\n').trim(),
-      rawSource: original,
-    };
-  }
-
-  if (isBulletedListType(type)) {
-    const blockId = String(attrs.id || '').trim();
-    const items = parseListItems(content, blockId);
-    const hadLegacyCorruption = containsLegacyObjectMarker(content);
-    return {
-      type: 'bulleted-list',
-      id: blockId,
-      className: normalizeClassName(attrs.class),
-      items,
-      rawSource: hadLegacyCorruption ? '' : original,
-    };
-  }
-
-  if (isNumberedListType(type)) {
-    const blockId = String(attrs.id || '').trim();
-    const items = parseListItems(content, blockId);
-    const hadLegacyCorruption = containsLegacyObjectMarker(content);
-    return {
-      type: 'numbered-list',
-      id: blockId,
-      className: normalizeClassName(attrs.class),
-      items,
-      rawSource: hadLegacyCorruption ? '' : original,
-    };
-  }
-
-  if (type === 'checklist') {
-    return {
-      type,
-      id: String(attrs.id || '').trim(),
-      className: normalizeClassName(attrs.class),
-      items: content
-        .map((line) => {
-          const match = /^\s*\[(x| )\]\s*(.*)$/i.exec(line.trim());
-          return match ? { checked: match[1].toLowerCase() === 'x', text: match[2] } : { checked: false, text: line.trim() };
-        })
-        .filter((item) => item.text.length > 0),
-      rawSource: original,
-    };
-  }
-
-  if (type === 'image') {
-    return {
-      type,
-      id: String(attrs.id || '').trim(),
-      className: normalizeClassName(attrs.class),
-      src: String(attrs.src || '').trim(),
-      alt: content.join('\n').trim(),
-      rawSource: original,
-    };
-  }
-
-  if (type === 'stylesheet') {
-    return {
-      type: 'stylesheet',
-      id: String(attrs.id || '').trim(),
-      className: normalizeClassName(attrs.class),
-      href: String(attrs.href || attrs.src || content.join('\n').trim() || '').trim(),
-      media: String(attrs.media || '').trim(),
-      rawSource: original,
-    };
-  }
-
-  if (type === 'style') {
-    return {
-      type: 'style',
-      id: String(attrs.id || '').trim(),
-      className: normalizeClassName(attrs.class),
-      text: content.join('\n').trimEnd(),
-      rawSource: original,
-    };
-  }
-
-  if (type === 'rule') {
-    return {
-      type: 'rule',
-      id: String(attrs.id || '').trim(),
-      className: normalizeClassName(attrs.class),
-      language: String(attrs.language || attrs.lang || '').trim(),
-    };
-  }
-
-  if (type === 'code') {
-    return {
-      type: 'code',
-      id: String(attrs.id || '').trim(),
-      className: normalizeClassName(attrs.class),
-      language: String(attrs.language || attrs.lang || '').trim(),
-      text: content.join('\n').trimEnd(),
-      rawSource: original,
-    };
-  }
-
-  if (type === 'paragraph') {
-    return {
-      type: 'paragraph',
-      id: String(attrs.id || '').trim(),
-      className: normalizeClassName(attrs.class),
-      text: content.join('\n'),
-      rawSource: original,
-    };
-  }
-
-  return {
-    type,
-    id: String(attrs.id || '').trim(),
-    className: normalizeClassName(attrs.class),
-    text: content.join('\n').trimEnd(),
-    rawSource: original,
-  };
-}
-
-function parseDoc(source) {
-  return { blocks: parseSourceBlocks(source) };
-}
-
-function stringifyDoc(model) {
-  const lines = [];
-
-  for (let i = 0; i < model.blocks.length; i += 1) {
-    lines.push(stringifyBlock(model.blocks[i]));
-
-    if (i < model.blocks.length - 1) {
-      lines.push('');
-    }
-  }
-
-  return lines.join('\n').trimEnd() + '\n';
 }
 
 // ---------------------------------------------------------------------------
@@ -2116,20 +1534,7 @@ function findAttributeTargetAtCursor(textarea) {
 }
 
 function findCssBlockIndex() {
-  if (!docModel || !Array.isArray(docModel.blocks)) {
-    return -1;
-  }
-
-  for (let i = 0; i < docModel.blocks.length; i += 1) {
-    const block = docModel.blocks[i];
-    if (!block || block.type !== 'code') continue;
-    const language = String(block.language || '').trim().toLowerCase();
-    if (language === 'css' || language === 'stylesheet') {
-      return i;
-    }
-  }
-
-  return -1;
+  return findCssBlockIndexInModel(docModel);
 }
 
 function splitRuleSelectors(selectorText) {
@@ -2295,266 +1700,89 @@ function upsertCssBlock(cssText) {
   block.rawSource = stringifyBlock({ ...block, rawSource: '' });
 }
 
-function ensureInlineCssSurface(source) {
-  const srcWrap = source ? source.closest('.block-src-wrapper') : null;
-  if (!srcWrap) {
-    return null;
-  }
-
-  const sourceArea = srcWrap.querySelector('.block-src');
-  const bodyWrap = sourceArea ? sourceArea.closest('.block-src-body-wrap') : null;
-  if (!sourceArea) {
-    return null;
-  }
-
-  let surface = srcWrap.querySelector('.inline-css-surface');
-
-  if (surface) {
-    if (bodyWrap && surface.nextElementSibling !== bodyWrap) {
-      srcWrap.insertBefore(surface, bodyWrap);
-    }
-    return surface;
-  }
-
-  surface = document.createElement('div');
-  surface.className = 'inline-css-surface';
-  surface.style.display = 'none';
-  surface.innerHTML = '<div class="inline-css-meta inline-css-head" aria-hidden="true"></div><textarea class="inline-css-src" spellcheck="false" aria-label="Inline CSS declarations"></textarea><div class="inline-css-meta inline-css-tail" aria-hidden="true">}</div>';
-
-  const editor = surface.querySelector('.inline-css-src');
-  if (editor) {
-    editor.addEventListener('input', () => {
-      const cssText = mergeScopedCssForSelector(
-        inlineCssSurfaceState.baseCssText,
-        inlineCssSurfaceState.selector,
-        editor.value,
-      );
-      autosizeInlineCssEditor(editor);
-      const scopedCss = getScopedCssForSelector(cssText, inlineCssSurfaceState.selector);
-      if (applyCustomCss(scopedCss)) {
-        if (!inlineCssSurfaceState.undoSeeded) {
-          recordDocumentUndo('inline-css-edit');
-          inlineCssSurfaceState.undoSeeded = true;
-        }
-        upsertCssBlock(cssText);
-        inlineCssSurfaceState.baseCssText = cssText;
-        markDocumentDirty();
-        publishViewState(scopedCss);
-      }
-    });
-
-    editor.addEventListener('keydown', (event) => {
-      if (event.key !== 'Escape') return;
-      event.preventDefault();
-      event.stopPropagation();
-      closeInlineCssSurface(true);
+function ensureControllers() {
+  if (!inlineCssController) {
+    inlineCssController = new InlineCssSurfaceController({
+      applyCustomCss,
+      extractCssFromDocumentModel,
+      findAttributeTargetAtCursor,
+      getScopedCssDeclarations,
+      getScopedCssForSelector,
+      markDocumentDirty,
+      mergeScopedCssForSelector,
+      publishViewState,
+      recordDocumentUndo,
+      renderEditableHeader,
+      upsertCssBlock,
     });
   }
 
-  if (bodyWrap) {
-    srcWrap.insertBefore(surface, bodyWrap);
-  } else {
-    srcWrap.appendChild(surface);
+  if (!blockSourceController) {
+    blockSourceController = new BlockSourceController({
+      applyEditableBodyPresentation,
+      autosizeBlockSrc,
+      buildRawSourceFromEditorParts,
+      buildRenderedContent,
+      clearDocumentUndoSeed,
+      clearEditableBodyPresentation,
+      closeInlineCssSurface,
+      debouncedAutosave,
+      getDocModel: () => docModel,
+      getHeaderSourceFromEditor,
+      getRawSourceForEditor,
+      getRawSourceFromEditor,
+      knownBlockTypes: KNOWN_BLOCK_TYPES,
+      parseBlock,
+      recordDocumentUndo,
+      refreshDocumentCss,
+      renderDocument,
+      setStatus,
+      splitBlockSourceForEditor,
+      stringifyBlock,
+      tryApplyPendingExternalSource,
+      updateInlineCssAffordance: (textarea) => inlineCssController.updateInlineCssAffordance(textarea),
+    });
   }
-
-  return surface;
-}
-
-function autosizeInlineCssEditor(editor) {
-  if (!editor) return;
-
-  const lineHeight = Number.parseFloat(window.getComputedStyle(editor).lineHeight) || 18;
-  const minLines = 2;
-  const maxLines = 16;
-  const maxHeight = Math.round(lineHeight * maxLines);
-
-  editor.style.height = '0px';
-  const desiredHeight = Math.max(lineHeight * minLines, editor.scrollHeight);
-  const nextHeight = Math.min(desiredHeight, maxHeight);
-
-  editor.style.height = nextHeight + 'px';
-  editor.style.maxHeight = maxHeight + 'px';
-  editor.style.overflowY = desiredHeight > maxHeight ? 'auto' : 'hidden';
 }
 
 function closeInlineCssSurface(restoreFocus) {
-  const activeSource = inlineCssSurfaceState.source;
-  const selectionStart = inlineCssSurfaceState.selectionStart;
-  const selectionEnd = inlineCssSurfaceState.selectionEnd;
-  const srcWrap = activeSource ? activeSource.closest('.block-src-wrapper') : null;
-  const surface = srcWrap
-    ? srcWrap.querySelector('.inline-css-surface')
-    : document.querySelector('.block-src-wrapper .inline-css-surface');
-
-  if (surface) {
-    surface.style.display = 'none';
-  }
-
-  inlineCssSurfaceState = {
-    source: null,
-    selector: '',
-    baseCssText: '',
-    selectionStart: 0,
-    selectionEnd: 0,
-    undoSeeded: false,
-  };
-
-  applyCustomCss('');
-  publishViewState('');
-
-  if (restoreFocus && activeSource) {
-    const start = Number.isFinite(selectionStart) ? selectionStart : activeSource.value.length;
-    const end = Number.isFinite(selectionEnd) ? selectionEnd : start;
-    activeSource.focus();
-    if (typeof activeSource.setSelectionRange === 'function') {
-      activeSource.setSelectionRange(start, end);
-    }
-  }
+  ensureControllers();
+  inlineCssController.closeInlineCssSurface(Boolean(restoreFocus));
 }
 
 function openInlineCssSurface(source, selector) {
-  if (!source) return;
-
-  const surface = ensureInlineCssSurface(source);
-  if (!surface) return;
-
-  const editor = surface.querySelector('.inline-css-src');
-  if (!editor) return;
-
-  const requestedSelector = String(selector || '').trim();
-  const alreadyOpen = inlineCssSurfaceState.source === source
-    && inlineCssSurfaceState.selector === requestedSelector
-    && surface.style.display !== 'none';
-
-  if (alreadyOpen) {
-    editor.focus();
-    return;
-  }
-
-  const meta = surface.querySelector('.inline-css-meta');
-  if (meta) {
-    meta.textContent = requestedSelector ? `${requestedSelector} {` : '{';
-  }
-
-  const cssText = extractCssFromDocumentModel();
-  const declarations = getScopedCssDeclarations(cssText, requestedSelector);
-  const scopedCss = getScopedCssForSelector(cssText, requestedSelector);
-
-  editor.value = declarations || '';
-  surface.style.display = 'block';
-  inlineCssSurfaceState = {
-    source,
-    selector: requestedSelector,
-    baseCssText: cssText,
-    selectionStart: typeof source.selectionStart === 'number' ? source.selectionStart : source.value.length,
-    selectionEnd: typeof source.selectionEnd === 'number' ? source.selectionEnd : source.value.length,
-    undoSeeded: false,
-  };
-
-  applyCustomCss(scopedCss);
-  publishViewState(scopedCss);
-
-  autosizeInlineCssEditor(editor);
-
-  const caret = editor.value.length;
-  editor.focus();
-  editor.setSelectionRange(caret, caret);
-  editor.scrollTop = editor.scrollHeight;
+  ensureControllers();
+  inlineCssController.openInlineCssSurface(source, selector);
 }
 
 function closeBlockSrc(index, commitChanges) {
-  const wrap = document.querySelector('.block-wrap[data-block-index="' + index + '"]');
-  if (!wrap) return;
-
-  const view = wrap.querySelector('.block-view');
-  const srcWrap = wrap.querySelector('.block-src-wrapper');
-  const source = wrap.querySelector('.block-src');
-
-  if (!view || !srcWrap || !source || srcWrap.style.display !== 'block') {
-    return;
-  }
-
-  if (commitChanges) {
-    commitBlockSrc(index);
-    return;
-  }
-
-  closeInlineCssSurface();
-  clearDocumentUndoSeed(source, { discardIfNoop: true });
-  clearEditableBodyPresentation(wrap);
-  srcWrap.style.display = 'none';
-  view.style.display = '';
+  ensureControllers();
+  blockSourceController.closeBlockSrc(index, commitChanges);
 }
 
 function hasPendingBlockSourceChanges(source) {
-  if (!source) {
-    return false;
-  }
-
-  const originalSource = source.dataset.originalSource || '';
-  const nextSource = buildRawSourceFromEditorParts(
-    getHeaderSourceFromEditor(source),
-    getRawSourceFromEditor(source.value),
-    source.dataset.footerSource || '',
-  );
-
-  return nextSource !== originalSource;
+  ensureControllers();
+  return blockSourceController.hasPendingBlockSourceChanges(source);
 }
 
 function commitBlockSourceForHistory(index) {
-  const wrap = document.querySelector('.block-wrap[data-block-index="' + index + '"]');
-  if (!wrap) {
-    return;
-  }
-
-  const source = wrap.querySelector('.block-src');
-  if (hasPendingBlockSourceChanges(source)) {
-    commitBlockSrc(index);
-    return;
-  }
-
-  closeBlockSrc(index, false);
+  ensureControllers();
+  blockSourceController.commitBlockSourceForHistory(index);
 }
 
 function commitOpenSources(exceptIndex) {
-  const openWraps = Array.from(document.querySelectorAll('.block-wrap .block-src-wrapper'))
-    .filter((node) => node.style.display === 'block')
-    .map((node) => node.closest('.block-wrap'))
-    .filter(Boolean);
-
-  const indices = openWraps
-    .map((wrap) => Number.parseInt(wrap.dataset.blockIndex, 10))
-    .filter((value) => !Number.isNaN(value) && value !== exceptIndex)
-    .sort((a, b) => b - a);
-
-  for (const index of indices) {
-    commitBlockSrc(index);
-  }
-
-  tryApplyPendingExternalSource();
+  ensureControllers();
+  blockSourceController.commitOpenSources(exceptIndex);
 }
 
 function commitOpenSourcesForHistory(exceptIndex) {
-  const openWraps = Array.from(document.querySelectorAll('.block-wrap .block-src-wrapper'))
-    .filter((node) => node.style.display === 'block')
-    .map((node) => node.closest('.block-wrap'))
-    .filter(Boolean);
-
-  const indices = openWraps
-    .map((wrap) => Number.parseInt(wrap.dataset.blockIndex, 10))
-    .filter((value) => !Number.isNaN(value) && value !== exceptIndex)
-    .sort((a, b) => b - a);
-
-  for (const index of indices) {
-    commitBlockSourceForHistory(index);
-  }
-
-  tryApplyPendingExternalSource();
+  ensureControllers();
+  blockSourceController.commitOpenSourcesForHistory(exceptIndex);
 }
 
 function hasOpenBlockSources() {
-  return Boolean(Array.from(document.querySelectorAll('.block-wrap .block-src-wrapper'))
-    .find((node) => node.style.display === 'block'));
+  ensureControllers();
+  return blockSourceController.hasOpenBlockSources();
 }
 
 function isBlankPageClickTarget(target, pageEl, blocksContainer) {
@@ -2571,129 +1799,18 @@ function isBlankPageClickTarget(target, pageEl, blocksContainer) {
 }
 
 function updateInlineCssAffordance(textarea) {
-  if (!textarea) return;
-  const target = findAttributeTargetAtCursor(textarea);
-  if (target && target.selector) {
-    textarea.setAttribute('title', 'Option/Alt + click to edit scoped styles');
-  } else {
-    textarea.removeAttribute('title');
-  }
-
-  if (textarea.classList.contains('block-src')) {
-    renderEditableHeader(textarea);
-  }
+  ensureControllers();
+  inlineCssController.updateInlineCssAffordance(textarea);
 }
 
 function openBlockSrc(index) {
-  const wrap = document.querySelector('.block-wrap[data-block-index="' + index + '"]');
-  if (!wrap) return;
-
-  const view = wrap.querySelector('.block-view');
-  const srcWrap = wrap.querySelector('.block-src-wrapper');
-  const source = wrap.querySelector('.block-src');
-
-  if (!view || !source || !srcWrap || srcWrap.style.display === 'block') {
-    return;
-  }
-
-  const block = docModel.blocks[index];
-  if (!block) return;
-
-  const rawSource = typeof block.rawSource === 'string' ? block.rawSource : stringifyBlock(block);
-  const editorParts = splitBlockSourceForEditor(rawSource, block.type);
-  source.value = getRawSourceForEditor(editorParts.bodySource);
-  source.dataset.originalSource = rawSource;
-  source.dataset.headerSource = editorParts.headerSource;
-  source.dataset.footerSource = editorParts.footerSource;
-  source.dataset.undoSeeded = '0';
-  source.dataset.undoSeedAction = '';
-  source.dataset.undoSeedDepth = '';
-  applyEditableBodyPresentation(wrap, block);
-  view.style.display = 'none';
-  srcWrap.style.display = 'block';
-  autosizeBlockSrc(source);
-  updateInlineCssAffordance(source);
-  source.focus();
+  ensureControllers();
+  blockSourceController.openBlockSrc(index);
 }
 
 function commitBlockSrc(index) {
-  const wrap = document.querySelector('.block-wrap[data-block-index="' + index + '"]');
-  if (!wrap) return;
-
-  const view = wrap.querySelector('.block-view');
-  const srcWrap = wrap.querySelector('.block-src-wrapper');
-  const source = wrap.querySelector('.block-src');
-
-  if (!view || !source || !srcWrap) {
-    return;
-  }
-
-  const originalSource = source.dataset.originalSource || '';
-  const nextSource = buildRawSourceFromEditorParts(
-    getHeaderSourceFromEditor(source),
-    getRawSourceFromEditor(source.value),
-    source.dataset.footerSource || '',
-  );
-  const parsed = parseBlock(nextSource);
-  parsed.rawSource = nextSource;
-  const previousBlock = docModel.blocks[index] || null;
-  const previousCanonical = previousBlock ? stringifyBlock(previousBlock) : '';
-  const nextCanonical = stringifyBlock(parsed);
-  const sourceChanged = nextCanonical !== previousCanonical;
-  const hasSeededUndo = source.dataset.undoSeeded === '1';
-
-  if (parsed.type === 'paragraph' && !String(parsed.text || '').trim()) {
-    if (sourceChanged && !hasSeededUndo) {
-      recordDocumentUndo('commit-block-source');
-    }
-    docModel.blocks.splice(index, 1);
-    clearDocumentUndoSeed(source, { discardIfNoop: !sourceChanged });
-    renderDocument();
-    setStatus('Block removed');
-    debouncedAutosave();
-    return;
-  }
-
-  if (!KNOWN_BLOCK_TYPES.has(parsed.type)) {
-    if (!originalSource) {
-      docModel.blocks.splice(index, 1);
-      clearDocumentUndoSeed(source, { discardIfNoop: !sourceChanged });
-      renderDocument();
-      return;
-    }
-    const reverted = parseBlock(originalSource);
-    reverted.rawSource = originalSource;
-    docModel.blocks[index] = reverted;
-    view.textContent = '';
-    view.appendChild(buildRenderedContent(reverted));
-    clearEditableBodyPresentation(wrap);
-    srcWrap.style.display = 'none';
-    view.style.display = '';
-    clearDocumentUndoSeed(source, { discardIfNoop: true });
-    setStatus('Reverted — unknown block type');
-    return;
-  }
-
-  if (sourceChanged && !hasSeededUndo) {
-    recordDocumentUndo('commit-block-source');
-  }
-
-  docModel.blocks[index] = parsed;
-  view.textContent = '';
-  view.appendChild(buildRenderedContent(parsed));
-  clearEditableBodyPresentation(wrap);
-  srcWrap.style.display = 'none';
-  view.style.display = '';
-  refreshDocumentCss();
-  clearDocumentUndoSeed(source, { discardIfNoop: !sourceChanged });
-  if (sourceChanged) {
-    setStatus('Unsaved changes');
-    debouncedAutosave();
-  }
-}
-
-function wireMetaField(viewId, inputId, getter, setter) {
-  // Removed: metadata section no longer exists
+  ensureControllers();
+  blockSourceController.commitBlockSrc(index);
 }
 
 function renderDocument() {
@@ -2775,171 +1892,94 @@ function clampScale(value) {
   return Math.min(115, Math.max(90, Math.round(numeric)));
 }
 
-function loadAppearance() {
-  try {
-    const raw = window.localStorage.getItem(appearanceStorageKey);
-
-    if (!raw) {
-      return;
-    }
-
-    const parsed = JSON.parse(raw);
-    const paper = String(parsed.paper || 'white');
-    const density = String(parsed.density || 'comfortable');
-    const scale = clampScale(parsed.scale);
-    currentAppearance = {
-      paper: ['white', 'cream', 'slate'].includes(paper) ? paper : 'white',
-      density: ['comfortable', 'compact'].includes(density) ? density : 'comfortable',
-      scale,
-    };
-  } catch {
+function syncUiStateMirrorFromController() {
+  if (!uiStateController) {
+    return;
   }
+
+  currentTheme = uiStateController.getCurrentTheme();
+  currentAppearance = uiStateController.getCurrentAppearance();
+}
+
+function ensureUiStateController() {
+  if (uiStateController) {
+    return uiStateController;
+  }
+
+  uiStateController = createUiStateController({
+    appearanceStorageKey,
+    editModeStorageKey,
+    DOC_VIEW_STATES,
+    transitionDocViewState,
+    getDocViewState: () => docViewState,
+    isEditModeState,
+    syncEditModeIndicators,
+    postMessage: (message) => vscode.postMessage(message),
+    publishViewState,
+    getActiveScopedCss,
+    closeInlineCssSurface,
+    commitOpenSources,
+    closeAutocomplete,
+    setStatus,
+    tryApplyPendingExternalSource,
+  });
+
+  uiStateController.setAppearance(currentAppearance);
+  uiStateController.applyTheme(currentTheme, false);
+  syncUiStateMirrorFromController();
+  return uiStateController;
+}
+
+function loadAppearance() {
+  ensureUiStateController().loadAppearance();
+  syncUiStateMirrorFromController();
 }
 
 function persistAppearance() {
-  try {
-    window.localStorage.setItem(appearanceStorageKey, JSON.stringify(currentAppearance));
-  } catch {
-  }
+  const controller = ensureUiStateController();
+  controller.setAppearance(currentAppearance);
+  controller.applyAppearance(true);
+  syncUiStateMirrorFromController();
 }
 
 function applyAppearance(persist = false) {
-  document.body.dataset.paper = currentAppearance.paper;
-  document.body.dataset.density = currentAppearance.density;
-  document.documentElement.style.setProperty('--editor-scale', String(currentAppearance.scale / 100));
-
-  const paperSelect = document.getElementById('paper-select');
-  const densitySelect = document.getElementById('density-select');
-  const scaleSlider = document.getElementById('scale-slider');
-
-  if (paperSelect) {
-    paperSelect.value = currentAppearance.paper;
-  }
-
-  if (densitySelect) {
-    densitySelect.value = currentAppearance.density;
-  }
-
-  if (scaleSlider) {
-    scaleSlider.value = String(currentAppearance.scale);
-  }
-
-  if (persist) {
-    persistAppearance();
-  }
-
-  publishViewState(getActiveScopedCss());
+  const controller = ensureUiStateController();
+  controller.setAppearance(currentAppearance);
+  controller.applyAppearance(Boolean(persist));
+  syncUiStateMirrorFromController();
 }
 
 function applyTheme(theme, persist = false) {
-  const allowed = new Set(['auto', 'light', 'dark']);
-  currentTheme = allowed.has(theme) ? theme : 'auto';
-  document.body.dataset.theme = currentTheme;
-
-  const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
-  const resolved = currentTheme === 'auto' ? (prefersDark ? 'dark' : 'light') : currentTheme;
-  document.body.dataset.resolvedTheme = resolved;
-
-  const select = document.getElementById('theme-select');
-  if (select) {
-    select.value = currentTheme;
-  }
-
-  if (persist) {
-    vscode.postMessage({ type: 'set-theme', theme: currentTheme });
-  }
-
-  publishViewState(getActiveScopedCss());
+  ensureUiStateController().applyTheme(theme, Boolean(persist));
+  syncUiStateMirrorFromController();
 }
 
 function setControlsOpen(isOpen) {
-  const chrome = document.getElementById('ui-chrome');
-  const toggle = document.getElementById('ui-chrome-toggle');
-
-  if (chrome) {
-    chrome.dataset.open = isOpen ? 'true' : 'false';
-  }
-
-  if (toggle) {
-    toggle.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
-  }
-
-  if (isOpen) {
-    document.body.classList.add('show-chrome');
-  }
+  ensureUiStateController().setControlsOpen(Boolean(isOpen));
 }
 
 function setHelpOpen(isOpen) {
-  const chrome = document.getElementById('ui-chrome');
-  const btn = document.getElementById('ui-chrome-help-btn');
-
-  if (chrome) {
-    chrome.dataset.help = isOpen ? 'true' : 'false';
-  }
-
-  if (btn) {
-    btn.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
-    btn.setAttribute('aria-label', isOpen ? 'Hide Help' : 'Show Help');
-  }
-
-  if (isOpen) {
-    document.body.classList.add('show-chrome');
-  }
+  ensureUiStateController().setHelpOpen(Boolean(isOpen));
 }
 
 function revealChromeBriefly(durationMs = 1400) {
-  document.body.classList.add('show-chrome');
-
-  if (chromeRevealTimer) {
-    clearTimeout(chromeRevealTimer);
-  }
-
-  chromeRevealTimer = setTimeout(() => {
-    const chrome = document.getElementById('ui-chrome');
-
-    if (chrome && (chrome.dataset.open === 'true' || chrome.dataset.help === 'true')) {
-      return;
-    }
-
-    document.body.classList.remove('show-chrome');
-  }, durationMs);
+  ensureUiStateController().revealChromeBriefly(durationMs);
 }
 
 function toggleControls(forceOpen) {
-  const chrome = document.getElementById('ui-chrome');
-  const isOpen = chrome ? chrome.dataset.open === 'true' : false;
-  const opening = typeof forceOpen === 'boolean' ? forceOpen : !isOpen;
-
-  if (opening) {
-    setHelpOpen(false);
-  }
-
-  setControlsOpen(opening);
+  ensureUiStateController().toggleControls(forceOpen);
 }
 
 function toggleHelp() {
-  const chrome = document.getElementById('ui-chrome');
-  const isOpen = chrome ? chrome.dataset.help === 'true' : false;
-
-  if (!isOpen) {
-    setControlsOpen(false);
-  }
-
-  setHelpOpen(!isOpen);
+  ensureUiStateController().toggleHelp();
 }
 
 function isEditModeEnabled() {
-  return isEditModeState(docViewState);
+  return ensureUiStateController().isEditModeEnabled();
 }
 
 function loadEditModePreference() {
-  try {
-    const stored = window.localStorage.getItem(editModeStorageKey);
-    if (stored === 'true') return true;
-    if (stored === 'false') return false;
-  } catch {
-  }
-  return true;
+  return ensureUiStateController().loadEditModePreference();
 }
 
 function persistEditModePreference(enabled) {
@@ -2950,29 +1990,8 @@ function persistEditModePreference(enabled) {
 }
 
 function setEditMode(enabled) {
-  const toggle = document.getElementById('ui-chrome-edit-toggle');
-  const modePill = document.getElementById('mode-pill');
-
-  const transitioned = enabled
-    ? transitionDocViewState('SET_EDIT')
-    : transitionDocViewState('SET_READ');
-
-  if (!transitioned && (docViewState === DOC_VIEW_STATES.BOOTSTRAPPING || docViewState === DOC_VIEW_STATES.LOAD_ERROR)) {
-    transitionDocViewState(enabled ? 'START_EDIT' : 'START_READ');
-  }
-
-  const editEnabled = isEditModeState(docViewState);
-  
-  if (toggle) {
-    toggle.setAttribute('aria-pressed', editEnabled ? 'true' : 'false');
-  }
-
-  if (modePill) {
-    modePill.dataset.mode = editEnabled ? 'edit' : 'read';
-    modePill.textContent = editEnabled ? 'Editing' : 'Read only';
-  }
-
-  persistEditModePreference(editEnabled);
+  ensureUiStateController().setEditMode(Boolean(enabled));
+  syncUiStateMirrorFromController();
 }
 
 function getFocusedBlockIndex() {
@@ -3078,12 +2097,12 @@ function captureSurfaceSnapshot(options = {}) {
     fsm: {
       documentState: docViewState,
       saveState: docSaveState,
-      historyLength: fsmHistory.length,
-      lastTransition: fsmHistory.length > 0 ? fsmHistory[fsmHistory.length - 1] : null,
+      historyLength: fsmTransitionHistory.length,
+      lastTransition: fsmTransitionHistory.lastTransition,
     },
     documentHistory: {
-      undoDepth: docUndoStack.length,
-      redoDepth: docRedoStack.length,
+      undoDepth: documentHistory.undoDepth,
+      redoDepth: documentHistory.redoDepth,
     },
     viewport: {
       width: window.innerWidth,
@@ -3209,6 +2228,11 @@ function hideLoadingScreen() {
   const loadingScreen = document.getElementById('loading-screen');
   const page = document.querySelector('.page');
 
+  if (loadingGuardTimer) {
+    clearTimeout(loadingGuardTimer);
+    loadingGuardTimer = null;
+  }
+
   // If setEditMode never ran (exception thrown before it, leaving FSM in BOOTSTRAPPING),
   // force through to LOADING_EDIT so MARK_READY can succeed.
   if (docViewState === DOC_VIEW_STATES.BOOTSTRAPPING) {
@@ -3234,6 +2258,29 @@ function hideLoadingScreen() {
     loadingScreen.addEventListener('transitionend', removeLoading, { once: true });
     setTimeout(removeLoading, 220);
   }
+}
+
+function armLoadingGuard(preferredEditMode = true) {
+  if (loadingGuardTimer) {
+    clearTimeout(loadingGuardTimer);
+    loadingGuardTimer = null;
+  }
+
+  loadingGuardTimer = setTimeout(() => {
+    if (isReadyViewState(docViewState)) {
+      loadingGuardTimer = null;
+      return;
+    }
+
+    console.warn('[doc-webview] Loading guard forcing ready state', { state: docViewState });
+
+    if (docViewState === DOC_VIEW_STATES.BOOTSTRAPPING || docViewState === DOC_VIEW_STATES.LOAD_ERROR) {
+      transitionDocViewState(preferredEditMode ? 'START_EDIT' : 'START_READ');
+    }
+
+    transitionDocViewState('MARK_READY');
+    hideLoadingScreen();
+  }, 2500);
 }
 
 function insertImageBlock(imagePath, altText, atIndex) {
@@ -3404,8 +2451,11 @@ function initializeDocument() {
   const initialPaper = initEl && initEl.dataset && initEl.dataset.initialPaper ? initEl.dataset.initialPaper : 'white';
   const initialDensity = initEl && initEl.dataset && initEl.dataset.initialDensity ? initEl.dataset.initialDensity : 'comfortable';
   const initialScale = initEl && initEl.dataset && initEl.dataset.initialScale ? clampScale(initEl.dataset.initialScale) : 100;
+  const preferredEditMode = loadEditModePreference();
   currentDocPath = docPath;
   workspaceBaseUri = (initEl && initEl.dataset && initEl.dataset.workspaceUri) ? String(initEl.dataset.workspaceUri).replace(/\/$/, '') : '';
+
+  armLoadingGuard(preferredEditMode);
 
   const docPathEl = document.getElementById('doc-path');
   if (docPathEl) {
@@ -3977,7 +3027,8 @@ function initializeDocument() {
         return;
       }
 
-      blankPagePointerDownHadOpenEditors = hasOpenBlockSources() || Boolean(inlineCssSurfaceState.source);
+      ensureControllers();
+      blankPagePointerDownHadOpenEditors = hasOpenBlockSources() || inlineCssController.hasOpenSurface();
     });
 
     pageEl.addEventListener('click', (event) => {
@@ -3993,7 +3044,8 @@ function initializeDocument() {
       if (!isBlankArea) return;
 
       const hadOpenSources = hasOpenBlockSources();
-      const hadOpenInlineCss = Boolean(inlineCssSurfaceState.source);
+      ensureControllers();
+      const hadOpenInlineCss = inlineCssController.hasOpenSurface();
       const shouldOnlyCloseEditors = blankPagePointerDownHadOpenEditors || hadOpenSources || hadOpenInlineCss;
 
       closeInlineCssSurface();
@@ -4158,7 +3210,7 @@ function initializeDocument() {
     refreshDocumentCss();
     setControlsOpen(false);
     setHelpOpen(false);
-    setEditMode(loadEditModePreference());
+    setEditMode(preferredEditMode);
     wireDragAndDrop();
     vscode.postMessage({ type: 'get-config' });
   } finally {
