@@ -298,6 +298,46 @@ export type TransitionHistoryEntry = {
   after: SnapshotValue;
 };
 
+export type DirtyReconcileInput = {
+  latestSource: string;
+  lastSavedSource: string;
+  hadDirtyWorkingCopySignal: boolean;
+  emitDirtySync?: boolean;
+};
+
+export type DirtyReconcileResult = {
+  isDirty: boolean;
+  shouldPostMarkDirty: boolean;
+  shouldPostMarkClean: boolean;
+  nextHasDirtyWorkingCopySignal: boolean;
+};
+
+export function computeDirtyReconcileResult(input: DirtyReconcileInput): DirtyReconcileResult {
+  const latestSource = String(input.latestSource || '');
+  const lastSavedSource = String(input.lastSavedSource || '');
+  const emitDirtySync = input.emitDirtySync !== false;
+  const hadDirtyWorkingCopySignal = Boolean(input.hadDirtyWorkingCopySignal);
+  const isDirty = latestSource !== lastSavedSource;
+
+  if (isDirty) {
+    return {
+      isDirty: true,
+      shouldPostMarkDirty: emitDirtySync,
+      shouldPostMarkClean: false,
+      nextHasDirtyWorkingCopySignal: true,
+    };
+  }
+
+  return {
+    isDirty: false,
+    shouldPostMarkDirty: false,
+    // Always post clean while syncing so the extension can clear modified state
+    // even if the webview-local dirty signal drifted out of sync.
+    shouldPostMarkClean: emitDirtySync,
+    nextHasDirtyWorkingCopySignal: false,
+  };
+}
+
 export class TransitionHistory {
   past: BoundedHistory<TransitionHistoryEntry>;
   future: BoundedHistory<TransitionHistoryEntry>;

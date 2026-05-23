@@ -5,12 +5,12 @@ import { cleanupTempWorkspace, createTempWorkspace, writeDxFile } from '../helpe
 import { createDatabase } from '#runtime-src/database.js';
 import { ingestWorkspace, listOrSearchDocuments } from '#runtime-src/doc-service.js';
 
-// Unit-level MCP message handling tests (no subprocess spawning)
-test('mcp document operations are callable and handle common workflows', async () => {
+// Service-layer behavior behind MCP tools (no MCP transport/process wiring in this file).
+test('service-layer operations backing MCP tools handle common workflows', async () => {
   const { rootDir, dbPath } = await createTempWorkspace('doc-mcp-unit-');
 
   try {
-    // Simulate MCP tool environment by calling the service layer directly
+    // Exercise service functions that MCP tools delegate to.
     await writeDxFile(
       rootDir,
       'examples/welcome.dx',

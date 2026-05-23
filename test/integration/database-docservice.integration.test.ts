@@ -331,6 +331,8 @@ test('migrateLegacyWorkspace imports missing docs only', async () => {
       db.prepare('DELETE FROM document_storage WHERE document_id = ?').run(id);
       const doc = getDocumentById(db, id);
       assert.ok(doc, 'Expected document to hydrate via parseDocFile fallback');
+      assert.match(doc.source, /No storage row/);
+      assert.match(doc.source, /::paragraph/);
       db.close();
     } finally {
       await cleanupTempWorkspace(rootDir);
@@ -348,6 +350,8 @@ test('migrateLegacyWorkspace imports missing docs only', async () => {
       db.prepare('UPDATE document_storage SET packed_blob = ? WHERE document_id = ?').run(Buffer.from('not-valid-msgpack'), id);
       const doc = getDocumentById(db, id);
       assert.ok(doc, 'Expected document to hydrate via catch fallback');
+      assert.match(doc.source, /Corrupt blob/);
+      assert.match(doc.source, /::paragraph/);
       db.close();
     } finally {
       await cleanupTempWorkspace(rootDir);
@@ -382,9 +386,10 @@ test('migrateLegacyWorkspace imports missing docs only', async () => {
       oldDb.close();
       // Now call createDatabase — should trigger migration (ALTER TABLE ADD COLUMN)
       const db = createDatabase(dbPath);
-      // Verify the column now exists by querying it
-      const row = db.prepare('SELECT view_state_json FROM documents LIMIT 0').all();
-      assert.ok(Array.isArray(row));
+      // Verify the column now exists by inspecting schema.
+      const columns = db.prepare('PRAGMA table_info(documents)').all();
+      const hasViewStateColumn = columns.some((column) => column.name === 'view_state_json');
+      assert.equal(hasViewStateColumn, true);
       db.close();
     } finally {
       await cleanupTempWorkspace(rootDir);

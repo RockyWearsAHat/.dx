@@ -1,10 +1,10 @@
 # Comprehensive Test Coverage Report
 
-Last verified: 2026-05-22
+Last verified: 2026-05-23
 
 ## Executive Summary
 
-- `npm test`: pass (150 tests, 0 failures)
+- `npm test`: pass (216 tests, 0 failures)
 - `npm run test:coverage`: pass (enforced `--100` on covered surface)
 - Enforced coverage result: 100% statements, 100% branches, 100% functions, 100% lines on the configured include list
 
@@ -38,26 +38,28 @@ If any one of those files drops below 100% in statements/branches/functions/line
 
 ## Current Test Inventory
 
-Primary test files:
+Primary source test files:
 
-- `test/database-docservice.integration.test.mjs`
-- `test/doc-format.test.mjs`
-- `test/doc-binary.test.mjs`
-- `test/doc-view-and-pipeline.test.mjs`
-- `test/doc-view-extra.test.mjs`
-- `test/view-state.test.mjs`
-- `test/global-db-path.test.mjs`
-- `test/sqlite-native.test.mjs`
-- `test/mcp-operations.unit.test.mjs`
-- `test/coverage-final-1.test.mjs`
-- `test/coverage-final-2.test.mjs`
-- `test/coverage-gaps.test.mjs`
-- `test/coverage-gaps-extended.test.mjs`
+- `test/integration/database-docservice.integration.test.ts`
+- `test/integration/doc-view-and-pipeline.test.ts`
+- `test/integration/mcp-operations.integration.test.ts`
+- `test/unit/doc-format.test.ts`
+- `test/unit/doc-binary.test.ts`
+- `test/unit/doc-view-extra.test.ts`
+- `test/unit/view-state.test.ts`
+- `test/unit/global-db-path.test.ts`
+- `test/unit/sqlite-native.test.ts`
+- `test/unit/webview-module-syntax.test.ts`
+- `test/coverage/coverage-final-1.test.ts`
+- `test/coverage/coverage-final-2.test.ts`
+- `test/coverage/coverage-gaps.test.ts`
+- `test/coverage/coverage-gaps-extended.test.ts`
+- `test/coverage/branch-coverage-edge.test.ts`
 
 Observed run summary:
 
-- tests: 150
-- pass: 150
+- tests: 216
+- pass: 216
 - fail: 0
 
 ## Known Non-Enforced / Not Fully Covered Areas

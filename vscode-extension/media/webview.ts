@@ -18,6 +18,7 @@ import { BlockSourceController, InlineCssSurfaceController } from './webview-edi
 import { registerBlockInteractionEvents } from './webview-events.js';
 import {
   CallbackUndoRedoController,
+  computeDirtyReconcileResult,
   TableDrivenStateMachine,
   TransitionHistory,
 } from './webview-state-core.js';
@@ -385,15 +386,19 @@ function syncDocumentSaveStateFromModel(): void {
 
 function reconcileSaveStateFromModel(emitDirtySync = true): void {
   const latestSource = currentDocSourceText();
-  const isDirty = latestSource !== lastSavedDoc;
-  const hadDirtyWorkingCopySignal = hasDirtyWorkingCopySignal;
+  const outcome = computeDirtyReconcileResult({
+    latestSource,
+    lastSavedSource: lastSavedDoc,
+    hadDirtyWorkingCopySignal: hasDirtyWorkingCopySignal,
+    emitDirtySync,
+  });
 
-  if (isDirty) {
+  if (outcome.isDirty) {
     transitionDocSaveState('MARK_DIRTY');
     setStatusPersistent('Unsaved changes', 'dirty');
-    hasDirtyWorkingCopySignal = true;
+    hasDirtyWorkingCopySignal = outcome.nextHasDirtyWorkingCopySignal;
 
-    if (emitDirtySync) {
+    if (outcome.shouldPostMarkDirty) {
       vscode.postMessage({
         type: 'mark-dirty',
         text: latestSource,
@@ -404,15 +409,12 @@ function reconcileSaveStateFromModel(emitDirtySync = true): void {
 
   transitionDocSaveState('SYNC_CLEAN');
   clearStatusPersistent();
-  hasDirtyWorkingCopySignal = false;
+  hasDirtyWorkingCopySignal = outcome.nextHasDirtyWorkingCopySignal;
 
-  // Flush the clean source back to the backing working copy when needed so
-  // SCM status returns to clean after reverting edits.
-  if (emitDirtySync && hadDirtyWorkingCopySignal) {
-    vscode.postMessage({
-      type: 'mark-dirty',
-      text: latestSource,
-    });
+  // Signal clean whenever source matches the saved snapshot so modified state
+  // clears on exact reverts (including Cmd/Ctrl+Z back to saved content).
+  if (outcome.shouldPostMarkClean) {
+    vscode.postMessage({ type: 'mark-clean' });
   }
 }
 
