@@ -17,6 +17,7 @@ import {
   TableDrivenStateMachine,
   TransitionHistory,
 } from './webview-state-core.js';
+import { createDocumentLifecycle } from './webview-document-lifecycle.js';
 import { createUiStateController } from './webview-ui-state.js';
 
 const vscode = typeof acquireVsCodeApi === 'function' ? acquireVsCodeApi() : { postMessage: () => {} };
@@ -73,9 +74,62 @@ const documentHistory = new CallbackUndoRedoController({
   captureSnapshot: () => cloneDocModel(docModel),
   restoreSnapshot: (snapshot) => applyDocumentSnapshot(snapshot, null),
 });
+let documentLifecycleController = null;
 let inlineCssController = null;
 let blockSourceController = null;
 let uiStateController = null;
+
+function ensureDocumentLifecycleController() {
+  if (documentLifecycleController) {
+    return documentLifecycleController;
+  }
+
+  documentLifecycleController = createDocumentLifecycle({
+    getDocModel: () => docModel,
+    setDocModel: (nextDocModel) => {
+      docModel = nextDocModel;
+    },
+    stringifyDoc,
+    parseDoc,
+    getLastSavedDoc: () => lastSavedDoc,
+    setLastSavedDoc: (nextLastSavedDoc) => {
+      lastSavedDoc = String(nextLastSavedDoc || '');
+    },
+    getPendingExternalSource: () => pendingExternalSource,
+    setPendingExternalSource: (nextPendingExternalSource) => {
+      pendingExternalSource = nextPendingExternalSource;
+    },
+    getIsApplyingDocHistory: () => isApplyingDocHistory,
+    clearDocumentRedoHistory: () => documentHistory.clearRedo(),
+    recordDocumentUndo,
+    transitionDocSaveState,
+    getDocSaveState: () => docSaveState,
+    DOC_SAVE_STATES,
+    hasActiveEditingSurface,
+    clearStatusPersistent,
+    setStatusPersistent,
+    setStatus,
+    markDocumentDirty,
+    setHasDirtyWorkingCopySignal: (nextHasDirtyWorkingCopySignal) => {
+      hasDirtyWorkingCopySignal = Boolean(nextHasDirtyWorkingCopySignal);
+    },
+    postMessage: (message) => vscode.postMessage(message),
+    getNextSaveRequestId: () => nextSaveRequestId,
+    setNextSaveRequestId: (nextRequestId) => {
+      nextSaveRequestId = Number(nextRequestId || 0);
+    },
+    setInFlightSaveRequestId: (nextInFlightSaveRequestId) => {
+      inFlightSaveRequestId = Number(nextInFlightSaveRequestId || 0);
+    },
+    commitOpenSources,
+    getBlocksElement: () => document.getElementById('blocks'),
+    buildBlockWrap,
+    refreshDocumentCss,
+    currentDocSourceText,
+  });
+
+  return documentLifecycleController;
+}
 
 function captureFsmSnapshot() {
   return {
@@ -404,54 +458,23 @@ function currentDocSourceText() {
 }
 
 function canApplyExternalSourceNow() {
-  return !hasActiveEditingSurface()
-    && docSaveState !== DOC_SAVE_STATES.SAVING
-    && docSaveState !== DOC_SAVE_STATES.DIRTY;
+  return ensureDocumentLifecycleController().canApplyExternalSourceNow();
 }
 
 function applyIncomingSourceText(sourceText) {
-  const incomingText = String(sourceText || '');
-  const previousSource = currentDocSourceText();
-
-  if (docModel && previousSource !== incomingText && !isApplyingDocHistory) {
-    recordDocumentUndo('external-sync');
-  }
-
-  docModel = parseDoc(incomingText);
-  documentHistory.clearRedo();
-  lastSavedDoc = stringifyDoc(docModel);
-  pendingExternalSource = null;
-  transitionDocSaveState('SYNC_CLEAN');
-  renderDocument();
-  clearStatusPersistent();
-  hasDirtyWorkingCopySignal = false;
-  setStatus('Refreshed');
+  ensureDocumentLifecycleController().applyIncomingSourceText(sourceText);
 }
 
 function tryApplyPendingExternalSource() {
-  if (pendingExternalSource === null) {
-    return;
-  }
-
-  if (!canApplyExternalSourceNow()) {
-    return;
-  }
-
-  applyIncomingSourceText(pendingExternalSource);
+  ensureDocumentLifecycleController().tryApplyPendingExternalSource();
 }
 
 function startSaveRequest(sourceText) {
-  const requestId = nextSaveRequestId;
-  nextSaveRequestId += 1;
-  inFlightSaveRequestId = requestId;
-
-  transitionDocSaveState('START_SAVE');
-  setStatusPersistent('Saving…', 'saving');
-  vscode.postMessage({ type: 'save', text: sourceText, requestId });
+  ensureDocumentLifecycleController().startSaveRequest(sourceText);
 }
 
 function debouncedAutosave() {
-  markDocumentDirty();
+  ensureDocumentLifecycleController().debouncedAutosave();
 }
 
 function hasActiveEditingSurface() {
@@ -1814,36 +1837,15 @@ function commitBlockSrc(index) {
 }
 
 function renderDocument() {
-  if (!docModel) return;
-
-  const blocksEl = document.getElementById('blocks');
-  if (!blocksEl) return;
-
-  blocksEl.textContent = '';
-
-  docModel.blocks.forEach((block, index) => {
-    blocksEl.appendChild(buildBlockWrap(block, index));
-  });
-
-  refreshDocumentCss();
+  ensureDocumentLifecycleController().renderDocument();
 }
 
 function saveDoc() {
-  if (!docModel) return;
-  commitOpenSources();
-
-  const currentDoc = currentDocSourceText();
-  if (currentDoc === lastSavedDoc) {
-    transitionDocSaveState('SYNC_CLEAN');
-    clearStatusPersistent();
-    return;
-  }
-
-  startSaveRequest(currentDoc);
+  ensureDocumentLifecycleController().saveDoc();
 }
 
 function saveDocAuto() {
-  // Autosave intentionally disabled. Persistence happens only on explicit Cmd/Ctrl+S.
+  ensureDocumentLifecycleController().saveDocAuto();
 }
 
 function getInsertIndexForY(container, clientY) {
