@@ -2,6 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { packDocument, unpackDocument } from '#runtime-src/doc-binary.js';
 
+function withEmptyBlockIds(blocks: Array<Record<string, unknown>>) {
+  return blocks.map((block) => ({
+    ...block,
+    id: '',
+  }));
+}
+
 test('doc-binary pack/unpack roundtrip preserves blocks and metadata', () => {
   const doc = {
     title: 'Binary Doc',
@@ -28,7 +35,7 @@ test('doc-binary pack/unpack roundtrip preserves blocks and metadata', () => {
   assert.equal(unpacked.summary, doc.summary);
   assert.deepEqual(unpacked.tags, doc.tags);
   assert.deepEqual(unpacked.meta, doc.meta);
-  assert.deepEqual(unpacked.blocks, doc.blocks);
+  assert.deepEqual(unpacked.blocks, withEmptyBlockIds(doc.blocks));
 });
 
 test('doc-binary rejects invalid blob header', () => {
@@ -103,10 +110,10 @@ test('doc-binary checklist encoder handles null items and object items with null
   };
 
   const unpacked = unpackDocument(packDocument(doc));
-  assert.deepEqual(unpacked.blocks[0], { type: 'checklist', id: 'a', items: [] });
+  assert.deepEqual(unpacked.blocks[0], { type: 'checklist', id: '', items: [] });
   assert.deepEqual(unpacked.blocks[1], {
     type: 'checklist',
-    id: 'b',
+    id: '',
     items: [{ checked: true, text: '' }],
   });
 });
@@ -131,13 +138,13 @@ test('doc-binary normalizes non-string block type to paragraph and preserves mix
 
   assert.deepEqual(unpacked.blocks[0], {
     type: 'paragraph',
-    id: 'x',
+    id: '',
     text: 'fallback paragraph text',
   });
 
   assert.deepEqual(unpacked.blocks[1], {
     type: 'bulleted-list',
-    id: 'mix',
+    id: '',
     items: ['object item', 'string item', '', ''],
   });
 });

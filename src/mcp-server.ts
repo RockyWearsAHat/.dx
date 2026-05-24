@@ -6,12 +6,7 @@
 
 import path from 'node:path';
 import readline from 'node:readline';
-import { mkdir } from 'node:fs/promises';
-import {
-  createDatabase,
-  migrateLegacyWorkspace,
-  saveDocumentViewState,
-} from './database.js';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import {
   createDocument,
   getDocument,
@@ -23,22 +18,19 @@ import {
 import { renderDocumentViewHtml } from './doc-view.js';
 import { captureDocumentViewPng } from './doc-view-capture.js';
 import { stringifyDocFile } from './doc-format.js';
-import { resolveDocDbPath } from './global-db-path.js';
-import { mergeDocumentViewState, normalizeDocumentViewState, readDocumentViewState } from './view-state.js';
+import { computeSourceHash, mergeDocumentViewState, normalizeDocumentViewState } from './view-state.js';
 import type { DocumentViewState } from './view-state.js';
 
 const PROTOCOL_VERSION = '2024-11-05';
 
 type JsonPrimitive = string | number | boolean | null;
 type JsonValue = JsonPrimitive | undefined | object | JsonValue[];
-type DbConnection = ReturnType<typeof createDatabase>;
 
 interface Runtime {
   workspaceRoot: string;
-  db: DbConnection;
+  viewStatePath: string;
+  viewStateDocuments: Record<string, JsonValue>;
 }
-
-type ViewStateDb = Parameters<typeof readDocumentViewState>[0];
 
 interface DocBlock {
   id?: string;
@@ -99,7 +91,6 @@ interface ViewerHistoryEntry {
 interface ViewerSession {
   sessionId: string;
   workspaceRoot: string;
-  db: DbConnection;
   document: DocRecord;
   initialViewState: NormalizedViewState;
   activeViewState: NormalizedViewState;
@@ -138,6 +129,32 @@ type NormalizedViewState = DocumentViewState;
 const runtimeCache = new Map<string, Runtime>();
 const viewerSessions = new Map<string, ViewerSession>();
 
+function getViewStatePath(workspaceRoot: string): string {
+  return path.resolve(workspaceRoot, '.doc/view-state.json');
+}
+
+async function readViewStateDocuments(viewStatePath: string): Promise<Record<string, JsonValue>> {
+  try {
+    const raw = await readFile(viewStatePath, 'utf8');
+    const parsed = JSON.parse(raw) as { documents?: Record<string, JsonValue> };
+    if (parsed && typeof parsed === 'object' && parsed.documents && typeof parsed.documents === 'object') {
+      return parsed.documents;
+    }
+  } catch {
+    // Missing or invalid view-state files default to empty in-memory state.
+  }
+  return {};
+}
+
+async function persistViewStateDocuments(runtime: Runtime): Promise<void> {
+  await mkdir(path.dirname(runtime.viewStatePath), { recursive: true });
+  const payload = {
+    version: 1,
+    documents: runtime.viewStateDocuments,
+  };
+  await writeFile(runtime.viewStatePath, safeJsonStringify(payload), 'utf8');
+}
+
 const rl = readline.createInterface({
   input: process.stdin,
   output: process.stdout,
@@ -174,13 +191,9 @@ async function getRuntime(workspacePath: JsonValue): Promise<Runtime> {
     return cached;
   }
 
-  const dbPath = resolveDocDbPath();
-  await mkdir(path.dirname(dbPath), { recursive: true });
-
-  const db = createDatabase(dbPath);
-  migrateLegacyWorkspace(db, workspaceRoot, path.join(workspaceRoot, 'data', 'doc-index.sqlite'));
-
-  const runtime = { workspaceRoot, db };
+  const viewStatePath = getViewStatePath(workspaceRoot);
+  const viewStateDocuments = await readViewStateDocuments(viewStatePath);
+  const runtime = { workspaceRoot, viewStatePath, viewStateDocuments };
   runtimeCache.set(workspaceRoot, runtime);
   return runtime;
 }
@@ -298,7 +311,8 @@ const TOOLS = [
             appearance: { type: 'object' },
             viewport: { type: 'object' },
             effectiveCss: { type: 'string' },
-            sourceText: { type: 'string' },
+            sourceHash: { type: 'string' },
+            editBuffer: { type: 'string' },
           },
         },
       },
@@ -351,6 +365,17 @@ const TOOLS = [
             required: ['action'],
           },
         },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'maintain-database',
+    description: 'Run WAL checkpoint(TRUNCATE) + VACUUM maintenance for SQLite compaction.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspacePath: { type: 'string', description: 'Optional workspace root path' },
       },
       required: [],
     },
@@ -459,7 +484,8 @@ function getActiveCaptureViewState(runtime: Runtime, document: DocRecord | null)
     return normalizeDocumentViewState(liveSession.activeViewState) as NormalizedViewState;
   }
 
-  return normalizeDocumentViewState(readDocumentViewState(runtime.db as ViewStateDb, document?.id) || {}) as NormalizedViewState;
+  const key = String(document?.relativePath || '');
+  return normalizeDocumentViewState((runtime.viewStateDocuments && runtime.viewStateDocuments[key]) || {}) as NormalizedViewState;
 }
 
 function setBlockText(block: DocBlock, text: string | number | boolean | null | undefined | object): void {
@@ -500,11 +526,11 @@ function setBlockText(block: DocBlock, text: string | number | boolean | null | 
 
 async function resolveDocumentFromArgs(runtime: Runtime, args: ToolArgs): Promise<DocRecord | null> {
   if (args.path) {
-    return getDocumentByRelativePath(runtime.workspaceRoot, runtime.db, String(args.path));
+    return getDocumentByRelativePath(runtime.workspaceRoot, null, String(args.path));
   }
 
   if (Number.isFinite(Number(args.id))) {
-    return getDocument(runtime.workspaceRoot, runtime.db, Number(args.id));
+    return getDocument(runtime.workspaceRoot, null, Number(args.id));
   }
 
   return null;
@@ -519,9 +545,10 @@ function cloneSessionDocument(document: DocRecord): DocRecord {
   return JSON.parse(safeJsonStringify(document || {})) as DocRecord;
 }
 
-function createInitialViewerViewState(db: ViewStateDb, document: DocRecord): NormalizedViewState {
-  const fromDb = readDocumentViewState(db, document?.id);
-  return normalizeDocumentViewState(fromDb || {}) as NormalizedViewState;
+function createInitialViewerViewState(runtime: Runtime, document: DocRecord): NormalizedViewState {
+  const key = String(document?.relativePath || '');
+  const fromStore = runtime.viewStateDocuments && runtime.viewStateDocuments[key];
+  return normalizeDocumentViewState(fromStore || {}) as NormalizedViewState;
 }
 
 function resetSessionViewState(session: ViewerSession): void {
@@ -571,6 +598,10 @@ function syncSessionDirtyState(session: ViewerSession): void {
   const currentSource = stringifyDocFile(session.document);
   session.document.source = currentSource;
   session.isDirty = currentSource !== String(session.savedSource || '');
+  session.activeViewState = mergeDocumentViewState(session.activeViewState, {
+    sourceHash: computeSourceHash(currentSource),
+    editBuffer: session.isDirty ? currentSource : '',
+  });
 }
 
 function undoSessionState(session: ViewerSession): boolean {
@@ -712,7 +743,7 @@ async function applyViewerAction(session: ViewerSession, actionSpec: ViewerActio
     const runtime = await getRuntime(session.workspaceRoot);
     const saved = await saveDocumentSourceByRelativePath(
       runtime.workspaceRoot,
-      runtime.db,
+      null,
       session.document.relativePath,
       stringifyDocFile(session.document)
     );
@@ -720,6 +751,10 @@ async function applyViewerAction(session: ViewerSession, actionSpec: ViewerActio
     session.savedSource = stringifyDocFile(saved);
     session.isDirty = false;
     session.future = [];
+    session.activeViewState = mergeDocumentViewState(session.activeViewState, {
+      sourceHash: computeSourceHash(session.savedSource),
+      editBuffer: '',
+    });
     return;
   }
 
@@ -731,6 +766,8 @@ async function applyViewerAction(session: ViewerSession, actionSpec: ViewerActio
 
     session.activeViewState = mergeDocumentViewState(session.activeViewState, patch);
     session.settingsDirty = safeJsonStringify(session.activeViewState) !== safeJsonStringify(session.initialViewState);
+    runtime.viewStateDocuments[session.document.relativePath] = session.activeViewState;
+    await persistViewStateDocuments(runtime);
     return;
   }
 
@@ -767,7 +804,7 @@ async function handleTool(id: JsonValue, toolName: string, args: ToolArgs = {}) 
         const runtime = await getRuntime(args.workspacePath);
         const query = String(args.query || '');
         const limit = Math.max(1, Number(args.limit || 50));
-        result = (await listOrSearchDocuments(runtime.workspaceRoot, runtime.db, query)).slice(0, limit);
+        result = (await listOrSearchDocuments(runtime.workspaceRoot, null, query)).slice(0, limit);
         break;
       }
 
@@ -775,9 +812,9 @@ async function handleTool(id: JsonValue, toolName: string, args: ToolArgs = {}) 
         const runtime = await getRuntime(args.workspacePath);
 
         if (args.path) {
-          result = await getDocumentByRelativePath(runtime.workspaceRoot, runtime.db, args.path);
+          result = await getDocumentByRelativePath(runtime.workspaceRoot, null, args.path);
         } else if (Number.isFinite(Number(args.id))) {
-          result = await getDocument(runtime.workspaceRoot, runtime.db, Number(args.id));
+          result = await getDocument(runtime.workspaceRoot, null, Number(args.id));
         } else {
           return sendError(id, -32602, 'Either path or id is required');
         }
@@ -798,7 +835,7 @@ async function handleTool(id: JsonValue, toolName: string, args: ToolArgs = {}) 
         }
 
         const limit = Math.max(1, Number(args.limit || 20));
-        result = (await listOrSearchDocuments(runtime.workspaceRoot, runtime.db, query)).slice(0, limit);
+        result = (await listOrSearchDocuments(runtime.workspaceRoot, null, query)).slice(0, limit);
         break;
       }
 
@@ -807,7 +844,7 @@ async function handleTool(id: JsonValue, toolName: string, args: ToolArgs = {}) 
         const title = String(args.title || 'Untitled').trim() || 'Untitled';
         const docPath = String(args.path || `documents/${toSlug(title)}.dx`);
 
-        await createDocument(runtime.workspaceRoot, runtime.db, {
+        await createDocument(runtime.workspaceRoot, null, {
           path: docPath,
           title,
           summary: args.summary,
@@ -817,9 +854,9 @@ async function handleTool(id: JsonValue, toolName: string, args: ToolArgs = {}) 
         });
 
         if (String(args.content || '').trim()) {
-          result = await saveDocumentSourceByRelativePath(runtime.workspaceRoot, runtime.db, docPath, String(args.content));
+          result = await saveDocumentSourceByRelativePath(runtime.workspaceRoot, null, docPath, String(args.content));
         } else {
-          result = await getDocumentByRelativePath(runtime.workspaceRoot, runtime.db, docPath);
+          result = await getDocumentByRelativePath(runtime.workspaceRoot, null, docPath);
         }
 
         break;
@@ -829,7 +866,7 @@ async function handleTool(id: JsonValue, toolName: string, args: ToolArgs = {}) 
         const runtime = await getRuntime(args.workspacePath);
         result = await saveDocumentSourceByRelativePath(
           runtime.workspaceRoot,
-          runtime.db,
+          null,
           String(args.path || ''),
           String(args.content || '')
         );
@@ -838,7 +875,7 @@ async function handleTool(id: JsonValue, toolName: string, args: ToolArgs = {}) 
 
       case 'ingest-workspace': {
         const runtime = await getRuntime(args.workspacePath);
-        result = await ingestWorkspace(runtime.workspaceRoot, runtime.db);
+        result = await ingestWorkspace(runtime.workspaceRoot, null);
         break;
       }
 
@@ -852,11 +889,10 @@ async function handleTool(id: JsonValue, toolName: string, args: ToolArgs = {}) 
 
         const sessionId = createViewerSessionId();
         const savedSource = stringifyDocFile(document);
-        const initialViewState = createInitialViewerViewState(runtime.db as ViewStateDb, document);
+        const initialViewState = createInitialViewerViewState(runtime, document);
         const session = {
           sessionId,
           workspaceRoot: runtime.workspaceRoot,
-          db: runtime.db,
           document,
           initialViewState,
           activeViewState: normalizeDocumentViewState(initialViewState),
@@ -905,6 +941,14 @@ async function handleTool(id: JsonValue, toolName: string, args: ToolArgs = {}) 
           { type: 'text', text: safeJsonStringify(result) },
           { type: 'image', mimeType: captured.mimeType, data: captured.base64 },
         ];
+        break;
+      }
+
+      case 'maintain-database': {
+        result = {
+          status: 'removed',
+          message: 'SQLite maintenance is no longer applicable. Active engine is bundle + dxlite.',
+        };
         break;
       }
 
@@ -959,11 +1003,10 @@ async function handleTool(id: JsonValue, toolName: string, args: ToolArgs = {}) 
 
           const sessionId = createViewerSessionId();
           const savedSource = stringifyDocFile(document);
-          const initialViewState = createInitialViewerViewState(runtime.db as ViewStateDb, document);
+          const initialViewState = createInitialViewerViewState(runtime, document);
           session = {
             sessionId,
             workspaceRoot: runtime.workspaceRoot,
-            db: runtime.db,
             document,
             initialViewState,
             activeViewState: normalizeDocumentViewState(initialViewState),
@@ -1070,7 +1113,7 @@ async function handleRequest(message: JsonRpcRequest) {
 
     if (method === 'resources/list') {
       const runtime = await getRuntime(params?.workspacePath);
-      const docs = await listOrSearchDocuments(runtime.workspaceRoot, runtime.db, '');
+      const docs = await listOrSearchDocuments(runtime.workspaceRoot, null, '');
       const resources = docs.flatMap((doc) => ([
         {
           uri: `doc:///${doc.relativePath}`,
@@ -1092,7 +1135,7 @@ async function handleRequest(message: JsonRpcRequest) {
       const relativePath = uri
         .replace(/^doc:\/\/\//, '')
         .replace(/^docview:\/\/\//, '');
-      const doc = await getDocumentByRelativePath(runtime.workspaceRoot, runtime.db, relativePath);
+      const doc = await getDocumentByRelativePath(runtime.workspaceRoot, null, relativePath);
 
       if (!doc) {
         return sendError(id, -32602, 'Document not found');

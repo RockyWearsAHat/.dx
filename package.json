@@ -9,8 +9,6 @@
   },
   "scripts": {
     "clean": "rm -rf build coverage tmp src/*.js src/*.js.map vscode-extension/media/*.js vscode-extension/media/*.js.map",
-    "build:native": "node-gyp rebuild || node -e \"console.warn('Native SQLite bridge build failed; falling back to node:sqlite.')\"",
-    "build:native:once": "node -e \"const fs=require('fs');const p='build/Release/doc_sqlite.node';if(fs.existsSync(p)){console.log('Native SQLite bridge already exists at '+p+', skipping rebuild.');process.exit(0);}process.exit(1);\" || npm run -s build:native",
     "build:ts": "npx tsc --project tsconfig.json --outDir build/runtime --rootDir . --noCheck && node scripts/build-runtime-metadata.mjs && node scripts/build-extension-host.mjs && node scripts/build-webview-bundle.mjs",
     "typecheck": "npx tsc --project tsconfig.json --noEmit",
     "typecheck:all": "npx tsc --project tsconfig.json --noEmit",
@@ -21,28 +19,27 @@
     "build:release": "npm run build:artifacts",
     "mcp": "node build/runtime/src/mcp-server.js",
     "mcp:dev": "node --watch build/runtime/src/mcp-server.js",
-    "mcp:prepare": "npm run -s build:ts && npm run -s build:native:once",
-    "mcp:dev:prepare": "npm run -s build:ts && npm run -s build:native:once && node --watch build/runtime/src/mcp-server.js",
+    "mcp:prepare": "npm run -s build:ts",
+    "mcp:dev:prepare": "npm run -s build:ts && node --watch build/runtime/src/mcp-server.js",
     "verify:doc-fsm": "npm run -s build:ts && node scripts/verify-doc-save-fsm.mjs",
     "docs:seed": "npm run -s build:ts && node scripts/maintenance/write-docs-seed.mjs",
-    "build:test": "npx tsc --project tsconfig.tests.json --outDir build/test --rootDir .",
-    "test": "npm run -s build:native:once && npm run -s build:ts && npm run -s build:test && node --test build/test/test/**/*.test.js",
-    "test:coverage": "npm run -s build:native:once && npm run -s build:ts && npm run -s build:test && c8 --all --reporter=text --reporter=lcov --reports-dir build/coverage --temp-directory build/coverage/tmp --100 --include=build/runtime/src/database.js --include=build/runtime/src/doc-service.js --include=build/runtime/src/doc-format.js --include=build/runtime/src/doc-binary.js --include=build/runtime/src/doc-view.js --include=build/runtime/src/view-state.js --include=build/runtime/src/global-db-path.js --include=build/runtime/src/sqlite-native.js --include=build/runtime/vscode-extension/media/doc-pipeline.js node --test build/test/test/**/*.test.js",
+    "build:test": "rm -rf build/test && npx tsc --project tsconfig.tests.json --outDir build/test --rootDir .",
+    "test": "npm run -s build:ts && npm run -s build:test && node --test build/test/test/**/*.test.js",
+    "test:coverage": "npm run -s build:ts && npm run -s build:test && c8 --all --reporter=text --reporter=lcov --reports-dir build/coverage --temp-directory build/coverage/tmp --100 --include=build/runtime/src/doc-service.js --include=build/runtime/src/doc-format.js --include=build/runtime/src/doc-binary.js --include=build/runtime/src/doc-view.js --include=build/runtime/src/view-state.js --include=build/runtime/vscode-extension/media/doc-pipeline.js node --test build/test/test/**/*.test.js",
     "setup": "npm run -s build:ts && node build/runtime/src/cli.js setup",
     "ingest": "npm run -s build:ts && node build/runtime/src/cli.js ingest",
+    "maintain": "npm run -s build:ts && node build/runtime/src/cli.js maintain",
     "reconstruct": "npm run -s build:ts && node build/runtime/src/cli.js reconstruct",
     "upgrade:install": "node scripts/upgrade-install.mjs"
   },
   "dependencies": {
-    "node-addon-api": "^8.3.1",
     "playwright": "^1.60.0"
   },
   "devDependencies": {
-    "@vscode/vsce": "^3.6.2",
     "@types/node": "^25.9.1",
+    "@vscode/vsce": "^3.6.2",
     "c8": "^10.1.3",
     "esbuild": "^0.27.0",
-    "node-gyp": "^11.2.0",
     "typescript": "^6.0.3"
   },
   "engines": {

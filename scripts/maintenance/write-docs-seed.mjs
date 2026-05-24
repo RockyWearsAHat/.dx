@@ -1,11 +1,9 @@
 import { saveDocumentSourceByRelativePath } from '../../build/runtime/src/doc-service.js';
-import { createDatabase } from '../../build/runtime/src/database.js';
-import { resolveDocDbPath } from '../../build/runtime/src/global-db-path.js';
 import { rm, rmdir } from 'node:fs/promises';
 import path from 'node:path';
 
 const root = process.cwd();
-const db = createDatabase(resolveDocDbPath());
+const runtime = null;
 
 // ---------------------------------------------------------------------------
 // Document source texts in canonical .dx block format
@@ -264,13 +262,13 @@ const blockReference = [
 // ---------------------------------------------------------------------------
 
 console.log('Writing examples/welcome.dx...');
-await saveDocumentSourceByRelativePath(root, db, 'examples/welcome.dx', welcome);
+await saveDocumentSourceByRelativePath(root, runtime, 'examples/welcome.dx', welcome);
 
 console.log('Writing examples/tutorial.dx...');
-await saveDocumentSourceByRelativePath(root, db, 'examples/tutorial.dx', tutorial);
+await saveDocumentSourceByRelativePath(root, runtime, 'examples/tutorial.dx', tutorial);
 
 console.log('Writing examples/block-reference.dx...');
-await saveDocumentSourceByRelativePath(root, db, 'examples/block-reference.dx', blockReference);
+await saveDocumentSourceByRelativePath(root, runtime, 'examples/block-reference.dx', blockReference);
 
 // ---------------------------------------------------------------------------
 // Remove junk test files (stubs from disk)

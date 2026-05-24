@@ -57,6 +57,18 @@ interface DecodeState {
   offset: number;
 }
 
+function firstHeadingText(blocks: BinaryBlock[]): string {
+  for (const block of blocks) {
+    if (!block || block.type !== 'heading') {
+      continue;
+    }
+
+    return String(block.text || '');
+  }
+
+  return '';
+}
+
 function encodeVarint(value: number | string | null | undefined): Buffer {
   const numberValue = Number(value);
   let number = Math.max(0, Math.trunc(numberValue || 0));
@@ -94,6 +106,22 @@ function encodeString(value: string | number | null | undefined): Buffer {
   const text = String(value || '');
   const payload = Buffer.from(text, 'utf8');
   return Buffer.concat([encodeVarint(payload.length), payload]);
+}
+
+function encodeBlockId(id: string | undefined, version: number): Buffer {
+  if (version >= 2) {
+    return Buffer.alloc(0);
+  }
+
+  return encodeString(id || '');
+}
+
+function decodeBlockId(buffer: Buffer, state: DecodeState, version: number): string {
+  if (version >= 2) {
+    return '';
+  }
+
+  return decodeString(buffer, state);
 }
 
 function decodeString(buffer: Buffer, state: DecodeState): string {
@@ -163,10 +191,10 @@ function decodeTags(buffer: Buffer, state: DecodeState): string[] {
   return tags;
 }
 
-function encodeBlock(block: BinaryBlock): Buffer {
+function encodeBlock(block: BinaryBlock, version: number): Buffer {
   const normalizedType = typeof block.type === 'string' ? block.type : 'paragraph';
   const blockCode = BLOCK_TYPE_TO_CODE[normalizedType as keyof typeof BLOCK_TYPE_TO_CODE] || BLOCK_TYPE_TO_CODE.paragraph;
-  const parts = [Buffer.from([blockCode]), encodeString(block.id || '')];
+  const parts = [Buffer.from([blockCode]), encodeBlockId(block.id, version)];
 
   if (block.type === 'heading') {
     parts.push(Buffer.from([Math.max(1, Math.min(4, Number(block.level) || 1))]));
@@ -218,7 +246,7 @@ function encodeBlock(block: BinaryBlock): Buffer {
   return Buffer.concat(parts);
 }
 
-function decodeBlock(buffer: Buffer, state: DecodeState): BinaryBlock {
+function decodeBlock(buffer: Buffer, state: DecodeState, version: number): BinaryBlock {
   if (state.offset >= buffer.length) {
     throw new Error('Unexpected end of binary document while decoding block.');
   }
@@ -228,7 +256,7 @@ function decodeBlock(buffer: Buffer, state: DecodeState): BinaryBlock {
 
   // Unknown type codes require malformed payloads crafted outside packDocument.
   const type = (CODE_TO_BLOCK_TYPE[typeCode] || 'paragraph') as BlockType | string;
-  const id = decodeString(buffer, state);
+  const id = decodeBlockId(buffer, state, version);
 
   if (type === 'heading') {
     if (state.offset >= buffer.length) {
@@ -288,20 +316,25 @@ function decodeBlock(buffer: Buffer, state: DecodeState): BinaryBlock {
 }
 
 export function packDocument(document: BinaryDocument): Buffer {
+  const version = 2;
+  const blocks = Array.isArray(document.blocks) ? document.blocks : [];
+  const title = String(document.title || '');
+  const headingTitle = firstHeadingText(blocks);
+  const storedTitle = title && headingTitle && title === headingTitle ? '' : title;
+
   const parts = [
     MAGIC,
-    encodeVarint(1),
-    encodeString(document.title || ''),
+    encodeVarint(version),
+    encodeString(storedTitle),
     encodeString(document.summary || ''),
     encodeTags(document.tags),
     encodeMeta(document.meta),
   ];
 
-  const blocks = Array.isArray(document.blocks) ? document.blocks : [];
   parts.push(encodeVarint(blocks.length));
 
   for (const block of blocks) {
-    parts.push(encodeBlock(block));
+    parts.push(encodeBlock(block, version));
   }
 
   return Buffer.concat(parts);
@@ -315,9 +348,9 @@ export function unpackDocument(blob: Buffer | Uint8Array): BinaryDocument {
   }
 
   const state = { offset: MAGIC.length };
-  decodeVarint(buffer, state);
+  const version = decodeVarint(buffer, state);
 
-  const title = decodeString(buffer, state);
+  const decodedTitle = decodeString(buffer, state);
   const summary = decodeString(buffer, state);
   const tags = decodeTags(buffer, state);
   const meta = decodeMeta(buffer, state);
@@ -325,8 +358,10 @@ export function unpackDocument(blob: Buffer | Uint8Array): BinaryDocument {
   const blocks = [];
 
   for (let index = 0; index < blockCount; index += 1) {
-    blocks.push(decodeBlock(buffer, state));
+    blocks.push(decodeBlock(buffer, state, version));
   }
+
+  const title = decodedTitle || firstHeadingText(blocks as BinaryBlock[]);
 
   return {
     title,

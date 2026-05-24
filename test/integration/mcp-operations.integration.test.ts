@@ -1,13 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import path from 'node:path';
 import { cleanupTempWorkspace, createTempWorkspace, writeDxFile } from '../helpers/test-utils.js';
-import { createDatabase } from '#runtime-src/database.js';
 import { ingestWorkspace, listOrSearchDocuments } from '#runtime-src/doc-service.js';
 
 // Service-layer behavior behind MCP tools (no MCP transport/process wiring in this file).
 test('service-layer operations backing MCP tools handle common workflows', async () => {
-  const { rootDir, dbPath } = await createTempWorkspace('doc-mcp-unit-');
+  const { rootDir } = await createTempWorkspace('doc-mcp-unit-');
 
   try {
     // Exercise service functions that MCP tools delegate to.
@@ -25,24 +23,20 @@ test('service-layer operations backing MCP tools handle common workflows', async
       ].join('\n')
     );
 
-    const db = createDatabase(dbPath);
-
     // Simulate ingest-workspace tool
-    const ingested = await ingestWorkspace(rootDir, db);
+    const ingested = await ingestWorkspace(rootDir, null);
     assert.equal(ingested.length, 1);
     assert.equal(ingested[0].relativePath, 'examples/welcome.dx');
     assert.equal(ingested[0].title, 'welcome');
 
     // Simulate list-documents tool
-    const listed = await listOrSearchDocuments(rootDir, db, '');
+    const listed = await listOrSearchDocuments(rootDir, null, '');
     assert.equal(listed.length, 1);
 
     // Simulate search-documents tool
-    const searched = await listOrSearchDocuments(rootDir, db, 'interactive');
+    const searched = await listOrSearchDocuments(rootDir, null, 'interactive');
     assert.equal(searched.length, 1);
-    assert.ok(searched[0].score > 0);
-
-    db.close();
+    assert.equal(searched[0].relativePath, 'examples/welcome.dx');
   } finally {
     await cleanupTempWorkspace(rootDir);
   }
