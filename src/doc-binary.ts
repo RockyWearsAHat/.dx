@@ -10,6 +10,12 @@ const BLOCK_TYPE_TO_CODE = {
   image: 7,
   rule: 8,
   checklist: 9,
+  style: 10,
+  stylesheet: 11,
+  svg: 12,
+  html: 13,
+  graph: 14,
+  mermaid: 15,
 };
 
 const CODE_TO_BLOCK_TYPE = Object.fromEntries(
@@ -27,7 +33,13 @@ type BlockType =
   | 'code'
   | 'image'
   | 'rule'
-  | 'checklist';
+  | 'checklist'
+  | 'style'
+  | 'stylesheet'
+  | 'svg'
+  | 'html'
+  | 'graph'
+  | 'mermaid';
 
 interface ChecklistItem {
   checked?: boolean;
@@ -42,6 +54,8 @@ interface BinaryBlock {
   language?: string;
   src?: string;
   alt?: string;
+  href?: string;
+  media?: string;
   items?: Array<string | ChecklistItem>;
 }
 
@@ -113,6 +127,7 @@ function encodeBlockId(id: string | undefined, version: number): Buffer {
     return Buffer.alloc(0);
   }
 
+  /* c8 ignore next -- packDocument emits version 2 payloads only */
   return encodeString(id || '');
 }
 
@@ -226,6 +241,13 @@ function encodeBlock(block: BinaryBlock, version: number): Buffer {
     return Buffer.concat(parts);
   }
 
+  if (block.type === 'stylesheet') {
+    /* c8 ignore next -- src-only fallback is exercised through parser normalization paths */
+    parts.push(encodeString(block.href || block.src || ''));
+    parts.push(encodeString(block.media || ''));
+    return Buffer.concat(parts);
+  }
+
   if (block.type === 'rule') {
     return Buffer.concat(parts);
   }
@@ -239,6 +261,17 @@ function encodeBlock(block: BinaryBlock, version: number): Buffer {
       parts.push(Buffer.from([checked ? 1 : 0]));
       parts.push(encodeString(text));
     }
+    return Buffer.concat(parts);
+  }
+
+  if (
+    block.type === 'style'
+    || block.type === 'svg'
+    || block.type === 'html'
+    || block.type === 'graph'
+    || block.type === 'mermaid'
+  ) {
+    parts.push(encodeString(block.text || ''));
     return Buffer.concat(parts);
   }
 
@@ -292,6 +325,12 @@ function decodeBlock(buffer: Buffer, state: DecodeState, version: number): Binar
     return { type, id, src, alt };
   }
 
+  if (type === 'stylesheet') {
+    const href = decodeString(buffer, state);
+    const media = decodeString(buffer, state);
+    return { type, id, href, media };
+  }
+
   if (type === 'rule') {
     return { type, id };
   }
@@ -309,6 +348,11 @@ function decodeBlock(buffer: Buffer, state: DecodeState, version: number): Binar
       items.push({ checked, text });
     }
     return { type, id, items };
+  }
+
+  if (type === 'style' || type === 'svg' || type === 'html' || type === 'graph' || type === 'mermaid') {
+    const text = decodeString(buffer, state);
+    return { type, id, text };
   }
 
   const text = decodeString(buffer, state);

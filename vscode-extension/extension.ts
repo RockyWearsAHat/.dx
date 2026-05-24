@@ -373,6 +373,20 @@ function renderEditorHtml(relativePath, sourceText, errorText = '', initialTheme
       .replace(/'/g, '&#39;');
   }
 
+  function sanitizeRichMarkup(value) {
+    let text = String(value || '');
+    text = text.replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, '');
+    text = text.replace(/\son[a-z]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '');
+    text = text.replace(/\s(?:href|src|xlink:href)\s*=\s*(['"])\s*javascript:[\s\S]*?\1/gi, '');
+    text = text.replace(/\s(?:href|src|xlink:href)\s*=\s*javascript:[^\s>]+/gi, '');
+    return text;
+  }
+
+  function extractSvgMarkup(value) {
+    const match = /<svg[\s\S]*?<\/svg>/i.exec(String(value || ''));
+    return match ? match[0] : '';
+  }
+
   function parseSourceText(text) {
     const normalized = String(text || '').replace(/\r\n/g, '\n');
     const lines = normalized.split('\n');
@@ -461,6 +475,9 @@ function renderEditorHtml(relativePath, sourceText, errorText = '', initialTheme
       } else if (type === 'image') {
         const srcMatch = /src=([^\s]+)/.exec(args);
         blocks.push({ type, src: srcMatch ? srcMatch[1] : '', alt: content.join('\n').trim() });
+      } else if (type === 'code') {
+        const langMatch = /(?:lang|language)=([^\s]+)/.exec(args);
+        blocks.push({ type, language: langMatch ? langMatch[1] : '', text: content.join('\n').trimEnd() });
       } else {
         blocks.push({ type, text: content.join('\n').trimEnd() });
       }
@@ -488,7 +505,21 @@ function renderEditorHtml(relativePath, sourceText, errorText = '', initialTheme
     }
 
     if (block.type === 'code') {
-      return `<pre>${escapeHtml(block.text || '')}</pre>`;
+      const language = String(block.language || '').trim().toLowerCase();
+      const rawText = String(block.text || '');
+
+      if (language === 'svg') {
+        const svgMarkup = extractSvgMarkup(rawText);
+        if (svgMarkup) {
+          return `<div class="svg-wrap">${sanitizeRichMarkup(svgMarkup)}</div>`;
+        }
+      }
+
+      if (language === 'html') {
+        return `<div class="html-wrap">${sanitizeRichMarkup(rawText)}</div>`;
+      }
+
+      return `<pre>${escapeHtml(rawText)}</pre>`;
     }
 
     if (block.type === 'quote') {
@@ -500,6 +531,27 @@ function renderEditorHtml(relativePath, sourceText, errorText = '', initialTheme
       const alt = escapeHtml(block.alt || '');
       const caption = alt ? `<figcaption>${alt}</figcaption>` : '';
       return `<figure class="image-wrap"><img src="${src}" alt="${alt}" loading="lazy" />${caption}</figure>`;
+    }
+
+    if (block.type === 'svg') {
+      const svgMarkup = extractSvgMarkup(block.text || '');
+      if (svgMarkup) {
+        return `<div class="svg-wrap">${sanitizeRichMarkup(svgMarkup)}</div>`;
+      }
+      return `<pre>${escapeHtml(block.text || '')}</pre>`;
+    }
+
+    if (block.type === 'html') {
+      return `<div class="html-wrap">${sanitizeRichMarkup(block.text || '')}</div>`;
+    }
+
+    if (block.type === 'graph' || block.type === 'mermaid') {
+      const graphText = String(block.text || '');
+      const svgMarkup = extractSvgMarkup(graphText);
+      if (svgMarkup) {
+        return `<div class="graph-wrap">${sanitizeRichMarkup(svgMarkup)}</div>`;
+      }
+      return `<pre>${escapeHtml(graphText)}</pre>`;
     }
 
     return `<p>${escapeHtml(block.text || '')}</p>`;

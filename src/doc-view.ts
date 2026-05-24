@@ -29,6 +29,21 @@ function escapeStyleTagContent(value: string | number | boolean | null | undefin
   return String(value).replace(/<\/(style)/gi, '<\\/$1');
 }
 
+function sanitizeRichMarkup(value: string | number | boolean | null | undefined | object): string {
+  let text = String(value || '');
+  text = text.replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, '');
+  text = text.replace(/\son[a-z]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '');
+  text = text.replace(/\s(?:href|src|xlink:href)\s*=\s*(['"])\s*javascript:[\s\S]*?\1/gi, '');
+  text = text.replace(/\s(?:href|src|xlink:href)\s*=\s*javascript:[^\s>]+/gi, '');
+  return text;
+}
+
+function extractSvgMarkup(value: string | number | boolean | null | undefined | object): string {
+  const text = String(value || '');
+  const match = /<svg[\s\S]*?<\/svg>/i.exec(text);
+  return match ? match[0] : '';
+}
+
 function toStringItems(items: Array<string | ChecklistItem> | undefined): string[] {
   if (!Array.isArray(items)) return [];
   return items.map((item) => {
@@ -120,9 +135,54 @@ function renderBlock(block: PipelineBlock): string {
   }
 
   if (type === 'code') {
-    const code = escapeHtml(block?.text || '');
+    const language = String(block?.language || '').trim().toLowerCase();
+    const rawText = String(block?.text || '');
+
+    if (language === 'svg') {
+      const svgMarkup = extractSvgMarkup(rawText);
+      if (svgMarkup) {
+        const attrs = getDecoratedAttrs(block, ['svg-wrap']);
+        return `<div${attrs}>${sanitizeRichMarkup(svgMarkup)}</div>`;
+      }
+    }
+
+    if (language === 'html') {
+      const attrs = getDecoratedAttrs(block, ['html-wrap']);
+      return `<div${attrs}>${sanitizeRichMarkup(rawText)}</div>`;
+    }
+
+    const code = escapeHtml(rawText);
     const open = decorateRootTag('pre', block);
     return `${open}${code}</pre>`;
+  }
+
+  if (type === 'svg') {
+    const svgMarkup = extractSvgMarkup(block?.text || '');
+    if (svgMarkup) {
+      const attrs = getDecoratedAttrs(block, ['svg-wrap']);
+      return `<div${attrs}>${sanitizeRichMarkup(svgMarkup)}</div>`;
+    }
+
+    const open = decorateRootTag('pre', block);
+    return `${open}${escapeHtml(block?.text || '')}</pre>`;
+  }
+
+  if (type === 'html') {
+    const attrs = getDecoratedAttrs(block, ['html-wrap']);
+    return `<div${attrs}>${sanitizeRichMarkup(block?.text || '')}</div>`;
+  }
+
+  if (type === 'graph' || type === 'mermaid') {
+    const text = String(block?.text || '');
+    const svgMarkup = extractSvgMarkup(text);
+
+    if (svgMarkup) {
+      const attrs = getDecoratedAttrs(block, ['graph-wrap']);
+      return `<div${attrs}>${sanitizeRichMarkup(svgMarkup)}</div>`;
+    }
+
+    const open = decorateRootTag('pre', block);
+    return `${open}${escapeHtml(text)}</pre>`;
   }
 
   if (type === 'image') {

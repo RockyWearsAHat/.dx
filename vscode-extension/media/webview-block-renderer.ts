@@ -10,6 +10,7 @@ interface RenderBlock {
   className?: string;
   type: string;
   text?: string;
+  language?: string;
   level?: number;
   src?: string;
   alt?: string;
@@ -67,6 +68,45 @@ function parseInlineLinks(text: string): ParsedToken[] {
     tokens.push({ type: 'text', value: text.slice(lastIndex) });
   }
   return tokens;
+}
+
+function sanitizeFragmentMarkup(markup: string): string {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(`<div>${String(markup || '')}</div>`, 'text/html');
+
+  if (!doc.body) {
+    return '';
+  }
+
+  const scripts = Array.from(doc.body.querySelectorAll('script'));
+  for (const script of scripts) {
+    script.remove();
+  }
+
+  const allElements = Array.from(doc.body.querySelectorAll('*'));
+  for (const element of allElements) {
+    const attrs = Array.from(element.attributes);
+    for (const attr of attrs) {
+      const name = String(attr.name || '').toLowerCase();
+      const value = String(attr.value || '');
+
+      if (name.startsWith('on')) {
+        element.removeAttribute(attr.name);
+        continue;
+      }
+
+      if ((name === 'href' || name === 'src' || name === 'xlink:href') && /^\s*javascript:/i.test(value)) {
+        element.removeAttribute(attr.name);
+      }
+    }
+  }
+
+  return doc.body.innerHTML;
+}
+
+function extractSvgMarkup(text: string): string {
+  const match = /<svg[\s\S]*?<\/svg>/i.exec(String(text || ''));
+  return match ? match[0] : '';
 }
 
 export function createBlockRenderer(options: RendererOptions = {}) {
@@ -159,8 +199,65 @@ export function createBlockRenderer(options: RendererOptions = {}) {
     }
 
     if (block.type === 'code') {
+      const language = String(block.language || '').trim().toLowerCase();
+      const rawText = String(block.text || '');
+
+      if (language === 'svg') {
+        const svgMarkup = extractSvgMarkup(rawText);
+        if (svgMarkup) {
+          const wrap = document.createElement('div');
+          wrap.className = 'svg-wrap';
+          wrap.innerHTML = sanitizeFragmentMarkup(svgMarkup);
+          return applyBlockDecorations(wrap);
+        }
+      }
+
+      if (language === 'html') {
+        const wrap = document.createElement('div');
+        wrap.className = 'html-wrap';
+        wrap.innerHTML = sanitizeFragmentMarkup(rawText);
+        return applyBlockDecorations(wrap);
+      }
+
       const pre = document.createElement('pre');
-      pre.textContent = block.text || '';
+      pre.textContent = rawText;
+      return applyBlockDecorations(pre);
+    }
+
+    if (block.type === 'svg') {
+      const svgMarkup = extractSvgMarkup(String(block.text || ''));
+      if (svgMarkup) {
+        const wrap = document.createElement('div');
+        wrap.className = 'svg-wrap';
+        wrap.innerHTML = sanitizeFragmentMarkup(svgMarkup);
+        return applyBlockDecorations(wrap);
+      }
+
+      const pre = document.createElement('pre');
+      pre.textContent = String(block.text || '');
+      return applyBlockDecorations(pre);
+    }
+
+    if (block.type === 'html') {
+      const wrap = document.createElement('div');
+      wrap.className = 'html-wrap';
+      wrap.innerHTML = sanitizeFragmentMarkup(String(block.text || ''));
+      return applyBlockDecorations(wrap);
+    }
+
+    if (block.type === 'graph' || block.type === 'mermaid') {
+      const graphText = String(block.text || '');
+      const svgMarkup = extractSvgMarkup(graphText);
+
+      if (svgMarkup) {
+        const wrap = document.createElement('div');
+        wrap.className = 'graph-wrap';
+        wrap.innerHTML = sanitizeFragmentMarkup(svgMarkup);
+        return applyBlockDecorations(wrap);
+      }
+
+      const pre = document.createElement('pre');
+      pre.textContent = graphText;
       return applyBlockDecorations(pre);
     }
 

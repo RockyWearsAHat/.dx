@@ -38,6 +38,7 @@ export function parseAttributes(args: string | number | boolean | null | undefin
 export const KNOWN_BLOCK_TYPES = new Set([
   'paragraph', 'heading', 'bulleted-list', 'numbered-list', 'list',
   'checklist', 'quote', 'code', 'image', 'rule', 'style', 'stylesheet',
+  'svg', 'html', 'graph', 'mermaid',
 ]);
 
 const LEGACY_LIST_ITEM_FALLBACKS: Record<string, string[]> = {
