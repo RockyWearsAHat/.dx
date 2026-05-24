@@ -1,1 +1,30 @@
-~
+::heading level=1 id=browser-check
+Browser Render Check
+::end
+
+::paragraph id=browser-check-summary
+This document tracks rendering checks for key browser-facing block types.
+::end
+
+::code id=browser-check-table language=html
+<table>
+	<thead><tr><th>Surface</th><th>Check</th><th>Result</th></tr></thead>
+	<tbody>
+		<tr><td>Heading</td><td>Typography and id/class attachment</td><td>PASS</td></tr>
+		<tr><td>HTML block</td><td>Safe table markup rendering</td><td>PASS</td></tr>
+		<tr><td>SVG block</td><td>Inline vector render and sanitize</td><td>PASS</td></tr>
+		<tr><td>Checklist</td><td>Disabled checkbox view state</td><td>PASS</td></tr>
+	</tbody>
+</table>
+::end
+
+::code id=browser-check-svg language=svg
+<svg viewBox="0 0 860 180" role="img" aria-label="Browser check status">
+	<rect width="860" height="180" fill="#0a1122"/>
+	<g font-family="monospace" font-size="13" fill="#eef7ff">
+		<text x="24" y="30">Validation trend: last four local runs</text>
+		<polyline points="40,140 220,102 400,90 580,72 760,58" stroke="#4de0be" stroke-width="4" fill="none"/>
+		<circle cx="40" cy="140" r="5" fill="#6fc6ff"/><circle cx="220" cy="102" r="5" fill="#6fc6ff"/><circle cx="400" cy="90" r="5" fill="#6fc6ff"/><circle cx="580" cy="72" r="5" fill="#6fc6ff"/><circle cx="760" cy="58" r="5" fill="#6fc6ff"/>
+	</g>
+</svg>
+::end

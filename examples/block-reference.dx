@@ -1,1 +1,46 @@
-~
+::heading level=1 id=block-reference
+Block Reference
+::end
+
+::paragraph id=block-reference-summary
+This catalog documents block types currently supported by parser and renderer.
+::end
+
+::code id=block-type-table language=html
+<table>
+	<thead><tr><th>Type</th><th>Core fields</th><th>Notes</th></tr></thead>
+	<tbody>
+		<tr><td>heading</td><td>level, text</td><td>Level clamps to range and remains deterministic.</td></tr>
+		<tr><td>paragraph</td><td>text</td><td>Default semantic body block.</td></tr>
+		<tr><td>bulleted-list / numbered-list</td><td>items[]</td><td>Each line becomes one list item.</td></tr>
+		<tr><td>quote</td><td>text</td><td>Rendered as blockquote.</td></tr>
+		<tr><td>code</td><td>language, text</td><td>language=svg/html activates rich rendering path.</td></tr>
+		<tr><td>image</td><td>src, alt</td><td>Accessible figure + optional caption.</td></tr>
+		<tr><td>rule</td><td>none</td><td>Horizontal separator.</td></tr>
+		<tr><td>svg/html/graph/mermaid</td><td>text</td><td>Preserved typed blocks for visual or source workflows.</td></tr>
+	</tbody>
+</table>
+::end
+
+::code id=block-reference-svg language=svg
+<svg viewBox="0 0 960 210" role="img" aria-label="Block type lanes">
+	<rect width="960" height="210" fill="#07121f"/>
+	<g font-family="monospace" font-size="13" fill="#eef7ff">
+		<rect x="28" y="40" width="120" height="40" fill="#2a7fda"/><text x="58" y="64">heading</text>
+		<rect x="160" y="40" width="120" height="40" fill="#2a68c2"/><text x="184" y="64">paragraph</text>
+		<rect x="292" y="40" width="120" height="40" fill="#206cb5"/><text x="317" y="64">lists</text>
+		<rect x="424" y="40" width="120" height="40" fill="#18998a"/><text x="459" y="64">quote</text>
+		<rect x="556" y="40" width="120" height="40" fill="#1b8f6f"/><text x="594" y="64">code</text>
+		<rect x="688" y="40" width="120" height="40" fill="#216b83"/><text x="726" y="64">image</text>
+		<rect x="820" y="40" width="112" height="40" fill="#355f86"/><text x="857" y="64">rule</text>
+		<text x="30" y="130">Rich typed blocks can be parsed, re-serialized, and rendered without grammar ambiguity.</text>
+	</g>
+</svg>
+::end
+
+::code id=block-reference-mermaid language=mermaid
+graph LR
+	A[DX Source] --> B[parseSourceBlocks]
+	B --> C[parseDocFile]
+	C --> D[renderDocumentViewHtml]
+::end

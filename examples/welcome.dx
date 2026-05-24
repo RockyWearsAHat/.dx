@@ -1,1 +1,41 @@
-~
+::heading level=1 id=welcome-title
+Welcome to DOC Platform
+::end
+
+::paragraph id=welcome-lead
+DOC uses explicit typed blocks for deterministic parsing and strong render fidelity across editor, capture, and MCP surfaces.
+::end
+
+::code id=welcome-kpi-grid language=html
+<div>
+	<table>
+		<thead><tr><th>Capability</th><th>Status</th><th>Why it matters</th></tr></thead>
+		<tbody>
+			<tr><td>Typed Blocks</td><td>Ready</td><td>Predictable parse and roundtrip</td></tr>
+			<tr><td>Scoped CSS</td><td>Ready</td><td>Visual power without global bleed</td></tr>
+			<tr><td>SVG/HTML render</td><td>Ready</td><td>Native diagrams and rich tables</td></tr>
+			<tr><td>SQLite + archive</td><td>Ready</td><td>Compact storage and durable hydration</td></tr>
+		</tbody>
+	</table>
+</div>
+::end
+
+::code id=welcome-flow language=svg
+<svg viewBox="0 0 940 240" role="img" aria-label="Document pipeline">
+	<rect width="940" height="240" fill="#0a1122"/>
+	<g fill="#dff3ff" font-family="monospace" font-size="14">
+		<rect x="30" y="80" width="190" height="60" rx="10" fill="#12345f"/><text x="72" y="116">DX Source</text>
+		<rect x="265" y="80" width="190" height="60" rx="10" fill="#1b4e84"/><text x="300" y="116">Parser</text>
+		<rect x="500" y="80" width="190" height="60" rx="10" fill="#26679e"/><text x="542" y="116">Renderer</text>
+		<rect x="735" y="80" width="170" height="60" rx="10" fill="#18998a"/><text x="762" y="116">Capture + MCP</text>
+		<path d="M220 110 L265 110 M455 110 L500 110 M690 110 L735 110" stroke="#6fc6ff" stroke-width="3" fill="none"/>
+	</g>
+</svg>
+::end
+
+::checklist id=welcome-checklist
+[x] Parse canonical source
+[x] Render visual blocks
+[x] Persist through runtime service
+[ ] Add your own chart and table
+::end
