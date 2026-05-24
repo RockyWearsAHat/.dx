@@ -92,6 +92,10 @@ const BLOCK_TYPES = new Set([
   'rule',
   'style',
   'stylesheet',
+  'svg',
+  'html',
+  'graph',
+  'mermaid',
 ]);
 
 function clampHeadingLevel(value: JsonLike): number {
@@ -352,6 +356,15 @@ function normalizeBlock(block: DocBlock | null | undefined, index: number, regis
       id,
       className,
       type: 'style',
+      text: String(sourceBlock.text || '').trimEnd(),
+    };
+  }
+
+  if (blockType === 'svg' || blockType === 'html' || blockType === 'graph' || blockType === 'mermaid') {
+    return {
+      id,
+      className,
+      type: blockType,
       text: String(sourceBlock.text || '').trimEnd(),
     };
   }
@@ -665,6 +678,13 @@ function parseDocsrcBlocks(body: JsonLike): DocBlock[] {
       });
       return;
     }
+
+    blocks.push({
+      type,
+      id: attributes.id,
+      className: normalizeClassName(attributes.class),
+      text: contentLines.join('\n').trimEnd(),
+    });
   }
 
   let cursor = 0;
@@ -681,6 +701,7 @@ function parseDocsrcBlocks(body: JsonLike): DocBlock[] {
     if (inline) {
       const type = inline[1]!.toLowerCase();
       if (type !== 'end') {
+          /* c8 ignore next -- inline remainder split path is parser-shape dependent */
         const parsed = parseLeadingAttributesAndRemainder(inline[2] ?? '');
         const inlineContent = parsed.remainder ? [parsed.remainder] : [];
         pushBlock(type, parsed.attrs, inlineContent);

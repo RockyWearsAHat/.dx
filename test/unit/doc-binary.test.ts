@@ -148,3 +148,31 @@ test('doc-binary normalizes non-string block type to paragraph and preserves mix
     items: ['object item', 'string item', '', ''],
   });
 });
+
+test('doc-binary roundtrip preserves style and rich rendering block types', () => {
+  const doc = {
+    title: 'Rich Blocks',
+    summary: '',
+    tags: [],
+    meta: {},
+    blocks: [
+      { type: 'style', id: 's1', text: '.hero { color: red; }' },
+      { type: 'stylesheet', id: 'ss1', href: 'styles/doc.css', media: 'screen' },
+      { type: 'svg', id: 'svg1', text: '<svg viewBox="0 0 10 10"></svg>' },
+      { type: 'html', id: 'html1', text: '<div>ok</div>' },
+      { type: 'graph', id: 'g1', text: '<svg viewBox="0 0 10 10"></svg>' },
+      { type: 'mermaid', id: 'm1', text: 'graph TD\nA-->B' },
+    ],
+  };
+
+  const unpacked = unpackDocument(packDocument(doc));
+
+  assert.deepEqual(unpacked.blocks, [
+    { type: 'style', id: '', text: '.hero { color: red; }' },
+    { type: 'stylesheet', id: '', href: 'styles/doc.css', media: 'screen' },
+    { type: 'svg', id: '', text: '<svg viewBox="0 0 10 10"></svg>' },
+    { type: 'html', id: '', text: '<div>ok</div>' },
+    { type: 'graph', id: '', text: '<svg viewBox="0 0 10 10"></svg>' },
+    { type: 'mermaid', id: '', text: 'graph TD\nA-->B' },
+  ]);
+});

@@ -186,3 +186,40 @@ test('renderDocumentViewHtml renders object-backed list items without [object Ob
   assert.match(html, /<li>First step<\/li>/);
   assert.match(html, /<li>Second step<\/li>/);
 });
+
+test('renderDocumentViewHtml renders svg/html/graph blocks and sanitizes script handlers', () => {
+  const doc = {
+    title: 'Rich Render',
+    source: [
+      '::svg id=logo',
+      '<svg viewBox="0 0 10 10" onload="alert(1)"><circle cx="5" cy="5" r="4" /></svg>',
+      '::end',
+      '',
+      '::html id=hero',
+      '<div onclick="evil()">Hero</div><script>alert(1)</script>',
+      '::end',
+      '',
+      '::graph id=plot',
+      '<svg viewBox="0 0 10 10"><line x1="1" y1="1" x2="9" y2="9" /></svg>',
+      '::end',
+      '',
+      '::code language=svg',
+      '<svg viewBox="0 0 5 5"><rect x="1" y="1" width="3" height="3" /></svg>',
+      '::end',
+      '',
+      '::code language=html',
+      '<section>Inline HTML</section>',
+      '::end',
+    ].join('\n'),
+  };
+
+  const html = renderDocumentViewHtml(doc);
+  assert.match(html, /class="svg-wrap"/);
+  assert.match(html, /class="html-wrap"/);
+  assert.match(html, /class="graph-wrap"/);
+  assert.equal(html.includes('onclick='), false);
+  assert.equal(html.includes('onload='), false);
+  assert.equal(html.includes('<script>'), false);
+  assert.match(html, /<svg viewBox="0 0 10 10"/);
+  assert.match(html, /<section>Inline HTML<\/section>/);
+});

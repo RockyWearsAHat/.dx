@@ -332,6 +332,41 @@ test('parseDocFile keeps style metadata blocks while excluding them from semanti
   assert.equal(parsed.sections.some((section) => section.content.includes('display: none')), false);
 });
 
+test('parseDocFile preserves svg/html/graph/mermaid typed blocks', () => {
+  const source = [
+    '::svg id=logo',
+    '<svg viewBox="0 0 10 10"><circle cx="5" cy="5" r="4" /></svg>',
+    '::end',
+    '',
+    '::html id=hero',
+    '<div class="hero">Hello</div>',
+    '::end',
+    '',
+    '::graph id=g1',
+    '<svg viewBox="0 0 10 10"><line x1="1" y1="1" x2="9" y2="9" /></svg>',
+    '::end',
+    '',
+    '::mermaid id=m1',
+    'graph TD',
+    'A --> B',
+    '::end',
+  ].join('\n');
+
+  const parsed = parseDocFile('/tmp/rich-types.dx', source);
+  const types = parsed.blocks.map((block) => block.type);
+
+  assert.ok(types.includes('svg'));
+  assert.ok(types.includes('html'));
+  assert.ok(types.includes('graph'));
+  assert.ok(types.includes('mermaid'));
+
+  const roundtrip = stringifyDocFile(parsed);
+  assert.match(roundtrip, /::svg/);
+  assert.match(roundtrip, /::html/);
+  assert.match(roundtrip, /::graph/);
+  assert.match(roundtrip, /::mermaid/);
+});
+
 test('stringifyDocFile serializes object-backed list items without [object Object]', () => {
   const doc = normalizeDocInput('/tmp/object-list.dx', {
     title: 'Object List',
