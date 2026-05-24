@@ -29,6 +29,7 @@ test('parseSourceBlocks parses block syntax and inline forms', () => {
     'Hello',
     '::end',
     '::paragraph id=p class=copy Hello inline ::end',
+    '::paragraph id=ph hidden=true Hidden inline ::end',
     '::bulleted-list id=l item-a ::end',
     '::checklist id=cl [x] done ::end',
     '::image id=img src=cat.png cute ::end',
@@ -39,10 +40,12 @@ test('parseSourceBlocks parses block syntax and inline forms', () => {
   assert.equal(blocks[0].type, 'heading');
   assert.equal(blocks[0].className, 'hero');
   assert.equal(blocks[1].type, 'paragraph');
-  assert.equal(blocks[2].type, 'bulleted-list');
-  assert.equal(blocks[3].type, 'checklist');
-  assert.equal(blocks[4].type, 'image');
-  assert.equal(blocks[5].type, 'rule');
+  assert.equal(blocks[2].type, 'paragraph');
+  assert.equal(blocks[2].hidden, true);
+  assert.equal(blocks[3].type, 'bulleted-list');
+  assert.equal(blocks[4].type, 'checklist');
+  assert.equal(blocks[5].type, 'image');
+  assert.equal(blocks[6].type, 'rule');
 });
 
 test('parseSourceBlocks supports style and stylesheet blocks', () => {

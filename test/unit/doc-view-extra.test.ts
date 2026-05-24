@@ -223,3 +223,23 @@ test('renderDocumentViewHtml renders svg/html/graph blocks and sanitizes script 
   assert.match(html, /<svg viewBox="0 0 10 10"/);
   assert.match(html, /<section>Inline HTML<\/section>/);
 });
+
+test('renderDocumentViewHtml marks hidden blocks with hidden attributes', () => {
+  const doc = {
+    title: 'Hidden Blocks',
+    source: [
+      '::paragraph id=shown',
+      'Shown paragraph',
+      '::end',
+      '',
+      '::paragraph id=hidden-block hidden=true',
+      'Hidden paragraph',
+      '::end',
+    ].join('\n'),
+  };
+
+  const html = renderDocumentViewHtml(doc);
+  assert.match(html, /data-block-id="hidden-block"/);
+  assert.match(html, /data-block-hidden="true"/);
+  assert.match(html, /class="[^"]*is-hidden[^"]*"/);
+});
