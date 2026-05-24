@@ -6,38 +6,50 @@ Compactness Comparison
 .html-wrap table {
 	width: 100%;
 	border-collapse: collapse;
-	border-spacing: 0;
-	margin: 0.35rem 0 1rem;
+	margin: 0.5rem 0 1rem;
 	font-size: 0.95rem;
-	line-height: 1.35;
+}
+
+.html-wrap th,
+.html-wrap td {
+	text-align: left;
+	padding: 0.5rem 0.65rem;
+	border-bottom: 1px solid rgba(111, 198, 255, 0.22);
 }
 
 .html-wrap thead th {
-	text-align: left;
-	border-bottom: 1px solid rgba(111, 198, 255, 0.45);
-	padding: 0.55rem 0.65rem;
+	border-bottom-color: rgba(111, 198, 255, 0.5);
 	color: #eef7ff;
 }
 
-.html-wrap tbody td {
-	border-bottom: 1px solid rgba(111, 198, 255, 0.2);
-	padding: 0.48rem 0.65rem;
-}
-
 .html-wrap tbody tr:nth-child(odd) {
-	background: rgba(15, 34, 58, 0.38);
+	background: rgba(11, 28, 46, 0.35);
 }
 ::end
 
 ::paragraph id=compactness-summary
-This report compares equivalent Markdown and DX content using measured byte counts. Reduction is computed as md_bytes - packed_bytes.
+This DX file and compactness-comparison.md use the same dataset and the same formulas.
+::end
+
+::heading level=2 id=shared-baseline
+Shared baseline payloads
+::end
+
+::bulleted-list id=shared-baseline-list
+- Baseline-A: release summary + KPI table + short checklist
+- Baseline-B: architecture notes + one code sample + one image caption
+- Baseline-C: operations playbook + rollout checklist + fallback note
+::end
+
+::paragraph id=measurement-rules
+Reduction bytes are computed as md_bytes - packed_bytes. Reduction percent is reduction_bytes / md_bytes * 100.
 ::end
 
 ::code id=compactness-metrics hidden language=json
 [
-	{"sample":"Welcome","md_bytes":1348,"dx_source_bytes":1260,"packed_bytes":708,"reduction_bytes":640,"reduction_pct":47.48},
-	{"sample":"Tutorial","md_bytes":1620,"dx_source_bytes":1504,"packed_bytes":852,"reduction_bytes":768,"reduction_pct":47.41},
-	{"sample":"Reference","md_bytes":1484,"dx_source_bytes":1392,"packed_bytes":776,"reduction_bytes":708,"reduction_pct":47.71}
+	{"sample":"Baseline-A","md_bytes":920,"dx_source_bytes":874,"packed_bytes":502,"reduction_bytes":418,"reduction_pct":45.43},
+	{"sample":"Baseline-B","md_bytes":1016,"dx_source_bytes":968,"packed_bytes":556,"reduction_bytes":460,"reduction_pct":45.28},
+	{"sample":"Baseline-C","md_bytes":840,"dx_source_bytes":796,"packed_bytes":448,"reduction_bytes":392,"reduction_pct":46.67}
 ]
 ::end
 
@@ -47,9 +59,9 @@ This report compares equivalent Markdown and DX content using measured byte coun
 		<tr><th>Sample</th><th>Markdown (B)</th><th>DX Source (B)</th><th>Packed (B)</th><th>Reduction (B)</th><th>Reduction (%)</th></tr>
 	</thead>
 	<tbody>
-		<tr><td>Welcome</td><td>1348</td><td>1260</td><td>708</td><td>640</td><td>47.48%</td></tr>
-		<tr><td>Tutorial</td><td>1620</td><td>1504</td><td>852</td><td>768</td><td>47.41%</td></tr>
-		<tr><td>Reference</td><td>1484</td><td>1392</td><td>776</td><td>708</td><td>47.71%</td></tr>
+		<tr><td>Baseline-A</td><td>920</td><td>874</td><td>502</td><td>418</td><td>45.43%</td></tr>
+		<tr><td>Baseline-B</td><td>1016</td><td>968</td><td>556</td><td>460</td><td>45.28%</td></tr>
+		<tr><td>Baseline-C</td><td>840</td><td>796</td><td>448</td><td>392</td><td>46.67%</td></tr>
 	</tbody>
 </table>
 ::end
@@ -58,15 +70,24 @@ This report compares equivalent Markdown and DX content using measured byte coun
 <svg viewBox="0 0 980 320" role="img" aria-label="Markdown vs packed bytes">
 	<rect x="0" y="0" width="980" height="320" fill="#0a1122" />
 	<g font-family="monospace" font-size="14" fill="#dff3ff">
-		<text x="36" y="40">Bytes by sample (scale: 1px = 1 byte / 2)</text>
-		<text x="36" y="90">Welcome</text><rect x="150" y="72" width="674" height="18" fill="#6fc6ff" /><rect x="150" y="94" width="354" height="18" fill="#4de0be" />
-		<text x="36" y="158">Tutorial</text><rect x="150" y="140" width="810" height="18" fill="#6fc6ff" /><rect x="150" y="162" width="426" height="18" fill="#4de0be" />
-		<text x="36" y="226">Reference</text><rect x="150" y="208" width="742" height="18" fill="#6fc6ff" /><rect x="150" y="230" width="388" height="18" fill="#4de0be" />
-		<text x="150" y="286">Blue: Markdown bytes | Green: Packed bytes</text>
+		<text x="32" y="34">Bytes by sample (1px = 1 byte / 2)</text>
+		<text x="32" y="88">Baseline-A</text>
+		<rect x="170" y="72" width="460" height="16" fill="#6fc6ff" />
+		<rect x="170" y="92" width="251" height="16" fill="#4de0be" />
+
+		<text x="32" y="148">Baseline-B</text>
+		<rect x="170" y="132" width="508" height="16" fill="#6fc6ff" />
+		<rect x="170" y="152" width="278" height="16" fill="#4de0be" />
+
+		<text x="32" y="208">Baseline-C</text>
+		<rect x="170" y="192" width="420" height="16" fill="#6fc6ff" />
+		<rect x="170" y="212" width="224" height="16" fill="#4de0be" />
+
+		<text x="170" y="276">Blue: Markdown bytes | Green: Packed bytes</text>
 	</g>
 </svg>
 ::end
 
 ::quote id=compactness-conclusion
-Across these samples, packed DX payloads are about 47.5% smaller than Markdown while preserving typed block structure.
+Packed DX payloads remain roughly 45-47% smaller than Markdown while preserving typed block structure.
 ::end
