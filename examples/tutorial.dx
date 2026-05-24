@@ -1,9 +1,1 @@
-@docstub 3
-path: examples/tutorial.dx
-artifact: .doc/.repo-docs.bin
-key: examples/tutorial.dx
-archive: .doc/.repo-docs.bin
-codec: brotli-docbin-v1
-sha256: c3ae874b642e96835b5c56491d61d474c0f722b7b8baa6c7b191a14ebcb263a1
-packed_bytes: 2998
-archive_bytes: 3976
+~

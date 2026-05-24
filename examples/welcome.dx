@@ -1,9 +1,1 @@
-@docstub 3
-path: examples/welcome.dx
-artifact: .doc/.repo-docs.bin
-key: examples/welcome.dx
-archive: .doc/.repo-docs.bin
-codec: brotli-docbin-v1
-sha256: e0540ed69f9e18986cb3f5c850cdb29ab79314f8c59262dcbd5f7eb06d8b4931
-packed_bytes: 1811
-archive_bytes: 3977
+~

@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 export interface DocumentViewAppearance {
   paper: 'white' | 'cream' | 'slate';
   density: 'comfortable' | 'compact';
@@ -18,7 +20,23 @@ export interface DocumentViewState {
   appearance: DocumentViewAppearance;
   viewport: DocumentViewViewport;
   effectiveCss: string;
-  sourceText: string;
+  sourceHash: string;
+  editBuffer: string;
+}
+
+const MAX_EDIT_BUFFER_CHARS = 4096;
+
+function sanitizeEditBuffer(input: string): string {
+  const value = String(input || '');
+  if (value.length <= MAX_EDIT_BUFFER_CHARS) {
+    return value;
+  }
+
+  return value.slice(0, MAX_EDIT_BUFFER_CHARS);
+}
+
+export function computeSourceHash(sourceText: string | number | boolean | null | undefined | object): string {
+  return createHash('sha256').update(String(sourceText || ''), 'utf8').digest('hex');
 }
 
 function sanitizeAppearance(input: string | number | boolean | null | undefined | object): DocumentViewAppearance {
@@ -70,7 +88,9 @@ export function normalizeDocumentViewState(input: string | number | boolean | nu
   const entry = (input && typeof input === 'object' ? input : {}) as Record<string, string | number | boolean | null | undefined | object>;
   const themeRaw = String(entry.theme || 'auto');
   const resolvedThemeRaw = String(entry.resolvedTheme || 'dark');
-  const sourceText = String(entry.sourceText || '');
+  const sourceHash = String(entry.sourceHash || '');
+  const editBufferRaw = String(entry.editBuffer ?? entry.sourceText ?? '');
+  const editBuffer = sanitizeEditBuffer(editBufferRaw);
   const effectiveCss = String(entry.effectiveCss || '');
   const theme: DocumentViewState['theme'] = ['auto', 'light', 'dark'].includes(themeRaw)
     ? (themeRaw as DocumentViewState['theme'])
@@ -85,7 +105,8 @@ export function normalizeDocumentViewState(input: string | number | boolean | nu
     appearance: sanitizeAppearance(entry.appearance),
     viewport: sanitizeViewport(entry.viewport),
     effectiveCss,
-    sourceText,
+    sourceHash,
+    editBuffer,
   };
 }
 
@@ -105,10 +126,20 @@ export function mergeDocumentViewState(baseState: string | number | boolean | nu
       ...(patch.viewport && typeof patch.viewport === 'object' ? patch.viewport : {}),
     },
     effectiveCss: patch.effectiveCss ?? base.effectiveCss,
-    sourceText: patch.sourceText ?? base.sourceText,
+    sourceHash: patch.sourceHash ?? base.sourceHash,
+    editBuffer: patch.editBuffer ?? patch.sourceText ?? base.editBuffer,
   };
 
   return normalizeDocumentViewState(merged);
+}
+
+export function compactDocumentViewStateForStorage(viewState: string | number | boolean | null | undefined | object): DocumentViewState {
+  const normalized = normalizeDocumentViewState(viewState);
+  return {
+    ...normalized,
+    // Edit buffer should only persist small transient text.
+    editBuffer: sanitizeEditBuffer(normalized.editBuffer),
+  };
 }
 
 export function readDocumentViewState(db: { prepare: (query: string) => { get: (id: number) => { view_state_json?: string } | undefined } } | null | undefined, documentId: string | number | boolean | null | undefined | object): DocumentViewState | null {

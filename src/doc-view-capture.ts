@@ -157,9 +157,10 @@ async function captureRenderedWithQuickLook(html: string, { size = 1000, stem = 
 export async function captureDocumentViewPng(document: CaptureDocument, { size = 1000, viewState = null }: CaptureOptions = {}): Promise<CaptureResult> {
   const stem = sanitizeStem(document?.title || document?.relativePath || 'document');
   const hasInlineSource = String(document?.source || '').trim().length > 0;
+  const bufferedSource = String(viewState?.editBuffer || '').trim();
   const captureDocument = hasInlineSource
     ? document
-    : (viewState?.sourceText ? { ...document, source: String(viewState.sourceText || '') } : document);
+    : (bufferedSource ? { ...document, source: bufferedSource } : document);
 
   const html = renderDocumentViewHtml(captureDocument, {
     theme: viewState?.theme || 'auto',

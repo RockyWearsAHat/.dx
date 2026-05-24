@@ -123,14 +123,6 @@ async function persistViewStateSnapshot(relativePath, snapshot) {
     return;
   }
 
-  const { db, dbModule } = await getDocRuntime();
-  const absolutePath = path.resolve(workspaceRoot, rel);
-  const document = dbModule.getDocumentByPath(db, workspaceRoot, absolutePath);
-
-  if (!document) {
-    return;
-  }
-
   const viewStatePath = path.join(workspaceRoot, '.doc', 'view-state.json');
   await mkdir(path.dirname(viewStatePath), { recursive: true });
 
@@ -158,36 +150,28 @@ async function persistViewStateSnapshot(relativePath, snapshot) {
       zoomFactor,
     },
     effectiveCss: String(snapshot.effectiveCss || ''),
-    sourceText: String(snapshot.sourceText || ''),
+    sourceHash: String(snapshot.sourceHash || ''),
+    editBuffer: String(snapshot.editBuffer || ''),
   };
 
-  dbModule.saveDocumentViewState(db, document.id, normalizedSnapshot);
-
-  const current = { version: 1, documents: {} };
-  const rows = db.prepare(`
-    SELECT path, view_state_json, updated_at
-    FROM documents
-    WHERE view_state_json IS NOT NULL
-    ORDER BY updated_at DESC
-  `).all();
-
-  for (const row of rows) {
-    try {
-      const entry = JSON.parse(row.view_state_json);
-      const key = normalizeDocPath(path.relative(workspaceRoot, row.path));
-
-      if (!key || !entry || typeof entry !== 'object') {
-        continue;
-      }
-
-      current.documents[key] = {
-        ...entry,
-        updatedAt: row.updated_at,
+  let current = { version: 1, documents: {} };
+  try {
+    const existing = await readFile(viewStatePath, 'utf8');
+    const parsed = JSON.parse(existing);
+    if (parsed && typeof parsed === 'object' && parsed.documents && typeof parsed.documents === 'object') {
+      current = {
+        version: Number(parsed.version || 1),
+        documents: parsed.documents,
       };
-    } catch {
-      continue;
     }
+  } catch {
+    // Missing/invalid view state defaults to a fresh document map.
   }
+
+  current.documents[rel] = {
+    ...normalizedSnapshot,
+    updatedAt: new Date().toISOString(),
+  };
 
   await writeFile(viewStatePath, `${JSON.stringify(current, null, 2)}\n`, 'utf8');
 }
@@ -199,14 +183,8 @@ function resetRuntime() {
   }
 
   runtimePromise
-    .then(({ db }) => {
-      try {
-        db.close();
-      } catch {
-      }
-    })
-    .catch(() => {
-    });
+    .then(() => {})
+    .catch(() => {});
 
   runtimePromise = null;
   runtimeRoot = null;
@@ -216,7 +194,7 @@ async function getDocRuntime() {
   const workspaceRoot = getWorkspaceRoot();
 
   if (!workspaceRoot) {
-    throw new Error('DOC DB requires an open workspace folder.');
+    throw new Error('DOC runtime requires an open workspace folder.');
   }
 
   if (runtimePromise && runtimeRoot === workspaceRoot) {
@@ -226,27 +204,15 @@ async function getDocRuntime() {
   runtimeRoot = workspaceRoot;
   runtimePromise = (async () => {
     const srcDir = path.join(workspaceRoot, 'build', 'runtime', 'src');
-    const [dbModule, serviceModule, globalPathModule] = await Promise.all([
-      import(pathToFileURL(path.join(srcDir, 'database.js')).href),
-      import(pathToFileURL(path.join(srcDir, 'doc-service.js')).href),
-      import(pathToFileURL(path.join(srcDir, 'global-db-path.js')).href),
-    ]);
+    const serviceModule = await import(pathToFileURL(path.join(srcDir, 'doc-service.js')).href);
 
-    const dbPath = globalPathModule.resolveDocDbPath();
-    await mkdir(path.dirname(dbPath), { recursive: true });
-
-    const db = dbModule.createDatabase(dbPath);
-    dbModule.migrateLegacyWorkspace(db, workspaceRoot, path.join(workspaceRoot, 'data', 'doc-index.sqlite'));
-
-    // Avoid re-ingesting the entire workspace on every extension startup.
-    if (dbModule.listDocuments(db, workspaceRoot).length === 0) {
-      await serviceModule.ingestWorkspace(workspaceRoot, db);
+    const docs = await serviceModule.listOrSearchDocuments(workspaceRoot, null, '');
+    if (!Array.isArray(docs) || docs.length === 0) {
+      await serviceModule.ingestWorkspace(workspaceRoot, null);
     }
 
     return {
       workspaceRoot,
-      db,
-      dbModule,
       serviceModule,
     };
   })();
@@ -255,15 +221,13 @@ async function getDocRuntime() {
 }
 
 async function readUiConfig() {
-  const { db, dbModule } = await getDocRuntime();
-  const configured = String(dbModule.getUserConfigValue(db, 'preferred_theme', 'auto') || 'auto');
+  const configured = String(vscode.workspace.getConfiguration('docdb').get('preferredTheme', 'auto') || 'auto').toLowerCase();
   return { theme: THEME_OPTIONS.has(configured) ? configured : 'auto' };
 }
 
 async function writePreferredTheme(theme) {
-  const { db, dbModule } = await getDocRuntime();
   const normalizedTheme = THEME_OPTIONS.has(String(theme || '').toLowerCase()) ? String(theme).toLowerCase() : 'auto';
-  dbModule.setUserConfigValue(db, 'preferred_theme', normalizedTheme);
+  await vscode.workspace.getConfiguration('docdb').update('preferredTheme', normalizedTheme, vscode.ConfigurationTarget.Workspace);
   return { theme: normalizedTheme };
 }
 
@@ -319,8 +283,8 @@ async function uploadVirtualDocImage(virtualPath, image) {
 
 async function readVirtualDocument(virtualPath) {
   const normalizedPath = normalizeVirtualPath(virtualPath);
-  const { workspaceRoot, db, serviceModule } = await getDocRuntime();
-  const document = await serviceModule.getDocumentByRelativePath(workspaceRoot, db, normalizedPath);
+  const { workspaceRoot, serviceModule } = await getDocRuntime();
+  const document = await serviceModule.getDocumentByRelativePath(workspaceRoot, null, normalizedPath);
 
   if (!document) {
     throw new Error(`Document not found: ${normalizedPath}`);
@@ -331,8 +295,8 @@ async function readVirtualDocument(virtualPath) {
 
 async function writeVirtualDocument(virtualPath, sourceText) {
   const normalizedPath = normalizeVirtualPath(virtualPath);
-  const { workspaceRoot, db, serviceModule } = await getDocRuntime();
-  const document = await serviceModule.saveDocumentSourceByRelativePath(workspaceRoot, db, normalizedPath, String(sourceText || ''));
+  const { workspaceRoot, serviceModule } = await getDocRuntime();
+  const document = await serviceModule.saveDocumentSourceByRelativePath(workspaceRoot, null, normalizedPath, String(sourceText || ''));
   return {
     document: {
       path: document.relativePath,
@@ -344,8 +308,8 @@ async function writeVirtualDocument(virtualPath, sourceText) {
 }
 
 async function listVirtualDocuments() {
-  const { workspaceRoot, db, serviceModule } = await getDocRuntime();
-  const documents = await serviceModule.listOrSearchDocuments(workspaceRoot, db, '');
+  const { workspaceRoot, serviceModule } = await getDocRuntime();
+  const documents = await serviceModule.listOrSearchDocuments(workspaceRoot, null, '');
 
   return documents
     .map((document) => ({

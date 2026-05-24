@@ -84,20 +84,17 @@ async function sleep(ms) {
 }
 
 async function runSmokeTest() {
-  // Verify basic database access works (native addon was already built by npm install).
-  // NOTE: Do not run node-gyp rebuild here — it calls node-gyp clean which deletes
-  // build/runtime/ (created by ingest/build:ts above), breaking the ESM import below.
+  // Verify bundle + dxlite engine is reachable after install.
   const { execFileSync } = await import('node:child_process');
 
   try {
-    // Verify database can be created and accessed
-    console.log('📊 Verifying database access...');
-    execFileSync(process.execPath, ['--input-type=module', '--eval', "import path from 'node:path'; import { tmpdir } from 'node:os'; import { createDatabase } from './build/runtime/src/database.js'; const smokePath = path.join(tmpdir(), 'docdb-smoke-' + Date.now() + '.sqlite'); createDatabase(smokePath); console.log('✓ Database initialized');"], {
+    console.log('📦 Verifying bundle engine access...');
+    execFileSync(process.execPath, ['--input-type=module', '--eval', "import { listOrSearchDocuments } from './build/runtime/src/doc-service.js'; const docs = await listOrSearchDocuments(process.cwd(), null, ''); console.log('✓ Bundle engine reachable; docs=' + docs.length);"], {
       cwd: rootDir,
       stdio: 'inherit',
     });
 
-    console.log('✅ Smoke test passed: Native bridge and database working');
+    console.log('✅ Smoke test passed: bundle engine working');
     return true;
   } catch (err) {
     throw new Error(`Smoke test failed: ${err.message}`);

@@ -1,16 +1,19 @@
 import { createHash } from 'node:crypto';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { brotliCompressSync, brotliDecompressSync, constants as zlibConstants } from 'node:zlib';
 
 import { packDocument, unpackDocument } from './doc-binary.js';
 import { normalizeDocInput } from './doc-format.js';
+import { removeDxliteIndex, writeDxliteIndex } from './dxlite.js';
 import { getGitDocState } from './git-doc-state.js';
 
 const ARCHIVE_MAGIC = Buffer.from('DXAR1', 'ascii');
 const ARCHIVE_CODEC = 'brotli-docbin-v1';
 const REPO_ARCHIVE_MAGIC = Buffer.from('DXRA1', 'ascii');
-const BUNDLE_MAGIC = Buffer.from('DXBUN2', 'ascii');
+const BUNDLE_MAGIC_V2 = Buffer.from('DXBUN2', 'ascii');
+const BUNDLE_MAGIC_V3 = Buffer.from('DXBUN3', 'ascii');
+const BUNDLE_MAGIC_V4 = Buffer.from('DXBUN4', 'ascii');
 const REPO_ARCHIVE_RELATIVE_PATH = '.doc/.repo-docs.bin';
 const LOCAL_ARCHIVE_RELATIVE_PATH = '.doc/.local-docs.bin';
 const LOCAL_ARCHIVE_GITIGNORE_ENTRY = '/.doc/.local-docs.bin';
@@ -150,18 +153,18 @@ function decodeRepoArchive(buffer: Buffer | Uint8Array | string | null | undefin
 }
 
 // ---------------------------------------------------------------------------
-// DXBUN2 — single-pass bundle format (replaces DXRA1 JSON+base64 format)
+// DXBUN2/DXBUN3/DXBUN4 — single-pass bundle formats (replace DXRA1 JSON+base64 format)
 //
 // Layout (all multi-byte integers are little-endian):
-//   [6 bytes]  magic "DXBUN2"
+//   [6 bytes]  magic "DXBUN2" or "DXBUN3" or "DXBUN4"
 //   [4 bytes]  uint32: total compressed payload length
 //   [N bytes]  single brotli-compressed payload containing:
 //     [4 bytes]  uint32: entry count
 //     per entry (header table):
 //       [1 byte]   path length (uint8, max 255 chars — relative .dx paths)
 //       [N bytes]  path UTF-8 bytes
-//       [32 bytes] SHA-256 of the packed document bytes
-//       [1 byte]   git flags: bit0=tracked bit1=untracked bit2=ignored bit3=modified bit4=staged
+//       [DXBUN2 only] [32 bytes] SHA-256 of the packed document bytes
+//       [DXBUN2/DXBUN3 only] [1 byte] git flags: bit0=tracked bit1=untracked bit2=ignored bit3=modified bit4=staged
 //       [4 bytes]  uint32: packed document byte length
 //     per entry (payload section, same order as header table):
 //       [N bytes]  raw packDocument() bytes (no individual brotli)
@@ -188,41 +191,24 @@ function encodeBundle(container: ArchiveContainer): Buffer {
 
     throw new Error('Archive entry is missing packed bytes and payload data.');
   });
-  const shas = entries.map(([, v]) => Buffer.from(v.sha256, 'hex'));
-  const gitFlagsBufs = entries.map(([, v]) => {
-    const g = v.git || {};
-    let flags = 0;
-    if (g.tracked)   flags |= 0x01;
-    if (g.untracked) flags |= 0x02;
-    if (g.ignored)   flags |= 0x04;
-    if (g.modified)  flags |= 0x08;
-    if (g.staged)    flags |= 0x10;
-    return flags;
-  });
-
   const countHeader = Buffer.alloc(4);
   countHeader.writeUInt32LE(entries.length, 0);
   const headerParts = [countHeader];
 
   for (let i = 0; i < entries.length; i++) {
     const pathBuf = pathBufs[i];
-    const sha = shas[i];
-    const gitFlags = gitFlagsBufs[i];
     const packed = packedBufs[i];
 
-    if (!pathBuf || !sha || gitFlags === undefined || !packed) {
+    if (!pathBuf || !packed) {
       throw new Error('Archive bundle index arrays are out of sync.');
     }
 
     const pathLen = Math.min(pathBuf.length, 255);
-    const row = Buffer.alloc(1 + pathLen + 32 + 1 + 4);
+    const row = Buffer.alloc(1 + pathLen + 4);
     let off = 0;
     row.writeUInt8(pathLen, off++);
     pathBuf.copy(row, off, 0, pathLen);
     off += pathLen;
-    sha.copy(row, off);
-    off += 32;
-    row.writeUInt8(gitFlags, off++);
     row.writeUInt32LE(packed.length, off);
     headerParts.push(row);
   }
@@ -239,19 +225,23 @@ function encodeBundle(container: ArchiveContainer): Buffer {
 
   const lenBuf = Buffer.alloc(4);
   lenBuf.writeUInt32LE(compressed.length, 0);
-  return Buffer.concat([BUNDLE_MAGIC, lenBuf, compressed]);
+  return Buffer.concat([BUNDLE_MAGIC_V4, lenBuf, compressed]);
 }
 
 function decodeBundle(buffer: Buffer | Uint8Array | string | null | undefined): ArchiveContainer {
   const buf = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer || []);
-  const minLen = BUNDLE_MAGIC.length + 4;
+  const minLen = BUNDLE_MAGIC_V3.length + 4;
+  const magic = buf.subarray(0, BUNDLE_MAGIC_V3.length);
+  const isV4 = magic.equals(BUNDLE_MAGIC_V4);
+  const isV3 = magic.equals(BUNDLE_MAGIC_V3);
+  const isV2 = magic.equals(BUNDLE_MAGIC_V2);
 
-  if (buf.length < minLen || !buf.subarray(0, BUNDLE_MAGIC.length).equals(BUNDLE_MAGIC)) {
+  if (buf.length < minLen || (!isV4 && !isV3 && !isV2)) {
     throw new Error('Bundle header is invalid.');
   }
 
-  const compressedLen = buf.readUInt32LE(BUNDLE_MAGIC.length);
-  const compressedStart = BUNDLE_MAGIC.length + 4;
+  const compressedLen = buf.readUInt32LE(BUNDLE_MAGIC_V3.length);
+  const compressedStart = BUNDLE_MAGIC_V3.length + 4;
 
   if (buf.length < compressedStart + compressedLen) {
     throw new Error('Bundle payload is truncated.');
@@ -269,9 +259,11 @@ function decodeBundle(buffer: Buffer | Uint8Array | string | null | undefined): 
     const pathLen = uncompressed.readUInt8(off++);
     const relativePath = uncompressed.toString('utf8', off, off + pathLen);
     off += pathLen;
-    const sha256 = uncompressed.toString('hex', off, off + 32);
-    off += 32;
-    const flags = uncompressed.readUInt8(off++);
+    const sha256 = isV2 ? uncompressed.toString('hex', off, off + 32) : '';
+    if (isV2) {
+      off += 32;
+    }
+    const flags = (isV3 || isV2) ? uncompressed.readUInt8(off++) : 0;
     const packedLen = uncompressed.readUInt32LE(off);
     off += 4;
     headers.push({ relativePath, sha256, flags, packedLen });
@@ -282,8 +274,9 @@ function decodeBundle(buffer: Buffer | Uint8Array | string | null | undefined): 
   for (const h of headers) {
     const packed = uncompressed.subarray(off, off + h.packedLen);
     off += h.packedLen;
+    const sha256 = h.sha256 || createHash('sha256').update(packed).digest('hex');
     documents[h.relativePath] = {
-      sha256: h.sha256,
+      sha256,
       packedBytes: h.packedLen,
       _packed: packed,
       git: {
@@ -296,7 +289,7 @@ function decodeBundle(buffer: Buffer | Uint8Array | string | null | undefined): 
     };
   }
 
-  return { version: 2, documents };
+  return { version: 3, documents };
 }
 
 function encodeRepoArchive(container: ArchiveContainer): Buffer {
@@ -324,8 +317,15 @@ async function readArchiveContainerAt(absolutePath: string): Promise<ArchiveCont
   try {
     const payload = await readFile(absolutePath);
 
-    // Prefer new DXBUN2 format; fall back to legacy DXRA1 JSON format.
-    if (payload.length >= BUNDLE_MAGIC.length && payload.subarray(0, BUNDLE_MAGIC.length).equals(BUNDLE_MAGIC)) {
+    // Prefer bundle formats; fall back to legacy DXRA1 JSON format.
+    if (
+      payload.length >= BUNDLE_MAGIC_V3.length
+      && (
+        payload.subarray(0, BUNDLE_MAGIC_V3.length).equals(BUNDLE_MAGIC_V4)
+        || payload.subarray(0, BUNDLE_MAGIC_V3.length).equals(BUNDLE_MAGIC_V3)
+        || payload.subarray(0, BUNDLE_MAGIC_V3.length).equals(BUNDLE_MAGIC_V2)
+      )
+    ) {
       return decodeBundle(payload);
     }
 
@@ -384,6 +384,7 @@ async function writeArchiveContainer(rootDir: string, relativePath: string, cont
   await mkdir(path.dirname(absolutePath), { recursive: true });
   const payload = encodeBundle(container);
   await writeFile(absolutePath, payload);
+  await writeDxliteIndex(rootDir, relativePath, container);
 
   return {
     absolutePath,
@@ -393,6 +394,23 @@ async function writeArchiveContainer(rootDir: string, relativePath: string, cont
 }
 
 async function writeLocalArchiveContainer(rootDir: string, container: ArchiveContainer) {
+  if (Object.keys(container.documents || {}).length === 0) {
+    const absolutePath = getLocalArchiveAbsolutePath(rootDir);
+
+    try {
+      await unlink(absolutePath);
+    } catch {
+      // Ignore missing local archive files.
+    }
+    await removeDxliteIndex(rootDir, LOCAL_ARCHIVE_RELATIVE_PATH);
+
+    return {
+      absolutePath,
+      relativePath: LOCAL_ARCHIVE_RELATIVE_PATH,
+      bytes: 0,
+    };
+  }
+
   await ensureGitIgnored(rootDir, LOCAL_ARCHIVE_GITIGNORE_ENTRY);
   return writeArchiveContainer(rootDir, LOCAL_ARCHIVE_RELATIVE_PATH, container);
 }
