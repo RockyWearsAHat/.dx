@@ -3,7 +3,7 @@ DX Authoring Tutorial
 ::end
 
 ::paragraph id=tutorial-intro
-Follow this short path to create a robust document with headings, lists, code, tables, and SVG visuals.
+Follow this short path to create a complete DX document with headings, lists, tables, SVG, and safe data-driven placeholders.
 ::end
 
 ::numbered-list id=tutorial-steps
@@ -11,7 +11,8 @@ Follow this short path to create a robust document with headings, lists, code, t
 2. Insert list and checklist blocks for workflow clarity.
 3. Add code language=html for table-based summaries.
 4. Add code language=svg for diagrams.
-5. Save and verify parser/render tests.
+5. Use script type=application/json for template variables.
+6. Save and verify parser/render tests.
 ::end
 
 ::code id=tutorial-shortcuts language=html
@@ -22,8 +23,17 @@ Follow this short path to create a robust document with headings, lists, code, t
 		<tr><td>Toggle edit mode</td><td>Toolbar pen button</td></tr>
 		<tr><td>Save source</td><td>Cmd+S / Ctrl+S</td></tr>
 		<tr><td>Open scoped CSS</td><td>Option+Click on id/class</td></tr>
+		<tr><td>Hide a block</td><td>Add hidden on block header</td></tr>
 	</tbody>
 </table>
+::end
+
+::script id=tutorial-vars type=application/json
+{"phase":"authoring","target":"clean examples"}
+::end
+
+::paragraph id=tutorial-vars-preview
+Current phase: {{phase}}. Current target: {{target}}.
 ::end
 
 ::code id=tutorial-architecture language=svg

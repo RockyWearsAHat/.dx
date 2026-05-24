@@ -3,7 +3,7 @@ Block Reference
 ::end
 
 ::paragraph id=block-reference-summary
-This catalog documents block types currently supported by parser and renderer.
+This catalog documents block types currently supported by parser and renderer, including hidden/script behavior.
 ::end
 
 ::code id=block-type-table language=html
@@ -18,6 +18,8 @@ This catalog documents block types currently supported by parser and renderer.
 		<tr><td>image</td><td>src, alt</td><td>Accessible figure + optional caption.</td></tr>
 		<tr><td>rule</td><td>none</td><td>Horizontal separator.</td></tr>
 		<tr><td>svg/html/graph/mermaid</td><td>text</td><td>Preserved typed blocks for visual or source workflows.</td></tr>
+		<tr><td>script</td><td>type, src, module, text</td><td>Data/logic carrier; JSON scripts can feed {{variables}} in content.</td></tr>
+		<tr><td>hidden (all blocks)</td><td>presence boolean</td><td>Use hidden in header to hide block without deleting source.</td></tr>
 	</tbody>
 </table>
 ::end
