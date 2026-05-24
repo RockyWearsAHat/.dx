@@ -42,6 +42,12 @@ Body text
 - `code` attrs: `id`, `class`, `lang` or `language`
 - `image` attrs: `id`, `class`, `src`
 - `rule` attrs: `id`, `class`
+- `script` attrs: `id`, `class`, `type`, `src`, `module`
+
+All block types also support boolean presence attrs:
+
+- `hidden` (equivalent to `hidden=true`)
+- `module` (for `script` blocks, equivalent to `module=true`)
 
 ## Parsing and Recovery Rules
 

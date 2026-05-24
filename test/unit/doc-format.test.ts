@@ -373,7 +373,7 @@ test('parseDocFile and stringifyDocFile preserve hidden block attributes', () =>
     'Visible text',
     '::end',
     '',
-    '::paragraph id=secret hidden=true',
+    '::paragraph id=secret hidden',
     'Hidden text',
     '::end',
   ].join('\n');
@@ -384,7 +384,29 @@ test('parseDocFile and stringifyDocFile preserve hidden block attributes', () =>
   assert.equal(hiddenBlock.hidden, true);
 
   const roundtrip = stringifyDocFile(parsed);
-  assert.match(roundtrip, /::paragraph id=secret hidden=true/);
+  assert.match(roundtrip, /::paragraph id=secret hidden/);
+});
+
+test('parseDocFile and stringifyDocFile preserve script blocks', () => {
+  const source = [
+    '::script id=doc-vars type=application/json',
+    '{"title":"Compactness","value":47.5}',
+    '::end',
+    '',
+    '::script id=inline-js module',
+    'export const x = 1;',
+    '::end',
+  ].join('\n');
+
+  const parsed = parseDocFile('/tmp/script-blocks.dx', source);
+  const scriptBlocks = parsed.blocks.filter((block) => block.type === 'script');
+  assert.equal(scriptBlocks.length, 2);
+  assert.equal(scriptBlocks[0].scriptType, 'application/json');
+  assert.equal(scriptBlocks[1].module, true);
+
+  const roundtrip = stringifyDocFile(parsed);
+  assert.match(roundtrip, /::script id=doc-vars type=application\/json/);
+  assert.match(roundtrip, /::script id=inline-js module/);
 });
 
 test('stringifyDocFile serializes object-backed list items without [object Object]', () => {

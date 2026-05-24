@@ -16,6 +16,8 @@ interface RenderOptions {
   effectiveCss?: string;
 }
 
+type TemplateValues = Record<string, string>;
+
 function escapeHtml(value: string | number | boolean | null | undefined | object): string {
   return String(value || '')
     .replace(/&/g, '&amp;')
@@ -42,6 +44,52 @@ function extractSvgMarkup(value: string | number | boolean | null | undefined | 
   const text = String(value || '');
   const match = /<svg[\s\S]*?<\/svg>/i.exec(text);
   return match ? match[0] : '';
+}
+
+function interpolateTemplateText(text: string, values: TemplateValues): string {
+  return String(text || '').replace(/\{\{\s*([a-zA-Z0-9_.-]+)\s*\}\}/g, (_full, key) => {
+    if (!Object.prototype.hasOwnProperty.call(values, key)) {
+      return '';
+    }
+
+    return values[key] as string;
+  });
+}
+
+function collectTemplateValues(blocks: PipelineBlock[]): TemplateValues {
+  const values: TemplateValues = {};
+
+  for (const block of blocks) {
+    if (String(block?.type || '').toLowerCase() !== 'script') {
+      continue;
+    }
+
+    const scriptType = String(block?.scriptType || '').trim().toLowerCase();
+
+    if (scriptType && scriptType !== 'application/json') {
+      continue;
+    }
+
+    const body = String(block?.text || '').trim();
+    if (!body) {
+      continue;
+    }
+
+    try {
+      const parsed = JSON.parse(body) as Record<string, unknown>;
+
+      for (const [key, value] of Object.entries(parsed)) {
+        if (value === null || value === undefined || typeof value === 'object') {
+          continue;
+        }
+
+        values[key] = String(value);
+      }
+    } catch {
+    }
+  }
+
+  return values;
 }
 
 function toStringItems(items: Array<string | ChecklistItem> | undefined): string[] {
@@ -90,10 +138,10 @@ function getDecoratedAttrs(block: PipelineBlock | undefined, baseClasses: string
   return attrs.length > 0 ? ` ${attrs.join(' ')}` : '';
 }
 
-function renderBlock(block: PipelineBlock): string {
+function renderBlock(block: PipelineBlock, templateValues: TemplateValues): string {
   const type = String(block?.type || 'paragraph').toLowerCase();
 
-  if (type === 'style' || type === 'stylesheet') {
+  if (type === 'style' || type === 'stylesheet' || type === 'script') {
     return '';
   }
 
@@ -136,7 +184,7 @@ function renderBlock(block: PipelineBlock): string {
 
   if (type === 'code') {
     const language = String(block?.language || '').trim().toLowerCase();
-    const rawText = String(block?.text || '');
+    const rawText = interpolateTemplateText(String(block?.text || ''), templateValues);
 
     if (language === 'svg') {
       const svgMarkup = extractSvgMarkup(rawText);
@@ -157,7 +205,7 @@ function renderBlock(block: PipelineBlock): string {
   }
 
   if (type === 'svg') {
-    const svgMarkup = extractSvgMarkup(block?.text || '');
+    const svgMarkup = extractSvgMarkup(interpolateTemplateText(String(block?.text || ''), templateValues));
     if (svgMarkup) {
       const attrs = getDecoratedAttrs(block, ['svg-wrap']);
       return `<div${attrs}>${sanitizeRichMarkup(svgMarkup)}</div>`;
@@ -169,11 +217,12 @@ function renderBlock(block: PipelineBlock): string {
 
   if (type === 'html') {
     const attrs = getDecoratedAttrs(block, ['html-wrap']);
-    return `<div${attrs}>${sanitizeRichMarkup(block?.text || '')}</div>`;
+    const html = interpolateTemplateText(String(block?.text || ''), templateValues);
+    return `<div${attrs}>${sanitizeRichMarkup(html)}</div>`;
   }
 
   if (type === 'graph' || type === 'mermaid') {
-    const text = String(block?.text || '');
+    const text = interpolateTemplateText(String(block?.text || ''), templateValues);
     const svgMarkup = extractSvgMarkup(text);
 
     if (svgMarkup) {
@@ -199,7 +248,7 @@ function renderBlock(block: PipelineBlock): string {
   }
 
   const open = decorateRootTag('p', block);
-  return `${open}${escapeHtml(block?.text || '')}</p>`;
+  return `${open}${escapeHtml(interpolateTemplateText(String(block?.text || ''), templateValues))}</p>`;
 }
 
 export function renderDocumentViewHtml(document: RenderDocument, {
@@ -216,6 +265,7 @@ export function renderDocumentViewHtml(document: RenderDocument, {
   const blocks: PipelineBlock[] = parsedBlocks.length > 0
     ? parsedBlocks
     : (Array.isArray(document?.blocks) ? document.blocks : []);
+  const templateValues = collectTemplateValues(blocks);
   const styleBlocks = blocks
     .filter((block) => String(block?.type || '').toLowerCase() === 'style')
     .map((block) => String(block?.text || '').trim())
@@ -246,7 +296,7 @@ export function renderDocumentViewHtml(document: RenderDocument, {
     }
     const wrapClassAttr = escapeHtml(Array.from(new Set(wrapClasses)).join(' '));
     const hiddenAttrs = hidden ? ' hidden aria-hidden="true" data-block-hidden="true"' : '';
-    return `<div class="${wrapClassAttr}" data-block-index="${index}" data-block-type="${type}"${hiddenAttrs}><div class="block-view" role="article" tabindex="0" aria-label="${aria}">${renderBlock(block)}</div></div>`;
+    return `<div class="${wrapClassAttr}" data-block-index="${index}" data-block-type="${type}"${hiddenAttrs}><div class="block-view" role="article" tabindex="0" aria-label="${aria}">${renderBlock(block, templateValues)}</div></div>`;
   }).join('\n');
   const styleMarkup = styleBlocks
     .map((css, index) => `<style data-doc-style="${index + 1}">${escapeStyleTagContent(css)}</style>`)

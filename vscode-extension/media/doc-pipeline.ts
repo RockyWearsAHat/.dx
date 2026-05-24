@@ -8,6 +8,8 @@ export interface PipelineBlock {
   id: string;
   className: string;
   hidden?: boolean;
+  scriptType?: string;
+  module?: boolean;
   rawSource?: string;
   text?: string;
   level?: number;
@@ -56,6 +58,14 @@ export function parseAttributes(args: string | number | boolean | null | undefin
     match = pattern.exec(text);
   }
 
+  if (/\bhidden\b/i.test(text) && !Object.prototype.hasOwnProperty.call(attributes, 'hidden')) {
+    attributes.hidden = 'true';
+  }
+
+  if (/\bmodule\b/i.test(text) && !Object.prototype.hasOwnProperty.call(attributes, 'module')) {
+    attributes.module = 'true';
+  }
+
   return attributes;
 }
 
@@ -78,6 +88,14 @@ function parseLeadingAttributesAndRemainder(text: string | number | boolean | nu
   let rest = String(text || '');
 
   while (true) {
+    const bareBoolean = /^\s*(hidden|module)(?=\s|$)/i.exec(rest);
+    if (bareBoolean) {
+      const key = String(bareBoolean[1]).trim().toLowerCase();
+      attrs[key] = 'true';
+      rest = rest.slice(bareBoolean[0].length);
+      continue;
+    }
+
     const match = /^\s*([a-zA-Z0-9._-]+)=(?:"([^"]*)"|'([^']*)'|([^\s]+))/.exec(rest);
     if (!match) {
       break;
@@ -217,6 +235,19 @@ export function parseSourceBlocks(source: string | number | boolean | null | und
           ...makeBaseBlock('stylesheet', attrs),
           href: String(attrs.href || attrs.src || inlineText || '').trim(),
           media: String(attrs.media || '').trim(),
+          rawSource,
+        });
+        cursor += 1;
+        continue;
+      }
+
+      if (type === 'script') {
+        blocks.push({
+          ...makeBaseBlock('script', attrs),
+          scriptType: String(attrs.type || '').trim(),
+          src: String(attrs.src || '').trim(),
+          module: parseBooleanAttribute(attrs.module),
+          text: inlineText,
           rawSource,
         });
         cursor += 1;
@@ -420,6 +451,18 @@ export function parseSourceBlocks(source: string | number | boolean | null | und
         ...makeBaseBlock('stylesheet', attrs),
         href: String(attrs.href || attrs.src || content.join('\n').trim() || '').trim(),
         media: String(attrs.media || '').trim(),
+        rawSource,
+      });
+      continue;
+    }
+
+    if (type === 'script') {
+      blocks.push({
+        ...makeBaseBlock('script', attrs),
+        scriptType: String(attrs.type || '').trim(),
+        src: String(attrs.src || '').trim(),
+        module: parseBooleanAttribute(attrs.module),
+        text: content.join('\n').trimEnd(),
         rawSource,
       });
       continue;
