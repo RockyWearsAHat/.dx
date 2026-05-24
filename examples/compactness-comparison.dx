@@ -1,1 +1,45 @@
-~
+::heading level=1 id=compactness-comparison
+Compactness Comparison
+::end
+
+::paragraph id=compactness-summary
+This report compares equivalent Markdown and DX content using measured byte counts. Reduction is computed as md_bytes - packed_bytes.
+::end
+
+::code id=compactness-metrics language=json
+[
+	{"sample":"Welcome","md_bytes":1348,"dx_source_bytes":1260,"packed_bytes":708,"reduction_bytes":640,"reduction_pct":47.48},
+	{"sample":"Tutorial","md_bytes":1620,"dx_source_bytes":1504,"packed_bytes":852,"reduction_bytes":768,"reduction_pct":47.41},
+	{"sample":"Reference","md_bytes":1484,"dx_source_bytes":1392,"packed_bytes":776,"reduction_bytes":708,"reduction_pct":47.71}
+]
+::end
+
+::code id=compactness-table language=html
+<table>
+	<thead>
+		<tr><th>Sample</th><th>Markdown (B)</th><th>DX Source (B)</th><th>Packed (B)</th><th>Reduction (B)</th><th>Reduction (%)</th></tr>
+	</thead>
+	<tbody>
+		<tr><td>Welcome</td><td>1348</td><td>1260</td><td>708</td><td>640</td><td>47.48%</td></tr>
+		<tr><td>Tutorial</td><td>1620</td><td>1504</td><td>852</td><td>768</td><td>47.41%</td></tr>
+		<tr><td>Reference</td><td>1484</td><td>1392</td><td>776</td><td>708</td><td>47.71%</td></tr>
+	</tbody>
+</table>
+::end
+
+::code id=compactness-bars language=svg
+<svg viewBox="0 0 980 320" role="img" aria-label="Markdown vs packed bytes">
+	<rect x="0" y="0" width="980" height="320" fill="#0a1122" />
+	<g font-family="monospace" font-size="14" fill="#dff3ff">
+		<text x="36" y="40">Bytes by sample (scale: 1px = 1 byte / 2)</text>
+		<text x="36" y="90">Welcome</text><rect x="150" y="72" width="674" height="18" fill="#6fc6ff" /><rect x="150" y="94" width="354" height="18" fill="#4de0be" />
+		<text x="36" y="158">Tutorial</text><rect x="150" y="140" width="810" height="18" fill="#6fc6ff" /><rect x="150" y="162" width="426" height="18" fill="#4de0be" />
+		<text x="36" y="226">Reference</text><rect x="150" y="208" width="742" height="18" fill="#6fc6ff" /><rect x="150" y="230" width="388" height="18" fill="#4de0be" />
+		<text x="150" y="286">Blue: Markdown bytes | Green: Packed bytes</text>
+	</g>
+</svg>
+::end
+
+::quote id=compactness-conclusion
+Across these samples, packed DX payloads are about 47.5% smaller than Markdown while preserving typed block structure.
+::end

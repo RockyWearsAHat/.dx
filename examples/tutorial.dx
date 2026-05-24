@@ -1,1 +1,40 @@
-~
+::heading level=1 id=tutorial-title
+DX Authoring Tutorial
+::end
+
+::paragraph id=tutorial-intro
+Follow this short path to create a robust document with headings, lists, code, tables, and SVG visuals.
+::end
+
+::numbered-list id=tutorial-steps
+1. Add a heading and paragraph for context.
+2. Insert list and checklist blocks for workflow clarity.
+3. Add code language=html for table-based summaries.
+4. Add code language=svg for diagrams.
+5. Save and verify parser/render tests.
+::end
+
+::code id=tutorial-shortcuts language=html
+<table>
+	<thead><tr><th>Action</th><th>Shortcut</th></tr></thead>
+	<tbody>
+		<tr><td>Open command panel</td><td>/</td></tr>
+		<tr><td>Toggle edit mode</td><td>Toolbar pen button</td></tr>
+		<tr><td>Save source</td><td>Cmd+S / Ctrl+S</td></tr>
+		<tr><td>Open scoped CSS</td><td>Option+Click on id/class</td></tr>
+	</tbody>
+</table>
+::end
+
+::code id=tutorial-architecture language=svg
+<svg viewBox="0 0 900 220" role="img" aria-label="Tutorial architecture">
+	<rect width="900" height="220" fill="#0e1730"/>
+	<g font-family="monospace" font-size="13" fill="#eef7ff">
+		<circle cx="120" cy="110" r="42" fill="#2a7fda"/><text x="84" y="114">Author</text>
+		<circle cx="330" cy="110" r="42" fill="#2a68c2"/><text x="297" y="114">Parse</text>
+		<circle cx="540" cy="110" r="42" fill="#18998a"/><text x="503" y="114">Render</text>
+		<circle cx="750" cy="110" r="42" fill="#1c9a69"/><text x="717" y="114">Store</text>
+		<path d="M162 110 L288 110 M372 110 L498 110 M582 110 L708 110" stroke="#6fc6ff" stroke-width="3" fill="none"/>
+	</g>
+</svg>
+::end

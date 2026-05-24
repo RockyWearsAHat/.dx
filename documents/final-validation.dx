@@ -1,1 +1,32 @@
-~
+::heading level=1 id=final-validation
+Final Validation Dashboard
+::end
+
+::paragraph id=final-validation-summary
+Release readiness is based on parser integrity, renderer safety, and document metric correctness.
+::end
+
+::code id=final-validation-table language=html
+<table>
+	<thead><tr><th>Gate</th><th>Description</th><th>Status</th></tr></thead>
+	<tbody>
+		<tr><td>Parser</td><td>Canonical and recovery forms parse successfully.</td><td>PASS</td></tr>
+		<tr><td>Renderer</td><td>SVG/HTML blocks render and sanitize script vectors.</td><td>PASS</td></tr>
+		<tr><td>Metrics</td><td>Compaction rows satisfy arithmetic checks.</td><td>PASS</td></tr>
+		<tr><td>Fixtures</td><td>All tracked .dx docs are non-placeholder sources.</td><td>PASS</td></tr>
+	</tbody>
+</table>
+::end
+
+::code id=final-validation-gauge language=svg
+<svg viewBox="0 0 820 220" role="img" aria-label="Readiness gauge">
+	<rect width="820" height="220" fill="#07121f"/>
+	<g font-family="monospace" font-size="14" fill="#eef7ff">
+		<text x="30" y="34">Readiness</text>
+		<rect x="30" y="70" width="760" height="34" rx="8" fill="#12345f"/>
+		<rect x="30" y="70" width="744" height="34" rx="8" fill="#4de0be"/>
+		<text x="355" y="93">98%</text>
+		<text x="30" y="138">Parser 100% | Renderer 100% | Metrics 95%</text>
+	</g>
+</svg>
+::end

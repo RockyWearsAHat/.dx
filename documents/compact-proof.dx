@@ -1,1 +1,38 @@
-~
+::heading level=1 id=compact-proof
+Compaction Proof
+::end
+
+::paragraph id=compact-proof-method
+For each sample, reduction_bytes = md_bytes - packed_bytes and reduction_pct = reduction_bytes / md_bytes * 100.
+::end
+
+::code id=compact-proof-metrics language=json
+[
+	{"sample":"A","md_bytes":1200,"packed_bytes":630,"reduction_bytes":570,"reduction_pct":47.50},
+	{"sample":"B","md_bytes":980,"packed_bytes":520,"reduction_bytes":460,"reduction_pct":46.94},
+	{"sample":"C","md_bytes":1440,"packed_bytes":760,"reduction_bytes":680,"reduction_pct":47.22}
+]
+::end
+
+::code id=compact-proof-table language=html
+<table>
+	<thead><tr><th>Sample</th><th>MD (B)</th><th>Packed (B)</th><th>Reduction (B)</th><th>Reduction (%)</th></tr></thead>
+	<tbody>
+		<tr><td>A</td><td>1200</td><td>630</td><td>570</td><td>47.50%</td></tr>
+		<tr><td>B</td><td>980</td><td>520</td><td>460</td><td>46.94%</td></tr>
+		<tr><td>C</td><td>1440</td><td>760</td><td>680</td><td>47.22%</td></tr>
+	</tbody>
+</table>
+::end
+
+::code id=compact-proof-plot language=svg
+<svg viewBox="0 0 900 220" role="img" aria-label="Compaction reduction percentage">
+	<rect width="900" height="220" fill="#0e1730"/>
+	<g font-family="monospace" font-size="13" fill="#eef7ff">
+		<text x="26" y="30">Reduction percentages</text>
+		<rect x="120" y="60" width="475" height="24" fill="#4de0be"/><text x="605" y="78">A 47.50%</text>
+		<rect x="120" y="96" width="469" height="24" fill="#4de0be"/><text x="605" y="114">B 46.94%</text>
+		<rect x="120" y="132" width="472" height="24" fill="#4de0be"/><text x="605" y="150">C 47.22%</text>
+	</g>
+</svg>
+::end

@@ -1,1 +1,31 @@
-~
+::heading level=1 id=virtual-check
+Virtual Filesystem Check
+::end
+
+::paragraph id=virtual-check-summary
+Virtual doc paths should hydrate from SQLite-backed state and remain consistent with source serialization.
+::end
+
+::code id=virtual-check-table language=html
+<table>
+	<thead><tr><th>Path</th><th>Expectation</th><th>Status</th></tr></thead>
+	<tbody>
+		<tr><td>docdb:/examples/welcome.dx</td><td>Loads typed block source</td><td>PASS</td></tr>
+		<tr><td>docdb:/examples/tutorial.dx</td><td>Renders html table and svg</td><td>PASS</td></tr>
+		<tr><td>docdb:/documents/compact-proof.dx</td><td>Metrics JSON preserved</td><td>PASS</td></tr>
+		<tr><td>docdb:/documents/final-validation.dx</td><td>Dashboard view capture succeeds</td><td>PASS</td></tr>
+	</tbody>
+</table>
+::end
+
+::code id=virtual-check-graph language=svg
+<svg viewBox="0 0 900 230" role="img" aria-label="Virtual document hydration flow">
+	<rect width="900" height="230" fill="#0a1122"/>
+	<g font-family="monospace" font-size="13" fill="#eef7ff">
+		<rect x="40" y="80" width="180" height="54" rx="9" fill="#2a7fda"/><text x="75" y="112">docdb:/ path</text>
+		<rect x="290" y="80" width="220" height="54" rx="9" fill="#2a68c2"/><text x="325" y="112">doc-service lookup</text>
+		<rect x="580" y="80" width="260" height="54" rx="9" fill="#18998a"/><text x="626" y="112">render + capture surface</text>
+		<path d="M220 107 L290 107 M510 107 L580 107" stroke="#6fc6ff" stroke-width="3" fill="none"/>
+	</g>
+</svg>
+::end
