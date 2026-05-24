@@ -232,7 +232,7 @@ test('renderDocumentViewHtml marks hidden blocks with hidden attributes', () => 
       'Shown paragraph',
       '::end',
       '',
-      '::paragraph id=hidden-block hidden=true',
+      '::paragraph id=hidden-block hidden',
       'Hidden paragraph',
       '::end',
     ].join('\n'),
@@ -242,4 +242,29 @@ test('renderDocumentViewHtml marks hidden blocks with hidden attributes', () => 
   assert.match(html, /data-block-id="hidden-block"/);
   assert.match(html, /data-block-hidden="true"/);
   assert.match(html, /class="[^"]*is-hidden[^"]*"/);
+});
+
+test('renderDocumentViewHtml interpolates template vars from script json blocks', () => {
+  const doc = {
+    title: 'Template Vars',
+    source: [
+      '::script id=vars type=application/json',
+      '{"kpi":"47.50%","label":"Compaction"}',
+      '::end',
+      '',
+      '::code id=summary language=html',
+      '<table><tbody><tr><td>{{label}}</td><td>{{kpi}}</td></tr></tbody></table>',
+      '::end',
+      '',
+      '::paragraph id=caption',
+      '{{label}} result: {{kpi}}',
+      '::end',
+    ].join('\n'),
+  };
+
+  const html = renderDocumentViewHtml(doc);
+  assert.match(html, /<td>Compaction<\/td>/);
+  assert.match(html, /<td>47\.50%<\/td>/);
+  assert.match(html, /<p[^>]*>Compaction result: 47\.50%<\/p>/);
+  assert.equal(html.includes('::script'), false);
 });

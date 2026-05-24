@@ -20,6 +20,8 @@ interface DocBlock {
   className?: string;
   class?: string;
   hidden?: boolean;
+  scriptType?: string;
+  module?: boolean;
   level?: number;
   text?: string;
   items?: Array<string | ListItem | ChecklistItem>;
@@ -97,6 +99,7 @@ const BLOCK_TYPES = new Set([
   'html',
   'graph',
   'mermaid',
+  'script',
 ]);
 
 function clampHeadingLevel(value: JsonLike): number {
@@ -195,7 +198,7 @@ function normalizeTags(tags: JsonLike): string[] {
 }
 
 function blockText(block: DocBlock): string {
-  if (block.type === 'style' || block.type === 'stylesheet') {
+  if (block.type === 'style' || block.type === 'stylesheet' || block.type === 'script') {
     return '';
   }
 
@@ -267,6 +270,14 @@ function parseAttributeString(rawAttributes: JsonLike): Record<string, string> {
     }
 
     match = pattern.exec(text);
+  }
+
+  if (/\bhidden\b/i.test(text) && !Object.prototype.hasOwnProperty.call(attributes, 'hidden')) {
+    attributes.hidden = 'true';
+  }
+
+  if (/\bmodule\b/i.test(text) && !Object.prototype.hasOwnProperty.call(attributes, 'module')) {
+    attributes.module = 'true';
   }
 
   return attributes;
@@ -393,6 +404,19 @@ function normalizeBlock(block: DocBlock | null | undefined, index: number, regis
     };
   }
 
+  if (blockType === 'script') {
+    return {
+      id,
+      className,
+      hidden,
+      type: 'script',
+      scriptType: String(sourceBlock.scriptType || '').trim(),
+      src: String(sourceBlock.src || '').trim(),
+      module: Boolean(sourceBlock.module),
+      text: String(sourceBlock.text || '').trimEnd(),
+    };
+  }
+
   const normalized: NormalizedDocBlock = {
     id,
     className,
@@ -504,6 +528,15 @@ function parseLeadingAttributesAndRemainder(text: JsonLike): { attrs: Record<str
   let rest = String(text || '');
 
   while (true) {
+    const bareBoolean = /^\s*(hidden|module)(?=\s|$)/i.exec(rest);
+
+    if (bareBoolean) {
+      const key = String(bareBoolean[1]).trim().toLowerCase();
+      attrs[key] = 'true';
+      rest = rest.slice(bareBoolean[0].length);
+      continue;
+    }
+
     const match = /^\s*([a-zA-Z0-9._-]+)=(?:"([^"]*)"|'([^']*)'|([^\s]+))/.exec(rest);
 
     if (!match) {
@@ -701,6 +734,20 @@ function parseDocsrcBlocks(body: JsonLike): DocBlock[] {
         hidden,
         href: String(attributes.href || attributes.src || contentLines.join('\n').trim() || '').trim(),
         media: String(attributes.media || '').trim(),
+      });
+      return;
+    }
+
+    if (type === 'script') {
+      blocks.push({
+        type: 'script',
+        id: attributes.id,
+        className: normalizeClassName(attributes.class),
+        hidden,
+        scriptType: String(attributes.type || '').trim(),
+        src: String(attributes.src || '').trim(),
+        module: parseBooleanAttribute(attributes.module),
+        text: contentLines.join('\n').trimEnd(),
       });
       return;
     }
@@ -1174,7 +1221,7 @@ function blockHeader(block: DocBlock): string {
   }
 
   if (block.hidden) {
-    attributes.push('hidden=true');
+    attributes.push('hidden');
   }
 
   if (block.type === 'heading') {
@@ -1206,6 +1253,22 @@ function blockHeader(block: DocBlock): string {
     }
 
     return `::stylesheet ${attributes.join(' ')}`;
+  }
+
+  if (block.type === 'script') {
+    if (block.scriptType) {
+      attributes.push(`type=${formatAttributeValue(block.scriptType)}`);
+    }
+
+    if (block.src) {
+      attributes.push(`src=${formatAttributeValue(block.src)}`);
+    }
+
+    if (block.module) {
+      attributes.push('module');
+    }
+
+    return `::script ${attributes.join(' ')}`;
   }
 
   return `::${block.type} ${attributes.join(' ')}`;
@@ -1246,6 +1309,10 @@ function blockBody(block: DocBlock): string {
 
   if (block.type === 'stylesheet' || block.type === 'rule') {
     return '';
+  }
+
+  if (block.type === 'script') {
+    return block.text || '';
   }
 
   return block.text || '';

@@ -33,7 +33,7 @@ Compactness Comparison
 This report compares equivalent Markdown and DX content using measured byte counts. Reduction is computed as md_bytes - packed_bytes.
 ::end
 
-::code id=compactness-metrics hidden=true language=json
+::code id=compactness-metrics hidden language=json
 [
 	{"sample":"Welcome","md_bytes":1348,"dx_source_bytes":1260,"packed_bytes":708,"reduction_bytes":640,"reduction_pct":47.48},
 	{"sample":"Tutorial","md_bytes":1620,"dx_source_bytes":1504,"packed_bytes":852,"reduction_bytes":768,"reduction_pct":47.41},
