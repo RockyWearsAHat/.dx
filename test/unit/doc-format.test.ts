@@ -367,6 +367,26 @@ test('parseDocFile preserves svg/html/graph/mermaid typed blocks', () => {
   assert.match(roundtrip, /::mermaid/);
 });
 
+test('parseDocFile and stringifyDocFile preserve hidden block attributes', () => {
+  const source = [
+    '::paragraph id=visible',
+    'Visible text',
+    '::end',
+    '',
+    '::paragraph id=secret hidden=true',
+    'Hidden text',
+    '::end',
+  ].join('\n');
+
+  const parsed = parseDocFile('/tmp/hidden.dx', source);
+  const hiddenBlock = parsed.blocks.find((block) => block.id === 'secret');
+  assert.ok(hiddenBlock);
+  assert.equal(hiddenBlock.hidden, true);
+
+  const roundtrip = stringifyDocFile(parsed);
+  assert.match(roundtrip, /::paragraph id=secret hidden=true/);
+});
+
 test('stringifyDocFile serializes object-backed list items without [object Object]', () => {
   const doc = normalizeDocInput('/tmp/object-list.dx', {
     title: 'Object List',

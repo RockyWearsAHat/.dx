@@ -19,6 +19,7 @@ interface DocBlock {
   id?: string;
   className?: string;
   class?: string;
+  hidden?: boolean;
   level?: number;
   text?: string;
   items?: Array<string | ListItem | ChecklistItem>;
@@ -246,6 +247,11 @@ function normalizeClassName(value: JsonLike): string {
     .join(' ');
 }
 
+function parseBooleanAttribute(value: JsonLike): boolean {
+  const normalized = String(value || '').trim().toLowerCase();
+  return normalized === 'true' || normalized === '1' || normalized === 'yes' || normalized === 'on';
+}
+
 function parseAttributeString(rawAttributes: JsonLike): Record<string, string> {
   const attributes: Record<string, string> = {};
   const text = String(rawAttributes || '');
@@ -282,11 +288,13 @@ function normalizeBlock(block: DocBlock | null | undefined, index: number, regis
   const idSeed = sourceBlock.id || (blockType === 'heading' ? sourceBlock.text : `${blockType}-${index + 1}`);
   const id = ensureUniqueId(idSeed, registry);
   const className = normalizeClassName(sourceBlock.className || sourceBlock.class);
+  const hidden = parseBooleanAttribute(sourceBlock.hidden);
 
   if (blockType === 'heading') {
     return {
       id,
       className,
+      hidden,
       type: 'heading',
       level: clampHeadingLevel(sourceBlock.level),
       text: String(sourceBlock.text || `Section ${index + 1}`).trim(),
@@ -315,6 +323,7 @@ function normalizeBlock(block: DocBlock | null | undefined, index: number, regis
     return {
       id,
       className,
+      hidden,
       type: blockType,
       items: items.length > 0 ? items : [{ text: 'List item' }],
     };
@@ -324,6 +333,7 @@ function normalizeBlock(block: DocBlock | null | undefined, index: number, regis
     return {
       id,
       className,
+      hidden,
       type: 'image',
       src: String(sourceBlock.src || '').trim(),
       alt: String(sourceBlock.alt || '').trim(),
@@ -342,19 +352,21 @@ function normalizeBlock(block: DocBlock | null | undefined, index: number, regis
     return {
       id,
       className,
+      hidden,
       type: 'checklist',
       items: items.length > 0 ? items : [{ checked: false, text: 'Item' }],
     };
   }
 
   if (blockType === 'rule') {
-    return { id, className, type: 'rule' };
+    return { id, className, hidden, type: 'rule' };
   }
 
   if (blockType === 'style') {
     return {
       id,
       className,
+      hidden,
       type: 'style',
       text: String(sourceBlock.text || '').trimEnd(),
     };
@@ -364,6 +376,7 @@ function normalizeBlock(block: DocBlock | null | undefined, index: number, regis
     return {
       id,
       className,
+      hidden,
       type: blockType,
       text: String(sourceBlock.text || '').trimEnd(),
     };
@@ -373,6 +386,7 @@ function normalizeBlock(block: DocBlock | null | undefined, index: number, regis
     return {
       id,
       className,
+      hidden,
       type: 'stylesheet',
       href: String(sourceBlock.href || sourceBlock.src || '').trim(),
       media: String(sourceBlock.media || '').trim(),
@@ -382,6 +396,7 @@ function normalizeBlock(block: DocBlock | null | undefined, index: number, regis
   const normalized: NormalizedDocBlock = {
     id,
     className,
+    hidden,
     type: blockType,
     text: String(sourceBlock.text || '').trim(),
   };
@@ -543,6 +558,7 @@ function parseDocsrcBlocks(body: JsonLike): DocBlock[] {
 
   function pushBlock(type: string, attributes: Record<string, string>, contentLines: string[]): void {
     const content = contentLines.join('\n').trim();
+    const hidden = parseBooleanAttribute(attributes.hidden);
 
     if (type === 'heading') {
       blocks.push({
@@ -550,6 +566,7 @@ function parseDocsrcBlocks(body: JsonLike): DocBlock[] {
         level: clampHeadingLevel(attributes.level || 1),
         id: attributes.id,
         className: normalizeClassName(attributes.class),
+        hidden,
         text: content || 'Section',
       });
       return;
@@ -560,6 +577,7 @@ function parseDocsrcBlocks(body: JsonLike): DocBlock[] {
         type: 'paragraph',
         id: attributes.id,
         className: normalizeClassName(attributes.class),
+        hidden,
         text: content,
       });
       return;
@@ -570,6 +588,7 @@ function parseDocsrcBlocks(body: JsonLike): DocBlock[] {
         type: 'quote',
         id: attributes.id,
         className: normalizeClassName(attributes.class),
+        hidden,
         text: content,
       });
       return;
@@ -580,6 +599,7 @@ function parseDocsrcBlocks(body: JsonLike): DocBlock[] {
         type: 'code',
         id: attributes.id,
         className: normalizeClassName(attributes.class),
+        hidden,
         language: attributes.lang || attributes.language || '',
         text: contentLines.join('\n').replace(/\n+$/, ''),
       });
@@ -610,6 +630,7 @@ function parseDocsrcBlocks(body: JsonLike): DocBlock[] {
         type: normalizedType,
         id: attributes.id,
         className: normalizeClassName(attributes.class),
+        hidden,
         items: nested,
       });
       return;
@@ -620,6 +641,7 @@ function parseDocsrcBlocks(body: JsonLike): DocBlock[] {
         type: 'image',
         id: attributes.id,
         className: normalizeClassName(attributes.class),
+        hidden,
         src: String(attributes.src || '').trim(),
         alt: content,
       });
@@ -644,6 +666,7 @@ function parseDocsrcBlocks(body: JsonLike): DocBlock[] {
         type: 'checklist',
         id: attributes.id,
         className: normalizeClassName(attributes.class),
+        hidden,
         items,
       });
       return;
@@ -654,6 +677,7 @@ function parseDocsrcBlocks(body: JsonLike): DocBlock[] {
         type: 'rule',
         id: attributes.id,
         className: normalizeClassName(attributes.class),
+        hidden,
       });
       return;
     }
@@ -663,6 +687,7 @@ function parseDocsrcBlocks(body: JsonLike): DocBlock[] {
         type: 'style',
         id: attributes.id,
         className: normalizeClassName(attributes.class),
+        hidden,
         text: contentLines.join('\n').trimEnd(),
       });
       return;
@@ -673,6 +698,7 @@ function parseDocsrcBlocks(body: JsonLike): DocBlock[] {
         type: 'stylesheet',
         id: attributes.id,
         className: normalizeClassName(attributes.class),
+        hidden,
         href: String(attributes.href || attributes.src || contentLines.join('\n').trim() || '').trim(),
         media: String(attributes.media || '').trim(),
       });
@@ -683,6 +709,7 @@ function parseDocsrcBlocks(body: JsonLike): DocBlock[] {
       type,
       id: attributes.id,
       className: normalizeClassName(attributes.class),
+      hidden,
       text: contentLines.join('\n').trimEnd(),
     });
   }
@@ -1144,6 +1171,10 @@ function blockHeader(block: DocBlock): string {
 
   if (normalizeClassName(block.className)) {
     attributes.push(`class=${formatAttributeValue(normalizeClassName(block.className))}`);
+  }
+
+  if (block.hidden) {
+    attributes.push('hidden=true');
   }
 
   if (block.type === 'heading') {

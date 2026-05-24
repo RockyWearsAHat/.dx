@@ -234,14 +234,19 @@ export function renderDocumentViewHtml(document: RenderDocument, {
     const type = escapeHtml(block?.type || 'paragraph');
     const aria = escapeHtml(`Block ${index + 1}: ${type}`);
     const wrapClasses = ['block-wrap'];
+    const hidden = Boolean(block?.hidden);
     for (const token of splitClassNames(block.className)) {
       wrapClasses.push(token);
     }
     if (block?.id) {
       wrapClasses.push(String(block.id));
     }
+    if (hidden) {
+      wrapClasses.push('is-hidden');
+    }
     const wrapClassAttr = escapeHtml(Array.from(new Set(wrapClasses)).join(' '));
-    return `<div class="${wrapClassAttr}" data-block-index="${index}" data-block-type="${type}"><div class="block-view" role="article" tabindex="0" aria-label="${aria}">${renderBlock(block)}</div></div>`;
+    const hiddenAttrs = hidden ? ' hidden aria-hidden="true" data-block-hidden="true"' : '';
+    return `<div class="${wrapClassAttr}" data-block-index="${index}" data-block-type="${type}"${hiddenAttrs}><div class="block-view" role="article" tabindex="0" aria-label="${aria}">${renderBlock(block)}</div></div>`;
   }).join('\n');
   const styleMarkup = styleBlocks
     .map((css, index) => `<style data-doc-style="${index + 1}">${escapeStyleTagContent(css)}</style>`)

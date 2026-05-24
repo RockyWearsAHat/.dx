@@ -7,6 +7,7 @@ export interface PipelineBlock {
   type: string;
   id: string;
   className: string;
+  hidden?: boolean;
   rawSource?: string;
   text?: string;
   level?: number;
@@ -19,6 +20,11 @@ export interface PipelineBlock {
 }
 
 type Attributes = Record<string, string>;
+
+function parseBooleanAttribute(value: string | number | boolean | null | undefined | object): boolean {
+  const normalized = String(value || '').trim().toLowerCase();
+  return normalized === 'true' || normalized === '1' || normalized === 'yes' || normalized === 'on';
+}
 
 export function normalizeClassName(value: string | number | boolean | null | undefined | object): string {
   return String(value || '')
@@ -124,6 +130,7 @@ function makeBaseBlock(type: string, attrs: Attributes): PipelineBlock {
     type,
     id: String(attrs.id || '').trim(),
     className: normalizeClassName(attrs.class),
+    hidden: parseBooleanAttribute(attrs.hidden),
   };
 }
 
