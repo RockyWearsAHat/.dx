@@ -72,6 +72,9 @@ const appearanceStorageKey = 'docdb.appearance.v1';
 const editModeStorageKey = 'docdb.edit-mode.v1';
 let loadingGuardTimer: ReturnType<typeof setTimeout> | null = null;
 let customCssSheet: CSSStyleSheet | null = null;
+let diffRole: 'none' | 'old' | 'new' = 'none';
+let comparisonDocModel: DocModel | null = null;
+let isDiffReadOnly = false;
 
 let blankPagePointerDownHadOpenEditors = false;
 
@@ -583,6 +586,63 @@ function currentDocSourceText(): string {
   }
 
   return stringifyDoc(docModel);
+}
+
+function normalizeBlockRawSource(block: PipelineBlock | null | undefined): string {
+  return String(block && block.rawSource ? block.rawSource : '').replace(/\r\n/g, '\n').trim();
+}
+
+function resolveDiffStatusForIndex(index: number): 'unchanged' | 'added' | 'removed' | 'changed' {
+  const currentBlocks = Array.isArray(docModel?.blocks) ? docModel.blocks : [];
+  const compareBlocks = Array.isArray(comparisonDocModel?.blocks) ? comparisonDocModel.blocks : [];
+  const currentBlock = currentBlocks[index] || null;
+  const compareBlock = compareBlocks[index] || null;
+
+  const currentRaw = normalizeBlockRawSource(currentBlock);
+  const compareRaw = normalizeBlockRawSource(compareBlock);
+
+  if (currentRaw && compareRaw && currentRaw === compareRaw) {
+    return 'unchanged';
+  }
+
+  if (!compareBlock && currentBlock) {
+    return diffRole === 'old' ? 'removed' : 'added';
+  }
+
+  if (compareBlock && currentBlock) {
+    return 'changed';
+  }
+
+  return 'unchanged';
+}
+
+function applyDiffDecorations(): void {
+  const page = document.querySelector<HTMLElement>('.page');
+  const blocks = document.querySelectorAll<HTMLElement>('.block-wrap');
+  const hasDiffContext = diffRole !== 'none' && Boolean(comparisonDocModel);
+
+  if (page) {
+    page.dataset.diffMode = hasDiffContext ? 'true' : 'false';
+    page.dataset.diffRole = hasDiffContext ? diffRole : 'none';
+  }
+
+  blocks.forEach((wrap, index) => {
+    wrap.classList.remove('diff-added', 'diff-removed', 'diff-changed');
+
+    if (!hasDiffContext) {
+      return;
+    }
+
+    const status = resolveDiffStatusForIndex(index);
+
+    if (status === 'added') {
+      wrap.classList.add('diff-added');
+    } else if (status === 'removed') {
+      wrap.classList.add('diff-removed');
+    } else if (status === 'changed') {
+      wrap.classList.add('diff-changed');
+    }
+  });
 }
 
 function canApplyExternalSourceNow(): boolean {
@@ -1462,13 +1522,23 @@ function commitBlockSrc(index: number): void {
 
 function renderDocument(): void {
   ensureDocumentLifecycleController().renderDocument();
+  applyDiffDecorations();
 }
 
 function saveDoc(): void {
+  if (isDiffReadOnly) {
+    setStatus('Diff preview is read-only');
+    return;
+  }
+
   ensureDocumentLifecycleController().saveDoc();
 }
 
 function saveDocAuto(): void {
+  if (isDiffReadOnly) {
+    return;
+  }
+
   ensureDocumentLifecycleController().saveDocAuto();
 }
 
@@ -1565,14 +1635,27 @@ function toggleHelp(): void {
 }
 
 function isEditModeEnabled(): boolean {
+  if (isDiffReadOnly) {
+    return false;
+  }
+
   return ensureUiStateController().isEditModeEnabled();
 }
 
 function loadEditModePreference(): boolean {
+  if (isDiffReadOnly) {
+    return false;
+  }
+
   return ensureUiStateController().loadEditModePreference();
 }
 
 function setEditMode(enabled: boolean): void {
+  if (isDiffReadOnly) {
+    ensureUiStateController().setEditMode(false);
+    return;
+  }
+
   ensureUiStateController().setEditMode(Boolean(enabled));
 }
 
@@ -1888,18 +1971,39 @@ function wireDragAndDrop(): void {
 function initializeDocument() {
   const initEl = document.getElementById('doc-init');
   const sourceEl = document.getElementById('doc-init-source');
+  const compareSourceEl = document.getElementById('doc-init-compare-source');
   const docPath = initEl && initEl.dataset && initEl.dataset.docPath ? initEl.dataset.docPath : 'unknown.dx';
   const sourceText = (sourceEl instanceof HTMLTextAreaElement || sourceEl instanceof HTMLInputElement)
     ? sourceEl.value
     : '';
+  const compareSourceText = (compareSourceEl instanceof HTMLTextAreaElement || compareSourceEl instanceof HTMLInputElement)
+    ? compareSourceEl.value
+    : '';
   const errorText = initEl && initEl.dataset && initEl.dataset.docError ? initEl.dataset.docError : '';
+  const initialDiffRole = initEl && initEl.dataset && initEl.dataset.diffRole ? String(initEl.dataset.diffRole) : 'none';
   const initialTheme = initEl && initEl.dataset && initEl.dataset.initialTheme ? initEl.dataset.initialTheme : 'auto';
   const initialPaper = initEl && initEl.dataset && initEl.dataset.initialPaper ? initEl.dataset.initialPaper : 'white';
   const initialDensity = initEl && initEl.dataset && initEl.dataset.initialDensity ? initEl.dataset.initialDensity : 'comfortable';
   const initialScale = initEl && initEl.dataset && initEl.dataset.initialScale ? Number(initEl.dataset.initialScale) : 100;
-  const preferredEditMode = loadEditModePreference();
   currentDocPath = docPath;
   workspaceBaseUri = (initEl && initEl.dataset && initEl.dataset.workspaceUri) ? String(initEl.dataset.workspaceUri).replace(/\/$/, '') : '';
+  diffRole = initialDiffRole === 'old' || initialDiffRole === 'new' ? initialDiffRole : 'none';
+  isDiffReadOnly = diffRole !== 'none';
+  const preferredEditMode = loadEditModePreference();
+  try {
+    comparisonDocModel = compareSourceText
+      ? parseDoc(compareSourceText)
+      : null;
+  } catch {
+    comparisonDocModel = null;
+  }
+
+  const readOnlyEditToggle = document.getElementById('ui-chrome-edit-toggle');
+  if (readOnlyEditToggle instanceof HTMLButtonElement && isDiffReadOnly) {
+    readOnlyEditToggle.disabled = true;
+    readOnlyEditToggle.setAttribute('aria-disabled', 'true');
+    readOnlyEditToggle.title = 'Diff preview is read-only';
+  }
 
   armLoadingGuard(preferredEditMode);
 

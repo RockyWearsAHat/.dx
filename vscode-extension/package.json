@@ -2,7 +2,7 @@
   "name": "docdb-virtual-files",
   "displayName": "DOC DB Virtual Files",
   "description": "Mount SQLite-backed DOC files as virtual files in VS Code without an HTTP backend.",
-  "version": "0.0.106",
+  "version": "0.0.140",
   "publisher": "local",
   "type": "module",
   "repository": {
@@ -17,7 +17,8 @@
   ],
   "activationEvents": [
     "onStartupFinished",
-    "onFileSystem:docdb"
+    "onFileSystem:docdb",
+    "onWebviewPanel:docdb.unifiedDiff"
   ],
   "main": "../build/runtime/vscode-extension/extension.cjs",
   "contributes": {
@@ -53,6 +54,10 @@
       {
         "command": "docdb.surface.action",
         "title": "DOC DB: Run Surface Action"
+      },
+      {
+        "command": "docdb.openUnifiedDiff",
+        "title": "DOC DB: Open Unified DX Diff"
       }
     ],
     "configuration": {
@@ -72,6 +77,11 @@
           "type": "boolean",
           "default": true,
           "description": "Automatically create extensions.json recommendation when a .doc folder is detected."
+        },
+        "docdb.unifiedDiffAutoOpen": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically replace VS Code's two-pane DX diff with DOC DB's one-pane unified diff viewer."
         }
       }
     }
