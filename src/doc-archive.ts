@@ -563,6 +563,42 @@ export async function readDocArchive(rootDir: string, absoluteDocPath: string, e
   throw new Error(`Archive entry not found for document key: ${key}`);
 }
 
+export function readDocArchiveFromBuffer(rootDir: string, absoluteDocPath: string, archiveBuffer: Buffer | Uint8Array | string | null | undefined) {
+  const archiveMeta = getDocArchiveMetadata(rootDir, absoluteDocPath);
+  const key = archiveMeta.key;
+  const payload = Buffer.isBuffer(archiveBuffer) ? archiveBuffer : Buffer.from(archiveBuffer || []);
+
+  const container = (
+    payload.length >= BUNDLE_MAGIC_V3.length
+    && (
+      payload.subarray(0, BUNDLE_MAGIC_V3.length).equals(BUNDLE_MAGIC_V4)
+      || payload.subarray(0, BUNDLE_MAGIC_V3.length).equals(BUNDLE_MAGIC_V3)
+      || payload.subarray(0, BUNDLE_MAGIC_V3.length).equals(BUNDLE_MAGIC_V2)
+    )
+  )
+    ? decodeBundle(payload)
+    : decodeRepoArchive(payload);
+
+  const entry = container.documents && container.documents[key];
+
+  if (!entry) {
+    throw new Error(`Archive entry not found for document key: ${key}`);
+  }
+
+  if (entry._packed) {
+    const packed = Buffer.isBuffer(entry._packed) ? entry._packed : Buffer.from(entry._packed);
+    const unpacked = unpackDocument(packed);
+    return normalizeDocInput(absoluteDocPath, unpacked);
+  }
+
+  if (entry.payload) {
+    const buffer = Buffer.from(String(entry.payload || ''), 'base64');
+    return decodeArchivePayload(absoluteDocPath, buffer);
+  }
+
+  throw new Error(`Archive entry is missing payload data for document key: ${key}`);
+}
+
 export function getLegacyCompanionArchivePath(absoluteDocPath: string): string {
   return legacyCompanionArchivePath(absoluteDocPath);
 }

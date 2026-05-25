@@ -1,7 +1,13 @@
 const path = require('node:path');
+const os = require('node:os');
 const { pathToFileURL } = require('node:url');
-const { mkdir, readFile, writeFile } = require('node:fs/promises');
+const { execFile } = require('node:child_process');
+const { promisify } = require('node:util');
+const { mkdir, readFile, writeFile, readdir } = require('node:fs/promises');
 const vscode = require('vscode');
+
+const execFileAsync = promisify(execFile);
+const CHAT_SNAPSHOT_SCHEME = 'chat-editing-snapshot-text-model';
 
 const THEME_OPTIONS = new Set(['auto', 'light', 'dark']);
 const WELCOME_DOC_RELATIVE_PATH = 'examples/welcome.dx';
@@ -16,6 +22,931 @@ const IMAGE_EXT_BY_MIME = {
 };
 let runtimeRoot = null;
 let runtimePromise = null;
+const chatEditingSessionDirCache = new Map();
+const chatEditingSessionStateCache = new Map();
+const unifiedDiffAutoRouteInFlight = new Set();
+let unifiedDiffPanelState = null;
+let extensionContext = null;
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms) || 0)));
+}
+
+class ChatEditingSnapshotContentProvider {
+  async provideTextDocumentContent(uri) {
+    return await readChatEditingSnapshotSource(uri, '');
+  }
+}
+
+function getVsCodeUserDataPath() {
+  const home = os.homedir();
+  const appName = String(vscode.env.appName || 'Code');
+
+  if (!home) {
+    return null;
+  }
+
+  if (process.platform === 'darwin') {
+    return path.join(home, 'Library', 'Application Support', appName, 'User');
+  }
+
+  if (process.platform === 'win32') {
+    return path.join(process.env.APPDATA || path.join(home, 'AppData', 'Roaming'), appName, 'User');
+  }
+
+  return path.join(process.env.XDG_CONFIG_HOME || path.join(home, '.config'), appName, 'User');
+}
+
+function decodeChatEditingSessionId(value) {
+  const raw = String(value || '').trim();
+
+  if (!raw) {
+    return '';
+  }
+
+  const token = raw.split('/').filter(Boolean).pop() || raw;
+  const normalizedToken = token.replace(/-/g, '+').replace(/_/g, '/');
+  const paddedToken = normalizedToken + '='.repeat((4 - (normalizedToken.length % 4)) % 4);
+
+  try {
+    const decoded = Buffer.from(paddedToken, 'base64').toString('utf8').trim();
+    return decoded || token;
+  } catch {
+    return token;
+  }
+}
+
+function getChatEditingSnapshotResourceUri(uri) {
+  const rawPath = String(uri?.path || '').trim();
+
+  if (!rawPath) {
+    return '';
+  }
+
+  try {
+    const decodedPath = decodeURIComponent(rawPath);
+    return pathToFileURL(path.resolve(decodedPath)).toString();
+  } catch {
+    return '';
+  }
+}
+
+function normalizePathForComparison(absolutePath) {
+  const normalized = path.resolve(String(absolutePath || ''));
+  return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
+}
+
+function getAbsolutePathFromResourceUri(resourceUriText) {
+  const raw = String(resourceUriText || '').trim();
+
+  if (!raw) {
+    return '';
+  }
+
+  try {
+    const parsed = vscode.Uri.parse(raw);
+
+    if (parsed.scheme === 'file' && parsed.fsPath) {
+      return path.resolve(String(parsed.fsPath));
+    }
+  } catch {
+    // Ignore parse errors and fall through to plain path decode.
+  }
+
+  try {
+    return path.resolve(decodeURIComponent(raw));
+  } catch {
+    return '';
+  }
+}
+
+function snapshotEntryMatchesFilePath(entry, filePath) {
+  const entryPath = getAbsolutePathFromResourceUri(entry?.resource || '');
+
+  if (!entryPath || !filePath) {
+    return false;
+  }
+
+  return normalizePathForComparison(entryPath) === normalizePathForComparison(filePath);
+}
+
+async function findChatEditingSessionDir(sessionId) {
+  const normalizedSessionId = String(sessionId || '').trim();
+
+  if (!normalizedSessionId) {
+    return null;
+  }
+
+  if (chatEditingSessionDirCache.has(normalizedSessionId)) {
+    return chatEditingSessionDirCache.get(normalizedSessionId) || null;
+  }
+
+  const userDataPath = getVsCodeUserDataPath();
+
+  if (!userDataPath) {
+    return null;
+  }
+
+  const workspaceStoragePath = path.join(userDataPath, 'workspaceStorage');
+
+  try {
+    const workspaceEntries = await readdir(workspaceStoragePath, { withFileTypes: true });
+
+    for (const workspaceEntry of workspaceEntries) {
+      if (!workspaceEntry.isDirectory()) {
+        continue;
+      }
+
+      const candidateDir = path.join(workspaceStoragePath, workspaceEntry.name, 'chatEditingSessions', normalizedSessionId);
+
+      try {
+        await readFile(path.join(candidateDir, 'state.json'), 'utf8');
+        chatEditingSessionDirCache.set(normalizedSessionId, candidateDir);
+        return candidateDir;
+      } catch {
+        // Keep scanning workspace storage directories.
+      }
+    }
+  } catch {
+    // Ignore missing workspace storage directories and fall back to null.
+  }
+
+  return null;
+}
+
+async function loadChatEditingSessionState(sessionId) {
+  const normalizedSessionId = String(sessionId || '').trim();
+
+  if (!normalizedSessionId) {
+    return null;
+  }
+
+  const sessionDir = await findChatEditingSessionDir(normalizedSessionId);
+
+  if (!sessionDir) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(await readFile(path.join(sessionDir, 'state.json'), 'utf8'));
+    return { sessionDir, parsed };
+  } catch {
+    return null;
+  }
+}
+
+function findSnapshotEntryInParsedState(parsedState, snapshotUriText, resourceUri, absoluteSnapshotPath) {
+  const recentEntries = Array.isArray(parsedState?.recentSnapshot?.entries) ? parsedState.recentSnapshot.entries : [];
+  const initialEntries = Array.isArray(parsedState?.initialFileContents) ? parsedState.initialFileContents : [];
+
+  const matchedEntry = recentEntries.find((entry) => String(entry?.snapshotUri || '') === snapshotUriText)
+    || recentEntries.find((entry) => String(entry?.resource || '') === resourceUri)
+    || recentEntries.find((entry) => snapshotEntryMatchesFilePath(entry, absoluteSnapshotPath))
+    || null;
+
+  const initialHashEntry = initialEntries.find((entry) => Array.isArray(entry) && String(entry[0] || '') === resourceUri)
+    || initialEntries.find((entry) => Array.isArray(entry) && snapshotEntryMatchesFilePath({ resource: entry[0] }, absoluteSnapshotPath));
+  const initialHash = String(initialHashEntry?.[1] || '').trim();
+
+  return {
+    matchedEntry,
+    initialHash,
+  };
+}
+
+async function resolveChatEditingSnapshotEntryByGlobalScan(uri) {
+  const userDataPath = getVsCodeUserDataPath();
+
+  if (!userDataPath) {
+    return null;
+  }
+
+  const workspaceStoragePath = path.join(userDataPath, 'workspaceStorage');
+  const snapshotUriText = typeof uri?.toString === 'function' ? uri.toString() : String(uri || '');
+  const resourceUri = getChatEditingSnapshotResourceUri(uri);
+  const absoluteSnapshotPath = decodeAbsolutePathFromSnapshotUri(uri);
+
+  try {
+    const workspaceEntries = await readdir(workspaceStoragePath, { withFileTypes: true });
+
+    for (const workspaceEntry of workspaceEntries) {
+      if (!workspaceEntry.isDirectory()) {
+        continue;
+      }
+
+      const sessionsRoot = path.join(workspaceStoragePath, workspaceEntry.name, 'chatEditingSessions');
+      let sessionEntries = [];
+
+      try {
+        sessionEntries = await readdir(sessionsRoot, { withFileTypes: true });
+      } catch {
+        continue;
+      }
+
+      for (const sessionEntry of sessionEntries) {
+        if (!sessionEntry.isDirectory()) {
+          continue;
+        }
+
+        const sessionDir = path.join(sessionsRoot, sessionEntry.name);
+        let parsed = null;
+
+        try {
+          parsed = JSON.parse(await readFile(path.join(sessionDir, 'state.json'), 'utf8'));
+        } catch {
+          continue;
+        }
+
+        const match = findSnapshotEntryInParsedState(parsed, snapshotUriText, resourceUri, absoluteSnapshotPath);
+
+        if (match.matchedEntry || match.initialHash) {
+          return {
+            sessionDir,
+            matchedEntry: match.matchedEntry,
+            initialHash: match.initialHash,
+          };
+        }
+      }
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+}
+
+async function resolveChatEditingSnapshotContentHash(uri) {
+  const payload = parseUriQueryObject(uri?.query);
+  const sessionInfo = payload?.session && typeof payload.session === 'object' ? payload.session : {};
+  const sessionId = decodeChatEditingSessionId(
+    sessionInfo.external || sessionInfo.path || sessionInfo.uri || sessionInfo.documentUri || ''
+  );
+
+  if (!sessionId) {
+    return null;
+  }
+
+  const loadedState = await loadChatEditingSessionState(sessionId);
+
+  if (!loadedState) {
+    return null;
+  }
+
+  const { sessionDir, parsed } = loadedState;
+  const resourceUri = getChatEditingSnapshotResourceUri(uri);
+  const snapshotUriText = typeof uri?.toString === 'function' ? uri.toString() : String(uri || '');
+  const recentEntries = Array.isArray(parsed?.recentSnapshot?.entries) ? parsed.recentSnapshot.entries : [];
+
+  const matchedEntry = recentEntries.find((entry) => String(entry?.snapshotUri || '') === snapshotUriText)
+    || recentEntries.find((entry) => String(entry?.resource || '') === resourceUri);
+
+  const initialEntries = Array.isArray(parsed?.initialFileContents) ? parsed.initialFileContents : [];
+  const initialHash = initialEntries.find((entry) => Array.isArray(entry) && String(entry[0] || '') === resourceUri)?.[1];
+  const contentHash = String(matchedEntry?.originalHash || matchedEntry?.currentHash || initialHash || '').trim();
+
+  if (!contentHash) {
+    return null;
+  }
+
+  return {
+    sessionDir,
+    contentHash,
+  };
+}
+
+async function resolveChatEditingSnapshotEntry(uri) {
+  const payload = parseUriQueryObject(uri?.query);
+  const sessionInfo = payload?.session && typeof payload.session === 'object' ? payload.session : {};
+  const sessionId = decodeChatEditingSessionId(
+    sessionInfo.external || sessionInfo.path || sessionInfo.uri || sessionInfo.documentUri || ''
+  );
+
+  if (!sessionId) {
+    return null;
+  }
+
+  const loadedState = await loadChatEditingSessionState(sessionId);
+
+  if (!loadedState) {
+    return await resolveChatEditingSnapshotEntryByGlobalScan(uri);
+  }
+
+  const { sessionDir, parsed } = loadedState;
+  const absoluteSnapshotPath = decodeAbsolutePathFromSnapshotUri(uri);
+  const resourceUri = getChatEditingSnapshotResourceUri(uri);
+  const snapshotUriText = typeof uri?.toString === 'function' ? uri.toString() : String(uri || '');
+  const match = findSnapshotEntryInParsedState(parsed, snapshotUriText, resourceUri, absoluteSnapshotPath);
+
+  if (!match.matchedEntry && !match.initialHash) {
+    return await resolveChatEditingSnapshotEntryByGlobalScan(uri);
+  }
+
+  return {
+    sessionDir,
+    matchedEntry: match.matchedEntry,
+    initialHash: String(match.initialHash || '').trim(),
+  };
+}
+
+async function readChatEditingSnapshotHashSource(uri, variant = 'original', fallbackText = '') {
+  try {
+    const resolved = await resolveChatEditingSnapshotEntry(uri);
+
+    if (!resolved?.sessionDir) {
+      return String(fallbackText || '');
+    }
+
+    const { sessionDir, matchedEntry, initialHash } = resolved;
+    const originalHash = String(matchedEntry?.originalHash || '').trim();
+    const currentHash = String(matchedEntry?.currentHash || '').trim();
+    const contentHash = variant === 'current'
+      ? (currentHash || originalHash || initialHash)
+      : (originalHash || currentHash || initialHash);
+
+    if (!contentHash) {
+      return String(fallbackText || '');
+    }
+
+    const snapshotPath = path.join(sessionDir, 'contents', contentHash);
+    const snapshotText = await readFile(snapshotPath, 'utf8');
+    return String(snapshotText || fallbackText || '');
+  } catch {
+    return String(fallbackText || '');
+  }
+}
+
+async function readChatEditingDiffPairFromSnapshotUri(snapshotUri) {
+  const oldSource = await readChatEditingSnapshotHashSource(snapshotUri, 'original', '');
+  const newSource = await readChatEditingSnapshotHashSource(snapshotUri, 'current', '');
+
+  return {
+    oldSource: String(oldSource || ''),
+    newSource: String(newSource || ''),
+  };
+}
+
+async function readChatEditingSnapshotSource(uri, fallbackText = '') {
+  try {
+    return await readChatEditingSnapshotHashSource(uri, 'original', fallbackText);
+  } catch {
+    return String(fallbackText || '');
+  }
+}
+
+function isSameUri(left, right) {
+  return String(left || '') === String(right || '');
+}
+
+function decodeAbsolutePathFromSnapshotUri(uri) {
+  try {
+    const rawPath = String(uri?.path || '').trim();
+
+    if (!rawPath) {
+      return '';
+    }
+
+    return path.resolve(decodeURIComponent(rawPath));
+  } catch {
+    return '';
+  }
+}
+
+function getSnapshotUriForFileUri(fileUri) {
+  if (!fileUri || fileUri.scheme !== 'file') {
+    return null;
+  }
+
+  const filePath = path.resolve(String(fileUri.fsPath || ''));
+
+  for (const textDocument of vscode.workspace.textDocuments) {
+    if (textDocument?.uri?.scheme !== CHAT_SNAPSHOT_SCHEME) {
+      continue;
+    }
+
+    const snapshotPath = decodeAbsolutePathFromSnapshotUri(textDocument.uri);
+
+    if (snapshotPath && path.resolve(snapshotPath) === filePath) {
+      return textDocument.uri;
+    }
+  }
+
+  return null;
+}
+
+function normalizeUnifiedDiffUris(originalUri, modifiedUri) {
+  let oldUri = originalUri;
+  let newUri = modifiedUri;
+
+  if (!oldUri || !newUri) {
+    return {
+      originalUri: oldUri,
+      modifiedUri: newUri,
+    };
+  }
+
+  const oldIsSnapshot = oldUri.scheme === CHAT_SNAPSHOT_SCHEME;
+  const newIsSnapshot = newUri.scheme === CHAT_SNAPSHOT_SCHEME;
+
+  if (!oldIsSnapshot && newIsSnapshot) {
+    oldUri = newUri;
+    newUri = originalUri;
+  }
+
+  const oldIsFile = oldUri?.scheme === 'file';
+  const newIsFile = newUri?.scheme === 'file';
+
+  if (oldIsFile && newIsFile) {
+    const oldFilePath = path.resolve(String(oldUri.fsPath || ''));
+    const newFilePath = path.resolve(String(newUri.fsPath || ''));
+
+    if (oldFilePath && newFilePath && oldFilePath === newFilePath) {
+      const snapshotUri = getSnapshotUriForFileUri(newUri);
+
+      if (snapshotUri) {
+        oldUri = snapshotUri;
+      }
+    }
+  }
+
+  return {
+    originalUri: oldUri,
+    modifiedUri: newUri,
+  };
+}
+
+function toUnifiedDiffPairKey(originalUri, modifiedUri) {
+  const normalized = normalizeUnifiedDiffUris(originalUri, modifiedUri);
+  return `${String(normalized.originalUri)}=>${String(normalized.modifiedUri)}`;
+}
+
+function findDiffCounterpartUri(documentUri) {
+  if (!documentUri || typeof vscode.TabInputTextDiff !== 'function') {
+    return null;
+  }
+
+  for (const tabGroup of vscode.window.tabGroups.all) {
+    for (const tab of tabGroup.tabs) {
+      const input = tab.input;
+
+      if (!(input instanceof vscode.TabInputTextDiff)) {
+        continue;
+      }
+
+      if (isSameUri(input.original, documentUri)) {
+        return { diffRole: 'old', otherUri: input.modified };
+      }
+
+      if (isSameUri(input.modified, documentUri)) {
+        return { diffRole: 'new', otherUri: input.original };
+      }
+    }
+  }
+
+  return null;
+}
+
+function findSnapshotCounterpartForDocument(documentUri) {
+  if (!documentUri) {
+    return null;
+  }
+
+  if (documentUri.scheme === CHAT_SNAPSHOT_SCHEME) {
+    const absolutePath = decodeAbsolutePathFromSnapshotUri(documentUri);
+
+    if (!absolutePath) {
+      return null;
+    }
+
+    return {
+      diffRole: 'old',
+      otherUri: vscode.Uri.file(absolutePath),
+    };
+  }
+
+  if (documentUri.scheme === 'file') {
+    const snapshotUri = getSnapshotUriForFileUri(documentUri);
+
+    if (snapshotUri) {
+      return {
+        diffRole: 'new',
+        otherUri: snapshotUri,
+      };
+    }
+  }
+
+  return null;
+}
+
+function getUnifiedDiffContextForDocument(documentUri) {
+  return findDiffCounterpartUri(documentUri) || findSnapshotCounterpartForDocument(documentUri);
+}
+
+function getWebviewAssetUris(webview, extensionUri) {
+  const stylesUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'media', 'styles.css'));
+  const workspaceRoot = getWorkspaceRoot();
+  const webviewBundlePath = workspaceRoot
+    ? vscode.Uri.file(path.join(workspaceRoot, 'build', 'docdb-webview.bundle.min.js'))
+    : vscode.Uri.joinPath(extensionUri, 'media', 'webview-main.js');
+  const webviewUri = webview.asWebviewUri(webviewBundlePath);
+  const workspaceUri = workspaceRoot
+    ? webview.asWebviewUri(vscode.Uri.file(workspaceRoot)).toString()
+    : '';
+
+  return {
+    stylesUri,
+    webviewUri,
+    workspaceUri,
+    workspaceRoot,
+  };
+}
+
+function configureDocWebview(webview, extensionUri, workspaceRoot) {
+  webview.options = {
+    enableScripts: true,
+    localResourceRoots: [
+      vscode.Uri.joinPath(extensionUri, 'media'),
+      ...(workspaceRoot ? [vscode.Uri.file(workspaceRoot)] : []),
+    ],
+  };
+}
+
+function isUriLike(value) {
+  return Boolean(value && typeof value === 'object' && typeof value.scheme === 'string' && typeof value.path === 'string');
+}
+
+function extractDiffUrisFromInput(input) {
+  if (!input || typeof input !== 'object') {
+    return null;
+  }
+
+  const candidates = [
+    { original: input.original, modified: input.modified },
+    { original: input.left, modified: input.right },
+    { original: input.base, modified: input.target },
+  ];
+
+  for (const candidate of candidates) {
+    if (isUriLike(candidate.original) && isUriLike(candidate.modified)) {
+      return {
+        originalUri: candidate.original,
+        modifiedUri: candidate.modified,
+      };
+    }
+  }
+
+  return null;
+}
+
+function isDxDiffInput(input) {
+  const diffUris = extractDiffUrisFromInput(input);
+
+  if (!diffUris) {
+    return false;
+  }
+
+  const originalRelativePath = toWorkspaceRelativeDocPath(diffUris.originalUri);
+  const modifiedRelativePath = toWorkspaceRelativeDocPath(diffUris.modifiedUri);
+  return Boolean(originalRelativePath || modifiedRelativePath);
+}
+
+function getDxDiffInputUris(input) {
+  const diffUris = extractDiffUrisFromInput(input);
+
+  if (!diffUris || !isDxDiffInput(input)) {
+    return null;
+  }
+
+  const relativePath = toWorkspaceRelativeDocPath(diffUris.modifiedUri) || toWorkspaceRelativeDocPath(diffUris.originalUri) || '';
+
+  return {
+    originalUri: diffUris.originalUri,
+    modifiedUri: diffUris.modifiedUri,
+    relativePath,
+  };
+}
+
+function formatDiffSideTitle(uri, fallbackLabel) {
+  const relativePath = toWorkspaceRelativeDocPath(uri);
+
+  if (relativePath) {
+    return path.basename(relativePath);
+  }
+
+  if (uri?.scheme === CHAT_SNAPSHOT_SCHEME) {
+    const snapshotPath = decodeAbsolutePathFromSnapshotUri(uri);
+    return snapshotPath ? path.basename(snapshotPath) : fallbackLabel;
+  }
+
+  if (uri?.scheme === 'file' && uri.fsPath) {
+    return path.basename(String(uri.fsPath));
+  }
+
+  const rawPath = String(uri?.path || '').trim();
+  return rawPath ? path.basename(rawPath) : fallbackLabel;
+}
+
+async function closeAllNativeDxDiffTabs() {
+  const tabsToClose = [];
+
+  for (const tabGroup of vscode.window.tabGroups.all) {
+    for (const tab of tabGroup.tabs) {
+      if (isDxDiffInput(tab?.input)) {
+        tabsToClose.push(tab);
+      }
+    }
+  }
+
+  for (const tab of tabsToClose) {
+    try {
+      await vscode.window.tabGroups.close(tab, true);
+    } catch {
+      // Ignore close failures and continue.
+    }
+  }
+}
+
+async function openUnifiedDxDiffPanel(extensionUri, originalUri, modifiedUri) {
+  const normalizedPair = normalizeUnifiedDiffUris(originalUri, modifiedUri);
+  const pairKey = toUnifiedDiffPairKey(normalizedPair.originalUri, normalizedPair.modifiedUri);
+  let panel = null;
+
+  if (unifiedDiffPanelState?.panel) {
+    try {
+      panel = unifiedDiffPanelState.panel;
+      panel.reveal(vscode.ViewColumn.Active, false);
+    } catch {
+      unifiedDiffPanelState = null;
+      panel = null;
+    }
+  }
+
+  const oldUri = normalizedPair.originalUri;
+  const newUri = normalizedPair.modifiedUri;
+  const relativePath = toWorkspaceRelativeDocPath(newUri)
+    || toWorkspaceRelativeDocPath(oldUri)
+    || toWorkspaceRelativeDocPath(originalUri)
+    || '';
+
+  if (!relativePath) {
+    vscode.window.showErrorMessage('Unable to resolve DX path for unified diff viewer.');
+    return;
+  }
+
+  const originalTitle = formatDiffSideTitle(oldUri, 'old');
+  const modifiedTitle = formatDiffSideTitle(newUri, 'new');
+  const panelTitle = `${originalTitle} (old) ↔ ${modifiedTitle} (current)`;
+
+  if (!panel) {
+    panel = vscode.window.createWebviewPanel(
+      'docdb.unifiedDiff',
+      panelTitle,
+      vscode.ViewColumn.Active,
+      {
+        enableScripts: true,
+        retainContextWhenHidden: true,
+      }
+    );
+
+    // Claim the singleton immediately so concurrent auto-route handlers reuse
+    // this panel instead of creating a duplicate second tab.
+    unifiedDiffPanelState = { panel, pairKey };
+  }
+  panel.title = panelTitle;
+
+  const { stylesUri, webviewUri, workspaceUri, workspaceRoot } = getWebviewAssetUris(panel.webview, extensionUri);
+  configureDocWebview(panel.webview, extensionUri, workspaceRoot);
+
+  let initialTheme = 'auto';
+  let initialAppearance = null;
+
+  try {
+    const config = await readUiConfig();
+    initialTheme = String(config?.theme || 'auto');
+  } catch {
+    initialTheme = 'auto';
+  }
+
+  try {
+    const { db, dbModule } = await getDocRuntime();
+    const absolutePath = path.resolve(getWorkspaceRoot() || '', relativePath || '');
+    const documentRow = dbModule.getDocumentByPath(db, getWorkspaceRoot() || '', absolutePath);
+    initialAppearance = normalizeInitialAppearance(dbModule.getDocumentViewState(db, documentRow?.id));
+  } catch {
+    initialAppearance = null;
+  }
+
+  let oldSource = '';
+  let newSource = '';
+  let loadError = '';
+  let baselineHeadSource = '';
+
+  try {
+    const absolutePathForRef = newUri?.scheme === 'file' && newUri.fsPath
+      ? path.resolve(String(newUri.fsPath))
+      : path.resolve(String(workspaceRoot || ''), relativePath);
+
+    if (relativePath && absolutePathForRef) {
+      baselineHeadSource = await readDocumentSnapshotAtRef(relativePath, absolutePathForRef, 'HEAD', '');
+    }
+
+    const baselineCurrentSource = relativePath
+      ? await readVirtualDocument(relativePath).catch(() => '')
+      : '';
+
+    if (oldUri?.scheme === CHAT_SNAPSHOT_SCHEME && newUri?.scheme === 'file') {
+      const snapshotPair = await readChatEditingDiffPairFromSnapshotUri(oldUri);
+      oldSource = snapshotPair.oldSource || baselineHeadSource;
+      newSource = snapshotPair.newSource || baselineCurrentSource;
+    }
+
+    oldSource = await readDisplaySourceForUri(relativePath, oldUri, oldSource || baselineHeadSource);
+    newSource = await readDisplaySourceForUri(relativePath, newUri, newSource || baselineCurrentSource);
+
+    if (!newSource && baselineCurrentSource) {
+      newSource = baselineCurrentSource;
+    }
+
+    if (!oldSource && baselineHeadSource) {
+      oldSource = baselineHeadSource;
+    }
+
+    if ((!oldSource || oldSource === newSource) && newSource && baselineHeadSource && baselineHeadSource !== newSource) {
+      oldSource = baselineHeadSource;
+    }
+  } catch (error) {
+    loadError = error instanceof Error ? error.message : 'Unable to load unified DX diff source.';
+  }
+
+  panel.webview.html = renderEditorHtml(
+    relativePath,
+    newSource,
+    loadError,
+    initialTheme,
+    initialAppearance,
+    panel.webview.cspSource,
+    stylesUri,
+    webviewUri,
+    workspaceUri,
+    'new',
+    oldSource,
+  );
+
+  const hasResolvedDiff = Boolean(oldSource && newSource && oldSource !== newSource);
+
+  if (!hasResolvedDiff && oldUri?.scheme === CHAT_SNAPSHOT_SCHEME && newUri?.scheme === 'file') {
+    void refreshUnifiedDiffWhenSnapshotReady({
+      panel,
+      pairKey,
+      relativePath,
+      oldUri,
+      newUri,
+      initialTheme,
+      initialAppearance,
+      stylesUri,
+      webviewUri,
+      workspaceUri,
+      workspaceRoot,
+      baselineHeadSource,
+    });
+  }
+
+  if (!unifiedDiffPanelState || unifiedDiffPanelState.panel !== panel) {
+    panel.onDidDispose(() => {
+      if (unifiedDiffPanelState?.panel === panel) {
+        unifiedDiffPanelState = null;
+      }
+    });
+  }
+
+  unifiedDiffPanelState = { panel, pairKey };
+
+  if (extensionContext) {
+    void extensionContext.workspaceState.update('docdb.unifiedDiffLastState', { relativePath, panelTitle });
+  }
+
+  return { panel, pairKey, originalUri: oldUri, modifiedUri: newUri };
+}
+
+async function readDisplaySourceForUri(relativePath, targetUri, fallbackText = '') {
+  if (!targetUri) {
+    return String(fallbackText || '');
+  }
+
+  if (targetUri.scheme === CHAT_SNAPSHOT_SCHEME) {
+    const preferredSnapshotText = String(fallbackText || '');
+    if (preferredSnapshotText) {
+      return preferredSnapshotText;
+    }
+
+    // .dx stub file snapshots hold only a pointer into the DXlite binary archive,
+    // not actual document content. Decode the document path and read the
+    // "before edit" source from the DXlite binary archive at git HEAD.
+    const absolutePath = decodeAbsolutePathFromSnapshotUri(targetUri);
+    if (absolutePath && relativePath) {
+      const headSource = await readDocumentSnapshotAtRef(relativePath, absolutePath, 'HEAD', '');
+      if (headSource) {
+        return headSource;
+      }
+    }
+    return String(fallbackText || '');
+  }
+
+  let candidateText = String(fallbackText || '');
+
+  if (!candidateText) {
+    try {
+      const textDocument = await vscode.workspace.openTextDocument(targetUri);
+      candidateText = textDocument.getText();
+    } catch {
+      candidateText = '';
+    }
+  }
+
+  if (targetUri.scheme === 'git') {
+    return await readDocumentSnapshotFromGit(relativePath, targetUri, candidateText);
+  }
+
+  const stubArchivePath = parseDocStubArchiveRelativePath(candidateText);
+
+  if (stubArchivePath === null) {
+    return candidateText;
+  }
+
+  try {
+    return await readVirtualDocument(relativePath);
+  } catch {
+    return candidateText;
+  }
+}
+
+async function refreshUnifiedDiffWhenSnapshotReady({
+  panel,
+  pairKey,
+  relativePath,
+  oldUri,
+  newUri,
+  initialTheme,
+  initialAppearance,
+  stylesUri,
+  webviewUri,
+  workspaceUri,
+  workspaceRoot,
+  baselineHeadSource,
+}) {
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    await delay(250);
+
+    if (!panel || unifiedDiffPanelState?.panel !== panel || unifiedDiffPanelState?.pairKey !== pairKey) {
+      return;
+    }
+
+    let nextOldSource = '';
+    let nextNewSource = '';
+
+    try {
+      const absolutePathForRef = newUri?.scheme === 'file' && newUri.fsPath
+        ? path.resolve(String(newUri.fsPath))
+        : path.resolve(String(workspaceRoot || ''), relativePath);
+
+      const fallbackHeadSource = baselineHeadSource
+        || await readDocumentSnapshotAtRef(relativePath, absolutePathForRef, 'HEAD', '');
+      const fallbackCurrentSource = await readVirtualDocument(relativePath).catch(() => '');
+
+      const snapshotPair = await readChatEditingDiffPairFromSnapshotUri(oldUri);
+      nextOldSource = await readDisplaySourceForUri(relativePath, oldUri, snapshotPair.oldSource || fallbackHeadSource || '');
+      nextNewSource = await readDisplaySourceForUri(relativePath, newUri, snapshotPair.newSource || fallbackCurrentSource || '');
+
+      if (!nextOldSource && fallbackHeadSource) {
+        nextOldSource = fallbackHeadSource;
+      }
+
+      if (!nextNewSource && fallbackCurrentSource) {
+        nextNewSource = fallbackCurrentSource;
+      }
+    } catch {
+      continue;
+    }
+
+    if (!nextOldSource || !nextNewSource || nextOldSource === nextNewSource) {
+      continue;
+    }
+
+    panel.webview.html = renderEditorHtml(
+      relativePath,
+      nextNewSource,
+      '',
+      initialTheme,
+      initialAppearance,
+      panel.webview.cspSource,
+      stylesUri,
+      webviewUri,
+      workspaceUri,
+      'new',
+      nextOldSource,
+    );
+    return;
+  }
+}
 
 async function ensureDocFolderConfiguration() {
   const workspaceFolders = vscode.workspace.workspaceFolders;
@@ -205,6 +1136,7 @@ async function getDocRuntime() {
   runtimePromise = (async () => {
     const srcDir = path.join(workspaceRoot, 'build', 'runtime', 'src');
     const serviceModule = await import(pathToFileURL(path.join(srcDir, 'doc-service.js')).href);
+    const archiveModule = await import(pathToFileURL(path.join(srcDir, 'doc-archive.js')).href);
 
     const docs = await serviceModule.listOrSearchDocuments(workspaceRoot, null, '');
     if (!Array.isArray(docs) || docs.length === 0) {
@@ -214,10 +1146,176 @@ async function getDocRuntime() {
     return {
       workspaceRoot,
       serviceModule,
+      archiveModule,
     };
   })();
 
   return runtimePromise;
+}
+
+function parseDocStubArchiveRelativePath(sourceText) {
+  const firstLine = String(sourceText || '').split(/\r?\n/, 1)[0].trim();
+
+  if (!firstLine) {
+    return null;
+  }
+
+  if (firstLine === '~' || firstLine === '@d3') {
+    return '';
+  }
+
+  if (firstLine.startsWith('~ ')) {
+    return firstLine.slice(2).trim();
+  }
+
+  if (firstLine.startsWith('@d3 ')) {
+    return firstLine.slice(4).trim();
+  }
+
+  return null;
+}
+
+function parseUriQueryObject(rawQuery) {
+  const raw = String(rawQuery || '');
+
+  if (!raw) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(raw);
+  } catch {
+    try {
+      return JSON.parse(decodeURIComponent(raw));
+    } catch {
+      return null;
+    }
+  }
+}
+
+function toGitArchiveLookup(relativePath, uriQuery) {
+  if (!uriQuery || typeof uriQuery !== 'object') {
+    return null;
+  }
+
+  const ref = String(uriQuery.ref || uriQuery.revision || uriQuery.commit || '').trim();
+
+  if (!ref) {
+    return null;
+  }
+
+  const candidatePaths = [
+    uriQuery.path,
+    uriQuery.originalPath,
+    uriQuery.uri,
+    uriQuery.documentUri,
+    relativePath,
+  ];
+
+  for (const candidate of candidatePaths) {
+    const value = String(candidate || '').trim();
+
+    if (!value) {
+      continue;
+    }
+
+    if (value.startsWith('file:')) {
+      try {
+        const parsed = vscode.Uri.parse(value);
+        if (parsed.scheme === 'file' && parsed.fsPath) {
+          return { ref, absolutePath: parsed.fsPath };
+        }
+      } catch {
+        // Ignore parse failures and continue searching candidates.
+      }
+    }
+  }
+
+  if (!relativePath) {
+    return null;
+  }
+
+  const workspaceRoot = getWorkspaceRoot();
+  if (!workspaceRoot) {
+    return null;
+  }
+
+  return {
+    ref,
+    absolutePath: path.resolve(workspaceRoot, relativePath),
+  };
+}
+
+async function readDocumentSnapshotFromGit(relativePath, documentUri, fallbackText) {
+  const workspaceRoot = getWorkspaceRoot();
+
+  if (!workspaceRoot || !relativePath || documentUri?.scheme !== 'git') {
+    return String(fallbackText || '');
+  }
+
+  const uriQuery = parseUriQueryObject(documentUri.query);
+  const lookup = toGitArchiveLookup(relativePath, uriQuery);
+
+  if (!lookup) {
+    return String(fallbackText || '');
+  }
+
+  const stubArchiveRelativePath = parseDocStubArchiveRelativePath(fallbackText);
+  const archiveRelativePath = stubArchiveRelativePath && stubArchiveRelativePath.length > 0
+    ? stubArchiveRelativePath
+    : '.doc/.repo-docs.bin';
+
+  try {
+    const { stdout } = await execFileAsync('git', ['-C', workspaceRoot, 'show', `${lookup.ref}:${archiveRelativePath}`], {
+      encoding: 'buffer',
+      maxBuffer: 64 * 1024 * 1024,
+    });
+
+    const archiveBuffer = Buffer.isBuffer(stdout) ? stdout : Buffer.from(stdout || []);
+    const { archiveModule } = await getDocRuntime();
+    const parsed = archiveModule.readDocArchiveFromBuffer(workspaceRoot, lookup.absolutePath, archiveBuffer);
+
+    return String(parsed?.source || fallbackText || '');
+  } catch {
+    return String(fallbackText || '');
+  }
+}
+
+async function readDocumentSnapshotAtRef(relativePath, absolutePath, ref, fallbackText = '') {
+  const workspaceRoot = getWorkspaceRoot();
+
+  if (!workspaceRoot || !relativePath || !ref) {
+    return String(fallbackText || '');
+  }
+
+  try {
+    const { stdout } = await execFileAsync('git', ['-C', workspaceRoot, 'show', `${ref}:${relativePath}`], {
+      encoding: 'utf8',
+      maxBuffer: 64 * 1024 * 1024,
+    });
+
+    const snapshotText = String(stdout || '');
+    const stubArchiveRelativePath = parseDocStubArchiveRelativePath(snapshotText);
+
+    if (stubArchiveRelativePath === null) {
+      return snapshotText;
+    }
+
+    const archiveRelativePath = stubArchiveRelativePath && stubArchiveRelativePath.length > 0
+      ? stubArchiveRelativePath
+      : '.doc/.repo-docs.bin';
+    const archiveResult = await execFileAsync('git', ['-C', workspaceRoot, 'show', `${ref}:${archiveRelativePath}`], {
+      encoding: 'buffer',
+      maxBuffer: 64 * 1024 * 1024,
+    });
+
+    const archiveBuffer = Buffer.isBuffer(archiveResult.stdout) ? archiveResult.stdout : Buffer.from(archiveResult.stdout || []);
+    const { archiveModule } = await getDocRuntime();
+    const parsed = archiveModule.readDocArchiveFromBuffer(workspaceRoot, absolutePath, archiveBuffer);
+    return String(parsed?.source || snapshotText || fallbackText || '');
+  } catch {
+    return String(fallbackText || '');
+  }
 }
 
 async function readUiConfig() {
@@ -322,12 +1420,140 @@ async function listVirtualDocuments() {
 }
 
 function toWorkspaceRelativeDocPath(uri) {
+  function normalizeRelativeCandidate(value) {
+    const raw = String(value || '').trim();
+
+    if (!raw) {
+      return null;
+    }
+
+    if (path.isAbsolute(raw) || path.posix.isAbsolute(raw.replace(/\\/g, '/'))) {
+      return null;
+    }
+
+    const normalized = raw
+      .replace(/\\/g, '/')
+      .replace(/^\.\/+/, '')
+      .replace(/^\/+/, '');
+
+    if (!normalized || !normalized.endsWith('.dx')) {
+      return null;
+    }
+
+    if (normalized.startsWith('..') || normalized.includes('/../') || normalized.endsWith('/..')) {
+      return null;
+    }
+
+    return normalized;
+  }
+
+  function fromAbsolutePath(absolutePath) {
+    if (!absolutePath) {
+      return null;
+    }
+
+    const resolvedPath = path.resolve(String(absolutePath));
+    const workspaceFolders = vscode.workspace.workspaceFolders || [];
+
+    for (const folder of workspaceFolders) {
+      if (!folder || folder.uri.scheme !== 'file') {
+        continue;
+      }
+
+      const relativePath = path.relative(folder.uri.fsPath, resolvedPath).replace(/\\/g, '/');
+
+      if (!relativePath || relativePath.startsWith('..') || path.isAbsolute(relativePath)) {
+        continue;
+      }
+
+      const normalized = normalizeRelativeCandidate(relativePath);
+
+      if (normalized) {
+        return normalized;
+      }
+    }
+
+    return null;
+  }
+
+  function parseQueryObject(rawQuery) {
+    const raw = String(rawQuery || '');
+
+    if (!raw) {
+      return null;
+    }
+
+    try {
+      return JSON.parse(raw);
+    } catch {
+      try {
+        return JSON.parse(decodeURIComponent(raw));
+      } catch {
+        return null;
+      }
+    }
+  }
+
+  function extractRelativeFromUriPayload(value) {
+    const raw = String(value || '').trim();
+
+    if (!raw) {
+      return null;
+    }
+
+    const directRelative = normalizeRelativeCandidate(raw);
+    if (directRelative) {
+      return directRelative;
+    }
+
+    if (raw.startsWith('file:') || raw.startsWith('git:') || raw.startsWith('docdb:')) {
+      try {
+        const parsed = vscode.Uri.parse(raw);
+        return toWorkspaceRelativeDocPath(parsed);
+      } catch {
+        return null;
+      }
+    }
+
+    return fromAbsolutePath(raw);
+  }
+
   if (uri && uri.scheme === 'docdb') {
     const virtualPath = String(uri.path || '').replace(/^\/+/, '');
     if (!virtualPath || !virtualPath.endsWith('.dx')) {
       return null;
     }
     return virtualPath;
+  }
+
+  const fromFsPath = fromAbsolutePath(uri?.fsPath);
+  if (fromFsPath) {
+    return fromFsPath;
+  }
+
+  const uriQuery = parseQueryObject(uri?.query);
+  if (uriQuery && typeof uriQuery === 'object') {
+    const queryCandidates = [
+      uriQuery.path,
+      uriQuery.originalPath,
+      uriQuery.uri,
+      uriQuery.documentUri,
+      uriQuery.left,
+      uriQuery.right,
+    ];
+
+    for (const candidate of queryCandidates) {
+      const resolved = extractRelativeFromUriPayload(candidate);
+
+      if (resolved) {
+        return resolved;
+      }
+    }
+  }
+
+  const fromUriPath = extractRelativeFromUriPayload(uri?.path);
+  if (fromUriPath) {
+    return fromUriPath;
   }
 
   const workspaceFolder = vscode.workspace.getWorkspaceFolder(uri);
@@ -361,7 +1587,7 @@ function getWorkspaceRoot() {
   return fileFolder ? fileFolder.uri.fsPath : null;
 }
 
-function renderEditorHtml(relativePath, sourceText, errorText = '', initialTheme = 'auto', initialAppearance = null, cspSource = "'none'", stylesUri = '', webviewUri = '', workspaceUri = '') {
+function renderEditorHtml(relativePath, sourceText, errorText = '', initialTheme = 'auto', initialAppearance = null, cspSource = "'none'", stylesUri = '', webviewUri = '', workspaceUri = '', diffRole = 'none', comparisonSourceText = '') {
   const appearance = normalizeInitialAppearance(initialAppearance);
   const initialScale = String(appearance.scale / 100);
   function escapeHtml(value) {
@@ -579,8 +1805,9 @@ function renderEditorHtml(relativePath, sourceText, errorText = '', initialTheme
           </div>
         </div>
       </div>
-      <div id="doc-init" data-doc-path="${escapeHtml(relativePath || 'unknown.dx')}" data-doc-error="${escapeHtml(errorText || '')}" data-initial-theme="${escapeHtml(initialTheme || 'auto')}" data-initial-paper="${escapeHtml(appearance.paper)}" data-initial-density="${escapeHtml(appearance.density)}" data-initial-scale="${escapeHtml(String(appearance.scale))}" data-workspace-uri="${escapeHtml(workspaceUri || '')}" hidden></div>
+      <div id="doc-init" data-doc-path="${escapeHtml(relativePath || 'unknown.dx')}" data-doc-error="${escapeHtml(errorText || '')}" data-initial-theme="${escapeHtml(initialTheme || 'auto')}" data-initial-paper="${escapeHtml(appearance.paper)}" data-initial-density="${escapeHtml(appearance.density)}" data-initial-scale="${escapeHtml(String(appearance.scale))}" data-workspace-uri="${escapeHtml(workspaceUri || '')}" data-diff-role="${escapeHtml(diffRole || 'none')}" hidden></div>
       <textarea id="doc-init-source" hidden>${escapeHtml(sourceText || '')}</textarea>
+      <textarea id="doc-init-compare-source" hidden>${escapeHtml(comparisonSourceText || '')}</textarea>
       ${initialLoadNote}
 
       <div class="ui-chrome" id="ui-chrome" data-open="false" data-help="false">
@@ -831,25 +2058,37 @@ class DocDbCustomEditorProvider {
   }
 
   async resolveCustomTextEditor(document, webviewPanel) {
-    const stylesUri = webviewPanel.webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'styles.css'));
-    const workspaceRoot = getWorkspaceRoot();
-    const webviewBundlePath = workspaceRoot
-      ? vscode.Uri.file(path.join(workspaceRoot, 'build', 'docdb-webview.bundle.min.js'))
-      : vscode.Uri.joinPath(this._extensionUri, 'media', 'webview-main.js');
-    const webviewUri = webviewPanel.webview.asWebviewUri(webviewBundlePath);
-    const workspaceUri = workspaceRoot
-      ? webviewPanel.webview.asWebviewUri(vscode.Uri.file(workspaceRoot)).toString()
-      : '';
+    const { stylesUri, webviewUri, workspaceUri, workspaceRoot } = getWebviewAssetUris(webviewPanel.webview, this._extensionUri);
+    configureDocWebview(webviewPanel.webview, this._extensionUri, workspaceRoot);
 
-    webviewPanel.webview.options = {
-      enableScripts: true,
-      localResourceRoots: [
-        vscode.Uri.joinPath(this._extensionUri, 'media'),
-        ...(workspaceRoot ? [vscode.Uri.file(workspaceRoot)] : []),
-      ],
-    };
+    const autoRouteToUnified = vscode.workspace.getConfiguration('docdb').get('unifiedDiffAutoOpen', true);
+    const automaticDiffContext = getUnifiedDiffContextForDocument(document.uri);
+
+    if (autoRouteToUnified && automaticDiffContext?.otherUri) {
+      const normalizedPair = automaticDiffContext.diffRole === 'old'
+        ? { originalUri: document.uri, modifiedUri: automaticDiffContext.otherUri }
+        : { originalUri: automaticDiffContext.otherUri, modifiedUri: document.uri };
+      const routeKey = toUnifiedDiffPairKey(normalizedPair.originalUri, normalizedPair.modifiedUri);
+
+      if (!unifiedDiffAutoRouteInFlight.has(routeKey)) {
+        unifiedDiffAutoRouteInFlight.add(routeKey);
+        try {
+          const opened = await openUnifiedDxDiffPanel(this._extensionUri, normalizedPair.originalUri, normalizedPair.modifiedUri);
+          if (opened?.originalUri && opened?.modifiedUri) {
+            await closeAllNativeDxDiffTabs();
+          }
+          webviewPanel.dispose();
+          return;
+        } catch {
+          // Keep native editor open if unified auto-route fails.
+        } finally {
+          unifiedDiffAutoRouteInFlight.delete(routeKey);
+        }
+      }
+    }
 
     const relativePath = toWorkspaceRelativeDocPath(document.uri);
+
     let initialTheme = 'auto';
     let initialAppearance = null;
 
@@ -874,11 +2113,50 @@ class DocDbCustomEditorProvider {
       return;
     }
 
+    const diffContext = getUnifiedDiffContextForDocument(document.uri);
+
+    const readDisplaySourceForCurrentPane = async () => {
+      return await readDisplaySourceForUri(relativePath, document.uri, document.getText());
+    };
+
+    const readComparisonSourceForCurrentPane = async (paneSourceText) => {
+      if (diffContext?.otherUri) {
+        return await readDisplaySourceForUri(relativePath, diffContext.otherUri, '');
+      }
+
+      const absolutePath = path.resolve(workspaceRoot || '', relativePath || '');
+
+      if (document.uri?.scheme === 'git') {
+        try {
+          return await readVirtualDocument(relativePath);
+        } catch {
+          return '';
+        }
+      }
+
+      if (document.uri?.scheme === 'file') {
+        return await readDocumentSnapshotAtRef(relativePath, absolutePath, 'HEAD', '');
+      }
+
+      return String(paneSourceText || '');
+    };
+
     let sourceText = '';
+    let comparisonSourceText = '';
+    let diffRole = 'none';
     let loadError = '';
 
     try {
-      sourceText = await readVirtualDocument(relativePath);
+      sourceText = await readDisplaySourceForCurrentPane();
+      comparisonSourceText = await readComparisonSourceForCurrentPane(sourceText);
+
+      if (comparisonSourceText && (diffContext?.diffRole === 'old' || diffContext?.diffRole === 'new')) {
+        diffRole = diffContext.diffRole;
+      } else if (document.uri?.scheme === 'git' && comparisonSourceText) {
+        diffRole = 'old';
+      } else if (document.uri?.scheme === 'file' && comparisonSourceText) {
+        diffRole = 'new';
+      }
     } catch (error) {
       loadError = error instanceof Error ? error.message : 'Failed to load document from SQLite.';
 
@@ -889,7 +2167,7 @@ class DocDbCustomEditorProvider {
       }
     }
 
-    webviewPanel.webview.html = renderEditorHtml(relativePath, sourceText, loadError, initialTheme, initialAppearance, webviewPanel.webview.cspSource, stylesUri, webviewUri, workspaceUri);
+    webviewPanel.webview.html = renderEditorHtml(relativePath, sourceText, loadError, initialTheme, initialAppearance, webviewPanel.webview.cspSource, stylesUri, webviewUri, workspaceUri, diffRole, comparisonSourceText);
 
     let sourcePushTimer = null;
     let suppressedEchoSource = null;
@@ -951,7 +2229,7 @@ class DocDbCustomEditorProvider {
 
     const pushLatestSourceToWebview = async () => {
       try {
-        const latestSource = await readVirtualDocument(relativePath);
+        const latestSource = await readDisplaySourceForCurrentPane();
 
         if (suppressedEchoSource !== null && latestSource === suppressedEchoSource) {
           suppressedEchoSource = null;
@@ -1194,8 +2472,63 @@ async function openWelcomeDocumentOnFirstActivation(context) {
 }
 
 function activate(context) {
+  extensionContext = context;
   const provider = new DocDbFileSystemProvider();
   const customEditor = new DocDbCustomEditorProvider(context.extensionUri);
+  const chatSnapshotProvider = new ChatEditingSnapshotContentProvider();
+
+  const openUnifiedDiffFromInput = async (input) => {
+    const resolved = getDxDiffInputUris(input);
+
+    if (!resolved) {
+      return false;
+    }
+
+    await openUnifiedDxDiffPanel(context.extensionUri, resolved.originalUri, resolved.modifiedUri);
+    return true;
+  };
+
+  const maybeRouteActiveDiffToUnified = async () => {
+    const autoRoute = vscode.workspace.getConfiguration('docdb').get('unifiedDiffAutoOpen', true);
+
+    if (!autoRoute) {
+      return;
+    }
+
+    const activeTabGroup = vscode.window.tabGroups.activeTabGroup;
+    const input = activeTabGroup?.activeTab?.input;
+
+    if (!isDxDiffInput(input)) {
+      return;
+    }
+
+    const resolved = getDxDiffInputUris(input);
+
+    if (!resolved) {
+      return;
+    }
+
+    const routeKey = toUnifiedDiffPairKey(resolved.originalUri, resolved.modifiedUri);
+
+    if (unifiedDiffAutoRouteInFlight.has(routeKey)) {
+      return;
+    }
+
+    unifiedDiffAutoRouteInFlight.add(routeKey);
+
+    try {
+      void closeAllNativeDxDiffTabs();
+      await openUnifiedDiffFromInput(input);
+    } catch {
+      // If unified routing fails, keep native diff view intact.
+    } finally {
+      unifiedDiffAutoRouteInFlight.delete(routeKey);
+    }
+  };
+
+  context.subscriptions.push(
+    vscode.workspace.registerTextDocumentContentProvider(CHAT_SNAPSHOT_SCHEME, chatSnapshotProvider)
+  );
 
   context.subscriptions.push(
     vscode.workspace.registerFileSystemProvider('docdb', provider, {
@@ -1235,6 +2568,95 @@ function activate(context) {
     })
   );
 
+  context.subscriptions.push(
+    vscode.commands.registerCommand('docdb.openUnifiedDiff', async () => {
+      const activeTab = vscode.window.tabGroups.activeTabGroup?.activeTab;
+      const input = activeTab?.input;
+
+      if (!input) {
+        vscode.window.showInformationMessage('No active tab to open as unified diff.');
+        return;
+      }
+
+      const opened = await openUnifiedDiffFromInput(input);
+
+      if (!opened) {
+        vscode.window.showInformationMessage('Active diff does not target a DX document.');
+      }
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.window.registerWebviewPanelSerializer('docdb.unifiedDiff', {
+      async deserializeWebviewPanel(webviewPanel, _serializedState) {
+        const savedState = extensionContext?.workspaceState.get('docdb.unifiedDiffLastState');
+        if (!savedState?.relativePath) {
+          webviewPanel.webview.html = `<html><body style="padding:2rem;color:var(--vscode-foreground)">
+            <p>DX diff context is no longer available. Re-open the file to compare again.</p>
+          </body></html>`;
+          return;
+        }
+        const { relativePath: rp, panelTitle: pt } = savedState;
+        webviewPanel.title = String(pt || rp);
+        const { stylesUri, webviewUri, workspaceUri, workspaceRoot } = getWebviewAssetUris(webviewPanel.webview, context.extensionUri);
+        configureDocWebview(webviewPanel.webview, context.extensionUri, workspaceRoot);
+        let initialTheme = 'auto';
+        try { initialTheme = String((await readUiConfig())?.theme || 'auto'); } catch {}
+        let oldSource = '';
+        let newSource = '';
+        try {
+          const absolutePath = path.resolve(String(workspaceRoot || ''), rp);
+          newSource = await readVirtualDocument(rp).catch(() => '');
+          if (!newSource) {
+            const td = await vscode.workspace.openTextDocument(vscode.Uri.file(absolutePath));
+            newSource = td.getText();
+          }
+          oldSource = await readDocumentSnapshotAtRef(rp, absolutePath, 'HEAD', '');
+        } catch {}
+        const hasDiff = Boolean(oldSource && newSource && oldSource !== newSource);
+        webviewPanel.webview.html = renderEditorHtml(
+          rp,
+          newSource || oldSource,
+          '',
+          initialTheme,
+          null,
+          webviewPanel.webview.cspSource,
+          stylesUri,
+          webviewUri,
+          workspaceUri,
+          hasDiff ? 'new' : 'none',
+          hasDiff ? oldSource : '',
+        );
+        if (!unifiedDiffPanelState || unifiedDiffPanelState.panel !== webviewPanel) {
+          unifiedDiffPanelState = { panel: webviewPanel, pairKey: rp };
+          webviewPanel.onDidDispose(() => {
+            if (unifiedDiffPanelState?.panel === webviewPanel) {
+              unifiedDiffPanelState = null;
+            }
+          });
+        }
+      },
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.window.tabGroups.onDidChangeTabs(() => {
+      void maybeRouteActiveDiffToUnified();
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.window.tabGroups.onDidChangeTabGroups(() => {
+      void maybeRouteActiveDiffToUnified();
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.window.onDidChangeActiveTextEditor(() => {
+      void maybeRouteActiveDiffToUnified();
+    })
+  );
+
   if (vscode.workspace.getConfiguration().get('docdb.autoMount', false)) {
     ensureMounted();
   } 
@@ -1244,6 +2666,8 @@ function activate(context) {
 
   // Auto-configure workspace when .doc folder is detected
   ensureDocFolderConfiguration();
+
+  void maybeRouteActiveDiffToUnified();
 
   void openWelcomeDocumentOnFirstActivation(context);
 

@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -79,6 +80,21 @@ function runCapture(command, args, options = {}) {
   });
 }
 
+function isRecoverableNativeInstallError(error) {
+  const message = String(error && error.message ? error.message : '');
+
+  // When native source files are unavailable in this workspace, npm's implicit
+  // install lifecycle runs node-gyp and fails. For upgrade/install testing we
+  // can continue by restoring JS dependencies without lifecycle scripts.
+  return (
+    message.includes('node-gyp rebuild exited with')
+    || message.includes('gyp ERR! build error')
+    || message.includes('doc_sqlite.node')
+    || message.includes('sqlite_bridge.o')
+    || message.includes('Cannot find module \'node-addon-api\'')
+  );
+}
+
 async function sleep(ms) {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -108,7 +124,25 @@ async function main() {
   await run('npm', ['version', args.level, '--no-git-tag-version'], { cwd: extensionDir });
 
   console.log('[upgrade-install] installing root dependencies');
-  await run('npm', ['install'], { cwd: rootDir });
+  const nativeBridgeSource = path.join(rootDir, 'native', 'sqlite_bridge.cc');
+  const installArgs = existsSync(nativeBridgeSource)
+    ? ['install']
+    : ['install', '--ignore-scripts'];
+
+  if (installArgs.includes('--ignore-scripts')) {
+    console.warn('[upgrade-install] native source not found; using npm install --ignore-scripts for root dependencies');
+  }
+
+  try {
+    await run('npm', installArgs, { cwd: rootDir });
+  } catch (error) {
+    if (!isRecoverableNativeInstallError(error)) {
+      throw error;
+    }
+
+    console.warn('[upgrade-install] native install scripts failed; retrying root install with --ignore-scripts');
+    await run('npm', ['install', '--ignore-scripts'], { cwd: rootDir });
+  }
 
   console.log('[upgrade-install] installing vscode-extension dependencies');
   await run('npm', ['install'], { cwd: extensionDir });

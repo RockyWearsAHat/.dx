@@ -1,4 +1,5 @@
 import { mkdir, readdir, unlink, readFile, writeFile, cp, rm } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
@@ -128,12 +129,31 @@ async function emitVsix(vsixOutputPath, packageCwd) {
   });
 }
 
+async function hasNpmScript(scriptName) {
+  const packageJsonPath = path.join(repoRoot, 'package.json');
+  const raw = await readFile(packageJsonPath, 'utf8');
+  const parsed = JSON.parse(raw);
+  const scripts = parsed && typeof parsed === 'object' && parsed.scripts && typeof parsed.scripts === 'object'
+    ? parsed.scripts
+    : {};
+  return typeof scripts[scriptName] === 'string' && scripts[scriptName].trim().length > 0;
+}
+
 async function main() {
   console.log('[build:artifacts] Starting artifact build...');
   const removedCount = await clearPreviousArtifacts();
   console.log(`[build:artifacts] Removed ${removedCount} previous bundle/vsix artifact(s).`);
 
-  await run('npm', ['run', 'build:native']);
+  const nativeScriptExists = await hasNpmScript('build:native');
+  const nativeSourceExists = existsSync(path.join(repoRoot, 'native', 'sqlite_bridge.cc'));
+
+  if (nativeScriptExists) {
+    await run('npm', ['run', 'build:native']);
+  } else if (nativeSourceExists) {
+    console.warn('[build:artifacts] build:native script is missing; continuing with existing native build outputs.');
+  } else {
+    console.warn('[build:artifacts] native source/build script not present; skipping native build step.');
+  }
 
   await runQuiet('npm', ['run', 'build:ts']);
 
