@@ -39,7 +39,8 @@ Body text
 - `quote` attrs: `id`, `class`
 - `bulleted-list` attrs: `id`, `class`
 - `numbered-list` attrs: `id`, `class`
-- `code` attrs: `id`, `class`, `lang` or `language`
+- `code` attrs: `id`, `class`, `lang` or `language`, `run`, `deps`, `timeout`, `format`
+- `output` attrs: `id`, `class`, `for`, `status`, `exit`, `hash`, `format`
 - `image` attrs: `id`, `class`, `src`
 - `rule` attrs: `id`, `class`
 - `script` attrs: `id`, `class`, `type`, `src`, `module`
@@ -48,6 +49,38 @@ All block types also support boolean presence attrs:
 
 - `hidden` (equivalent to `hidden=true`)
 - `module` (for `script` blocks, equivalent to `module=true`)
+- `run` (for `code` blocks, equivalent to `run=true`)
+
+## Executable Code and Captured Output
+
+A `code` block marked `run` is executable. `deps` names the libraries to install before
+running, `timeout` caps its runtime in seconds, and `format` (`svg` or `html`) declares
+that the block prints markup which should be rendered rather than quoted.
+
+Running a document writes one `output` block immediately after each code block it ran:
+
+```text
+::code id=stats lang=python run deps=numpy
+print(1)
+::end
+
+::output id=stats-output for=stats status=ok hash=b1323d9097e9ba05
+1
+::end
+```
+
+Contract for `output` blocks:
+
+- `for` names the `code` block that produced it; the writer places it directly after that
+  block, and re-running replaces it rather than appending a second one.
+- `status` is `ok`, `error`, or `blocked` (no toolchain, or execution disabled).
+- `exit` is the process exit code and is omitted when it is `0`.
+- `hash` fingerprints the code plus its dependencies. A re-run whose fingerprint still
+  matches is skipped and the recorded output is left untouched.
+- `format` is copied from the code block, and only affects rendering: a failed block always
+  renders as text so the error is legible.
+- An `output` block is data, never executable: nothing in the parser, renderer, or
+  screenshotter runs code. Only `dx run` / the `dx_run` tool does.
 
 ## Parsing and Recovery Rules
 

@@ -29,15 +29,6 @@ name = "doc-core"
 version = "0.1.0"
 
 [[package]]
-name = "doc-native"
-version = "0.1.0"
-dependencies = [
- "doc-core",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "doc-run"
 version = "0.1.0"
 dependencies = [
