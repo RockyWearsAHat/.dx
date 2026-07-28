@@ -8,10 +8,10 @@
 //! # Searchable text (a format contract)
 //! Indexed text comes from a document's `title`, `summary`, `tags`, and the text of these
 //! block kinds: `heading`, `paragraph`, `quote`, `bulleted-list`, `numbered-list`,
-//! `checklist`. The `style`, `stylesheet`, and `script` block kinds are presentation /
-//! behaviour only and are **excluded** — CSS or script text never makes a document
-//! findable. This matches the rendering contract where in-document CSS is presentation,
-//! not content.
+//! `checklist`, `code`, and `output`. The `style`, `stylesheet`, and `script` block kinds
+//! are presentation or behaviour only and are **excluded** — CSS or script text never makes
+//! a document findable, matching the rendering contract where in-document CSS is
+//! presentation, not content.
 //!
 //! # Tokenisation
 //! Text is lowercased and split on every non-alphanumeric character; empty tokens are
@@ -127,10 +127,22 @@ pub fn build_index(docs: &[(String, Document)]) -> SearchIndex {
 }
 
 /// Whether a block's text contributes to the search index (see the module contract).
+///
+/// Prose, lists, code, and captured output are all content someone might come looking for —
+/// "where did we call `retry_budget`?" and "which document printed that error?" are the same
+/// kind of question. `style`, `stylesheet`, and `script` are presentation and stay out, as do
+/// the raw-markup kinds, whose tag names would swamp the index with noise.
 fn is_searchable(kind: &str) -> bool {
     matches!(
         kind,
-        "heading" | "paragraph" | "quote" | "bulleted-list" | "numbered-list" | "checklist"
+        "heading"
+            | "paragraph"
+            | "quote"
+            | "bulleted-list"
+            | "numbered-list"
+            | "checklist"
+            | "code"
+            | "output"
     )
 }
 
@@ -253,6 +265,17 @@ mod tests {
         assert_eq!(index.search("rust")[0].path, "n.dx");
         assert_eq!(index.search("wasm")[0].path, "n.dx");
         assert_eq!(index.search("codec")[0].path, "n.dx");
+    }
+
+    #[test]
+    fn code_and_its_captured_output_are_findable() {
+        let source = "::paragraph id=p\nprose\n::end\n\n\
+::code id=c lang=python run\nretry_budget = compute()\n::end\n\n\
+::output id=o for=c status=ok\nConnectionResetError\n::end\n";
+        let docs = vec![("notes.dx".to_string(), crate::format::parse(source))];
+        let index = build_index(&docs);
+        assert_eq!(index.search("retry_budget").len(), 1);
+        assert_eq!(index.search("ConnectionResetError").len(), 1);
     }
 
     #[test]
