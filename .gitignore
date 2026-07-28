@@ -17,3 +17,14 @@ vscode-extension/media/*.js.map
 
 # Local workspace noise
 .DS_Store
+
+# Personal Claude Code overrides
+.claude/settings.local.json
+
+# Rust build output
+rust/target/
+
+# VS Code extension build output (compiled from src/, wasm from rust/doc-wasm)
+editor/vscode/dist/
+editor/vscode/wasm/
+editor/vscode/node_modules/

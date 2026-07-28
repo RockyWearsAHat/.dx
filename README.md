@@ -4,13 +4,10 @@ DOC is a canonical block-document system for human and AI collaboration.
 
 It keeps rendering and authoring separate. Humans edit visual blocks in the browser instead of hand-writing markup syntax. AI systems get one deterministic DOCSRC serialization instead of ambiguous Markdown variants.
 
-SQLite is the source of truth for document content. The runtime now prefers a native C++ SQLite bridge (`native/sqlite_bridge.cc`) for predictable performance and clean typed bindings.
-
-On-disk `.dx` files are stubs and one hidden repository artifact stores all compressed document payloads for transport.
+Canonical document content lives in compressed bundle archives. On-disk `.dx` files are stubs/pointers; the bundle archives hold the packed payloads for transport and rebuild.
 
 ## Storage model
 
-- Full document source and indexes live in `data/doc-index.sqlite`.
 - On-disk `.dx` files are minimal stubs, for example:
 
 ```text
@@ -18,23 +15,26 @@ On-disk `.dx` files are stubs and one hidden repository artifact stores all comp
 path: research/grill-with-docs.dx
 ```
 
-- A single hidden artifact at `.doc/.repo-docs.bin` stores ultra-compressed payloads for all docs. This artifact can rebuild DB state in a fresh clone/shared repo.
-- Existing non-stub `.dx` files are migrated into SQLite during ingest, then replaced by stubs + shared archive entries.
-- Search continues to run on a zero-dependency custom SQLite token index.
+- Canonical content is packed DOC-binary blocks inside bundle archives:
+  - `.doc/.repo-docs.bin` — repository-tracked docs (commit this; it rebuilds state in a fresh clone/shared repo).
+  - `.doc/.local-docs.bin` — local-only docs (gitignored).
+- Which archive a doc belongs to is driven by its git tracking state.
+- Existing non-stub `.dx` files are migrated into the bundle during ingest, then replaced by stubs + archive entries.
+- Search runs on a zero-dependency custom token index: `dxlite` sidecars (`*.dxlite.bin`).
+- View state (theme, appearance, edit buffer) is persisted in `.doc/view-state.json`.
 
 ## Quick start
 
 1. **Run guided setup:** `npm run setup` to ingest docs and print behavior-focused editor tips.
 2. **(Optional) Seed example docs:** `npm run docs:seed` to rewrite baseline welcome/tutorial/reference docs.
-3. **Ingest workspace (repeat when needed):** `npm run ingest` to migrate/reindex all `.dx` files into SQLite.
+3. **Ingest workspace (repeat when needed):** `npm run ingest` to migrate/reindex all `.dx` files into the bundle + dxlite index.
 4. **Compile TypeScript runtime artifacts:** `npm run build:ts`.
-5. **(Optional) Ensure native bridge exists once:** `npm run build:native:once`.
-6. **Run strict TypeScript diagnostics for the stabilized surface:** `npm run typecheck`.
-7. **Run full migration diagnostics across all TypeScript files:** `npm run typecheck:full`.
-8. **Run MCP server (fast start):** `npm run mcp` to start the MCP server immediately from built runtime.
-9. **Edit in VS Code:** Open `vscode-extension/` and press `F5` to launch the extension with virtual `docdb:/` filesystem.
-10. **Reconstruct:** `npm run reconstruct -- <document-id>` to emit SQLite-backed DOCSRC source.
-11. **Re-clean generated outputs (when needed):** `npm run clean`.
+5. **Run strict TypeScript diagnostics for the stabilized surface:** `npm run typecheck`.
+6. **Run full migration diagnostics across all TypeScript files:** `npm run typecheck:full`.
+7. **Run MCP server (fast start):** `npm run mcp` to start the MCP server immediately from built runtime.
+8. **Edit in VS Code:** Open `vscode-extension/` and press `F5` to launch the extension with virtual `docdb:/` filesystem.
+9. **Reconstruct:** `npm run reconstruct -- <path.dx>` to emit DOCSRC source from the bundle.
+10. **Re-clean generated outputs (when needed):** `npm run clean`.
 
 ## Project layout
 
@@ -51,7 +51,7 @@ path: research/grill-with-docs.dx
 
 This structure keeps authored sources in `src/`, test sources in `test/`, and all generated artifacts under `build/`.
 
-The MCP server is the standard interface for AI agents and tools to query and manipulate documents. The VS Code extension connects directly to the local SQLite database via the native C++ bridge — no HTTP server required.
+The MCP server is the standard interface for AI agents and tools to query and manipulate documents. The VS Code extension reads/writes the same bundle archives directly — no HTTP server required.
 
 ## Tutorial and setup behaviors
 
@@ -65,10 +65,10 @@ The MCP server is the standard interface for AI agents and tools to query and ma
 
 The workspace includes a local extension at `vscode-extension/` that provides a virtual filesystem:
 
-- `docdb:/` is a virtual filesystem provider backed by SQLite.
+- `docdb:/` is a virtual filesystem provider backed by the bundle archives.
 - Virtual docs appear like normal files in Explorer once mounted.
-- Opening a `.dx` stub uses the custom DOC DB editor and loads full content from SQLite.
-- The extension connects directly to the database via the native C++ bridge (no HTTP backend).
+- Opening a `.dx` stub uses the custom DOC DB editor and loads full content from the bundle.
+- The extension reads/writes the bundle archives directly (no HTTP backend).
 
 To run the extension locally:
 
@@ -84,7 +84,7 @@ The project exposes document operations via a Model Context Protocol (MCP) serve
 npm run mcp
 ```
 
-`npm run mcp` intentionally does not rebuild the native addon. The server starts quickly and uses the native bridge when `build/Release/doc_sqlite.node` is already present, otherwise it falls back to `node:sqlite` automatically. Use `npm run mcp:prepare` when you want to refresh runtime artifacts and ensure a native bridge is available.
+`npm run mcp` intentionally does not rebuild runtime artifacts. The server starts quickly from `build/runtime/`. Use `npm run mcp:prepare` (alias for `npm run build:ts`) when you want to refresh runtime artifacts first.
 
 **Available Tools:**
 - `list-documents` — List all documents with optional search query
@@ -100,7 +100,7 @@ npm run mcp
 - `doc:///path/to/document.dx` — Raw document source
 - `docview:///path/to/document.dx` — Built-in rendered document view (HTML)
 
-The MCP server reads/writes from the same SQLite database as the VS Code extension, ensuring consistency.
+The MCP server reads/writes the same bundle archives as the VS Code extension, ensuring consistency.
 
 ## Canonical DOCSRC shape
 
@@ -151,14 +151,16 @@ The reparsed transcript makes the core complaint clear: Markdown is attractive b
 - using one file grammar
 - moving humans onto a visual block editor
 - keeping AI-facing storage deterministic
-- indexing semantic sections into SQLite instead of parsing ad hoc markup every time
+- indexing semantic sections into a custom token index instead of parsing ad hoc markup every time
 
 ## Architecture
 
 - `src/doc-format.ts` handles DOCSRC parsing, legacy migration, block normalization, and reconstruction.
-- `src/doc-binary.ts` packs normalized documents into compact SQLite blobs.
-- `src/database.ts` stores source, compact storage blobs, and searchable semantic sections.
-- `src/doc-service.ts` enforces SQLite-first storage and writes tiny link stubs to disk.
+- `src/doc-binary.ts` packs normalized documents into compact binary blocks.
+- `src/doc-archive.ts` reads/writes the brotli-compressed bundle archives (repo + local).
+- `src/dxlite.ts` builds and queries the custom token search index over bundle contents.
+- `src/git-doc-state.ts` resolves git tracking state to route docs between repo and local archives.
+- `src/doc-service.ts` orchestrates bundle-first storage and writes tiny link stubs to disk.
 - `src/mcp-server.ts` defines stdio MCP tools/resources for document read/write/search/view workflows.
 - `src/doc-view-capture.ts` captures rendered document surfaces as PNG via Playwright (Quick Look fallback on macOS).
 - Runtime `.js` files are emitted from TypeScript into `build/runtime/` for Node/webview execution compatibility.

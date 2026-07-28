@@ -1,0 +1,46 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "DX Document",
+  "scopeName": "source.dx",
+  "patterns": [
+    { "include": "#block-close" },
+    { "include": "#block-open" },
+    { "include": "#list-item" }
+  ],
+  "repository": {
+    "block-open": {
+      "match": "^(::)([a-z-]+)(.*)$",
+      "captures": {
+        "1": { "name": "punctuation.definition.tag.dx" },
+        "2": { "name": "entity.name.tag.dx" },
+        "3": { "patterns": [{ "include": "#attributes" }] }
+      }
+    },
+    "block-close": {
+      "match": "^(::end)\\s*$",
+      "name": "entity.name.tag.dx"
+    },
+    "attributes": {
+      "patterns": [
+        {
+          "match": "\\b(hidden|module|run)\\b",
+          "name": "keyword.control.dx"
+        },
+        {
+          "match": "\\b([a-zA-Z0-9._-]+)(=)(\"[^\"]*\"|'[^']*'|[^\\s]+)",
+          "captures": {
+            "1": { "name": "entity.other.attribute-name.dx" },
+            "2": { "name": "punctuation.separator.dx" },
+            "3": { "name": "string.quoted.dx" }
+          }
+        }
+      ]
+    },
+    "list-item": {
+      "match": "^\\s*(-|\\[[ x]\\])\\s",
+      "captures": {
+        "1": { "name": "punctuation.definition.list.begin.dx" }
+      }
+    }
+  }
+}

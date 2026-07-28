@@ -441,8 +441,32 @@ export function parseBlock(raw: string | number | boolean | null | undefined | o
   };
 }
 
+/**
+ * The active source-block parser. Defaults to the TypeScript reference parser
+ * (`parseSourceBlocks`). The webview may swap in the Rust `doc-core` wasm parser at boot via
+ * `setSourceBlockParser` once that engine has initialized; if wasm init fails the default
+ * stays in place, so the editor always has a working parser. The signature matches
+ * `parseSourceBlocks` exactly, so callers are unaffected by the swap.
+ */
+let activeSourceBlockParser: (source: string | number | boolean | null | undefined | object) => PipelineBlock[] =
+  parseSourceBlocks;
+
+/**
+ * Install a replacement source-block parser used by `parseDoc` (and therefore every render
+ * path). Pass `parseSourceBlocks` to restore the default. Intended for the boot-time switch to
+ * the wasm `doc-core` engine; keeping it injectable avoids an import cycle between this module
+ * and the wasm adapter, which depends on `stringifyBlock` defined here.
+ *
+ * @param parser a parser with the same contract as `parseSourceBlocks`
+ */
+export function setSourceBlockParser(
+  parser: (source: string | number | boolean | null | undefined | object) => PipelineBlock[],
+): void {
+  activeSourceBlockParser = typeof parser === 'function' ? parser : parseSourceBlocks;
+}
+
 export function parseDoc(source: string | number | boolean | null | undefined | object): DocumentModel {
-  return { blocks: parseSourceBlocks(source) };
+  return { blocks: activeSourceBlockParser(source) };
 }
 
 export function stringifyDoc(model: DocumentModel): string {

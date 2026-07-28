@@ -7,5 +7,13 @@
     "docdb.autoRecommend": true,
     "files.associations": {
         "*.dx": "plaintext"
+    },
+    "files.exclude": {
+        "**/.git": true,
+        "**/.svn": true,
+        "**/.hg": true,
+        "**/.DS_Store": true,
+        "**/Thumbs.db": true,
+        ".doc": true
     }
 }

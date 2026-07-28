@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { sha1Hex } from './core/digest.js';
 import { mkdir, readFile, stat, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
@@ -74,7 +74,7 @@ function assertWithinRoot(rootDir: string, absolutePath: string): string {
 
 /* c8 ignore start -- stable hashing fallback branch is intentionally defensive */
 function toStableDocumentId(relativePath: string): number {
-  const digest = createHash('sha1').update(relativePath, 'utf8').digest('hex');
+  const digest = sha1Hex(relativePath);
   const id = Number.parseInt(digest.slice(0, 8), 16) & 0x7fffffff;
   return id > 0 ? id : 1;
 }

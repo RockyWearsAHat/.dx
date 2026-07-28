@@ -1,0 +1,136 @@
+//! Discovery commands: `ls` and `search`.
+//!
+//! Both walk a directory tree for `.dx` files and report what they find, so an agent
+//! dropped into an unfamiliar project can answer "what documentation exists here?" in one
+//! call instead of guessing at paths.
+
+use std::path::PathBuf;
+
+use crate::args::Args;
+use crate::workspace;
+
+/// Default number of search hits reported.
+const DEFAULT_SEARCH_LIMIT: usize = 20;
+
+/// `dx ls [dir]` — every document under a directory, with its title and size.
+pub fn run_ls(args: &Args) -> Result<String, String> {
+    let root = root_of(args, 0);
+    let documents = workspace::load_all(&root);
+    if documents.is_empty() {
+        return Ok(format!("no .dx documents under {}\n", root.display()));
+    }
+
+    let width = documents
+        .iter()
+        .map(|loaded| loaded.relative.len())
+        .max()
+        .unwrap_or(4);
+    let mut out = String::new();
+    for loaded in &documents {
+        out.push_str(&format!(
+            "{:<width$}  {}  ({} blocks)\n",
+            loaded.relative,
+            loaded.title(),
+            loaded.document.blocks.len(),
+            width = width
+        ));
+    }
+    Ok(out)
+}
+
+/// `dx search <query> [dir]` — documents matching a query, best first.
+pub fn run_search(args: &Args) -> Result<String, String> {
+    let query = args
+        .positional(0)
+        .ok_or_else(|| "a search query is required".to_string())?;
+    let root = root_of(args, 1);
+    let limit = args
+        .number("limit")
+        .map_or(DEFAULT_SEARCH_LIMIT, |limit| limit as usize);
+
+    let hits = workspace::search(&root, query, limit);
+    if hits.is_empty() {
+        return Ok(format!("no documents match `{query}`\n"));
+    }
+
+    let mut out = String::new();
+    for hit in &hits {
+        out.push_str(&format!(
+            "{:.3}  {}  {}\n",
+            hit.score,
+            hit.document.relative,
+            hit.document.title()
+        ));
+    }
+    Ok(out)
+}
+
+/// The directory to search: positional `index` if given, else the current directory.
+fn root_of(args: &Args, index: usize) -> PathBuf {
+    args.positional(index)
+        .map_or_else(|| PathBuf::from("."), PathBuf::from)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use doc_core::format::parse;
+
+    fn args(tokens: &[&str]) -> Args {
+        Args::parse(&tokens.iter().map(|t| (*t).to_string()).collect::<Vec<_>>())
+    }
+
+    fn project(label: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("dx-find-tests-{label}"));
+        let _ = std::fs::remove_dir_all(&root);
+        workspace::save(
+            &root.join("guide.dx"),
+            &parse("::heading level=1 id=h\nDeployment Guide\n::end\n\n::paragraph id=p\nkubernetes rollout steps\n::end\n"),
+        )
+        .expect("guide");
+        workspace::save(
+            &root.join("notes/misc.dx"),
+            &parse("::heading level=1 id=h\nMisc Notes\n::end\n"),
+        )
+        .expect("misc");
+        root
+    }
+
+    #[test]
+    fn ls_reports_every_document_with_its_title() {
+        let root = project("ls");
+        let out = run_ls(&args(&[&root.to_string_lossy()])).expect("ls");
+        assert!(out.contains("guide.dx"));
+        assert!(out.contains("Deployment Guide"));
+        assert!(out.contains("misc.dx"));
+        assert_eq!(out.lines().count(), 2);
+    }
+
+    #[test]
+    fn ls_of_an_empty_directory_says_so_instead_of_printing_nothing() {
+        let root = std::env::temp_dir().join("dx-find-tests-empty");
+        std::fs::create_dir_all(&root).expect("root");
+        let out = run_ls(&args(&[&root.to_string_lossy()])).expect("ls");
+        assert!(out.contains("no .dx documents"));
+    }
+
+    #[test]
+    fn search_finds_the_matching_document_and_ranks_it() {
+        let root = project("search");
+        let out = run_search(&args(&["kubernetes", &root.to_string_lossy()])).expect("search");
+        assert!(out.contains("guide.dx"));
+        assert!(!out.contains("misc.dx"));
+    }
+
+    #[test]
+    fn search_with_no_match_reports_the_query() {
+        let root = project("search-empty");
+        let out = run_search(&args(&["quasar", &root.to_string_lossy()])).expect("search");
+        assert!(out.contains("no documents match `quasar`"));
+    }
+
+    #[test]
+    fn search_requires_a_query() {
+        assert!(run_search(&args(&[])).unwrap_err().contains("query"));
+    }
+}

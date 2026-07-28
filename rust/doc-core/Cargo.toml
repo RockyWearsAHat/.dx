@@ -1,0 +1,13 @@
+[package]
+name = "doc-core"
+description = "Runtime-agnostic core engine for the DOC platform: digests, the dxz1 byte codec, binary document packing, and DOCSRC parsing. Pure Rust with no OS dependencies; compiles to native and wasm32."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+# rlib for native linking (CLI / MCP server), cdylib for the wasm32 editor build.
+crate-type = ["rlib", "cdylib"]
+
+[dependencies]

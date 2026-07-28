@@ -1,0 +1,101 @@
+::heading level=1 id=title
+A Notepad for Code
+::end
+
+::paragraph id=lead
+This document is not describing a program. It **is** one. The code blocks below run on your machine, pull in real libraries, and store what they produced right back into this file — so the next person to open it sees the results, not just the source.
+::end
+
+::heading level=2 id=numbers
+Numbers, computed here
+::end
+
+::paragraph id=numbers-lead
+`dx run showcase.dx` executes this block with `numpy`, installed on demand.
+::end
+
+::code id=stats lang=python run deps=numpy
+import numpy as np
+
+latency_ms = np.array([12, 18, 9, 44, 15, 21, 13, 120, 17, 11])
+
+print(f"requests   {latency_ms.size}")
+print(f"p50        {np.percentile(latency_ms, 50):.1f} ms")
+print(f"p95        {np.percentile(latency_ms, 95):.1f} ms")
+print(f"worst      {latency_ms.max()} ms")
+::end
+
+::output id=stats-output for=stats status=ok hash=b1323d9097e9ba05
+requests   10
+p50        16.0 ms
+p95        85.8 ms
+worst      120 ms
+::end
+
+::heading level=2 id=picture
+A picture, drawn here
+::end
+
+::paragraph id=picture-lead
+A block that declares `format=svg` has its output rendered as a drawing instead of quoted as text. That is what lets an agent look at a chart and reason about the shape of the data — rather than imagining it from the code that would have produced it.
+::end
+
+::code id=chart lang=python run deps=numpy format=svg
+import numpy as np
+
+latency_ms = [12, 18, 9, 44, 15, 21, 13, 120, 17, 11]
+width, height, pad = 720, 240, 32
+scale = (height - 2 * pad) / max(latency_ms)
+step = (width - 2 * pad) / (len(latency_ms) - 1)
+
+points = " ".join(
+    f"{pad + index * step:.1f},{height - pad - value * scale:.1f}"
+    for index, value in enumerate(latency_ms)
+)
+dots = "".join(
+    f'<circle cx="{pad + i * step:.1f}" cy="{height - pad - v * scale:.1f}" r="4" fill="#6cb0ff"/>'
+    for i, v in enumerate(latency_ms)
+)
+
+print(f'''<svg viewBox="0 0 {width} {height}" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Request latency">
+  <line x1="{pad}" y1="{height - pad}" x2="{width - pad}" y2="{height - pad}" stroke="#8894a4" stroke-width="1"/>
+  <polyline points="{points}" fill="none" stroke="#6cb0ff" stroke-width="2.5"/>
+  {dots}
+  <text x="{pad}" y="{pad - 8}" fill="#8894a4" font-family="monospace" font-size="13">request latency (ms)</text>
+</svg>''')
+::end
+
+::output id=chart-output for=chart status=ok hash=6866343b9f5101b3 format=svg
+<svg viewBox="0 0 720 240" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Request latency">
+  <line x1="32" y1="208" x2="688" y2="208" stroke="#8894a4" stroke-width="1"/>
+  <polyline points="32.0,190.4 104.9,181.6 177.8,194.8 250.7,143.5 323.6,186.0 396.4,177.2 469.3,188.9 542.2,32.0 615.1,183.1 688.0,191.9" fill="none" stroke="#6cb0ff" stroke-width="2.5"/>
+  <circle cx="32.0" cy="190.4" r="4" fill="#6cb0ff"/><circle cx="104.9" cy="181.6" r="4" fill="#6cb0ff"/><circle cx="177.8" cy="194.8" r="4" fill="#6cb0ff"/><circle cx="250.7" cy="143.5" r="4" fill="#6cb0ff"/><circle cx="323.6" cy="186.0" r="4" fill="#6cb0ff"/><circle cx="396.4" cy="177.2" r="4" fill="#6cb0ff"/><circle cx="469.3" cy="188.9" r="4" fill="#6cb0ff"/><circle cx="542.2" cy="32.0" r="4" fill="#6cb0ff"/><circle cx="615.1" cy="183.1" r="4" fill="#6cb0ff"/><circle cx="688.0" cy="191.9" r="4" fill="#6cb0ff"/>
+  <text x="32" y="24" fill="#8894a4" font-family="monospace" font-size="13">request latency (ms)</text>
+</svg>
+::end
+
+::heading level=2 id=how
+How to use it
+::end
+
+::numbered-list id=steps
+- Write prose and code in plain text. A .dx file is readable with `cat` and diffable in a pull request.
+- Mark a code block `run` and list any libraries it needs with `deps`.
+- Run `dx run showcase.dx`. Unchanged blocks are skipped, so re-running is nearly free.
+- Open the file in VS Code to read it as a page, or `dx png showcase.dx` to get an image of it.
+::end
+
+::heading level=2 id=agents
+What an agent sees
+::end
+
+::bulleted-list id=agent-tools
+- `dx_view` returns this page as an image — the chart above arrives as a picture.
+- `dx_outline` maps the blocks so only the relevant section has to be fetched.
+- `dx_run` executes the code and reports what each block produced.
+- `dx_edit` changes one block by id without rewriting the rest of the file.
+::end
+
+::quote id=closing
+The point is not that a document can hold code. It is that a document can hold the *result* — checked in, reproducible, and visible to whoever opens it next.
+::end

@@ -1,7 +1,7 @@
 {
   "version": 1,
   "documents": {
-    "examples/compactness-comparison.dx": {
+    "examples/tutorial.dx": {
       "theme": "auto",
       "resolvedTheme": "dark",
       "appearance": {
@@ -10,8 +10,8 @@
         "scale": 100
       },
       "viewport": {
-        "width": 823,
-        "height": 474,
+        "width": 486,
+        "height": 135,
         "pixelRatio": 2,
         "zoomLevel": 0,
         "zoomFactor": 1
@@ -19,7 +19,7 @@
       "effectiveCss": "",
       "sourceHash": "",
       "editBuffer": "",
-      "updatedAt": "2026-05-25T00:57:45.986Z"
+      "updatedAt": "2026-06-01T19:54:07.054Z"
     }
   }
 }
