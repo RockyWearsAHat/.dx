@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["doc-cli", "doc-core", "doc-native", "doc-run", "doc-shot", "doc-wasm"]
+members = ["doc-cli", "doc-core", "doc-run", "doc-shot", "doc-wasm"]
 
 [workspace.package]
 version = "0.1.0"

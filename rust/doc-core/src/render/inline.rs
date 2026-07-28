@@ -230,7 +230,10 @@ mod tests {
         assert_eq!(inline_html("a — b"), "a — b");
         assert_eq!(inline_html("naïve café — déjà vu"), "naïve café — déjà vu");
         assert_eq!(inline_html("ship it 🚀 — now"), "ship it 🚀 — now");
-        assert_eq!(inline_html("**é** — *ü*"), "<strong>é</strong> — <em>ü</em>");
+        assert_eq!(
+            inline_html("**é** — *ü*"),
+            "<strong>é</strong> — <em>ü</em>"
+        );
         assert_eq!(inline_html("`—` — ok"), "<code>—</code> — ok");
         assert_eq!(inline_html("日本語のテキスト"), "日本語のテキスト");
     }

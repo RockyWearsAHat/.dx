@@ -1,172 +1,179 @@
-# DOC Platform
+# dx — a notepad for code
 
-DOC is a canonical block-document system for human and AI collaboration.
-
-It keeps rendering and authoring separate. Humans edit visual blocks in the browser instead of hand-writing markup syntax. AI systems get one deterministic DOCSRC serialization instead of ambiguous Markdown variants.
-
-Canonical document content lives in compressed bundle archives. On-disk `.dx` files are stubs/pointers; the bundle archives hold the packed payloads for transport and rebuild.
-
-## Storage model
-
-- On-disk `.dx` files are minimal stubs, for example:
+A `.dx` file is a document you can read, a page you can look at, and a program you can run.
 
 ```text
-@docstub 3
-path: research/grill-with-docs.dx
+::heading level=1 id=title
+Latency report
+::end
+
+::paragraph id=intro
+The numbers below are computed when this document runs.
+::end
+
+::code id=stats lang=python run deps="numpy"
+import numpy as np
+print(np.percentile([12, 18, 9, 44, 15], 95))
+::end
+
+::output id=stats-output for=stats status=ok hash=b132…
+41.6
+::end
 ```
 
-- Canonical content is packed DOC-binary blocks inside bundle archives:
-  - `.doc/.repo-docs.bin` — repository-tracked docs (commit this; it rebuilds state in a fresh clone/shared repo).
-  - `.doc/.local-docs.bin` — local-only docs (gitignored).
-- Which archive a doc belongs to is driven by its git tracking state.
-- Existing non-stub `.dx` files are migrated into the bundle during ingest, then replaced by stubs + archive entries.
-- Search runs on a zero-dependency custom token index: `dxlite` sidecars (`*.dxlite.bin`).
-- View state (theme, appearance, edit buffer) is persisted in `.doc/view-state.json`.
+That is the whole idea. The file is plain text, so `cat`, `grep`, `git diff`, and any editor
+work on it. Open it in VS Code and it renders as a page. Run `dx run` and the code executes
+and stores what it produced, right there in the file, for whoever opens it next.
 
-## Quick start
+---
 
-1. **Run guided setup:** `npm run setup` to ingest docs and print behavior-focused editor tips.
-2. **(Optional) Seed example docs:** `npm run docs:seed` to rewrite baseline welcome/tutorial/reference docs.
-3. **Ingest workspace (repeat when needed):** `npm run ingest` to migrate/reindex all `.dx` files into the bundle + dxlite index.
-4. **Compile TypeScript runtime artifacts:** `npm run build:ts`.
-5. **Run strict TypeScript diagnostics for the stabilized surface:** `npm run typecheck`.
-6. **Run full migration diagnostics across all TypeScript files:** `npm run typecheck:full`.
-7. **Run MCP server (fast start):** `npm run mcp` to start the MCP server immediately from built runtime.
-8. **Edit in VS Code:** Open `vscode-extension/` and press `F5` to launch the extension with virtual `docdb:/` filesystem.
-9. **Reconstruct:** `npm run reconstruct -- <path.dx>` to emit DOCSRC source from the bundle.
-10. **Re-clean generated outputs (when needed):** `npm run clean`.
-
-## Project layout
-
-- `src/` core runtime services, storage, parser, and MCP server logic.
-- `vscode-extension/` extension host and webview source.
-- `test/unit/` focused unit tests.
-- `test/integration/` cross-module workflow and integration tests.
-- `test/coverage/` edge and threshold-focused coverage tests.
-- `test/helpers/` shared test utilities.
-- `test/types/` ambient type declarations used by TypeScript tests.
-- `build/runtime/` compiled runtime JavaScript.
-- `build/test/` compiled test JavaScript.
-- `build/coverage/` generated coverage reports and c8 temp output.
-
-This structure keeps authored sources in `src/`, test sources in `test/`, and all generated artifacts under `build/`.
-
-The MCP server is the standard interface for AI agents and tools to query and manipulate documents. The VS Code extension reads/writes the same bundle archives directly — no HTTP server required.
-
-## Tutorial and setup behaviors
-
-- Press `/` to open the control panel quickly.
-- Use the pen button to switch between **Editing** and **Read only** mode.
-- Use `?` to open the in-editor setup + format tutorial.
-- Use `Option/Alt + click` on `id=` or `class=` attributes while source-editing to open scoped CSS editing.
-- Share `.dx` files plus `.doc/.repo-docs.bin` in git to keep portable, rebuildable docs for other users.
-
-## VS Code integration
-
-The workspace includes a local extension at `vscode-extension/` that provides a virtual filesystem:
-
-- `docdb:/` is a virtual filesystem provider backed by the bundle archives.
-- Virtual docs appear like normal files in Explorer once mounted.
-- Opening a `.dx` stub uses the custom DOC DB editor and loads full content from the bundle.
-- The extension reads/writes the bundle archives directly (no HTTP backend).
-
-To run the extension locally:
-
-1. Open `vscode-extension/` in VS Code.
-2. Press `F5` to launch Extension Development Host.
-3. Run `DOC DB: Mount Virtual Files` if it does not auto-mount.
-
-## MCP Server
-
-The project exposes document operations via a Model Context Protocol (MCP) server. This is the standard interface for AI tools, agents, and LLMs to interact with the knowledge base:
+## Install
 
 ```bash
-npm run mcp
+cd rust && cargo build --release -p doc-cli
+./target/release/dx install
 ```
 
-`npm run mcp` intentionally does not rebuild runtime artifacts. The server starts quickly from `build/runtime/`. Use `npm run mcp:prepare` (alias for `npm run build:ts`) when you want to refresh runtime artifacts first.
+`dx install` copies the binary somewhere on your `PATH` and registers its MCP server with
+every AI assistant it finds — Claude, Codex, Cursor, VS Code, Windsurf, Gemini. Run
+`dx doctor` afterwards to see what is wired up and what is missing.
 
-**Available Tools:**
-- `list-documents` — List all documents with optional search query
-- `get-document` — Retrieve a specific document by path or ID
-- `search-documents` — Full-text search across all documents
-- `create-document` — Create a new document
-- `save-document` — Update an existing document
-- `open-document-viewer` — Open a stateful, built-in document viewer session
-- `interact-document-viewer` — Interact with a viewer session (inspect/click/scroll/edit/save)
-- `ingest-workspace` — Index documents from a workspace directory
+For the editor:
 
-**Available Resources:**
-- `doc:///path/to/document.dx` — Raw document source
-- `docview:///path/to/document.dx` — Built-in rendered document view (HTML)
+```bash
+cd editor/vscode && npm install && npm run package
+code --install-extension dx-documents-1.0.0.vsix
+```
 
-The MCP server reads/writes the same bundle archives as the VS Code extension, ensuring consistency.
+The extension is platform-independent — the same `.vsix` runs on macOS, Windows, and Linux.
 
-## Canonical DOCSRC shape
+---
+
+## Using it
+
+```bash
+dx text     notes.dx                 # the document as Markdown
+dx outline  notes.dx                 # block ids, kinds, and previews
+dx render   notes.dx                 # a self-contained HTML page
+dx png      notes.dx                 # an image of the rendered page
+dx open     notes.dx                 # open it in your browser
+dx run      notes.dx                 # execute its code blocks
+dx ls       .                        # every .dx document in a project
+dx search   "deploy" .               # find documents by content
+```
+
+Add `--section <block-id>` to any reading command to get one part of a long document.
+`dx help` lists everything.
+
+### Writing
+
+Edit `.dx` files in any editor — they are text. When you want a targeted change:
+
+```bash
+dx new    guide.dx --title "Deployment guide"
+dx set    guide.dx intro --text "New opening paragraph."
+dx append guide.dx --type code --lang python --run --text "print(1)"
+dx fmt    guide.dx                   # rewrite in canonical form
+```
+
+`dx set` replaces one block by id and leaves every other byte alone.
+
+### Running code
+
+Mark a code block `run` and name what it needs:
 
 ```text
-@doc 3
-title: Architecture Notes
-summary: What this document covers.
-tags: architecture, docs
-meta.owner: alex
----
-::heading level=1 id=architecture-notes
-Architecture Notes
-::end
-
-::paragraph id=paragraph-2
-This document is edited visually, not with Markdown syntax.
-::end
+::code id=chart lang=python run deps="numpy matplotlib" timeout=120 format=svg
 ```
 
-## Block syntax reference
+| Attribute | Meaning |
+|-----------|---------|
+| `run`     | This block is executable |
+| `deps`    | Libraries to install before running |
+| `timeout` | Seconds before the block is killed (default 60) |
+| `format`  | `svg` or `html` — render the output as a drawing, not as quoted text |
 
-- `::paragraph` text `::end` or plain text without a block wrapper
-- `::heading level=1..4` text `::end`
-- `::bulleted-list` newline-separated items `::end`
-- `::numbered-list` newline-separated items `::end`
-- `::checklist` items as `[x] done` or `[ ] pending` `::end`
-- `::quote` text `::end`
-- `::code` text `::end` (optional `lang=` or `language=` attribute)
-- `::image src=...` alt text body `::end`
-- `::style` CSS declarations `::end` (applies style, not semantic content)
-- `::stylesheet href=...` `::end` (external stylesheet link, not semantic content)
+Languages: **python** (via `uv` or a cached virtualenv), **node**, **typescript** (Deno),
+**bash**, **rust** (Cargo), **go**, **ruby**. Each uses the toolchain already on your
+machine, so a block behaves exactly like the same code pasted into a terminal.
 
-For list blocks, each newline is one item. Leading `-`, `*`, or `1.` prefixes are optional and normalized away.
+Blocks run in the document's own directory, so `open("data.csv")` finds the file next to
+the `.dx`. Results are fingerprinted: re-running a document only executes what changed.
 
-Style and stylesheet blocks affect rendering only. They are intentionally excluded from section text extraction/search context so AI text workflows focus on document meaning rather than presentation rules.
+**Running a document runs its code.** It happens only through `dx run` or the `dx_run` tool
+— never while reading, rendering, or screenshotting. Set `DX_NO_EXEC=1` to disable it
+entirely.
 
-## DX Contract and Review Checklist
+See [`examples/showcase.dx`](examples/showcase.dx) for a document that computes its own
+numbers and draws its own chart.
 
-- DX format and safety contract: `docs/dx-format-contract.md`
-- Parser/render change grilling checklist: `docs/grill-me.md`
+---
 
-These docs define the non-negotiable behavior for parsing, canonicalization, and CSS safety.
+## For AI agents
 
-## Why this matches the video better
+Once `dx install` has run, any MCP-capable assistant gets nine tools:
 
-The reparsed transcript makes the core complaint clear: Markdown is attractive because it renders well, but it has too many overlapping syntaxes, too much inline escape hatch behavior, and too much grammar pollution in the source text itself. This implementation fixes that by:
+| Tool | What it does |
+|------|--------------|
+| `dx_view` | **Returns the rendered page as an image.** Use it whenever a document has tables, charts, diagrams, or program output |
+| `dx_read` | The document as Markdown |
+| `dx_outline` | One row per block: id, kind, size, whether it is runnable |
+| `dx_list` / `dx_search` | Find documents in a project |
+| `dx_render` | The HTML page source |
+| `dx_write` / `dx_edit` | Create a document, or replace one block by id |
+| `dx_run` | Execute the code blocks and report what each produced |
 
-- using one file grammar
-- moving humans onto a visual block editor
-- keeping AI-facing storage deterministic
-- indexing semantic sections into a custom token index instead of parsing ad hoc markup every time
+`dx_view` exists so an agent can *look* at a result instead of reasoning about the code
+that would have produced it. A generated chart arrives as a chart.
 
-## Architecture
+An assistant without MCP support needs no configuration at all — `dx` is a command, and
+`dx help` explains itself.
 
-- `src/doc-format.ts` handles DOCSRC parsing, legacy migration, block normalization, and reconstruction.
-- `src/doc-binary.ts` packs normalized documents into compact binary blocks.
-- `src/doc-archive.ts` reads/writes the brotli-compressed bundle archives (repo + local).
-- `src/dxlite.ts` builds and queries the custom token search index over bundle contents.
-- `src/git-doc-state.ts` resolves git tracking state to route docs between repo and local archives.
-- `src/doc-service.ts` orchestrates bundle-first storage and writes tiny link stubs to disk.
-- `src/mcp-server.ts` defines stdio MCP tools/resources for document read/write/search/view workflows.
-- `src/doc-view-capture.ts` captures rendered document surfaces as PNG via Playwright (Quick Look fallback on macOS).
-- Runtime `.js` files are emitted from TypeScript into `build/runtime/` for Node/webview execution compatibility.
-- `vscode-extension/` provides the `docdb:/` virtual filesystem and `.dx` stub custom editor.
+---
 
-## Limits
+## How it fits together
 
-- This extension is local to this repo and is not packaged/published yet.
-- Delete and rename operations for virtual docs are not implemented in the extension yet.
+```text
+                    ┌─────────────┐
+     notes.dx ─────►│  doc-core   │──► HTML page  ──► browser, editor, screenshot
+    (plain text)    │  parse +    │──► Markdown   ──► agents, diffs
+                    │  render     │──► outline    ──► navigation
+                    └──────┬──────┘
+                           │ compiled twice
+              ┌────────────┴────────────┐
+        native binary              WebAssembly
+        (dx CLI, dx mcp)           (VS Code extension)
+```
+
+One engine, compiled for both hosts. That is what guarantees a document cannot look like
+one thing in your editor and another thing to an agent — the editor and the CLI produce
+byte-identical HTML.
+
+| Crate | Responsibility |
+|-------|----------------|
+| `rust/doc-core` | The format and the views: parse, canonical write, HTML, Markdown, outline, sections. No OS dependencies; compiles to wasm |
+| `rust/doc-run` | Executing code blocks: language plans, dependency installation, sandboxes, timeouts |
+| `rust/doc-shot` | Rendering a document to PNG with an installed Chromium browser |
+| `rust/doc-cli` | The `dx` command and the MCP server |
+| `rust/doc-wasm` | `doc-core` for JavaScript hosts |
+| `editor/vscode` | The VS Code extension |
+
+The format itself is specified in [`docs/dx-format-contract.md`](docs/dx-format-contract.md).
+
+---
+
+## Development
+
+```bash
+cd rust
+cargo test                                  # 238 tests
+cargo clippy --all-targets -- -D warnings
+cargo fmt --check
+```
+
+Every public item is documented, there is no `unsafe`, and library code does not panic.
+
+The `src/` and `vscode-extension/` directories hold the original TypeScript implementation.
+It is the historical reference the Rust core was validated against — `doc-core`'s fixtures
+still assert byte-identical output against it — and is no longer on the path any user or
+agent takes.
