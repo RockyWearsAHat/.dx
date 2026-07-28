@@ -8,6 +8,8 @@
  */
 
 import { execFile } from 'child_process';
+import { existsSync } from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
 
@@ -17,9 +19,41 @@ export interface CliResult {
   output: string;
 }
 
+/**
+ * Places `dx install` puts the binary, checked when it is not on `PATH`.
+ *
+ * An editor launched from the desktop does not always inherit the `PATH` a terminal has, so
+ * `dx` can be installed and working in a shell yet invisible here. Looking in the handful of
+ * locations the installer actually uses turns that puzzle into a non-event.
+ */
+function installLocations(): string[] {
+  const home = os.homedir();
+  if (process.platform === 'win32') {
+    const local = process.env.LOCALAPPDATA ?? path.join(home, 'AppData', 'Local');
+    return [path.join(local, 'Programs', 'dx', 'dx.exe')];
+  }
+  return [
+    path.join(home, '.local', 'bin', 'dx'),
+    '/usr/local/bin/dx',
+    '/opt/homebrew/bin/dx',
+  ];
+}
+
 /** The configured path to the `dx` binary. */
 export function cliPath(): string {
   return vscode.workspace.getConfiguration('dx').get<string>('cliPath', 'dx');
+}
+
+/**
+ * The command to actually spawn: the configured value if it names a real file or is meant
+ * to be resolved through `PATH`, otherwise the first known install location that exists.
+ */
+function resolveCli(): string {
+  const configured = cliPath();
+  if (configured.includes(path.sep) || existsSync(configured)) {
+    return configured;
+  }
+  return installLocations().find(existsSync) ?? configured;
 }
 
 /**
@@ -31,7 +65,7 @@ export function cliPath(): string {
 export function runCli(args: string[], documentPath: string): Promise<CliResult> {
   return new Promise((resolve) => {
     execFile(
-      cliPath(),
+      resolveCli(),
       args,
       { cwd: path.dirname(documentPath), maxBuffer: 16 * 1024 * 1024 },
       (error, stdout, stderr) => {
@@ -49,7 +83,8 @@ export function runCli(args: string[], documentPath: string): Promise<CliResult>
 /** The message shown when the `dx` binary cannot be found. */
 export function missingCliMessage(): string {
   return (
-    `Could not find the "${cliPath()}" command. ` +
+    `Could not find the "${cliPath()}" command, or any dx binary in ` +
+    `${installLocations().join(', ')}. ` +
     'Install the dx CLI and run `dx install`, or set "dx.cliPath" to its full path. ' +
     'Viewing documents does not need it — only running code and exporting images do.'
   );
