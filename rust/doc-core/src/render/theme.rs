@@ -211,10 +211,13 @@ hr { border: 0; border-top: 1px solid var(--dx-border); margin: 2rem 0; }
 .dx-badge-ok { color: var(--dx-ok); }
 .dx-badge-error { color: var(--dx-error); }
 
+/* Long lines wrap rather than scroll out of view. A rendered document is also read as a
+   static image, where a horizontal scrollbar silently truncates code and output. */
 .dx-code pre, .dx-output pre {
   margin: 0;
   padding: 0.85rem 1rem;
-  overflow-x: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
   font-family: var(--dx-mono);
   font-size: 0.855rem;
   line-height: 1.55;
@@ -277,7 +280,10 @@ thead th {
 }
 tbody tr:nth-child(even) { background: var(--dx-surface); }
 
-.dx-html, .dx-svg { margin: 0 0 1.05rem; }
+/* Author markup can be genuinely wider than the page (a table with many columns). It
+   scrolls inside its own box so the page body never scrolls sideways. */
+.dx-html { margin: 0 0 1.05rem; overflow-x: auto; }
+.dx-svg { margin: 0 0 1.05rem; }
 .dx-svg svg, img { max-width: 100%; height: auto; }
 
 figure { margin: 0 0 1.05rem; }
@@ -323,5 +329,17 @@ mod tests {
         assert!(css.contains("prefers-color-scheme: dark"));
         assert!(css.contains(":root[data-theme=\"light\"]"));
         assert!(css.contains(":root[data-theme=\"dark\"]"));
+    }
+
+    #[test]
+    fn code_and_output_wrap_so_a_screenshot_never_truncates_them() {
+        let css = stylesheet();
+        assert!(css.contains("white-space: pre-wrap"));
+        assert!(css.contains("overflow-wrap: anywhere"));
+    }
+
+    #[test]
+    fn wide_author_markup_scrolls_in_its_own_box_rather_than_the_page() {
+        assert!(stylesheet().contains(".dx-html { margin: 0 0 1.05rem; overflow-x: auto; }"));
     }
 }
