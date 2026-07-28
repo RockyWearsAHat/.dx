@@ -1,0 +1,17 @@
+[package]
+name = "doc-cli"
+description = "The dx command line: read, render, screenshot, edit, and execute .dx documents, and serve them to AI agents over MCP."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "dx"
+path = "src/main.rs"
+
+[dependencies]
+doc-core = { path = "../doc-core" }
+doc-run = { path = "../doc-run" }
+doc-shot = { path = "../doc-shot" }
+serde_json = "1.0"

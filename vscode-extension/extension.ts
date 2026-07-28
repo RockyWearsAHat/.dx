@@ -544,10 +544,13 @@ function getUnifiedDiffContextForDocument(documentUri) {
 function getWebviewAssetUris(webview, extensionUri) {
   const stylesUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'media', 'styles.css'));
   const workspaceRoot = getWorkspaceRoot();
-  const webviewBundlePath = workspaceRoot
-    ? vscode.Uri.file(path.join(workspaceRoot, 'build', 'docdb-webview.bundle.min.js'))
-    : vscode.Uri.joinPath(extensionUri, 'media', 'webview-main.js');
+  const webviewBundlePath = vscode.Uri.file(path.join(__dirname, '..', '..', 'docdb-webview.bundle.min.js'));
   const webviewUri = webview.asWebviewUri(webviewBundlePath);
+  // The Rust doc-core engine compiled to wasm. The esbuild bundle cannot resolve the .wasm via
+  // import.meta.url, so we hand the webview an explicit, CSP-allowed asset URI to fetch.
+  const wasmUri = webview
+    .asWebviewUri(vscode.Uri.joinPath(extensionUri, 'media', 'wasm', 'doc_wasm_bg.wasm'))
+    .toString();
   const workspaceUri = workspaceRoot
     ? webview.asWebviewUri(vscode.Uri.file(workspaceRoot)).toString()
     : '';
@@ -555,16 +558,20 @@ function getWebviewAssetUris(webview, extensionUri) {
   return {
     stylesUri,
     webviewUri,
+    wasmUri,
     workspaceUri,
     workspaceRoot,
   };
 }
 
 function configureDocWebview(webview, extensionUri, workspaceRoot) {
+  const buildRoot = vscode.Uri.file(path.join(__dirname, '..', '..'));
+
   webview.options = {
     enableScripts: true,
     localResourceRoots: [
       vscode.Uri.joinPath(extensionUri, 'media'),
+      buildRoot,
       ...(workspaceRoot ? [vscode.Uri.file(workspaceRoot)] : []),
     ],
   };
@@ -583,6 +590,8 @@ function extractDiffUrisFromInput(input) {
     { original: input.original, modified: input.modified },
     { original: input.left, modified: input.right },
     { original: input.base, modified: input.target },
+    { original: input.before, modified: input.after },
+    { original: input.source, modified: input.destination },
   ];
 
   for (const candidate of candidates) {
@@ -597,6 +606,46 @@ function extractDiffUrisFromInput(input) {
   return null;
 }
 
+function isLikelyDxUri(uri) {
+  if (!isUriLike(uri)) {
+    return false;
+  }
+
+  const relativePath = toWorkspaceRelativeDocPath(uri);
+  if (relativePath) {
+    return true;
+  }
+
+  const rawPath = String(uri?.path || '').trim();
+
+  let decodedPath = rawPath;
+  try {
+    decodedPath = decodeURIComponent(rawPath || '');
+  } catch {
+    decodedPath = rawPath;
+  }
+
+  if (rawPath.endsWith('.dx') || decodedPath.endsWith('.dx')) {
+    return true;
+  }
+
+  if (uri?.scheme === CHAT_SNAPSHOT_SCHEME) {
+    const absolutePath = decodeAbsolutePathFromSnapshotUri(uri);
+    if (absolutePath && absolutePath.endsWith('.dx')) {
+      return true;
+    }
+  }
+
+  if (uri?.scheme === 'file') {
+    const filePath = String(uri?.fsPath || '');
+    if (filePath.endsWith('.dx')) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 function isDxDiffInput(input) {
   const diffUris = extractDiffUrisFromInput(input);
 
@@ -604,9 +653,7 @@ function isDxDiffInput(input) {
     return false;
   }
 
-  const originalRelativePath = toWorkspaceRelativeDocPath(diffUris.originalUri);
-  const modifiedRelativePath = toWorkspaceRelativeDocPath(diffUris.modifiedUri);
-  return Boolean(originalRelativePath || modifiedRelativePath);
+  return isLikelyDxUri(diffUris.originalUri) || isLikelyDxUri(diffUris.modifiedUri);
 }
 
 function getDxDiffInputUris(input) {
@@ -694,7 +741,7 @@ async function openUnifiedDxDiffPanel(extensionUri, originalUri, modifiedUri) {
 
   const originalTitle = formatDiffSideTitle(oldUri, 'old');
   const modifiedTitle = formatDiffSideTitle(newUri, 'new');
-  const panelTitle = `${originalTitle} (old) ↔ ${modifiedTitle} (current)`;
+  const panelTitle = `${originalTitle} ↔ ${modifiedTitle}`;
 
   if (!panel) {
     panel = vscode.window.createWebviewPanel(
@@ -713,7 +760,7 @@ async function openUnifiedDxDiffPanel(extensionUri, originalUri, modifiedUri) {
   }
   panel.title = panelTitle;
 
-  const { stylesUri, webviewUri, workspaceUri, workspaceRoot } = getWebviewAssetUris(panel.webview, extensionUri);
+  const { stylesUri, webviewUri, wasmUri, workspaceUri, workspaceRoot } = getWebviewAssetUris(panel.webview, extensionUri);
   configureDocWebview(panel.webview, extensionUri, workspaceRoot);
 
   let initialTheme = 'auto';
@@ -789,6 +836,7 @@ async function openUnifiedDxDiffPanel(extensionUri, originalUri, modifiedUri) {
     workspaceUri,
     'new',
     oldSource,
+    wasmUri,
   );
 
   const hasResolvedDiff = Boolean(oldSource && newSource && oldSource !== newSource);
@@ -804,6 +852,7 @@ async function openUnifiedDxDiffPanel(extensionUri, originalUri, modifiedUri) {
       initialAppearance,
       stylesUri,
       webviewUri,
+      wasmUri,
       workspaceUri,
       workspaceRoot,
       baselineHeadSource,
@@ -889,6 +938,7 @@ async function refreshUnifiedDiffWhenSnapshotReady({
   initialAppearance,
   stylesUri,
   webviewUri,
+  wasmUri,
   workspaceUri,
   workspaceRoot,
   baselineHeadSource,
@@ -943,6 +993,7 @@ async function refreshUnifiedDiffWhenSnapshotReady({
       workspaceUri,
       'new',
       nextOldSource,
+      wasmUri,
     );
     return;
   }
@@ -1134,7 +1185,7 @@ async function getDocRuntime() {
 
   runtimeRoot = workspaceRoot;
   runtimePromise = (async () => {
-    const srcDir = path.join(workspaceRoot, 'build', 'runtime', 'src');
+    const srcDir = path.join(__dirname, '..', 'src');
     const serviceModule = await import(pathToFileURL(path.join(srcDir, 'doc-service.js')).href);
     const archiveModule = await import(pathToFileURL(path.join(srcDir, 'doc-archive.js')).href);
 
@@ -1587,7 +1638,7 @@ function getWorkspaceRoot() {
   return fileFolder ? fileFolder.uri.fsPath : null;
 }
 
-function renderEditorHtml(relativePath, sourceText, errorText = '', initialTheme = 'auto', initialAppearance = null, cspSource = "'none'", stylesUri = '', webviewUri = '', workspaceUri = '', diffRole = 'none', comparisonSourceText = '') {
+function renderEditorHtml(relativePath, sourceText, errorText = '', initialTheme = 'auto', initialAppearance = null, cspSource = "'none'", stylesUri = '', webviewUri = '', workspaceUri = '', diffRole = 'none', comparisonSourceText = '', wasmUri = '') {
   const appearance = normalizeInitialAppearance(initialAppearance);
   const initialScale = String(appearance.scale / 100);
   function escapeHtml(value) {
@@ -1805,7 +1856,7 @@ function renderEditorHtml(relativePath, sourceText, errorText = '', initialTheme
           </div>
         </div>
       </div>
-      <div id="doc-init" data-doc-path="${escapeHtml(relativePath || 'unknown.dx')}" data-doc-error="${escapeHtml(errorText || '')}" data-initial-theme="${escapeHtml(initialTheme || 'auto')}" data-initial-paper="${escapeHtml(appearance.paper)}" data-initial-density="${escapeHtml(appearance.density)}" data-initial-scale="${escapeHtml(String(appearance.scale))}" data-workspace-uri="${escapeHtml(workspaceUri || '')}" data-diff-role="${escapeHtml(diffRole || 'none')}" hidden></div>
+      <div id="doc-init" data-doc-path="${escapeHtml(relativePath || 'unknown.dx')}" data-doc-error="${escapeHtml(errorText || '')}" data-initial-theme="${escapeHtml(initialTheme || 'auto')}" data-initial-paper="${escapeHtml(appearance.paper)}" data-initial-density="${escapeHtml(appearance.density)}" data-initial-scale="${escapeHtml(String(appearance.scale))}" data-workspace-uri="${escapeHtml(workspaceUri || '')}" data-wasm-uri="${escapeHtml(wasmUri || '')}" data-diff-role="${escapeHtml(diffRole || 'none')}" hidden></div>
       <textarea id="doc-init-source" hidden>${escapeHtml(sourceText || '')}</textarea>
       <textarea id="doc-init-compare-source" hidden>${escapeHtml(comparisonSourceText || '')}</textarea>
       ${initialLoadNote}
@@ -1856,7 +1907,7 @@ function renderEditorHtml(relativePath, sourceText, errorText = '', initialTheme
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${cspSource}; script-src ${cspSource}; img-src ${cspSource} data: https:; font-src ${cspSource} https:;" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${cspSource}; script-src ${cspSource} 'wasm-unsafe-eval'; img-src ${cspSource} data: https:; font-src ${cspSource} https:;" />
     <link rel="stylesheet" href="${stylesUri}" />
   </head>
   <body data-theme="${escapeHtml(initialTheme || 'auto')}" data-paper="${escapeHtml(appearance.paper)}" data-density="${escapeHtml(appearance.density)}">
@@ -2058,34 +2109,8 @@ class DocDbCustomEditorProvider {
   }
 
   async resolveCustomTextEditor(document, webviewPanel) {
-    const { stylesUri, webviewUri, workspaceUri, workspaceRoot } = getWebviewAssetUris(webviewPanel.webview, this._extensionUri);
+    const { stylesUri, webviewUri, wasmUri, workspaceUri, workspaceRoot } = getWebviewAssetUris(webviewPanel.webview, this._extensionUri);
     configureDocWebview(webviewPanel.webview, this._extensionUri, workspaceRoot);
-
-    const autoRouteToUnified = vscode.workspace.getConfiguration('docdb').get('unifiedDiffAutoOpen', true);
-    const automaticDiffContext = getUnifiedDiffContextForDocument(document.uri);
-
-    if (autoRouteToUnified && automaticDiffContext?.otherUri) {
-      const normalizedPair = automaticDiffContext.diffRole === 'old'
-        ? { originalUri: document.uri, modifiedUri: automaticDiffContext.otherUri }
-        : { originalUri: automaticDiffContext.otherUri, modifiedUri: document.uri };
-      const routeKey = toUnifiedDiffPairKey(normalizedPair.originalUri, normalizedPair.modifiedUri);
-
-      if (!unifiedDiffAutoRouteInFlight.has(routeKey)) {
-        unifiedDiffAutoRouteInFlight.add(routeKey);
-        try {
-          const opened = await openUnifiedDxDiffPanel(this._extensionUri, normalizedPair.originalUri, normalizedPair.modifiedUri);
-          if (opened?.originalUri && opened?.modifiedUri) {
-            await closeAllNativeDxDiffTabs();
-          }
-          webviewPanel.dispose();
-          return;
-        } catch {
-          // Keep native editor open if unified auto-route fails.
-        } finally {
-          unifiedDiffAutoRouteInFlight.delete(routeKey);
-        }
-      }
-    }
 
     const relativePath = toWorkspaceRelativeDocPath(document.uri);
 
@@ -2109,7 +2134,7 @@ class DocDbCustomEditorProvider {
     }
 
     if (!relativePath) {
-      webviewPanel.webview.html = renderEditorHtml('', '', 'Unable to map this file into workspace-relative .dx path.', initialTheme, initialAppearance, webviewPanel.webview.cspSource, stylesUri, webviewUri, workspaceUri);
+      webviewPanel.webview.html = renderEditorHtml('', '', 'Unable to map this file into workspace-relative .dx path.', initialTheme, initialAppearance, webviewPanel.webview.cspSource, stylesUri, webviewUri, workspaceUri, 'none', '', wasmUri);
       return;
     }
 
@@ -2167,7 +2192,7 @@ class DocDbCustomEditorProvider {
       }
     }
 
-    webviewPanel.webview.html = renderEditorHtml(relativePath, sourceText, loadError, initialTheme, initialAppearance, webviewPanel.webview.cspSource, stylesUri, webviewUri, workspaceUri, diffRole, comparisonSourceText);
+    webviewPanel.webview.html = renderEditorHtml(relativePath, sourceText, loadError, initialTheme, initialAppearance, webviewPanel.webview.cspSource, stylesUri, webviewUri, workspaceUri, diffRole, comparisonSourceText, wasmUri);
 
     let sourcePushTimer = null;
     let suppressedEchoSource = null;
@@ -2488,13 +2513,45 @@ function activate(context) {
     return true;
   };
 
-  const maybeRouteActiveDiffToUnified = async () => {
+  const routeDiffInputToUnified = async (input, tabsToClose = []) => {
     const autoRoute = vscode.workspace.getConfiguration('docdb').get('unifiedDiffAutoOpen', true);
 
     if (!autoRoute) {
-      return;
+      return false;
     }
 
+    const resolved = getDxDiffInputUris(input);
+
+    if (!resolved) {
+      return false;
+    }
+
+    const routeKey = toUnifiedDiffPairKey(resolved.originalUri, resolved.modifiedUri);
+
+    if (unifiedDiffAutoRouteInFlight.has(routeKey)) {
+      return false;
+    }
+
+    unifiedDiffAutoRouteInFlight.add(routeKey);
+
+    try {
+      if (Array.isArray(tabsToClose) && tabsToClose.length > 0) {
+        await vscode.window.tabGroups.close(tabsToClose, true);
+      } else {
+        await closeAllNativeDxDiffTabs();
+      }
+
+      await openUnifiedDiffFromInput(input);
+      return true;
+    } catch {
+      // If unified routing fails, keep native diff view intact.
+      return false;
+    } finally {
+      unifiedDiffAutoRouteInFlight.delete(routeKey);
+    }
+  };
+
+  const maybeRouteActiveDiffToUnified = async () => {
     const activeTabGroup = vscode.window.tabGroups.activeTabGroup;
     const input = activeTabGroup?.activeTab?.input;
 
@@ -2502,28 +2559,7 @@ function activate(context) {
       return;
     }
 
-    const resolved = getDxDiffInputUris(input);
-
-    if (!resolved) {
-      return;
-    }
-
-    const routeKey = toUnifiedDiffPairKey(resolved.originalUri, resolved.modifiedUri);
-
-    if (unifiedDiffAutoRouteInFlight.has(routeKey)) {
-      return;
-    }
-
-    unifiedDiffAutoRouteInFlight.add(routeKey);
-
-    try {
-      void closeAllNativeDxDiffTabs();
-      await openUnifiedDiffFromInput(input);
-    } catch {
-      // If unified routing fails, keep native diff view intact.
-    } finally {
-      unifiedDiffAutoRouteInFlight.delete(routeKey);
-    }
+    await routeDiffInputToUnified(input);
   };
 
   context.subscriptions.push(
@@ -2598,7 +2634,7 @@ function activate(context) {
         }
         const { relativePath: rp, panelTitle: pt } = savedState;
         webviewPanel.title = String(pt || rp);
-        const { stylesUri, webviewUri, workspaceUri, workspaceRoot } = getWebviewAssetUris(webviewPanel.webview, context.extensionUri);
+        const { stylesUri, webviewUri, wasmUri, workspaceUri, workspaceRoot } = getWebviewAssetUris(webviewPanel.webview, context.extensionUri);
         configureDocWebview(webviewPanel.webview, context.extensionUri, workspaceRoot);
         let initialTheme = 'auto';
         try { initialTheme = String((await readUiConfig())?.theme || 'auto'); } catch {}
@@ -2626,6 +2662,7 @@ function activate(context) {
           workspaceUri,
           hasDiff ? 'new' : 'none',
           hasDiff ? oldSource : '',
+          wasmUri,
         );
         if (!unifiedDiffPanelState || unifiedDiffPanelState.panel !== webviewPanel) {
           unifiedDiffPanelState = { panel: webviewPanel, pairKey: rp };
@@ -2640,7 +2677,17 @@ function activate(context) {
   );
 
   context.subscriptions.push(
-    vscode.window.tabGroups.onDidChangeTabs(() => {
+    vscode.window.tabGroups.onDidChangeTabs((event) => {
+      const openedDiffTabs = Array.isArray(event?.opened)
+        ? event.opened.filter((tab) => isDxDiffInput(tab?.input))
+        : [];
+
+      if (openedDiffTabs.length > 0) {
+        const firstOpenedDiffTab = openedDiffTabs[0];
+        void routeDiffInputToUnified(firstOpenedDiffTab.input, openedDiffTabs);
+        return;
+      }
+
       void maybeRouteActiveDiffToUnified();
     })
   );

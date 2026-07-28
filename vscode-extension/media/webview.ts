@@ -11,9 +11,11 @@ import {
   parseAttributes,
   parseBlock,
   parseDoc,
+  setSourceBlockParser,
   stringifyBlock,
   stringifyDoc,
 } from './webview-doc-model.js';
+import { initDocCore, isDocCoreReady, wasmParseSourceBlocks } from './doc-core-wasm.js';
 import { BlockSourceController, InlineCssSurfaceController } from './webview-edit-controllers.js';
 import { registerBlockInteractionEvents } from './webview-events.js';
 import {
@@ -2579,8 +2581,32 @@ function initializeDocument() {
   }
 }
 
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', initializeDocument);
-} else {
+/**
+ * Boot the webview: initialize the Rust `doc-core` wasm parser (if a wasm URL was injected),
+ * route parsing through it, then run the normal document initialization. wasm init is async and
+ * best-effort — on any failure the editor falls back to the TypeScript parser. The DOM must be
+ * ready before `initializeDocument` reads `#doc-init`, so this is invoked from the DOM hook.
+ */
+async function bootWebview(): Promise<void> {
+  const initEl = document.getElementById('doc-init');
+  const wasmUri = initEl && initEl.dataset ? String(initEl.dataset.wasmUri || '') : '';
+  if (wasmUri) {
+    try {
+      const ok = await initDocCore(wasmUri);
+      if (ok && isDocCoreReady()) {
+        setSourceBlockParser(wasmParseSourceBlocks);
+      }
+    } catch {
+      // initDocCore never rejects, but guard anyway: the TS parser remains the default.
+    }
+  }
   initializeDocument();
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', () => {
+    void bootWebview();
+  });
+} else {
+  void bootWebview();
 }

@@ -1,0 +1,10 @@
+[package]
+name = "doc-run"
+description = "Executes the runnable code blocks in a .dx document and folds the captured output back into the document."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+doc-core = { path = "../doc-core" }

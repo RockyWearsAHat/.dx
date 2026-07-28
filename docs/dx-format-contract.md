@@ -77,7 +77,7 @@ In-document CSS code blocks are content by default.
 
 ## Persisted View State Contract
 
-View state in SQLite may include:
+Persisted view state (`.doc/view-state.json`) may include:
 
 - `theme`, `resolvedTheme`
 - `appearance`

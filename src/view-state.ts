@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { sha256Hex } from './core/digest.js';
 
 export interface DocumentViewAppearance {
   paper: 'white' | 'cream' | 'slate';
@@ -36,7 +36,7 @@ function sanitizeEditBuffer(input: string): string {
 }
 
 export function computeSourceHash(sourceText: string | number | boolean | null | undefined | object): string {
-  return createHash('sha256').update(String(sourceText || ''), 'utf8').digest('hex');
+  return sha256Hex(String(sourceText || ''));
 }
 
 function sanitizeAppearance(input: string | number | boolean | null | undefined | object): DocumentViewAppearance {

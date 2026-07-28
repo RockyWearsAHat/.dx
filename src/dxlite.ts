@@ -1,5 +1,5 @@
-import { createHash } from 'node:crypto';
 import { brotliCompressSync, brotliDecompressSync, constants as zlibConstants } from 'node:zlib';
+import { sha256Hex } from './core/digest.js';
 import { mkdir, readFile, stat, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
@@ -285,7 +285,7 @@ function decodeBundleArchive(buffer: Buffer): DxliteArchiveContainer | null {
   for (const header of headers) {
     const packed = uncompressed.subarray(off, off + header.packedLen);
     off += header.packedLen;
-    const sha256 = header.sha256 || createHash('sha256').update(packed).digest('hex');
+    const sha256 = header.sha256 || sha256Hex(packed);
     documents[header.relativePath] = {
       sha256,
       packedBytes: header.packedLen,

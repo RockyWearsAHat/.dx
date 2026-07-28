@@ -1,0 +1,21 @@
+[package]
+name = "doc-wasm"
+description = "WebAssembly bindings for doc-core: the same Rust DOCSRC parser, binary codec, compressor, digest, and search index, exposed to JavaScript so the editor and the backend share one parser."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+# The bundled wasm-opt is older than the bulk-memory ops LLVM now emits by default;
+# enable that feature so the optimizer accepts (and keeps optimizing) the module.
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = ["-O", "--enable-bulk-memory"]
+
+[dependencies]
+doc-core = { path = "../doc-core" }
+wasm-bindgen = "0.2"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"

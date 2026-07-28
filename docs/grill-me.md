@@ -31,8 +31,8 @@ Use this checklist to challenge any .dx parser, renderer, or save-path change.
 
 ## Storage and Canonicalization
 
-1. Does SQLite remain canonical for source/view state after this change?
-2. Is `.doc` transport mirrored from DB, not treated as source of truth?
+1. Do the bundle archives remain canonical for source after this change (and `.doc/view-state.json` for view state)?
+2. Are on-disk `.dx` stubs treated as pointers, not as the source of truth?
 3. Can ingest from stub/archive produce different block semantics than direct save?
 4. Can source reconstruction produce a non-canonical form?
 

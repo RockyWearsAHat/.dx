@@ -1,0 +1,164 @@
+{
+  "name": "dx-documents",
+  "displayName": "DX Documents",
+  "description": "Open .dx documents as rendered pages, edit their source, and run the code inside them.",
+  "version": "1.0.0",
+  "publisher": "dx",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Notebooks",
+    "Visualization"
+  ],
+  "keywords": [
+    "dx",
+    "documentation",
+    "notebook",
+    "literate programming"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onLanguage:dx"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "dx",
+        "aliases": [
+          "DX Document",
+          "dx"
+        ],
+        "extensions": [
+          ".dx"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "dx",
+        "scopeName": "source.dx",
+        "path": "./syntaxes/dx.tmLanguage.json"
+      }
+    ],
+    "customEditors": [
+      {
+        "viewType": "dx.document",
+        "displayName": "DX Document",
+        "selector": [
+          {
+            "filenamePattern": "*.dx"
+          }
+        ],
+        "priority": "default"
+      }
+    ],
+    "commands": [
+      {
+        "command": "dx.editSource",
+        "title": "DX: Edit Source",
+        "icon": "$(code)"
+      },
+      {
+        "command": "dx.showRendered",
+        "title": "DX: Show Rendered Document",
+        "icon": "$(book)"
+      },
+      {
+        "command": "dx.run",
+        "title": "DX: Run Code Blocks",
+        "icon": "$(play)"
+      },
+      {
+        "command": "dx.exportHtml",
+        "title": "DX: Export as HTML"
+      },
+      {
+        "command": "dx.exportPng",
+        "title": "DX: Export as Image"
+      },
+      {
+        "command": "dx.copyMarkdown",
+        "title": "DX: Copy as Markdown"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "dx.showRendered",
+          "when": "resourceExtname == .dx && activeEditor == 'workbench.editors.files.textFileEditor'",
+          "group": "navigation"
+        },
+        {
+          "command": "dx.run",
+          "when": "resourceExtname == .dx",
+          "group": "navigation"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "dx.editSource",
+          "when": "resourceExtname == .dx"
+        },
+        {
+          "command": "dx.showRendered",
+          "when": "resourceExtname == .dx"
+        },
+        {
+          "command": "dx.run",
+          "when": "resourceExtname == .dx"
+        },
+        {
+          "command": "dx.exportHtml",
+          "when": "resourceExtname == .dx"
+        },
+        {
+          "command": "dx.exportPng",
+          "when": "resourceExtname == .dx"
+        },
+        {
+          "command": "dx.copyMarkdown",
+          "when": "resourceExtname == .dx"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "DX Documents",
+      "properties": {
+        "dx.theme": {
+          "type": "string",
+          "enum": [
+            "match-editor",
+            "auto",
+            "light",
+            "dark"
+          ],
+          "default": "match-editor",
+          "description": "Palette used when rendering a .dx document."
+        },
+        "dx.documentCss": {
+          "type": "boolean",
+          "default": false,
+          "description": "Apply a document's own ::style blocks when rendering it."
+        },
+        "dx.cliPath": {
+          "type": "string",
+          "default": "dx",
+          "description": "Path to the dx command line, used for running code blocks and exporting images."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsc -p .",
+    "package": "npm run build && npx --yes @vscode/vsce package --no-dependencies --allow-missing-repository"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/vscode": "^1.90.0",
+    "typescript": "^5.6.0"
+  }
+}
