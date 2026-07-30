@@ -1,66 +1,11 @@
 //! Line-level matchers for the DOCSRC block scanner.
 //!
-//! These ports of the reference's per-line regexes recognize block headers, inline
-//! `::type … ::end` blocks, synthetic-wrapper triples, list markers, and checklist items.
-//! They are pure functions over a single line (or the whole body, for the wrapper unwrap)
-//! and carry no block-assembly state — that lives in [`super::parse`].
+//! These matchers recognize block headers, inline `::type … ::end` blocks, list markers,
+//! and checklist items. They are pure functions over a single line and carry no
+//! block-assembly state — that lives in [`super::parse`].
 
 use super::util::{js_trim, strip_leading_inline_ws};
 use crate::model::Item;
-
-/// Unwrap the broken `::paragraph id=paragraph-N` / line / `::end` triples that an earlier
-/// renderer could persist, replacing each with just its wrapped line. Port of
-/// `unwrapSyntheticParagraphWrappers`.
-pub(super) fn unwrap_synthetic_paragraph_wrappers(source: &str) -> String {
-    let normalized = source.replace("\r\n", "\n");
-    let input: Vec<&str> = normalized.split('\n').collect();
-    let mut output: Vec<String> = Vec::with_capacity(input.len());
-
-    let mut i = 0;
-    while i < input.len() {
-        let line = input[i];
-        let trimmed = js_trim(line);
-        if is_synthetic_paragraph_open(trimmed) && i + 2 < input.len() {
-            let wrapped = input[i + 1];
-            let close = js_trim(input[i + 2]);
-            if close == "::end" {
-                output.push(wrapped.to_string());
-                i += 3;
-                continue;
-            }
-        }
-        output.push(line.to_string());
-        i += 1;
-    }
-
-    output.join("\n")
-}
-
-/// Match `::paragraph id=paragraph-<digits>` (case-insensitive, optional trailing spaces).
-/// Port of `/^::paragraph\s+id=paragraph-\d+\s*$/i`.
-fn is_synthetic_paragraph_open(trimmed: &str) -> bool {
-    let lower = trimmed.to_lowercase();
-    let rest = match lower.strip_prefix("::paragraph") {
-        Some(rest) => rest,
-        None => return false,
-    };
-    let rest = rest.trim_start_matches([' ', '\t']);
-    if rest.len() == lower.len() - "::paragraph".len() {
-        // No whitespace separated `::paragraph` from the rest: `\s+` failed.
-        return false;
-    }
-    let rest = match rest.strip_prefix("id=paragraph-") {
-        Some(rest) => rest,
-        None => return false,
-    };
-    let digits_end = rest
-        .find(|c: char| !c.is_ascii_digit())
-        .unwrap_or(rest.len());
-    if digits_end == 0 {
-        return false;
-    }
-    rest[digits_end..].chars().all(|c| c == ' ' || c == '\t')
-}
 
 /// Match a full-line block header `::type` with an optional attribute remainder.
 /// Returns `(type, remainder)`; `None` when the trimmed line is not a header.

@@ -4,11 +4,15 @@
 //! byte-for-byte identical to the TypeScript reference (`src/core/digest.ts`) and to
 //! `openssl`/Node `crypto`. Used to fingerprint packed documents and source text.
 
+/// Lowercase hex digits, indexed by nibble value.
+const HEX_DIGITS: &[u8; 16] = b"0123456789abcdef";
+
 /// Render bytes as a lowercase hex string.
 fn to_hex(bytes: &[u8]) -> String {
     let mut hex = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
-        hex.push_str(&format!("{byte:02x}"));
+        hex.push(char::from(HEX_DIGITS[usize::from(byte >> 4)]));
+        hex.push(char::from(HEX_DIGITS[usize::from(byte & 0x0f)]));
     }
     hex
 }
@@ -36,7 +40,12 @@ const SHA256_K: [u32; 64] = [
 fn padded(message: &[u8]) -> Vec<u8> {
     let bit_len = (message.len() as u64) * 8;
     let with_terminator = message.len() + 1;
-    let total = with_terminator + ((56usize.wrapping_sub(with_terminator % 64) + 64) % 64) + 8;
+    // Zero-fill until the 8-byte length field lands exactly at a block boundary. Adding 64
+    // before the modulo keeps the arithmetic positive: subtracting first underflows `usize`
+    // whenever the terminated message is more than 56 bytes into its final block, which
+    // then panicked on the following add in debug builds.
+    let zero_fill = (56 + 64 - (with_terminator % 64)) % 64;
+    let total = with_terminator + zero_fill + 8;
 
     let mut buffer = vec![0u8; total];
     buffer[..message.len()].copy_from_slice(message);
@@ -203,6 +212,35 @@ mod tests {
         assert_eq!(
             sha1_hex(b"The quick brown fox jumps over the lazy dog"),
             "2fd4e1c67a2d28fced849ee1bb76e7391b93eb12"
+        );
+    }
+
+    #[test]
+    fn every_message_length_across_a_block_boundary_hashes_without_panicking() {
+        // Padding used to underflow `usize` for lengths 56..=62 (mod 64) and then panic on
+        // the following add in a debug build — so hashing ordinary text could abort.
+        for length in 0..200usize {
+            let message = vec![b'a'; length];
+            assert_eq!(sha256_hex(&message).len(), 64, "sha256 failed at {length}");
+            assert_eq!(sha1_hex(&message).len(), 40, "sha1 failed at {length}");
+        }
+    }
+
+    #[test]
+    fn digests_at_the_padding_edges_match_known_values() {
+        // 55, 56, and 64 bytes are the boundary cases: the last fits with the length field,
+        // the next forces an extra block, and the third is exactly one block.
+        assert_eq!(
+            sha256_hex(&[b'a'; 55]),
+            "9f4390f8d30c2dd92ec9f095b65e2b9ae9b0a925a5258e241c9f1e910f734318"
+        );
+        assert_eq!(
+            sha256_hex(&[b'a'; 56]),
+            "b35439a4ac6f0948b6d6f9e3c6af0f5f590ce20f1bde7090ef7970686ec6738a"
+        );
+        assert_eq!(
+            sha256_hex(&[b'a'; 64]),
+            "ffe054fe7ae0cb6dc65c3af9b61d5209f439851db43d0ba5997337df154668eb"
         );
     }
 }

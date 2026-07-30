@@ -106,12 +106,26 @@ mod tests {
     }
 
     #[test]
-    fn unwraps_synthetic_paragraph_wrapper() {
-        // The wrapper unwraps to a bare line with no block markers, leaving no blocks, so
-        // normalization inserts the default paragraph — exactly as the TS reference does.
+    fn a_paragraph_with_a_generated_id_is_not_mistaken_for_a_wrapper() {
+        // `paragraph-N` is exactly the id the writer assigns an unnamed paragraph. Treating
+        // it as a legacy wrapper to unwrap meant writing a document and reading it back
+        // destroyed the paragraph, replacing it with the default placeholder.
+        let input = "::paragraph id=paragraph-12\nSome line here\n::end\n";
+        assert_eq!(round_trip(input), input);
+    }
+
+    #[test]
+    fn an_unnamed_paragraph_survives_a_write_then_read() {
+        // The writer generates `paragraph-2` here; reading that back must return it intact.
+        let written = round_trip("::heading level=1 id=h\nT\n::end\n\n::paragraph\nBody.\n::end\n");
+        assert!(
+            written.contains("Body."),
+            "paragraph body lost on write: {written}"
+        );
         assert_eq!(
-            round_trip("::paragraph id=paragraph-12\nSome line here\n::end\n"),
-            "::paragraph id=paragraph-1\nStart writing here.\n::end\n"
+            round_trip(&written),
+            written,
+            "write/read is not a fixed point"
         );
     }
 

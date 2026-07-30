@@ -1,8 +1,8 @@
 //! Throughput micro-benchmark for the `doc-core` engine, using only `std::time`.
 //!
 //! This is a *measurement* example, not a test: it times each core operation
-//! (`digest`, `compress`/`decompress`, `docbin` pack/unpack, `format` parse/stringify,
-//! `bundle` encode/decode, and `search` build/query) on representative inputs and prints
+//! (`digest`, `compress`/`decompress`, `chunk` split/encode/decode, `format`
+//! parse/stringify, and `search` build/query) on representative inputs and prints
 //! a fixed-width table of nanoseconds-per-op plus MB/s where a byte rate makes sense.
 //!
 //! It deliberately avoids any external benchmark crate (no Criterion): a simple warm-up
@@ -18,9 +18,9 @@
 
 use std::time::Instant;
 
-use doc_core::bundle::{BundleEntry, GitFlags};
+use doc_core::chunk::Pack;
 use doc_core::model::Document;
-use doc_core::{bundle, compress, digest, docbin, format, search};
+use doc_core::{chunk, compress, digest, format, search};
 
 /// One real example document, embedded so the bench needs no filesystem access.
 const WELCOME_DX: &str = include_str!("../../../examples/welcome.dx");
@@ -67,7 +67,8 @@ fn main() {
 
     // The largest example document, parsed once for the codec/stringify rows.
     let doc: Document = format::parse(WELCOME_DX);
-    let packed = docbin::pack(&doc);
+    let chunks = chunk::split(&doc);
+    let chunk_bytes: usize = chunks.iter().map(chunk::Chunk::len).sum();
 
     // A small multi-document corpus for the search rows.
     let corpus: Vec<(String, Document)> = vec![
@@ -80,16 +81,9 @@ fn main() {
     ];
     let index = search::build_index(&corpus);
 
-    // A bundle of the three packed docs for the archive rows.
-    let entries: Vec<BundleEntry> = corpus
-        .iter()
-        .map(|(path, document)| BundleEntry {
-            path: path.clone(),
-            git: GitFlags::default(),
-            packed: docbin::pack(document),
-        })
-        .collect();
-    let bundle_bytes = bundle::encode_bundle(&entries);
+    // A pack of the three documents for the storage rows.
+    let pack = Pack::build(corpus.iter().map(|(path, doc)| (path.as_str(), doc)));
+    let pack_bytes = chunk::encode_pack(&pack);
 
     println!("doc-core micro-benchmark (mean of {ITERS} iters, release)\n");
     println!("{:<28} {:>13}   {:>13}", "operation", "ns/op", "throughput");
@@ -112,12 +106,9 @@ fn main() {
         compress::decompress(&frame).expect("valid frame")
     });
 
-    // ---- docbin pack / unpack -------------------------------------------------
-    time_ns("docbin::pack welcome.dx", packed.len(), || {
-        docbin::pack(&doc)
-    });
-    time_ns("docbin::unpack welcome.dx", packed.len(), || {
-        docbin::unpack(&packed).expect("valid blob")
+    // ---- chunk split ----------------------------------------------------------
+    time_ns("chunk::split welcome.dx", chunk_bytes, || {
+        chunk::split(&doc)
     });
 
     // ---- format parse / stringify --------------------------------------------
@@ -128,12 +119,12 @@ fn main() {
         format::stringify(&doc)
     });
 
-    // ---- bundle encode / decode ----------------------------------------------
-    time_ns("bundle::encode 3 docs", bundle_bytes.len(), || {
-        bundle::encode_bundle(&entries)
+    // ---- pack encode / decode -------------------------------------------------
+    time_ns("chunk::encode_pack 3 docs", pack_bytes.len(), || {
+        chunk::encode_pack(&pack)
     });
-    time_ns("bundle::decode 3 docs", bundle_bytes.len(), || {
-        bundle::decode_bundle(&bundle_bytes).expect("valid bundle")
+    time_ns("chunk::decode_pack 3 docs", pack_bytes.len(), || {
+        chunk::decode_pack(&pack_bytes).expect("valid pack")
     });
 
     // ---- search build / query -------------------------------------------------

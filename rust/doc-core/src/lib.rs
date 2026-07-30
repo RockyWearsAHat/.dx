@@ -5,12 +5,17 @@
 //! in-editor block editor). It owns every deterministic concern of the platform:
 //!
 //! - [`digest`] — SHA-256 / SHA-1 hex digests, byte-identical to the reference spec.
-//! - [`compress`] — the `dxz1` LZSS byte codec used for bundle storage.
-//! - [`docbin`] — the DOCB1 binary document codec.
+//! - [`compress`] — the `dxz1` LZSS byte codec used for chunk storage.
 //! - [`format`] — DOCSRC (`.dx`) parsing and canonical stringify.
-//! - [`bundle`] — the DXBUN5 archive container that stores many packed documents.
-//! - [`search`] — the dxlite-equivalent in-memory token search index.
+//! - [`chunk`] — content-addressed per-block chunks and the `DXCP1` pack container.
+//! - [`search`] — the in-memory token search index.
 //! - [`render`] — the document views: themed HTML, Markdown, outlines, and sections.
+//!
+//! # Storage is lossless by construction
+//! A chunk holds the exact canonical text [`format::stringify`] would write for one block,
+//! so reassembly returns the file byte-for-byte and no field can be dropped by a codec
+//! that had not heard of it. Any encoding that understands only *some* block attributes
+//! has no place here.
 //!
 //! # Design rules
 //! The crate forbids `unsafe` code and documents every public item. Fallible
@@ -21,10 +26,9 @@
 #![warn(missing_docs)]
 #![warn(clippy::all)]
 
-pub mod bundle;
+pub mod chunk;
 pub mod compress;
 pub mod digest;
-pub mod docbin;
 pub mod format;
 pub mod model;
 pub mod render;
