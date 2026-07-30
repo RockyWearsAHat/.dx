@@ -211,20 +211,22 @@ mod tests {
     }
 
     #[test]
-    fn new_creates_a_readable_document_and_refuses_to_clobber() {
+    fn new_creates_a_resolvable_document_and_refuses_to_clobber() {
         let path = scratch("new").join("release-notes.dx");
         let file = path.to_string_lossy().into_owned();
         run_new(&args(&[&file])).expect("create");
 
-        let raw = std::fs::read_to_string(&path).expect("read");
-        assert!(raw.contains("Release notes"));
-        assert!(raw.starts_with("::heading level=1"));
+        // On disk: a pointer. Through the resolver: the document.
+        assert!(doc_store::stub::is_stub(
+            &std::fs::read_to_string(&path).expect("read")
+        ));
+        let resolved = workspace::read(&path).expect("resolve");
+        assert!(resolved.contains("Release notes"));
+        assert!(resolved.starts_with("::heading level=1"));
 
         assert!(run_new(&args(&[&file])).unwrap_err().contains("--force"));
         run_new(&args(&[&file, "--force", "--title", "Renamed"])).expect("force");
-        assert!(std::fs::read_to_string(&path)
-            .expect("read")
-            .contains("Renamed"));
+        assert!(workspace::read(&path).expect("resolve").contains("Renamed"));
     }
 
     #[test]
@@ -239,7 +241,7 @@ mod tests {
 
         run_set(&args(&[&file, "body", "--text", "New text"])).expect("set");
 
-        let raw = std::fs::read_to_string(&path).expect("read");
+        let raw = workspace::read(&path).expect("resolve");
         assert!(raw.contains("New text"));
         assert!(!raw.contains("Old text"));
         assert!(raw.contains("::paragraph id=tail\nKeep me\n::end"));
@@ -275,7 +277,7 @@ mod tests {
         ]))
         .expect("append list");
 
-        let raw = std::fs::read_to_string(&path).expect("read");
+        let raw = workspace::read(&path).expect("resolve");
         assert!(raw.contains("::code id=code-2 lang=python run"));
         assert!(raw.contains("- one\n- two"));
     }

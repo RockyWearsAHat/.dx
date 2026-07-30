@@ -2,29 +2,55 @@
 //!
 //! # Shape
 //! Content lives in `chunks`, addressed by the SHA-256 of the chunk's canonical block text
-//! and stored `dxz1`-compressed. `documents` names each document; `document_chunks` records
-//! which chunks a document is made of, in order. Because the join table holds *positions*
-//! into a shared chunk pool, a block that appears in two documents — or survives an edit to
-//! its neighbours — is stored exactly once.
+//! and stored `dxz1`-compressed. A **manifest** is a whole document version: it is keyed by
+//! the digest of that version's canonical source, and `manifest_chunks` lists the chunks it is
+//! made of, in order. `documents` then just names a path and points at the manifest that is
+//! current for it.
 //!
-//! `sections` and `tokens` are derived read models: they let an agent ask for one section or
-//! search the corpus without decompressing whole documents. They are rebuilt from the
-//! chunks whenever a document is saved, so they can never disagree with the content.
+//! # Why versions are addressed, not paths
+//! Two things fall out of keying content by digest rather than by path, and both are needed:
+//!
+//! - **Git's diff driver works.** `textconv` is handed a *temporary copy* of a blob, not the
+//!   file in the workspace, so a path tells it nothing. The pointer's digest is the only
+//!   usable key — and looking a version up by digest works for any revision, which is what
+//!   makes `git log -p` and `git show` render real documents.
+//! - **History is nearly free.** An edited document shares every unchanged block with its
+//!   previous version, so keeping the old manifest costs a row per block, not a copy of the
+//!   document.
+//!
+//! `sections` and `tokens` are derived read models over the current version: they let an agent
+//! ask for one section or search the corpus without decompressing whole documents. They are
+//! rebuilt on every save, so they cannot disagree with the content.
 //!
 //! # Why no refcount column
-//! An unreferenced chunk is found by asking, not by bookkeeping: `collect_garbage` deletes
-//! the chunks no `document_chunks` row points at. A counter would be a second source of
-//! truth that could drift from the join table; a query cannot.
+//! An unreferenced chunk is found by asking, not by bookkeeping: `collect_garbage` deletes the
+//! chunks no `manifest_chunks` row points at. A counter would be a second source of truth that
+//! could drift from the join table; a query cannot.
 
 use rusqlite::Connection;
 
 use crate::StoreError;
 
-/// Current schema version. `apply` migrates an older database up to it.
-pub const VERSION: i64 = 1;
+/// Current schema version. A database at an older version is rebuilt (see [`apply`]).
+pub const VERSION: i64 = 2;
 
-/// Statements that create the version-1 schema.
-const V1: &str = "
+/// Drop every table this schema owns, in dependency order.
+///
+/// Used when an older database is opened. The index is a derived artifact — the content lives
+/// in the committed packs — so discarding and rebuilding it is safe where migrating an
+/// unreleased schema would be pointless ceremony. `Store::sync` repopulates it.
+const DROP_ALL: &str = "
+DROP TABLE IF EXISTS tokens;
+DROP TABLE IF EXISTS sections;
+DROP TABLE IF EXISTS documents;
+DROP TABLE IF EXISTS manifest_chunks;
+DROP TABLE IF EXISTS manifests;
+DROP TABLE IF EXISTS document_chunks;
+DROP TABLE IF EXISTS chunks;
+";
+
+/// Statements that create the current schema.
+const CURRENT: &str = "
 CREATE TABLE IF NOT EXISTS chunks (
     hash         TEXT PRIMARY KEY,
     bytes        BLOB NOT NULL,
@@ -32,24 +58,30 @@ CREATE TABLE IF NOT EXISTS chunks (
     compressed   INTEGER NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS documents (
-    id            INTEGER PRIMARY KEY,
-    path          TEXT NOT NULL UNIQUE,
-    title         TEXT NOT NULL,
-    summary       TEXT NOT NULL,
-    source_digest  TEXT NOT NULL,
+CREATE TABLE IF NOT EXISTS manifests (
+    digest        TEXT PRIMARY KEY,
     source_bytes  INTEGER NOT NULL,
-    local_only    INTEGER NOT NULL DEFAULT 0,
-    updated_at    TEXT NOT NULL
+    created_at    TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS document_chunks (
-    document_id  INTEGER NOT NULL,
-    position     INTEGER NOT NULL,
-    chunk_hash   TEXT NOT NULL,
-    PRIMARY KEY (document_id, position),
-    FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE,
+CREATE TABLE IF NOT EXISTS manifest_chunks (
+    digest      TEXT NOT NULL,
+    position    INTEGER NOT NULL,
+    chunk_hash  TEXT NOT NULL,
+    PRIMARY KEY (digest, position),
+    FOREIGN KEY (digest) REFERENCES manifests(digest) ON DELETE CASCADE,
     FOREIGN KEY (chunk_hash) REFERENCES chunks(hash)
+);
+
+CREATE TABLE IF NOT EXISTS documents (
+    id             INTEGER PRIMARY KEY,
+    path           TEXT NOT NULL UNIQUE,
+    title          TEXT NOT NULL,
+    summary        TEXT NOT NULL,
+    source_digest  TEXT NOT NULL,
+    local_only     INTEGER NOT NULL DEFAULT 0,
+    updated_at     TEXT NOT NULL,
+    FOREIGN KEY (source_digest) REFERENCES manifests(digest)
 );
 
 CREATE TABLE IF NOT EXISTS sections (
@@ -70,7 +102,8 @@ CREATE TABLE IF NOT EXISTS tokens (
     FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE
 );
 
-CREATE INDEX IF NOT EXISTS idx_document_chunks_hash ON document_chunks(chunk_hash);
+CREATE INDEX IF NOT EXISTS idx_manifest_chunks_hash ON manifest_chunks(chunk_hash);
+CREATE INDEX IF NOT EXISTS idx_documents_digest ON documents(source_digest);
 CREATE INDEX IF NOT EXISTS idx_sections_document ON sections(document_id, position);
 CREATE INDEX IF NOT EXISTS idx_tokens_token ON tokens(token);
 ";
@@ -100,7 +133,17 @@ pub fn apply(connection: &Connection) -> Result<(), StoreError> {
         )));
     }
 
-    connection.execute_batch(V1).map_err(StoreError::backend)?;
+    if found > 0 && found < VERSION {
+        // An index written by an older dx. Rebuild rather than migrate: it is derived data,
+        // and `Store::sync` restores every document from the packs.
+        connection
+            .execute_batch(DROP_ALL)
+            .map_err(StoreError::backend)?;
+    }
+
+    connection
+        .execute_batch(CURRENT)
+        .map_err(StoreError::backend)?;
     connection
         .pragma_update(None, "user_version", VERSION)
         .map_err(StoreError::backend)?;
@@ -124,12 +167,12 @@ mod tests {
         let tables: i64 = connection
             .query_row(
                 "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name IN \
-                 ('chunks', 'documents', 'document_chunks', 'sections', 'tokens')",
+                 ('chunks', 'manifests', 'manifest_chunks', 'documents', 'sections', 'tokens')",
                 [],
                 |row| row.get(0),
             )
             .expect("count");
-        assert_eq!(tables, 5);
+        assert_eq!(tables, 6);
     }
 
     #[test]
@@ -150,21 +193,65 @@ mod tests {
     }
 
     #[test]
+    fn an_older_index_is_rebuilt_rather_than_left_broken() {
+        let connection = Connection::open_in_memory().expect("memory db");
+        // An index shaped like an earlier release, marked with its version.
+        connection
+            .execute_batch(
+                "CREATE TABLE documents (id INTEGER PRIMARY KEY, path TEXT, source_bytes INTEGER);
+                 CREATE TABLE document_chunks (document_id INTEGER, position INTEGER);",
+            )
+            .expect("old schema");
+        connection
+            .pragma_update(None, "user_version", 1)
+            .expect("mark old");
+
+        apply(&connection).expect("rebuild");
+
+        // The superseded table is gone and the current one is in place.
+        let stale: i64 = connection
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE name = 'document_chunks'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count");
+        assert_eq!(stale, 0, "the old table survived the rebuild");
+
+        // And a current-shaped insert works, which the old `documents` table would have refused.
+        connection
+            .execute_batch(
+                "INSERT INTO manifests (digest, source_bytes, created_at) VALUES ('d', 1, 'now');
+                 INSERT INTO documents (path, title, summary, source_digest, updated_at)
+                   VALUES ('a.dx', 't', '', 'd', 'now');",
+            )
+            .expect("current schema is usable");
+    }
+
+    #[test]
     fn foreign_keys_are_enforced_on_the_connection() {
         let connection = Connection::open_in_memory().expect("memory db");
         apply(&connection).expect("migrate");
         // A chunk reference with no chunk row must be refused.
         connection
             .execute(
-                "INSERT INTO documents (path, title, summary, source_digest, source_bytes, \
-                 updated_at) VALUES ('a.dx', 't', '', 'd', 1, 'now')",
+                "INSERT INTO manifests (digest, source_bytes, created_at) \
+                 VALUES ('d', 1, 'now')",
                 [],
             )
-            .expect("document");
+            .expect("manifest");
         let orphan = connection.execute(
-            "INSERT INTO document_chunks (document_id, position, chunk_hash) VALUES (1, 0, 'nope')",
+            "INSERT INTO manifest_chunks (digest, position, chunk_hash) VALUES ('d', 0, 'nope')",
             [],
         );
         assert!(orphan.is_err(), "foreign keys were not enforced");
+
+        // And a document may not point at a manifest that does not exist.
+        let dangling = connection.execute(
+            "INSERT INTO documents (path, title, summary, source_digest, updated_at) \
+             VALUES ('a.dx', 't', '', 'missing', 'now')",
+            [],
+        );
+        assert!(dangling.is_err(), "a document kept a dangling manifest");
     }
 }

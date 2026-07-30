@@ -390,7 +390,7 @@ mod tests {
     }
 
     #[test]
-    fn write_creates_a_plain_text_file_and_reports_its_ids() {
+    fn write_stores_a_document_and_reports_its_ids() {
         let root = project("write");
         let items = call(
             "dx_write",
@@ -399,8 +399,12 @@ mod tests {
         )
         .expect("write");
         assert!(text_of(&items).contains("hello"));
+        // A pointer on disk, the document through the resolver.
+        assert!(doc_store::stub::is_stub(
+            &std::fs::read_to_string(root.join("new.dx")).expect("read")
+        ));
         assert_eq!(
-            std::fs::read_to_string(root.join("new.dx")).expect("read"),
+            workspace::read(&root.join("new.dx")).expect("resolve"),
             "::paragraph id=hello\nHi there\n::end\n"
         );
     }
@@ -415,7 +419,7 @@ mod tests {
         )
         .expect("edit");
 
-        let saved = std::fs::read_to_string(root.join("guide.dx")).expect("read");
+        let saved = workspace::read(&root.join("guide.dx")).expect("resolve");
         assert!(saved.contains("Install it second."));
         assert!(saved.contains("::paragraph id=usage-body\nThen run it.\n::end"));
     }

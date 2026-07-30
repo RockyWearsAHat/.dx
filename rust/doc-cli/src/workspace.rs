@@ -1,41 +1,42 @@
-//! Reading and writing `.dx` files, and finding them in a project.
+//! The resolver: turning a `.dx` path into the document it stands for.
 //!
-//! # `.dx` files are ordinary text files
-//! This is the rule the whole platform rests on. A `.dx` file on disk is its own content —
-//! plain DOCSRC text, readable with `cat`, searchable with `grep`, diffable in a pull
-//! request, and editable by any tool or agent that can open a file. There is no database
-//! to be in sync with and no pointer to dereference. Everything else here (rendering,
-//! screenshots, execution, the MCP server) is a *view* over these bytes, never a
-//! replacement for them.
+//! # A `.dx` file is a pointer, and this is what dereferences it
+//! On disk a `.dx` file is a one-line stub carrying the digest of its content
+//! ([`doc_store::stub`]). The content lives in the workspace store. Every read in the CLI and
+//! the MCP server comes through here, and the contract is absolute: **the caller gets the
+//! true document, always.** [`read`] tries the store, then the committed packs, and only
+//! reports a failure when no source can produce the document — it never returns a pointer as
+//! if it were content, and never returns nothing where content exists.
+//!
+//! # Reading has no side effects
+//! Resolving never creates the database, never rewrites a stub, and never executes anything.
+//! A workspace that has only stubs and a committed pack — a fresh clone — resolves straight
+//! from the pack. Adoption of outside edits happens in [`sync`], which a caller asks for
+//! explicitly, or as part of a [`save`].
+//!
+//! # Writing
+//! [`save`] stores the document as chunks, rewrites its stub, and re-exports the packs, so
+//! canonical form and the on-disk pointer are always what the store says they are.
 
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use doc_core::format::{parse, stringify};
+use doc_core::format::parse;
 use doc_core::model::Document;
-use doc_core::search::build_index;
+use doc_store::{pack, stub, Stats, Store, StoreError, SyncReport};
 
-/// Directories never walked when looking for documents.
-const SKIPPED_DIRECTORIES: &[&str] = &[
-    ".git",
-    "node_modules",
-    "target",
-    "build",
-    "dist",
-    ".venv",
-    "__pycache__",
-    ".doc",
-];
+/// Markers that identify a workspace root, in the order they are trusted.
+const ROOT_MARKERS: &[&str] = &[".doc", ".git"];
 
-/// A document loaded from disk, with the path it came from.
+/// A document and the path it was resolved from.
 #[derive(Debug, Clone)]
 pub struct Loaded {
-    /// Absolute path of the file.
+    /// Absolute path of the `.dx` file (the stub).
     pub path: PathBuf,
-    /// Path relative to the search root, for display.
+    /// Path relative to the workspace root, for display.
     pub relative: String,
-    /// The parsed document.
+    /// The resolved document.
     pub document: Document,
 }
 
@@ -59,17 +60,75 @@ impl Loaded {
     }
 }
 
-/// Read and parse the document at `path`.
-pub fn load(path: &Path) -> Result<Loaded, String> {
-    let source = read(path)?;
-    Ok(Loaded {
-        path: path.to_path_buf(),
-        relative: path.to_string_lossy().into_owned(),
-        document: parse(&source),
-    })
+/// The workspace root governing `start`: the nearest ancestor holding `.doc` or `.git`.
+///
+/// Falls back to `start` itself (or its parent, when it is a file) so a document outside any
+/// project still has a well-defined store beside it.
+#[must_use]
+pub fn workspace_root(start: &Path) -> PathBuf {
+    let absolute = fs::canonicalize(start).unwrap_or_else(|_| start.to_path_buf());
+    let mut cursor: &Path = if absolute.is_dir() {
+        &absolute
+    } else {
+        absolute.parent().unwrap_or(&absolute)
+    };
+
+    loop {
+        if ROOT_MARKERS
+            .iter()
+            .any(|marker| cursor.join(marker).is_dir())
+        {
+            return cursor.to_path_buf();
+        }
+        match cursor.parent() {
+            Some(parent) if parent != cursor => cursor = parent,
+            _ => break,
+        }
+    }
+
+    if absolute.is_dir() {
+        absolute
+    } else {
+        absolute
+            .parent()
+            .map_or_else(|| PathBuf::from("."), Path::to_path_buf)
+    }
 }
 
-/// Read a file's text, or `-` for standard input.
+/// The workspace-relative form of `path`, for keying the store.
+fn relative_of(root: &Path, path: &Path) -> String {
+    let absolute = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let trimmed = absolute.strip_prefix(root).unwrap_or(&absolute);
+    stub::normalize_path(&trimmed.to_string_lossy())
+        .unwrap_or_else(|| trimmed.to_string_lossy().into_owned())
+}
+
+/// Open the workspace store at `root`, creating it if needed.
+///
+/// Use this for writes. Reads should prefer [`open_existing`] so that resolving a document
+/// never brings a database into being.
+pub fn open_store(root: &Path) -> Result<Store, String> {
+    Store::open(root).map_err(|error| error.to_string())
+}
+
+/// Open the store only if it has already been built, so reads create nothing.
+fn open_existing(root: &Path) -> Option<Store> {
+    if root.join(".doc").join("index.db").exists() {
+        Store::open(root).ok()
+    } else {
+        None
+    }
+}
+
+/// Read the canonical source of the document at `path`, or `-` for standard input.
+///
+/// Resolution order, stopping at the first that answers:
+/// 1. Plain document text sitting on disk — something other than `dx` wrote it, and it is the
+///    newest truth. Returned as found, so an external edit is never lost or second-guessed.
+/// 2. The store, when the file is a stub.
+/// 3. The committed packs, for a workspace whose index has not been built yet.
+///
+/// A stub nothing can resolve is an error that says what to run, never an empty document.
 pub fn read(path: &Path) -> Result<String, String> {
     if path == Path::new("-") {
         let mut buffer = String::new();
@@ -78,19 +137,107 @@ pub fn read(path: &Path) -> Result<String, String> {
             .map(|_| buffer)
             .map_err(|error| format!("could not read standard input: {error}"));
     }
-    fs::read_to_string(path).map_err(|error| format!("could not read {}: {error}", path.display()))
+
+    let on_disk = fs::read_to_string(path).ok();
+    let is_pointer = on_disk.as_deref().is_some_and(stub::is_stub);
+
+    if let Some(text) = &on_disk {
+        if !is_pointer {
+            return Ok(text.clone());
+        }
+    }
+
+    let root = workspace_root(path);
+    let relative = relative_of(&root, path);
+
+    if let Some(store) = open_existing(&root) {
+        match store.source(&relative) {
+            Ok(source) => return Ok(source),
+            // Not in the index yet: fall through to the packs.
+            Err(StoreError::NotFound(_)) => {}
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+
+    match pack::source(&root, &relative).map_err(|error| error.to_string())? {
+        Some(source) => Ok(source),
+        None if is_pointer => Err(format!(
+            "{} is a dx pointer, but its content is not in this workspace's store or packs; \
+             run `dx sync` to rebuild from .doc/, or restore .doc/repo.dxcp",
+            path.display()
+        )),
+        None => Err(format!("could not read {}", path.display())),
+    }
 }
 
-/// Write canonical DOCSRC for `document` to `path`, creating parent directories.
+/// Resolve whatever a `.dx` file *contains*, without trusting where it sits.
 ///
-/// Writing always goes through [`stringify`], so a file this tool touches is left in
-/// canonical form — the property that keeps two different editors from fighting over
-/// formatting.
+/// This is what git's diff driver needs. Git extracts a blob to a throwaway temporary file and
+/// runs `textconv` on that, so the path carries no information — the digest written inside the
+/// pointer is the only usable key. Because the store keeps a manifest for every version it has
+/// ever held, this resolves historical revisions too, which is what makes `git log -p` and
+/// `git show` render documents rather than digests.
+///
+/// `search_from` is where the workspace is looked for (git runs the driver from the top of the
+/// worktree). Plain document text passes straight through unchanged.
+pub fn resolve_contents(text: &str, search_from: &Path) -> Result<String, String> {
+    let Some(digest) = stub::digest_in(text) else {
+        return Ok(text.to_string());
+    };
+
+    let root = workspace_root(search_from);
+    if let Some(store) = open_existing(&root) {
+        if let Some(source) = store
+            .source_of_version(&digest)
+            .map_err(|error| error.to_string())?
+        {
+            return Ok(source);
+        }
+    }
+
+    // No index, or a version it never held: the packs still carry the current one.
+    for source in pack::load_all(&root)
+        .map_err(|error| error.to_string())?
+        .into_values()
+    {
+        if stub::digest_of(&source) == digest {
+            return Ok(source);
+        }
+    }
+
+    Err(format!(
+        "this dx pointer names version {digest}, which is not in {}'s store or packs; \
+         run `dx sync` there, or restore .doc/repo.dxcp",
+        root.display()
+    ))
+}
+
+/// Read and resolve the document at `path`.
+pub fn load(path: &Path) -> Result<Loaded, String> {
+    let source = read(path)?;
+    let root = workspace_root(path);
+    Ok(Loaded {
+        relative: relative_of(&root, path),
+        path: path.to_path_buf(),
+        document: parse(&source),
+    })
+}
+
+/// Store `document` at `path`: chunks into the store, pointer onto disk, packs re-exported.
 pub fn save(path: &Path, document: &Document) -> Result<(), String> {
-    write_text(path, &stringify(document))
+    let root = workspace_root(path);
+    let relative = relative_of(&root, path);
+    let mut store = open_store(&root)?;
+    store
+        .save(&relative, document)
+        .map(|_| ())
+        .map_err(|error| error.to_string())
 }
 
 /// Write raw text to `path`, creating parent directories as needed.
+///
+/// This is the escape hatch for output that is *not* a document — a rendered HTML page, a
+/// screenshot, a report redirected by `--out`. Documents go through [`save`].
 pub fn write_text(path: &Path, text: &str) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
@@ -109,58 +256,59 @@ pub fn document_dir(path: &Path) -> PathBuf {
         .map_or_else(|| PathBuf::from("."), Path::to_path_buf)
 }
 
-/// Find every `.dx` file under `root`, sorted by path.
-///
-/// Build outputs, dependency directories, and version-control metadata are skipped, so
-/// listing a project returns the documents a person wrote, not the ones a tool generated.
-pub fn discover(root: &Path) -> Vec<PathBuf> {
-    let mut found = Vec::new();
-    walk(root, &mut found);
-    found.sort();
-    found
+/// Reconcile the workspace at `root`: adopt plain-text documents, restore stubs from packs,
+/// and collect unreferenced chunks.
+pub fn sync(root: &Path) -> Result<SyncReport, String> {
+    open_store(root)?.sync().map_err(|error| error.to_string())
 }
 
-/// Recursively collect `.dx` files, skipping uninteresting directories.
-fn walk(directory: &Path, found: &mut Vec<PathBuf>) {
-    let Ok(entries) = fs::read_dir(directory) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let name = entry.file_name().to_string_lossy().into_owned();
-
-        if path.is_dir() {
-            let skipped = name.starts_with('.') || SKIPPED_DIRECTORIES.contains(&name.as_str());
-            if !skipped {
-                walk(&path, found);
-            }
-            continue;
-        }
-        if path.extension().is_some_and(|extension| extension == "dx") {
-            found.push(path);
-        }
+/// Storage totals for the workspace at `root`.
+pub fn stats(root: &Path) -> Result<Stats, String> {
+    match open_existing(root) {
+        Some(store) => store.stats().map_err(|error| error.to_string()),
+        None => Ok(Stats::default()),
     }
 }
 
-/// Load every document under `root`, ignoring files that cannot be read.
+/// Find every `.dx` file under `root`, sorted by path.
+#[must_use]
+pub fn discover(root: &Path) -> Vec<PathBuf> {
+    doc_store::discover_documents(root)
+}
+
+/// Resolve every document under `root`, skipping any that cannot be read.
+///
+/// Documents are found from the store when it has them and from disk otherwise, so a listing
+/// covers both what has been stored and what has only just been written by something else.
 #[must_use]
 pub fn load_all(root: &Path) -> Vec<Loaded> {
-    discover(root)
-        .into_iter()
-        .filter_map(|path| {
-            let source = fs::read_to_string(&path).ok()?;
-            let relative = path
-                .strip_prefix(root)
-                .unwrap_or(&path)
-                .to_string_lossy()
-                .into_owned();
-            Some(Loaded {
-                document: parse(&source),
-                path,
-                relative,
-            })
-        })
-        .collect()
+    let mut loaded: Vec<Loaded> = Vec::new();
+    for path in discover(root) {
+        if let Ok(document) = load(&path) {
+            loaded.push(document);
+        }
+    }
+
+    // Include stored documents whose stub is absent, so nothing stored is invisible.
+    if let Some(store) = open_existing(root) {
+        if let Ok(summaries) = store.list() {
+            for summary in summaries {
+                if loaded.iter().any(|entry| entry.relative == summary.path) {
+                    continue;
+                }
+                if let Ok(document) = store.document(&summary.path) {
+                    loaded.push(Loaded {
+                        path: root.join(&summary.path),
+                        relative: summary.path,
+                        document,
+                    });
+                }
+            }
+        }
+    }
+
+    loaded.sort_by(|a, b| a.relative.cmp(&b.relative));
+    loaded
 }
 
 /// One search hit: a document and why it matched.
@@ -173,14 +321,41 @@ pub struct Hit {
 }
 
 /// Search every document under `root` for `query`, best matches first.
+///
+/// The store answers when it has been built — it narrows candidates in SQL before ranking, so
+/// the cost tracks matches rather than corpus size. Otherwise the documents are resolved and
+/// ranked in memory, which keeps search working in a workspace with no index yet.
 #[must_use]
 pub fn search(root: &Path, query: &str, limit: usize) -> Vec<Hit> {
+    if let Some(store) = open_existing(root) {
+        if let Ok(summaries) = store.search(query, limit) {
+            let hits: Vec<Hit> = summaries
+                .into_iter()
+                .filter_map(|summary| {
+                    let document = store.document(&summary.path).ok()?;
+                    Some(Hit {
+                        // Ranking order is the store's; the score is not re-derived here.
+                        score: 1.0,
+                        document: Loaded {
+                            path: root.join(&summary.path),
+                            relative: summary.path,
+                            document,
+                        },
+                    })
+                })
+                .collect();
+            if !hits.is_empty() {
+                return hits;
+            }
+        }
+    }
+
     let documents = load_all(root);
     let indexed: Vec<(String, Document)> = documents
         .iter()
         .map(|loaded| (loaded.relative.clone(), loaded.document.clone()))
         .collect();
-    let index = build_index(&indexed);
+    let index = doc_core::search::build_index(&indexed);
 
     index
         .search(query)
@@ -203,24 +378,82 @@ mod tests {
     use super::*;
 
     fn scratch(label: &str) -> PathBuf {
-        let root = std::env::temp_dir().join(format!("dx-workspace-tests-{label}"));
+        let root = std::env::temp_dir().join(format!("dx-resolver-tests-{label}"));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).expect("scratch root");
-        root
+        // Mark it a workspace so root detection does not climb into the real repository.
+        fs::create_dir_all(root.join(".doc")).expect("marker");
+        fs::canonicalize(&root).expect("canonical root")
+    }
+
+    const NOTES: &str = "::heading level=1 id=notes\nNotes\n::end\n\n::paragraph id=p\nkubernetes scheduling notes\n::end\n";
+
+    #[test]
+    fn a_saved_document_is_a_pointer_on_disk_and_real_content_through_the_resolver() {
+        let root = scratch("pointer");
+        let path = root.join("notes.dx");
+        save(&path, &parse(NOTES)).expect("save");
+
+        let raw = fs::read_to_string(&path).expect("read raw");
+        assert!(stub::is_stub(&raw), "expected a pointer, found {raw:?}");
+        assert!(!raw.contains("kubernetes"));
+
+        assert_eq!(read(&path).expect("resolve"), NOTES);
+        assert_eq!(load(&path).expect("load").title(), "Notes");
     }
 
     #[test]
-    fn a_saved_document_is_plain_readable_text() {
-        let root = scratch("plain-text");
-        let path = root.join("notes.dx");
-        save(&path, &parse("::heading level=1 id=h\nNotes\n::end\n")).expect("save");
+    fn plain_text_written_by_anything_else_is_returned_as_the_newest_truth() {
+        let root = scratch("external-edit");
+        let path = root.join("outside.dx");
+        fs::write(&path, NOTES).expect("external write");
+        assert_eq!(read(&path).expect("resolve"), NOTES);
+    }
 
-        let raw = fs::read_to_string(&path).expect("read back");
-        assert_eq!(raw, "::heading level=1 id=h\nNotes\n::end\n");
+    #[test]
+    fn a_pointer_resolves_from_the_packs_with_no_database_present() {
+        // The fresh-clone case: stubs and repo.dxcp committed, index.db absent.
+        let root = scratch("fresh-clone");
+        let path = root.join("notes.dx");
+        save(&path, &parse(NOTES)).expect("save");
+        fs::remove_file(root.join(".doc/index.db")).expect("drop index");
+
+        assert!(stub::is_stub(
+            &fs::read_to_string(&path).expect("stub still there")
+        ));
+        assert_eq!(read(&path).expect("resolve from pack"), NOTES);
+    }
+
+    #[test]
+    fn reading_creates_nothing() {
+        let root = scratch("pure-read");
+        let path = root.join("notes.dx");
+        fs::write(&path, NOTES).expect("write");
+
+        let _ = read(&path).expect("resolve");
         assert!(
-            raw.contains("Notes"),
-            "content must be legible without tooling"
+            !root.join(".doc/index.db").exists(),
+            "resolving a document must not build a database"
         );
+    }
+
+    #[test]
+    fn an_unresolvable_pointer_says_what_to_run() {
+        let root = scratch("orphan");
+        let path = root.join("orphan.dx");
+        fs::write(&path, stub::render(NOTES)).expect("write stub");
+
+        let error = read(&path).expect_err("should fail");
+        assert!(error.contains("dx sync"), "{error}");
+        // And never passes the pointer off as content.
+        assert!(!error.contains("~ dx1"));
+    }
+
+    #[test]
+    fn a_missing_file_explains_which_one() {
+        let root = scratch("missing");
+        let error = read(&root.join("nope.dx")).expect_err("should fail");
+        assert!(error.contains("nope.dx"), "{error}");
     }
 
     #[test]
@@ -229,48 +462,24 @@ mod tests {
         let path = root.join("messy.dx");
         save(&path, &parse("::heading level=2 id=h Hello ::end\n")).expect("save");
         assert_eq!(
-            fs::read_to_string(&path).expect("read"),
+            read(&path).expect("resolve"),
             "::heading level=2 id=h\nHello\n::end\n"
         );
     }
 
     #[test]
-    fn discovery_finds_documents_and_skips_build_output() {
-        let root = scratch("discover");
-        save(&root.join("a.dx"), &parse("::paragraph id=p\na\n::end\n")).expect("a");
-        save(
-            &root.join("deep/b.dx"),
-            &parse("::paragraph id=p\nb\n::end\n"),
-        )
-        .expect("b");
-        save(
-            &root.join("node_modules/c.dx"),
-            &parse("::paragraph id=p\nc\n::end\n"),
-        )
-        .expect("c");
-        fs::write(root.join("d.txt"), "not a document").expect("txt");
-
-        let found = discover(&root);
-        assert_eq!(found.len(), 2);
-        assert!(found.iter().all(|path| path.extension().unwrap() == "dx"));
-        assert!(!found
-            .iter()
-            .any(|path| path.to_string_lossy().contains("node_modules")));
-    }
-
-    #[test]
-    fn search_ranks_the_document_that_mentions_the_term() {
+    fn listing_and_search_find_documents_through_the_store() {
         let root = scratch("search");
-        save(
-            &root.join("kubernetes.dx"),
-            &parse("::paragraph id=p\nkubernetes scheduling notes\n::end\n"),
-        )
-        .expect("k");
+        save(&root.join("kubernetes.dx"), &parse(NOTES)).expect("k");
         save(
             &root.join("recipes.dx"),
             &parse("::paragraph id=p\nbread and soup\n::end\n"),
         )
         .expect("r");
+
+        let listed = load_all(&root);
+        assert_eq!(listed.len(), 2);
+        assert_eq!(listed[0].relative, "kubernetes.dx");
 
         let hits = search(&root, "kubernetes", 10);
         assert_eq!(hits.len(), 1);
@@ -278,30 +487,45 @@ mod tests {
     }
 
     #[test]
-    fn titles_fall_back_from_metadata_to_heading_to_file_name() {
-        let root = scratch("titles");
-        let with_heading = root.join("h.dx");
-        save(
-            &with_heading,
-            &parse("::heading level=1 id=h\nReal Title\n::end\n"),
-        )
-        .expect("save");
-        assert_eq!(load(&with_heading).expect("load").title(), "Real Title");
-
-        let no_heading = root.join("plain-name.dx");
-        save(&no_heading, &parse("::paragraph id=p\nbody\n::end\n")).expect("save");
-        assert_eq!(load(&no_heading).expect("load").title(), "plain-name");
+    fn search_works_before_any_index_exists() {
+        let root = scratch("search-no-index");
+        fs::write(root.join("a.dx"), NOTES).expect("write");
+        let hits = search(&root, "kubernetes", 10);
+        assert_eq!(hits.len(), 1);
     }
 
     #[test]
-    fn reading_a_missing_file_explains_which_one() {
-        let error = load(Path::new("/dx/definitely/missing.dx")).expect_err("should fail");
-        assert!(error.contains("missing.dx"));
+    fn sync_adopts_plain_text_and_leaves_a_pointer() {
+        let root = scratch("sync");
+        let path = root.join("adopted.dx");
+        fs::write(&path, NOTES).expect("write");
+
+        let report = sync(&root).expect("sync");
+        assert_eq!(report.ingested, vec!["adopted.dx".to_string()]);
+        assert!(stub::is_stub(&fs::read_to_string(&path).expect("read")));
+        assert_eq!(read(&path).expect("resolve"), NOTES);
+    }
+
+    #[test]
+    fn the_workspace_root_is_the_nearest_marked_ancestor() {
+        let root = scratch("root-detect");
+        let nested = root.join("a/b");
+        fs::create_dir_all(&nested).expect("dirs");
+        assert_eq!(workspace_root(&nested.join("c.dx")), root);
+        assert_eq!(workspace_root(&root), root);
     }
 
     #[test]
     fn document_dir_is_where_a_blocks_relative_paths_resolve() {
         assert_eq!(document_dir(Path::new("/a/b/c.dx")), PathBuf::from("/a/b"));
         assert_eq!(document_dir(Path::new("c.dx")), PathBuf::from("."));
+    }
+
+    #[test]
+    fn write_text_is_for_output_that_is_not_a_document() {
+        let root = scratch("raw-write");
+        let path = root.join("out/page.html");
+        write_text(&path, "<p>hi</p>").expect("write");
+        assert_eq!(fs::read_to_string(&path).expect("read"), "<p>hi</p>");
     }
 }

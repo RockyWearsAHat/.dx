@@ -220,6 +220,14 @@ WRITE
   dx append   <file> --type T --text T          add a block at the end
   dx fmt      <file...> [--check]               rewrite in canonical form
 
+STORE
+  A .dx file on disk is a one-line pointer; its content lives in the workspace
+  store (.doc/). Every dx read resolves the pointer to the real document.
+  dx sync     [dir]                             adopt, restore, and repair pointers
+  dx stats    [dir]                             documents, block sharing, compaction
+  dx textconv <file>                            print what a pointer stands for
+  dx git-setup [dir]                            make git diff .dx as documents
+
 RUN
   dx run      <file> [--only ID] [--force] [--dry] [--timeout S]
               Executes code blocks marked `run` and stores their output in the
