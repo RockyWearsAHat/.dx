@@ -147,7 +147,13 @@ fn is_searchable(kind: &str) -> bool {
 }
 
 /// Collect every searchable token from a document, in reading order.
-fn document_tokens(document: &Document) -> Vec<String> {
+///
+/// Public so a persistent store can record the same tokens the in-memory index would
+/// derive. Ranking stays in [`SearchIndex::search`] alone: a store should use these tokens
+/// to *narrow* candidates, then rank the survivors through [`build_index`], so there is only
+/// ever one scoring implementation to keep honest.
+#[must_use]
+pub fn document_tokens(document: &Document) -> Vec<String> {
     let mut tokens = Vec::new();
     push_tokens(&mut tokens, &document.title);
     push_tokens(&mut tokens, &document.summary);
@@ -180,7 +186,11 @@ fn push_tokens(out: &mut Vec<String>, text: &str) {
 }
 
 /// The distinct tokens of `query`, preserving first-seen order.
-fn distinct_tokens(query: &str) -> Vec<String> {
+///
+/// Public for the same reason as [`document_tokens`]: a store needs the query's tokens to
+/// select candidate documents before ranking them.
+#[must_use]
+pub fn distinct_tokens(query: &str) -> Vec<String> {
     let mut seen: Vec<String> = Vec::new();
     let mut raw = Vec::new();
     push_tokens(&mut raw, query);

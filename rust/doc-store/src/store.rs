@@ -1,0 +1,1136 @@
+//! [`Store`] — the document authority and the resolver over it.
+//!
+//! Every read in the platform lands in one of three methods here: [`Store::source`] for
+//! canonical text, [`Store::document`] for the parsed model, and [`Store::search`] /
+//! [`Store::list`] for finding things. Each one reads from SQLite, never from the `.dx` file,
+//! because the `.dx` file is a pointer.
+//!
+//! Writes go the other way: [`Store::save`] stores the chunks, refreshes the derived read
+//! models, rewrites the stub on disk, and exports the pack — in that order, so a crash
+//! leaves the database ahead of the stub rather than behind it. A stub whose digest the
+//! database does not recognize is a signal to re-resolve, never a reason to serve nothing.
+
+use std::collections::HashMap;
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use doc_core::chunk::{self, Chunk};
+use doc_core::compress::{compress, decompress};
+use doc_core::format::{parse, stringify};
+use doc_core::model::Document;
+use doc_core::render::outline;
+use doc_core::search::{build_index, distinct_tokens, document_tokens};
+use rusqlite::{params, Connection, OptionalExtension};
+
+use crate::git::{self, Route};
+use crate::{pack, schema, stub, StoreError};
+
+/// Directory holding the store and its packs, relative to the workspace root.
+pub(crate) const STORE_DIR: &str = ".doc";
+/// The SQLite database file, relative to the workspace root.
+const DB_RELATIVE: &str = ".doc/index.db";
+
+/// Directories never walked when discovering documents.
+const SKIPPED_DIRECTORIES: &[&str] = &[
+    ".git",
+    "node_modules",
+    "target",
+    "build",
+    "dist",
+    ".venv",
+    "__pycache__",
+    STORE_DIR,
+];
+
+/// Lightweight metadata for a stored document.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Summary {
+    /// Workspace-relative `.dx` path.
+    pub path: String,
+    /// Display title.
+    pub title: String,
+    /// Summary line, empty when the document has none.
+    pub summary: String,
+    /// Byte length of the canonical source.
+    pub source_bytes: usize,
+    /// Whether the document is git-ignored or untracked scratch work.
+    pub local_only: bool,
+    /// When the document was last written, ISO-8601.
+    pub updated_at: String,
+}
+
+/// What a [`Store::save`] actually changed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Saved {
+    /// Workspace-relative path written.
+    pub path: String,
+    /// Digest of the stored canonical source, as recorded in the stub.
+    pub digest: String,
+    /// Canonical source byte length.
+    pub source_bytes: usize,
+    /// Chunks the document is made of.
+    pub chunks: usize,
+    /// Chunks that were new to the store; the rest were already shared with something else.
+    pub chunks_added: usize,
+    /// Bytes those new chunks occupy compressed.
+    pub bytes_added: usize,
+}
+
+/// Storage totals, for `dx doctor` and the compaction report.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Stats {
+    /// Documents stored.
+    pub documents: usize,
+    /// Distinct chunks stored.
+    pub chunks: usize,
+    /// Chunk references across all documents; the excess over `chunks` is what sharing saved.
+    pub chunk_references: usize,
+    /// Total canonical source bytes across every document.
+    pub source_bytes: usize,
+    /// Bytes the chunks occupy in the database, compressed.
+    pub stored_bytes: usize,
+}
+
+impl Stats {
+    /// Stored bytes as a percentage of canonical source bytes, or `None` when nothing is
+    /// stored. Lower is better.
+    #[must_use]
+    pub fn compaction_percent(&self) -> Option<f64> {
+        if self.source_bytes == 0 {
+            return None;
+        }
+        Some(100.0 * self.stored_bytes as f64 / self.source_bytes as f64)
+    }
+}
+
+/// What [`Store::sync`] reconciled.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SyncReport {
+    /// Plain-text `.dx` files adopted into the store.
+    pub ingested: Vec<String>,
+    /// Documents whose stub was missing or stale and has been rewritten.
+    pub stubs_written: Vec<String>,
+    /// Documents recovered from a pack because the database did not have them.
+    pub restored: Vec<String>,
+    /// Stubs that could not be resolved from any source.
+    pub unresolved: Vec<String>,
+    /// Chunks deleted because nothing referenced them.
+    pub chunks_collected: usize,
+}
+
+impl SyncReport {
+    /// Whether the sync changed nothing.
+    #[must_use]
+    pub fn is_clean(&self) -> bool {
+        self.ingested.is_empty()
+            && self.stubs_written.is_empty()
+            && self.restored.is_empty()
+            && self.unresolved.is_empty()
+            && self.chunks_collected == 0
+    }
+}
+
+/// The document store rooted at a workspace directory.
+pub struct Store {
+    root: PathBuf,
+    connection: Connection,
+}
+
+impl Store {
+    /// Open (creating if needed) the store for the workspace rooted at `root`.
+    ///
+    /// Creates `.doc/` and migrates the schema. Opening does not touch any `.dx` file and
+    /// does not execute anything — reading is always free of side effects.
+    pub fn open(root: &Path) -> Result<Self, StoreError> {
+        let root = root.to_path_buf();
+        let directory = root.join(STORE_DIR);
+        fs::create_dir_all(&directory).map_err(|error| {
+            StoreError::Backend(format!("could not create {}: {error}", directory.display()))
+        })?;
+
+        let connection = Connection::open(root.join(DB_RELATIVE)).map_err(StoreError::backend)?;
+        schema::apply(&connection)?;
+        Ok(Self { root, connection })
+    }
+
+    /// Open a store held entirely in memory, for tests and one-shot rendering.
+    pub fn open_in_memory(root: &Path) -> Result<Self, StoreError> {
+        let connection = Connection::open_in_memory().map_err(StoreError::backend)?;
+        schema::apply(&connection)?;
+        Ok(Self {
+            root: root.to_path_buf(),
+            connection,
+        })
+    }
+
+    /// The workspace root this store belongs to.
+    #[must_use]
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    /// The absolute path of the `.dx` stub for `relative`.
+    #[must_use]
+    pub fn stub_path(&self, relative: &str) -> PathBuf {
+        self.root.join(relative)
+    }
+
+    /// Normalize a caller-supplied path, or explain why it is unusable.
+    fn require_path(path: &str) -> Result<String, StoreError> {
+        stub::normalize_path(path).ok_or_else(|| StoreError::InvalidPath(path.to_string()))
+    }
+
+    /// The stored document id for `relative`, or `None`.
+    fn document_id(&self, relative: &str) -> Result<Option<i64>, StoreError> {
+        self.connection
+            .query_row(
+                "SELECT id FROM documents WHERE path = ?1",
+                params![relative],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(StoreError::backend)
+    }
+
+    /// Whether a document is stored at `path`.
+    pub fn contains(&self, path: &str) -> Result<bool, StoreError> {
+        let relative = Self::require_path(path)?;
+        Ok(self.document_id(&relative)?.is_some())
+    }
+
+    /// The canonical source of the document at `path`.
+    ///
+    /// This is the resolver: it reassembles the document from its chunks and verifies the
+    /// result against the digest recorded when it was stored. A mismatch is reported as
+    /// [`StoreError::Corrupt`] rather than returned, so a damaged store can never be mistaken
+    /// for an edited document.
+    pub fn source(&self, path: &str) -> Result<String, StoreError> {
+        let relative = Self::require_path(path)?;
+        let id = self
+            .document_id(&relative)?
+            .ok_or_else(|| StoreError::NotFound(relative.clone()))?;
+
+        let (expected, expected_bytes) = self
+            .connection
+            .query_row(
+                "SELECT source_digest, source_bytes FROM documents WHERE id = ?1",
+                params![id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+            )
+            .map_err(StoreError::backend)?;
+
+        let source = chunk::join(self.chunk_texts(id)?.iter().map(String::as_str));
+        let digest = stub::digest_of(&source);
+        if digest != expected {
+            return Err(StoreError::Corrupt(format!(
+                "{relative} reassembled to {} bytes with digest {digest}, but the store \
+                 recorded {expected_bytes} bytes with digest {expected}",
+                source.len()
+            )));
+        }
+        Ok(source)
+    }
+
+    /// The chunk texts of document `id`, in document order, decompressed.
+    fn chunk_texts(&self, id: i64) -> Result<Vec<String>, StoreError> {
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT c.bytes, c.compressed, d.chunk_hash
+                 FROM document_chunks d JOIN chunks c ON c.hash = d.chunk_hash
+                 WHERE d.document_id = ?1 ORDER BY d.position",
+            )
+            .map_err(StoreError::backend)?;
+
+        let rows = statement
+            .query_map(params![id], |row| {
+                Ok((
+                    row.get::<_, Vec<u8>>(0)?,
+                    row.get::<_, i64>(1)? != 0,
+                    row.get::<_, String>(2)?,
+                ))
+            })
+            .map_err(StoreError::backend)?;
+
+        let mut texts = Vec::new();
+        for row in rows {
+            let (bytes, compressed, hash) = row.map_err(StoreError::backend)?;
+            let plain = if compressed {
+                decompress(&bytes).map_err(|error| {
+                    StoreError::Corrupt(format!("chunk {hash} would not decompress ({error})"))
+                })?
+            } else {
+                bytes
+            };
+            texts.push(String::from_utf8(plain).map_err(|_| {
+                StoreError::Corrupt(format!("chunk {hash} is not valid UTF-8 text"))
+            })?);
+        }
+        Ok(texts)
+    }
+
+    /// The parsed document at `path`.
+    pub fn document(&self, path: &str) -> Result<Document, StoreError> {
+        Ok(parse(&self.source(path)?))
+    }
+
+    /// Store `document` at `path`, rewrite its stub, and export the packs.
+    ///
+    /// The canonical source is derived from `document`, so a save always lands the document
+    /// in canonical form — the property that stops two editors from fighting over formatting.
+    pub fn save(&mut self, path: &str, document: &Document) -> Result<Saved, StoreError> {
+        let relative = Self::require_path(path)?;
+        let source = stringify(document);
+        let chunks = chunk::split(document);
+        let route = git::route(&self.root, &relative);
+
+        let saved = self.write_document(&relative, document, &source, &chunks, route)?;
+        self.write_stub(&relative, &source)?;
+        self.export_packs()?;
+        Ok(saved)
+    }
+
+    /// Persist a document's rows and chunks inside one transaction.
+    fn write_document(
+        &mut self,
+        relative: &str,
+        document: &Document,
+        source: &str,
+        chunks: &[Chunk],
+        route: Route,
+    ) -> Result<Saved, StoreError> {
+        let digest = stub::digest_of(source);
+        let title = display_title(document, relative);
+        let now = timestamp();
+
+        let transaction = self.connection.transaction().map_err(StoreError::backend)?;
+
+        transaction
+            .execute(
+                "INSERT INTO documents
+                    (path, title, summary, source_digest, source_bytes, local_only, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                 ON CONFLICT(path) DO UPDATE SET
+                    title = excluded.title, summary = excluded.summary,
+                    source_digest = excluded.source_digest,
+                    source_bytes = excluded.source_bytes,
+                    local_only = excluded.local_only, updated_at = excluded.updated_at",
+                params![
+                    relative,
+                    title,
+                    document.summary,
+                    digest,
+                    source.len() as i64,
+                    i64::from(route.is_local_only()),
+                    now
+                ],
+            )
+            .map_err(StoreError::backend)?;
+
+        let id: i64 = transaction
+            .query_row(
+                "SELECT id FROM documents WHERE path = ?1",
+                params![relative],
+                |row| row.get(0),
+            )
+            .map_err(StoreError::backend)?;
+
+        // Store chunk bodies first so the references below always have a target.
+        let mut chunks_added = 0;
+        let mut bytes_added = 0;
+        for chunk in chunks {
+            let (bytes, compressed) = encode_chunk(&chunk.text);
+            let inserted = transaction
+                .execute(
+                    "INSERT INTO chunks (hash, bytes, plain_bytes, compressed)
+                     VALUES (?1, ?2, ?3, ?4) ON CONFLICT(hash) DO NOTHING",
+                    params![
+                        chunk.hash,
+                        bytes,
+                        chunk.text.len() as i64,
+                        i64::from(compressed)
+                    ],
+                )
+                .map_err(StoreError::backend)?;
+            if inserted > 0 {
+                chunks_added += 1;
+                bytes_added += bytes.len();
+            }
+        }
+
+        transaction
+            .execute(
+                "DELETE FROM document_chunks WHERE document_id = ?1",
+                params![id],
+            )
+            .map_err(StoreError::backend)?;
+        for (position, chunk) in chunks.iter().enumerate() {
+            transaction
+                .execute(
+                    "INSERT INTO document_chunks (document_id, position, chunk_hash)
+                     VALUES (?1, ?2, ?3)",
+                    params![id, position as i64, chunk.hash],
+                )
+                .map_err(StoreError::backend)?;
+        }
+
+        write_read_models(&transaction, id, document)?;
+        transaction.commit().map_err(StoreError::backend)?;
+
+        Ok(Saved {
+            path: relative.to_string(),
+            digest,
+            source_bytes: source.len(),
+            chunks: chunks.len(),
+            chunks_added,
+            bytes_added,
+        })
+    }
+
+    /// Write the stub for `relative` unless the file already says exactly this.
+    ///
+    /// Skipping an identical write keeps file mtimes — and therefore editor reload storms and
+    /// git's idea of what changed — quiet when a save did not alter the content.
+    fn write_stub(&self, relative: &str, source: &str) -> Result<bool, StoreError> {
+        let path = self.stub_path(relative);
+        let wanted = stub::render(source);
+        if fs::read_to_string(&path).is_ok_and(|found| found == wanted) {
+            return Ok(false);
+        }
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(|error| {
+                StoreError::Backend(format!("could not create {}: {error}", parent.display()))
+            })?;
+        }
+        fs::write(&path, &wanted).map_err(|error| {
+            StoreError::Backend(format!("could not write {}: {error}", path.display()))
+        })?;
+        Ok(true)
+    }
+
+    /// Adopt plain-text `.dx` content at `path` into the store.
+    ///
+    /// This is how anything that is not `dx` — a text editor, `git checkout`, an agent that
+    /// wrote the file directly — gets its work preserved rather than overwritten.
+    pub fn ingest(&mut self, path: &str, text: &str) -> Result<Saved, StoreError> {
+        self.save(path, &parse(text))
+    }
+
+    /// Forget the document at `path` and delete its stub.
+    ///
+    /// Chunks it no longer shares with anything are collected.
+    pub fn delete(&mut self, path: &str) -> Result<(), StoreError> {
+        let relative = Self::require_path(path)?;
+        let id = self
+            .document_id(&relative)?
+            .ok_or_else(|| StoreError::NotFound(relative.clone()))?;
+        self.connection
+            .execute("DELETE FROM documents WHERE id = ?1", params![id])
+            .map_err(StoreError::backend)?;
+        self.collect_garbage()?;
+
+        let path = self.stub_path(&relative);
+        if fs::read_to_string(&path).is_ok_and(|found| stub::is_stub(&found)) {
+            fs::remove_file(&path).map_err(|error| {
+                StoreError::Backend(format!("could not remove {}: {error}", path.display()))
+            })?;
+        }
+        self.export_packs()
+    }
+
+    /// Every stored document, ordered by path.
+    pub fn list(&self) -> Result<Vec<Summary>, StoreError> {
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT path, title, summary, source_bytes, local_only, updated_at
+                 FROM documents ORDER BY path",
+            )
+            .map_err(StoreError::backend)?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok(Summary {
+                    path: row.get(0)?,
+                    title: row.get(1)?,
+                    summary: row.get(2)?,
+                    source_bytes: row.get::<_, i64>(3)?.max(0) as usize,
+                    local_only: row.get::<_, i64>(4)? != 0,
+                    updated_at: row.get(5)?,
+                })
+            })
+            .map_err(StoreError::backend)?;
+        rows.collect::<Result<Vec<Summary>, _>>()
+            .map_err(StoreError::backend)
+    }
+
+    /// Search stored documents for `query`, best matches first.
+    ///
+    /// The token table narrows the corpus to documents that contain at least one query token;
+    /// only those are reassembled and ranked, through the same [`build_index`] the rest of the
+    /// platform uses. Narrowing in SQL keeps the cost proportional to the matches rather than
+    /// to the whole store, and reusing `build_index` keeps one ranking implementation.
+    pub fn search(&self, query: &str, limit: usize) -> Result<Vec<Summary>, StoreError> {
+        let tokens = distinct_tokens(query);
+        if tokens.is_empty() || limit == 0 {
+            return Ok(Vec::new());
+        }
+
+        let placeholders = vec!["?"; tokens.len()].join(", ");
+        let sql = format!(
+            "SELECT DISTINCT d.path FROM documents d JOIN tokens t ON t.document_id = d.id
+             WHERE t.token IN ({placeholders}) ORDER BY d.path"
+        );
+        let mut statement = self.connection.prepare(&sql).map_err(StoreError::backend)?;
+        let candidates = statement
+            .query_map(rusqlite::params_from_iter(tokens.iter()), |row| {
+                row.get::<_, String>(0)
+            })
+            .map_err(StoreError::backend)?
+            .collect::<Result<Vec<String>, _>>()
+            .map_err(StoreError::backend)?;
+
+        let mut documents = Vec::new();
+        for path in candidates {
+            documents.push((path.clone(), self.document(&path)?));
+        }
+        let index = build_index(&documents);
+
+        let summaries: HashMap<String, Summary> = self
+            .list()?
+            .into_iter()
+            .map(|summary| (summary.path.clone(), summary))
+            .collect();
+
+        Ok(index
+            .search(query)
+            .into_iter()
+            .take(limit)
+            .filter_map(|hit| summaries.get(&hit.path).cloned())
+            .collect())
+    }
+
+    /// Storage totals across the whole store.
+    pub fn stats(&self) -> Result<Stats, StoreError> {
+        let row = self
+            .connection
+            .query_row(
+                "SELECT
+                    (SELECT count(*) FROM documents),
+                    (SELECT count(*) FROM chunks),
+                    (SELECT count(*) FROM document_chunks),
+                    (SELECT coalesce(sum(source_bytes), 0) FROM documents),
+                    (SELECT coalesce(sum(length(bytes)), 0) FROM chunks)",
+                [],
+                |row| {
+                    Ok(Stats {
+                        documents: row.get::<_, i64>(0)?.max(0) as usize,
+                        chunks: row.get::<_, i64>(1)?.max(0) as usize,
+                        chunk_references: row.get::<_, i64>(2)?.max(0) as usize,
+                        source_bytes: row.get::<_, i64>(3)?.max(0) as usize,
+                        stored_bytes: row.get::<_, i64>(4)?.max(0) as usize,
+                    })
+                },
+            )
+            .map_err(StoreError::backend)?;
+        Ok(row)
+    }
+
+    /// Delete every chunk no document references, returning how many went.
+    pub fn collect_garbage(&self) -> Result<usize, StoreError> {
+        let removed = self
+            .connection
+            .execute(
+                "DELETE FROM chunks WHERE hash NOT IN (SELECT chunk_hash FROM document_chunks)",
+                [],
+            )
+            .map_err(StoreError::backend)?;
+        Ok(removed)
+    }
+
+    /// Write the repo and local packs from what is stored.
+    fn export_packs(&self) -> Result<(), StoreError> {
+        pack::export(self)
+    }
+
+    /// Reconcile the workspace with the store so every `.dx` file resolves correctly.
+    ///
+    /// This is the repair path, and it is deliberately conservative — it never discards
+    /// content:
+    /// 1. A `.dx` file holding **plain text** is adopted into the store. Anything that wrote
+    ///    a document without going through `dx` keeps its work.
+    /// 2. A **stub the store knows** is left alone, and rewritten only if its digest drifted.
+    /// 3. A **stub the store does not know** is restored from the packs — the fresh-clone
+    ///    case, where the database does not exist yet.
+    /// 4. A stub nothing can resolve is reported in [`SyncReport::unresolved`] rather than
+    ///    deleted or blanked.
+    pub fn sync(&mut self) -> Result<SyncReport, StoreError> {
+        let mut report = SyncReport::default();
+        let available = pack::load_all(&self.root)?;
+
+        for absolute in discover(&self.root) {
+            let Some(relative) = self.relative_of(&absolute) else {
+                continue;
+            };
+            let Ok(text) = fs::read_to_string(&absolute) else {
+                continue;
+            };
+
+            match stub::digest_in(&text) {
+                None => {
+                    // Real content on disk: adopt it, then replace it with its pointer.
+                    self.ingest(&relative, &text)?;
+                    report.ingested.push(relative);
+                }
+                Some(digest) => {
+                    let known = self.document_id(&relative)?.is_some();
+                    if known {
+                        let source = self.source(&relative)?;
+                        if stub::digest_of(&source) != digest
+                            && self.write_stub(&relative, &source)?
+                        {
+                            report.stubs_written.push(relative);
+                        }
+                        continue;
+                    }
+                    match available.get(&relative) {
+                        Some(source) => {
+                            self.ingest(&relative, source)?;
+                            report.restored.push(relative);
+                        }
+                        None => report.unresolved.push(relative),
+                    }
+                }
+            }
+        }
+
+        // Documents present in a pack but with no file yet (a fresh clone that has the pack
+        // committed but whose stubs are also committed) are covered above; anything left in
+        // the packs with no stub is materialized so it is reachable.
+        for (relative, source) in &available {
+            if self.document_id(relative)?.is_none() {
+                self.ingest(relative, source)?;
+                report.restored.push(relative.clone());
+            }
+        }
+
+        report.chunks_collected = self.collect_garbage()?;
+        Ok(report)
+    }
+
+    /// The workspace-relative path of `absolute`, or `None` when it is outside the root.
+    fn relative_of(&self, absolute: &Path) -> Option<String> {
+        let relative = absolute.strip_prefix(&self.root).ok()?;
+        stub::normalize_path(&relative.to_string_lossy())
+    }
+}
+
+/// Compress `text` when that actually saves space, reporting which form was chosen.
+///
+/// Short blocks — a heading, a one-line paragraph — usually grow under any compressor, so
+/// storing them raw is both smaller and cheaper to read back.
+fn encode_chunk(text: &str) -> (Vec<u8>, bool) {
+    let plain = text.as_bytes();
+    let squeezed = compress(plain);
+    if squeezed.len() < plain.len() {
+        (squeezed, true)
+    } else {
+        (plain.to_vec(), false)
+    }
+}
+
+/// A document's display title: its metadata title, else its first heading, else its file stem.
+fn display_title(document: &Document, relative: &str) -> String {
+    for candidate in [document.title.trim(), document.first_heading_text().trim()] {
+        if !candidate.is_empty() {
+            return candidate.to_string();
+        }
+    }
+    Path::new(relative).file_stem().map_or_else(
+        || relative.to_string(),
+        |stem| stem.to_string_lossy().into_owned(),
+    )
+}
+
+/// Rebuild the derived section and token rows for document `id`.
+///
+/// Both are caches over the chunks, so they are deleted and rewritten wholesale rather than
+/// patched — a partial update is how a read model starts disagreeing with its source.
+fn write_read_models(
+    transaction: &rusqlite::Transaction<'_>,
+    id: i64,
+    document: &Document,
+) -> Result<(), StoreError> {
+    transaction
+        .execute("DELETE FROM sections WHERE document_id = ?1", params![id])
+        .map_err(StoreError::backend)?;
+    transaction
+        .execute("DELETE FROM tokens WHERE document_id = ?1", params![id])
+        .map_err(StoreError::backend)?;
+
+    for entry in outline(document) {
+        if entry.level == 0 {
+            continue;
+        }
+        transaction
+            .execute(
+                "INSERT INTO sections (document_id, position, slug, heading, depth)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    id,
+                    entry.index as i64,
+                    entry.id,
+                    entry.preview,
+                    i64::from(entry.level)
+                ],
+            )
+            .map_err(StoreError::backend)?;
+    }
+
+    let mut counts: HashMap<String, i64> = HashMap::new();
+    for token in document_tokens(document) {
+        *counts.entry(token).or_insert(0) += 1;
+    }
+    for (token, hits) in counts {
+        transaction
+            .execute(
+                "INSERT INTO tokens (document_id, token, hits) VALUES (?1, ?2, ?3)",
+                params![id, token, hits],
+            )
+            .map_err(StoreError::backend)?;
+    }
+    Ok(())
+}
+
+/// An ISO-8601 timestamp for "now", to second precision and UTC.
+///
+/// Hand-rolled from the epoch seconds so the crate needs no date dependency. A clock that
+/// predates the epoch yields the epoch itself rather than an error, since a timestamp is
+/// metadata and must never be the reason a save fails.
+fn timestamp() -> String {
+    let seconds = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_secs());
+
+    let days = seconds / 86_400;
+    let time_of_day = seconds % 86_400;
+    let (year, month, day) = civil_from_days(days as i64);
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
+        time_of_day / 3600,
+        (time_of_day % 3600) / 60,
+        time_of_day % 60
+    )
+}
+
+/// Convert days since 1970-01-01 into a `(year, month, day)` civil date.
+///
+/// Howard Hinnant's `civil_from_days`, which is exact for the proleptic Gregorian calendar
+/// and needs no lookup tables.
+fn civil_from_days(days: i64) -> (i64, u32, u32) {
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let day_of_era = z - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let shifted_month = (5 * day_of_year + 2) / 153;
+    let day = (day_of_year - (153 * shifted_month + 2) / 5 + 1) as u32;
+    let month = if shifted_month < 10 {
+        shifted_month + 3
+    } else {
+        shifted_month - 9
+    } as u32;
+    (year + i64::from(month <= 2), month, day)
+}
+
+/// Find every `.dx` file under `root`, sorted by path.
+#[must_use]
+pub fn discover(root: &Path) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    walk(root, &mut found);
+    found.sort();
+    found
+}
+
+/// Recursively collect `.dx` files, skipping build output and the store itself.
+fn walk(directory: &Path, found: &mut Vec<PathBuf>) {
+    let Ok(entries) = fs::read_dir(directory) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if path.is_dir() {
+            if !(name.starts_with('.') || SKIPPED_DIRECTORIES.contains(&name.as_str())) {
+                walk(&path, found);
+            }
+            continue;
+        }
+        if path.extension().is_some_and(|extension| extension == "dx") {
+            found.push(path);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A scratch workspace directory, emptied first so runs do not leak into each other.
+    fn scratch(label: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("dx-store-tests-{label}"));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).expect("scratch root");
+        root
+    }
+
+    const NOTES: &str = "::heading level=1 id=notes\nNotes\n::end\n\n::paragraph id=p\nA line of prose about kubernetes.\n::end\n";
+
+    #[test]
+    fn a_saved_document_leaves_a_stub_on_disk_and_reads_back_whole() {
+        let root = scratch("stub-and-read");
+        let mut store = Store::open(&root).expect("open");
+        store.ingest("notes.dx", NOTES).expect("ingest");
+
+        // On disk: a pointer, not content.
+        let on_disk = fs::read_to_string(root.join("notes.dx")).expect("read stub");
+        assert!(stub::is_stub(&on_disk), "expected a stub, got {on_disk:?}");
+        assert!(!on_disk.contains("kubernetes"));
+        assert!(on_disk.len() < 80);
+
+        // Through the resolver: the true document, byte-for-byte canonical.
+        assert_eq!(store.source("notes.dx").expect("source"), NOTES);
+        assert_eq!(store.document("notes.dx").expect("doc").blocks.len(), 2);
+    }
+
+    #[test]
+    fn every_authored_attribute_survives_a_store_round_trip() {
+        let root = scratch("lossless");
+        let mut store = Store::open(&root).expect("open");
+        let source = "::code id=stats lang=python run deps=\"numpy pandas\" timeout=45 format=svg\nprint(1)\n::end\n\n::output id=o for=stats status=ok hash=abc123 format=svg\n<svg></svg>\n::end\n\n::checklist id=c\n[x] done\n[ ] todo\n::end\n";
+        store.ingest("rich.dx", source).expect("ingest");
+        assert_eq!(store.source("rich.dx").expect("source"), source);
+    }
+
+    #[test]
+    fn identical_blocks_across_documents_are_stored_once() {
+        let root = scratch("sharing");
+        let mut store = Store::open(&root).expect("open");
+        let shared = "::paragraph id=p\nExactly the same block.\n::end\n";
+        store.ingest("a.dx", shared).expect("a");
+        let second = store.ingest("b.dx", shared).expect("b");
+
+        assert_eq!(second.chunks, 1);
+        assert_eq!(second.chunks_added, 0, "the block should already be stored");
+        let stats = store.stats().expect("stats");
+        assert_eq!(stats.documents, 2);
+        assert_eq!(stats.chunks, 1);
+        assert_eq!(stats.chunk_references, 2);
+    }
+
+    #[test]
+    fn editing_one_block_leaves_the_others_shared() {
+        let root = scratch("incremental");
+        let mut store = Store::open(&root).expect("open");
+        store
+            .ingest(
+                "doc.dx",
+                "::paragraph id=a\nkeep\n::end\n\n::paragraph id=b\nchange me\n::end\n",
+            )
+            .expect("first");
+        let after = store
+            .ingest(
+                "doc.dx",
+                "::paragraph id=a\nkeep\n::end\n\n::paragraph id=b\nchanged\n::end\n",
+            )
+            .expect("second");
+
+        assert_eq!(after.chunks, 2);
+        assert_eq!(after.chunks_added, 1, "only the edited block is new");
+    }
+
+    #[test]
+    fn storage_is_smaller_than_the_source_it_holds() {
+        let root = scratch("compaction");
+        let mut store = Store::open(&root).expect("open");
+        let big = include_str!("../../../examples/showcase.dx");
+        store.ingest("showcase.dx", big).expect("ingest");
+
+        let stats = store.stats().expect("stats");
+        let percent = stats.compaction_percent().expect("percent");
+        assert!(
+            percent < 100.0,
+            "stored {} bytes for {} bytes of source ({percent:.1}%)",
+            stats.stored_bytes,
+            stats.source_bytes
+        );
+    }
+
+    #[test]
+    fn a_missing_document_says_so_instead_of_returning_nothing() {
+        let root = scratch("missing");
+        let store = Store::open(&root).expect("open");
+        let error = store.source("nope.dx").expect_err("should fail");
+        assert!(matches!(error, StoreError::NotFound(_)), "{error}");
+        assert!(error.to_string().contains("dx ls"));
+    }
+
+    #[test]
+    fn a_path_escaping_the_workspace_is_refused() {
+        let root = scratch("traversal");
+        let mut store = Store::open(&root).expect("open");
+        assert!(matches!(
+            store.source("../../etc/passwd"),
+            Err(StoreError::InvalidPath(_))
+        ));
+        assert!(matches!(
+            store.ingest("../escape.dx", NOTES),
+            Err(StoreError::InvalidPath(_))
+        ));
+    }
+
+    #[test]
+    fn deleting_a_document_removes_its_stub_and_collects_its_chunks() {
+        let root = scratch("delete");
+        let mut store = Store::open(&root).expect("open");
+        store.ingest("gone.dx", NOTES).expect("ingest");
+        store.delete("gone.dx").expect("delete");
+
+        assert!(!root.join("gone.dx").exists(), "stub should be gone");
+        assert_eq!(store.stats().expect("stats").chunks, 0);
+        assert!(matches!(
+            store.source("gone.dx"),
+            Err(StoreError::NotFound(_))
+        ));
+    }
+
+    #[test]
+    fn deleting_one_document_keeps_chunks_another_still_shares() {
+        let root = scratch("shared-delete");
+        let mut store = Store::open(&root).expect("open");
+        let shared = "::paragraph id=p\nshared body\n::end\n";
+        store.ingest("keep.dx", shared).expect("keep");
+        store.ingest("drop.dx", shared).expect("drop");
+        store.delete("drop.dx").expect("delete");
+
+        assert_eq!(store.source("keep.dx").expect("still there"), shared);
+        assert_eq!(store.stats().expect("stats").chunks, 1);
+    }
+
+    #[test]
+    fn listing_and_search_find_documents_through_the_database() {
+        let root = scratch("search");
+        let mut store = Store::open(&root).expect("open");
+        store.ingest("kubernetes.dx", NOTES).expect("k");
+        store
+            .ingest(
+                "recipes.dx",
+                "::paragraph id=p\nbread and soup and butter\n::end\n",
+            )
+            .expect("r");
+
+        let listed = store.list().expect("list");
+        assert_eq!(listed.len(), 2);
+        assert_eq!(listed[0].path, "kubernetes.dx");
+        assert_eq!(listed[0].title, "Notes");
+
+        let hits = store.search("kubernetes", 10).expect("search");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].path, "kubernetes.dx");
+
+        assert!(store
+            .search("nothingmatches", 10)
+            .expect("empty")
+            .is_empty());
+        assert!(store.search("", 10).expect("blank").is_empty());
+    }
+
+    #[test]
+    fn sync_adopts_plain_text_written_by_anything_else() {
+        let root = scratch("ingest-plain");
+        let mut store = Store::open(&root).expect("open");
+        // Something that is not dx writes a document directly.
+        fs::write(root.join("outside.dx"), NOTES).expect("write");
+
+        let report = store.sync().expect("sync");
+        assert_eq!(report.ingested, vec!["outside.dx".to_string()]);
+        assert_eq!(store.source("outside.dx").expect("resolves"), NOTES);
+        assert!(stub::is_stub(
+            &fs::read_to_string(root.join("outside.dx")).expect("read")
+        ));
+    }
+
+    #[test]
+    fn sync_restores_documents_from_the_pack_when_the_database_is_gone() {
+        // The fresh-clone case: stubs and packs are committed, index.db is not.
+        let root = scratch("fresh-clone");
+        {
+            let mut store = Store::open(&root).expect("open");
+            store.ingest("notes.dx", NOTES).expect("ingest");
+        }
+        fs::remove_file(root.join(DB_RELATIVE)).expect("drop database");
+
+        let mut store = Store::open(&root).expect("reopen");
+        assert!(
+            store.source("notes.dx").is_err(),
+            "database really is empty"
+        );
+
+        let report = store.sync().expect("sync");
+        assert!(report.restored.contains(&"notes.dx".to_string()));
+        assert_eq!(store.source("notes.dx").expect("restored"), NOTES);
+    }
+
+    #[test]
+    fn sync_reports_a_stub_it_cannot_resolve_instead_of_serving_nothing() {
+        let root = scratch("unresolved");
+        let mut store = Store::open(&root).expect("open");
+        fs::write(root.join("orphan.dx"), stub::render(NOTES)).expect("write stub");
+
+        let report = store.sync().expect("sync");
+        assert_eq!(report.unresolved, vec!["orphan.dx".to_string()]);
+        // And the file is left exactly as found — never blanked.
+        assert!(stub::is_stub(
+            &fs::read_to_string(root.join("orphan.dx")).expect("read")
+        ));
+    }
+
+    #[test]
+    fn a_clean_workspace_syncs_to_no_changes() {
+        let root = scratch("idempotent-sync");
+        let mut store = Store::open(&root).expect("open");
+        store.ingest("notes.dx", NOTES).expect("ingest");
+
+        store.sync().expect("first sync");
+        let second = store.sync().expect("second sync");
+        assert!(second.is_clean(), "sync should settle: {second:?}");
+    }
+
+    #[test]
+    fn saving_the_same_content_twice_does_not_touch_the_stub_file() {
+        let root = scratch("quiet-writes");
+        let mut store = Store::open(&root).expect("open");
+        store.ingest("notes.dx", NOTES).expect("first");
+        let before = fs::metadata(root.join("notes.dx"))
+            .and_then(|meta| meta.modified())
+            .expect("mtime");
+        store.ingest("notes.dx", NOTES).expect("second");
+        let after = fs::metadata(root.join("notes.dx"))
+            .and_then(|meta| meta.modified())
+            .expect("mtime");
+        assert_eq!(
+            before, after,
+            "an unchanged save should not rewrite the stub"
+        );
+    }
+
+    #[test]
+    fn non_ascii_prose_survives_the_store() {
+        let root = scratch("i18n");
+        let mut store = Store::open(&root).expect("open");
+        let source = "::paragraph id=p\nこんにちは — naïve café ✅ Ω\n::end\n";
+        store.ingest("i18n.dx", source).expect("ingest");
+        assert_eq!(store.source("i18n.dx").expect("source"), source);
+    }
+
+    #[test]
+    fn empty_input_is_stored_as_the_canonical_empty_document() {
+        let root = scratch("empty");
+        let mut store = Store::open(&root).expect("open");
+        store.ingest("blank.dx", "").expect("ingest");
+        let source = store.source("blank.dx").expect("source");
+        assert_eq!(
+            source,
+            "::paragraph id=paragraph-1\nStart writing here.\n::end\n"
+        );
+        // And that canonical form is a fixed point.
+        store.ingest("blank.dx", &source).expect("re-ingest");
+        assert_eq!(store.source("blank.dx").expect("source"), source);
+    }
+
+    #[test]
+    fn a_document_in_a_subdirectory_round_trips() {
+        let root = scratch("nested-path");
+        let mut store = Store::open(&root).expect("open");
+        store.ingest("notes/deep/thing.dx", NOTES).expect("ingest");
+        assert!(root.join("notes/deep/thing.dx").exists());
+        assert_eq!(store.source("notes/deep/thing.dx").expect("source"), NOTES);
+    }
+
+    #[test]
+    fn a_tampered_chunk_is_reported_not_served() {
+        let root = scratch("corrupt");
+        let mut store = Store::open(&root).expect("open");
+        store.ingest("notes.dx", NOTES).expect("ingest");
+
+        // Rewrite one chunk body to something else of the same shape.
+        let replacement = "::paragraph id=p\nnot what was stored\n::end";
+        store
+            .connection
+            .execute(
+                "UPDATE chunks SET bytes = ?1, compressed = 0, plain_bytes = ?2
+                 WHERE hash = (SELECT chunk_hash FROM document_chunks
+                               WHERE document_id = 1 ORDER BY position DESC LIMIT 1)",
+                params![replacement.as_bytes(), replacement.len() as i64],
+            )
+            .expect("tamper");
+
+        let error = store.source("notes.dx").expect_err("should refuse");
+        assert!(matches!(error, StoreError::Corrupt(_)), "{error}");
+        assert!(error.to_string().contains("dx sync"));
+    }
+
+    #[test]
+    fn timestamps_are_iso_8601_and_decode_a_known_day() {
+        // 2026-07-29 is 20663 days after the epoch.
+        assert_eq!(civil_from_days(20_663), (2026, 7, 29));
+        assert_eq!(civil_from_days(0), (1970, 1, 1));
+        // Leap-year boundary.
+        assert_eq!(civil_from_days(59), (1970, 3, 1));
+
+        let now = timestamp();
+        assert_eq!(now.len(), 20, "{now}");
+        assert!(now.ends_with('Z'));
+    }
+
+    #[test]
+    fn short_blocks_are_stored_raw_and_long_ones_compressed() {
+        let (bytes, compressed) = encode_chunk("::rule id=r\n\n::end");
+        assert!(!compressed, "a tiny block should not be inflated");
+        assert_eq!(bytes.len(), "::rule id=r\n\n::end".len());
+
+        let repetitive = format!("::paragraph id=p\n{}\n::end", "the same words ".repeat(40));
+        let (bytes, compressed) = encode_chunk(&repetitive);
+        assert!(compressed, "a repetitive block should compress");
+        assert!(bytes.len() < repetitive.len());
+    }
+
+    #[test]
+    fn discovery_skips_build_output_and_the_store_directory() {
+        let root = scratch("discover");
+        for relative in ["a.dx", "deep/b.dx", "node_modules/c.dx", "target/d.dx"] {
+            let path = root.join(relative);
+            fs::create_dir_all(path.parent().expect("parent")).expect("dirs");
+            fs::write(&path, NOTES).expect("write");
+        }
+        fs::create_dir_all(root.join(STORE_DIR)).expect("store dir");
+        fs::write(root.join(STORE_DIR).join("e.dx"), NOTES).expect("write");
+
+        let found = discover(&root);
+        assert_eq!(found.len(), 2, "{found:?}");
+        assert!(found.iter().all(|path| {
+            let text = path.to_string_lossy();
+            !text.contains("node_modules") && !text.contains("target") && !text.contains(STORE_DIR)
+        }));
+    }
+
+    #[test]
+    fn titles_fall_back_from_metadata_to_heading_to_file_name() {
+        let with_heading = parse("::heading level=1 id=h\nReal Title\n::end\n");
+        assert_eq!(display_title(&with_heading, "a/b.dx"), "Real Title");
+
+        let bare = parse("::paragraph id=p\nbody\n::end\n");
+        assert_eq!(display_title(&bare, "a/plain-name.dx"), "plain-name");
+    }
+}
