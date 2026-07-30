@@ -94,5 +94,8 @@ Quick checklist
 ::end
 
 ::checklist id=welcome-checklist
-
+[x] Parse canonical source
+[x] Render charts and tables
+[x] Persist with stable structure
+[ ] Add one custom chart and one custom table
 ::end

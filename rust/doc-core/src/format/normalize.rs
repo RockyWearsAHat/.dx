@@ -125,9 +125,11 @@ fn normalize_block(block: &Block, index: usize, registry: &mut IdRegistry) -> Bl
     normalized
 }
 
-/// Normalize list items: keep an explicit item list (preserving `nested`), or split the
-/// block's `text` on newlines as a fallback, dropping blank items. Port of the list branch
-/// of `normalizeBlock`.
+/// Normalize list items: keep an explicit item list, or split the block's `text` on
+/// newlines as a fallback, dropping blank items.
+///
+/// Nesting is normalized recursively so a child item is trimmed and blank-filtered exactly
+/// like a top-level one, and a nested list survives the round-trip at full depth.
 fn normalize_list_items(items: &[Item], text: &str) -> Vec<Item> {
     if items.is_empty() {
         return text
@@ -143,9 +145,9 @@ fn normalize_list_items(items: &[Item], text: &str) -> Vec<Item> {
     items
         .iter()
         .map(|item| Item {
+            checked: false,
             text: js_trim(&item.text).to_string(),
-            nested: item.nested.clone(),
-            ..Item::default()
+            nested: normalize_list_items(&item.nested, ""),
         })
         .filter(|item| !item.text.is_empty())
         .collect()

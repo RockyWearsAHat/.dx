@@ -43,7 +43,7 @@ mod stringify;
 mod util;
 
 pub use source::parse;
-pub use stringify::stringify;
+pub use stringify::{stringify, stringify_blocks, BLOCK_SEPARATOR};
 
 /// The block kinds DOCSRC understands. Any other `::type` opening normalizes to
 /// `paragraph`, matching the reference `BLOCK_TYPES` allow-list.
@@ -152,22 +152,29 @@ mod tests {
     }
 
     #[test]
-    fn nested_list_flattens_like_reference() {
-        // The reference `buildNestedListStructure` drops nesting (object-aliasing quirk);
-        // only items where the working stack empties survive.
-        assert_eq!(
-            round_trip("::bulleted-list id=l\n- a\n  - a1\n  - a2\n- b\n::end\n"),
-            "::bulleted-list id=l\n- a\n- b\n::end\n"
-        );
+    fn nested_list_keeps_every_item_at_its_depth() {
+        // Every written item must come back: dropping the indented ones silently destroyed
+        // list content on save.
+        let input = "::bulleted-list id=l\n- a\n  - a1\n  - a2\n- b\n::end\n";
+        assert_eq!(round_trip(input), input);
+        assert_eq!(round_trip(&round_trip(input)), input);
     }
 
     #[test]
-    fn checklist_body_is_empty_like_reference() {
-        // The reference blockBody has no checklist case, so the body is empty on write.
-        assert_eq!(
-            round_trip("::checklist id=c\n[x] done\n[ ] todo\n::end\n"),
-            "::checklist id=c\n\n::end\n"
-        );
+    fn deeply_nested_list_survives_and_is_idempotent() {
+        let input = "::bulleted-list id=l\n- a\n  - a1\n    - a1a\n  - a2\n- b\n::end\n";
+        assert_eq!(round_trip(input), input);
+    }
+
+    #[test]
+    fn checklist_items_survive_a_save() {
+        // The body used to be written empty, erasing every item in the list.
+        let input = "::checklist id=c\n[x] done\n[ ] todo\n::end\n";
+        assert_eq!(round_trip(input), input);
+        let items = &parse(input).blocks[0].items;
+        assert_eq!(items.len(), 2);
+        assert!(items[0].checked);
+        assert!(!items[1].checked);
     }
 
     #[test]

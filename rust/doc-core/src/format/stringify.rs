@@ -114,30 +114,57 @@ fn block_body(block: &Block) -> String {
             list_lines(&block.items, 0, &mut lines);
             lines.join("\n")
         }
+        "checklist" => block
+            .items
+            .iter()
+            .map(|item| {
+                let marker = if item.checked { "[x]" } else { "[ ]" };
+                format!("{marker} {}", js_trim(&item.text))
+            })
+            .collect::<Vec<String>>()
+            .join("\n"),
         "image" => block.alt.clone(),
         "stylesheet" | "rule" => String::new(),
         // style/script and the paragraph/quote/code/svg/html/graph/mermaid default all use
-        // the block's `text` field verbatim. Checklist falls here too — matching the
-        // reference, which has no checklist case and so emits an empty body.
+        // the block's `text` field verbatim.
         _ => block.text.clone(),
     }
 }
 
-/// Serialize a [`Document`] into canonical DOCSRC text, byte-identical to the reference
-/// `stringifyDocFile`. Only the document's blocks are written; metadata is not emitted.
+/// The separator written between two canonical blocks.
+pub const BLOCK_SEPARATOR: &str = "\n\n";
+
+/// Serialize a [`Document`] into its canonical DOCSRC blocks, one string per block.
 ///
-/// The blocks are re-normalized first, so a document built from any source produces stable,
-/// canonical output (unique ids, clamped heading levels, default paragraph when empty).
-pub fn stringify(document: &Document) -> String {
-    let normalized = normalize_blocks(&document.blocks);
-    let chunks: Vec<String> = normalized
+/// Each returned string is a complete `::type attrs` / body / `::end` unit with no
+/// trailing newline. Joining them with [`BLOCK_SEPARATOR`] and appending a single `\n`
+/// reproduces [`stringify`] exactly — that identity is what lets storage keep a document
+/// as independent per-block pieces and still rebuild the canonical file byte-for-byte.
+///
+/// The blocks are re-normalized first, so a document built from any source produces
+/// stable, canonical output (unique ids, clamped heading levels, default paragraph when
+/// empty). Normalization happens once for the whole document, so ids stay unique across
+/// the returned pieces.
+///
+/// Complexity: `O(n)` in the document's total byte size.
+pub fn stringify_blocks(document: &Document) -> Vec<String> {
+    normalize_blocks(&document.blocks)
         .iter()
         .map(|block| {
             let header = block_header(block);
             let body = block_body(block);
             format!("{header}\n{body}\n::end")
         })
-        .collect();
-    let body = chunks.join("\n\n");
+        .collect()
+}
+
+/// Serialize a [`Document`] into canonical DOCSRC text, byte-identical to the reference
+/// `stringifyDocFile`. Only the document's blocks are written; metadata is not emitted.
+///
+/// This is [`stringify_blocks`] joined with [`BLOCK_SEPARATOR`] plus a trailing newline;
+/// the two share one implementation so a per-block round-trip can never drift from a
+/// whole-document one.
+pub fn stringify(document: &Document) -> String {
+    let body = stringify_blocks(document).join(BLOCK_SEPARATOR);
     format!("{body}\n")
 }
