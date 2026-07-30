@@ -1,42 +1,62 @@
-# .doc/ — Repository Document Archive
+# `.doc/` — where your documents actually live
 
-This folder contains the ultra-compressed document artifact for the DOC editor system.
+A `.dx` file in this project is a one-line pointer:
+
+```text
+~ dx1 c939d5becfb64b14193566ffed7ccf8217c90bf5c90e6ba2a5ce8bf87903c823
+```
+
+The content is here, stored once per distinct block.
 
 ## Contents
 
-- **`.repo-docs.bin`** — Single Brotli-compressed container with all .dx document payloads, keyed by document path. This is the portable artifact that makes documents transportable across repositories and users while maintaining SQLite as the authoritative index.
+| File | What it is | Commit it? |
+|------|------------|-----------|
+| `repo.dxcp` | **Your documents.** Every repository document, split into content-addressed chunks, deduplicated across documents and versions, and compressed as one stream. | **Yes.** This is the content. |
+| `local.dxcp` | Documents git ignores or has never tracked — scratch work that should not reach a teammate. | No |
+| `index.db` | SQLite: the local queryable authority. Chunks, manifests, sections, and a token index for search. Rebuildable from `repo.dxcp`. | No |
 
-## For Best Experience
+`dx git-setup` writes the `.gitignore` lines that get this right.
 
-Install the **docdb VS Code extension** to:
-- Automatically hide this folder in the Explorer sidebar
-- Open `.dx` stub files with the rich document editor
-- Enable inline CSS editing, scoped to individual blocks
-- See real-time rendering and block-level editing
+## How a document is stored
 
-The extension will automatically hide this folder by updating `.vscode/settings.json` with `files.exclude` rules.
+A document is one **chunk** per block, where a chunk's payload is byte-for-byte the canonical
+text `dx` would write for that block. Reassembly is concatenation, so nothing can be lost in
+translation — the store cannot drop a block attribute it had not heard of. Two blocks that read
+the same are one chunk, so editing one paragraph of a long document costs one new chunk.
 
-Without the extension, the folder remains visible but is not required for functionality—stub files still resolve their content from the archive. However, the custom editor and visual experience are significantly enhanced with the extension installed.
+A **manifest** records one version: its content digest and its ordered chunk list. Every version
+ever saved keeps its manifest, which is why `git log -p` can render an old revision — and why it
+costs almost nothing to keep, since an edited document shares every unchanged block with its
+predecessor.
 
-## Storage Format
+## Reading a document
 
-Documents are stored in a binary container format:
-- Each document is compressed individually with Brotli
-- The container is indexed by document path (e.g., `examples/welcome.dx`)
-- SHA256 integrity check on read to ensure data consistency
-- Container is transparent to the stub editor—all reads/writes are automatic
+Never open the pointer expecting content. Ask `dx`, and it resolves:
 
-## Development
-
-To manually inspect the archive:
 ```bash
-node -e "
-  const archive = require('./src/doc-archive.js');
-  const fs = require('fs');
-  const data = fs.readFileSync('.doc/.repo-docs.bin');
-  const docs = archive.decodeArchiveContainer(data);
-  console.log(Object.keys(docs));
-"
+dx text notes.dx        # the document as Markdown
+dx textconv notes.dx    # its exact canonical source
+dx render notes.dx      # a self-contained HTML page
+dx stats .              # what sharing and compression saved
 ```
 
-This folder is part of version control and should be committed to ensure documents are available to all users of the repository.
+Agents use the MCP server (`dx mcp`), which resolves the same way.
+
+## If something looks wrong
+
+```bash
+dx sync .
+```
+
+That is the repair command. It adopts any plain-text `.dx` file something else wrote, rebuilds
+`index.db` from the packs when it is missing — the fresh-clone case — and rewrites pointers that
+drifted. It never discards content: a pointer it cannot resolve is reported, not blanked.
+
+If a pointer is reported unresolved, its content is in neither the index nor the packs. Restore
+`repo.dxcp` from version control.
+
+## Do not hand-edit anything in here
+
+These are generated artifacts. Write documents through `dx` or your editor; both go through the
+same store.

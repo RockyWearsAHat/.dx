@@ -181,6 +181,34 @@ mod tests {
     }
 
     #[test]
+    fn a_document_in_a_git_repository_lands_in_the_committed_pack() {
+        // The whole point of the repo pack: commit the pointers and the content travels with
+        // them. A document whose content only reached the ignored pack would arrive at a clone
+        // as a pointer with nothing behind it.
+        let root = scratch("committed");
+        if !std::process::Command::new("git")
+            .arg("-C")
+            .arg(&root)
+            .args(["init", "-q"])
+            .status()
+            .is_ok_and(|status| status.success())
+        {
+            return; // No git available; the routing test covers the decision itself.
+        }
+
+        let mut store = Store::open(&root).expect("open");
+        store.ingest("notes.dx", NOTES).expect("ingest");
+
+        let (repo_path, _) = paths(&root);
+        assert!(
+            repo_path.exists(),
+            "a new document must reach the pack that gets committed"
+        );
+        let pack = decode_pack(&fs::read(&repo_path).expect("read")).expect("decode");
+        assert_eq!(pack.source("notes.dx").as_deref(), Some(NOTES));
+    }
+
+    #[test]
     fn an_empty_store_leaves_no_pack_behind() {
         let root = scratch("empty");
         let mut store = Store::open(&root).expect("open");

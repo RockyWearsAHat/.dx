@@ -23,9 +23,9 @@ use doc_core::model::Document;
 use doc_core::{chunk, compress, digest, format, search};
 
 /// One real example document, embedded so the bench needs no filesystem access.
-const WELCOME_DX: &str = include_str!("../../../examples/welcome.dx");
-const TUTORIAL_DX: &str = include_str!("../../../examples/tutorial.dx");
-const BLOCK_REF_DX: &str = include_str!("../../../examples/block-reference.dx");
+const WELCOME_DX: &str = include_str!("../tests/fixtures/welcome.input.dx");
+const TUTORIAL_DX: &str = include_str!("../tests/fixtures/tutorial.input.dx");
+const BLOCK_REF_DX: &str = include_str!("../tests/fixtures/block-reference.input.dx");
 
 /// Number of timed iterations per operation (after a warm-up pass).
 const ITERS: u32 = 2_000;
