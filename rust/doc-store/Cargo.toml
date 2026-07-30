@@ -1,0 +1,11 @@
+[package]
+name = "doc-store"
+description = "The SQLite-backed chunk store: the authority for .dx document content, and the resolver that always hands back the true document."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+doc-core = { path = "../doc-core" }
+rusqlite = { version = "0.32", features = ["bundled"] }
