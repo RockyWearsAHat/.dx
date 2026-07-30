@@ -210,40 +210,58 @@ impl Store {
             .document_id(&relative)?
             .ok_or_else(|| StoreError::NotFound(relative.clone()))?;
 
-        let (expected, expected_bytes) = self
+        let expected: String = self
             .connection
             .query_row(
-                "SELECT source_digest, source_bytes FROM documents WHERE id = ?1",
+                "SELECT source_digest FROM documents WHERE id = ?1",
                 params![id],
-                |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+                |row| row.get(0),
             )
             .map_err(StoreError::backend)?;
 
-        let source = chunk::join(self.chunk_texts(id)?.iter().map(String::as_str));
-        let digest = stub::digest_of(&source);
-        if digest != expected {
+        self.source_of_version(&expected)?
+            .ok_or_else(|| StoreError::Corrupt(format!("{relative} has no stored content")))
+    }
+
+    /// The canonical source of the version whose digest is `digest`, or `None` when this store
+    /// has never held it.
+    ///
+    /// This is the digest-keyed read path, and it is what makes the git diff driver work: git
+    /// hands `textconv` a temporary copy of a blob, so the only usable key is the digest written
+    /// inside the pointer itself. Because every version ever saved keeps its manifest, this
+    /// resolves historical revisions too.
+    ///
+    /// The result is verified against `digest` before it is returned, so a damaged store is
+    /// reported rather than served.
+    pub fn source_of_version(&self, digest: &str) -> Result<Option<String>, StoreError> {
+        let texts = self.chunk_texts_of(digest)?;
+        if texts.is_empty() {
+            return Ok(None);
+        }
+        let source = chunk::join(texts.iter().map(String::as_str));
+        let found = stub::digest_of(&source);
+        if found != digest {
             return Err(StoreError::Corrupt(format!(
-                "{relative} reassembled to {} bytes with digest {digest}, but the store \
-                 recorded {expected_bytes} bytes with digest {expected}",
+                "version {digest} reassembled to {} bytes with digest {found} instead",
                 source.len()
             )));
         }
-        Ok(source)
+        Ok(Some(source))
     }
 
-    /// The chunk texts of document `id`, in document order, decompressed.
-    fn chunk_texts(&self, id: i64) -> Result<Vec<String>, StoreError> {
+    /// The chunk texts of the version `digest`, in document order, decompressed.
+    fn chunk_texts_of(&self, digest: &str) -> Result<Vec<String>, StoreError> {
         let mut statement = self
             .connection
             .prepare(
-                "SELECT c.bytes, c.compressed, d.chunk_hash
-                 FROM document_chunks d JOIN chunks c ON c.hash = d.chunk_hash
-                 WHERE d.document_id = ?1 ORDER BY d.position",
+                "SELECT c.bytes, c.compressed, m.chunk_hash
+                 FROM manifest_chunks m JOIN chunks c ON c.hash = m.chunk_hash
+                 WHERE m.digest = ?1 ORDER BY m.position",
             )
             .map_err(StoreError::backend)?;
 
         let rows = statement
-            .query_map(params![id], |row| {
+            .query_map(params![digest], |row| {
                 Ok((
                     row.get::<_, Vec<u8>>(0)?,
                     row.get::<_, i64>(1)? != 0,
@@ -305,37 +323,7 @@ impl Store {
 
         let transaction = self.connection.transaction().map_err(StoreError::backend)?;
 
-        transaction
-            .execute(
-                "INSERT INTO documents
-                    (path, title, summary, source_digest, source_bytes, local_only, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-                 ON CONFLICT(path) DO UPDATE SET
-                    title = excluded.title, summary = excluded.summary,
-                    source_digest = excluded.source_digest,
-                    source_bytes = excluded.source_bytes,
-                    local_only = excluded.local_only, updated_at = excluded.updated_at",
-                params![
-                    relative,
-                    title,
-                    document.summary,
-                    digest,
-                    source.len() as i64,
-                    i64::from(route.is_local_only()),
-                    now
-                ],
-            )
-            .map_err(StoreError::backend)?;
-
-        let id: i64 = transaction
-            .query_row(
-                "SELECT id FROM documents WHERE path = ?1",
-                params![relative],
-                |row| row.get(0),
-            )
-            .map_err(StoreError::backend)?;
-
-        // Store chunk bodies first so the references below always have a target.
+        // Chunk bodies first, so every reference below already has a target.
         let mut chunks_added = 0;
         let mut bytes_added = 0;
         for chunk in chunks {
@@ -358,21 +346,55 @@ impl Store {
             }
         }
 
+        // The manifest for this exact content. Identical content is the same digest, so
+        // re-saving an unchanged document — or reverting to an earlier one — adds nothing.
+        let fresh_manifest = transaction
+            .execute(
+                "INSERT INTO manifests (digest, source_bytes, created_at) VALUES (?1, ?2, ?3)
+                 ON CONFLICT(digest) DO NOTHING",
+                params![digest, source.len() as i64, now],
+            )
+            .map_err(StoreError::backend)?
+            > 0;
+        if fresh_manifest {
+            for (position, chunk) in chunks.iter().enumerate() {
+                transaction
+                    .execute(
+                        "INSERT INTO manifest_chunks (digest, position, chunk_hash)
+                         VALUES (?1, ?2, ?3)",
+                        params![digest, position as i64, chunk.hash],
+                    )
+                    .map_err(StoreError::backend)?;
+            }
+        }
+
         transaction
             .execute(
-                "DELETE FROM document_chunks WHERE document_id = ?1",
-                params![id],
+                "INSERT INTO documents
+                    (path, title, summary, source_digest, local_only, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                 ON CONFLICT(path) DO UPDATE SET
+                    title = excluded.title, summary = excluded.summary,
+                    source_digest = excluded.source_digest,
+                    local_only = excluded.local_only, updated_at = excluded.updated_at",
+                params![
+                    relative,
+                    title,
+                    document.summary,
+                    digest,
+                    i64::from(route.is_local_only()),
+                    now
+                ],
             )
             .map_err(StoreError::backend)?;
-        for (position, chunk) in chunks.iter().enumerate() {
-            transaction
-                .execute(
-                    "INSERT INTO document_chunks (document_id, position, chunk_hash)
-                     VALUES (?1, ?2, ?3)",
-                    params![id, position as i64, chunk.hash],
-                )
-                .map_err(StoreError::backend)?;
-        }
+
+        let id: i64 = transaction
+            .query_row(
+                "SELECT id FROM documents WHERE path = ?1",
+                params![relative],
+                |row| row.get(0),
+            )
+            .map_err(StoreError::backend)?;
 
         write_read_models(&transaction, id, document)?;
         transaction.commit().map_err(StoreError::backend)?;
@@ -443,8 +465,9 @@ impl Store {
         let mut statement = self
             .connection
             .prepare(
-                "SELECT path, title, summary, source_bytes, local_only, updated_at
-                 FROM documents ORDER BY path",
+                "SELECT d.path, d.title, d.summary, m.source_bytes, d.local_only, d.updated_at
+                 FROM documents d JOIN manifests m ON m.digest = d.source_digest
+                 ORDER BY d.path",
             )
             .map_err(StoreError::backend)?;
         let rows = statement
@@ -517,8 +540,10 @@ impl Store {
                 "SELECT
                     (SELECT count(*) FROM documents),
                     (SELECT count(*) FROM chunks),
-                    (SELECT count(*) FROM document_chunks),
-                    (SELECT coalesce(sum(source_bytes), 0) FROM documents),
+                    (SELECT count(*) FROM documents d
+                       JOIN manifest_chunks mc ON mc.digest = d.source_digest),
+                    (SELECT coalesce(sum(m.source_bytes), 0) FROM documents d
+                       JOIN manifests m ON m.digest = d.source_digest),
                     (SELECT coalesce(sum(length(bytes)), 0) FROM chunks)",
                 [],
                 |row| {
@@ -540,7 +565,7 @@ impl Store {
         let removed = self
             .connection
             .execute(
-                "DELETE FROM chunks WHERE hash NOT IN (SELECT chunk_hash FROM document_chunks)",
+                "DELETE FROM chunks WHERE hash NOT IN (SELECT chunk_hash FROM manifest_chunks)",
                 [],
             )
             .map_err(StoreError::backend)?;
@@ -891,18 +916,80 @@ mod tests {
     }
 
     #[test]
-    fn deleting_a_document_removes_its_stub_and_collects_its_chunks() {
+    fn deleting_a_document_removes_its_stub_and_stops_resolving_the_path() {
         let root = scratch("delete");
         let mut store = Store::open(&root).expect("open");
-        store.ingest("gone.dx", NOTES).expect("ingest");
+        let saved = store.ingest("gone.dx", NOTES).expect("ingest");
         store.delete("gone.dx").expect("delete");
 
         assert!(!root.join("gone.dx").exists(), "stub should be gone");
-        assert_eq!(store.stats().expect("stats").chunks, 0);
         assert!(matches!(
             store.source("gone.dx"),
             Err(StoreError::NotFound(_))
         ));
+        assert_eq!(store.stats().expect("stats").documents, 0);
+        // The version itself is still addressable, so an old commit still diffs.
+        assert_eq!(
+            store
+                .source_of_version(&saved.digest)
+                .expect("version lookup"),
+            Some(NOTES.to_string())
+        );
+    }
+
+    #[test]
+    fn an_earlier_version_stays_addressable_by_its_digest() {
+        // This is what lets `git log -p` and `git show` render a document at an old revision.
+        let root = scratch("history");
+        let mut store = Store::open(&root).expect("open");
+        let first = store.ingest("doc.dx", NOTES).expect("first");
+        let changed =
+            "::heading level=1 id=notes\nNotes\n::end\n\n::paragraph id=p\nrewritten\n::end\n";
+        let second = store.ingest("doc.dx", changed).expect("second");
+
+        assert_ne!(first.digest, second.digest);
+        assert_eq!(
+            store.source_of_version(&first.digest).expect("old"),
+            Some(NOTES.to_string())
+        );
+        assert_eq!(
+            store.source_of_version(&second.digest).expect("new"),
+            Some(changed.to_string())
+        );
+        // The current read still gives the newest content.
+        assert_eq!(store.source("doc.dx").expect("current"), changed);
+    }
+
+    #[test]
+    fn keeping_history_costs_only_the_blocks_that_changed() {
+        let root = scratch("history-cost");
+        let mut store = Store::open(&root).expect("open");
+        store
+            .ingest(
+                "doc.dx",
+                "::paragraph id=a\nkeep\n::end\n\n::paragraph id=b\nfirst\n::end\n",
+            )
+            .expect("first");
+        let after = store
+            .ingest(
+                "doc.dx",
+                "::paragraph id=a\nkeep\n::end\n\n::paragraph id=b\nsecond\n::end\n",
+            )
+            .expect("second");
+
+        assert_eq!(after.chunks_added, 1, "only the edited block is new");
+        // Three distinct blocks stored across two versions of a two-block document.
+        assert_eq!(store.stats().expect("stats").chunks, 3);
+    }
+
+    #[test]
+    fn an_unknown_version_is_absent_rather_than_an_error() {
+        let root = scratch("unknown-version");
+        let store = Store::open(&root).expect("open");
+        assert_eq!(
+            store.source_of_version(&"0".repeat(64)).expect("lookup"),
+            None
+        );
     }
 
     #[test]
@@ -915,6 +1002,7 @@ mod tests {
         store.delete("drop.dx").expect("delete");
 
         assert_eq!(store.source("keep.dx").expect("still there"), shared);
+        assert_eq!(store.stats().expect("stats").documents, 1);
         assert_eq!(store.stats().expect("stats").chunks, 1);
     }
 
@@ -1070,8 +1158,8 @@ mod tests {
             .connection
             .execute(
                 "UPDATE chunks SET bytes = ?1, compressed = 0, plain_bytes = ?2
-                 WHERE hash = (SELECT chunk_hash FROM document_chunks
-                               WHERE document_id = 1 ORDER BY position DESC LIMIT 1)",
+                 WHERE hash = (SELECT chunk_hash FROM manifest_chunks
+                               ORDER BY position DESC LIMIT 1)",
                 params![replacement.as_bytes(), replacement.len() as i64],
             )
             .expect("tamper");

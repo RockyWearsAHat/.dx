@@ -89,7 +89,7 @@ fn write_pack(path: &Path, documents: &[(String, Document)]) -> Result<(), Store
 /// The repo pack is read first so a local pack entry wins for the same path — the local copy
 /// is the one this machine last worked on. A pack that will not decode is reported rather than
 /// skipped: silently ignoring it would look exactly like the document never existing.
-pub(crate) fn load_all(root: &Path) -> Result<BTreeMap<String, String>, StoreError> {
+pub fn load_all(root: &Path) -> Result<BTreeMap<String, String>, StoreError> {
     let mut found = BTreeMap::new();
     let (repo_path, local_path) = paths(root);
     for path in [repo_path, local_path] {
@@ -129,6 +129,16 @@ fn read_pack(path: &Path) -> Result<Vec<(String, String)>, StoreError> {
         out.push((entry.path.clone(), source));
     }
     Ok(out)
+}
+
+/// The canonical source of one document as the packs hold it, or `None` when neither pack
+/// carries it.
+///
+/// This is the read path that needs no database: it lets a reader resolve a stub in a fresh
+/// clone — or any workspace whose index has not been built — without creating anything on
+/// disk. Reading a document must never have a side effect.
+pub fn source(root: &Path, relative: &str) -> Result<Option<String>, StoreError> {
+    Ok(load_all(root)?.remove(relative))
 }
 
 /// The `.gitignore` lines a workspace needs so the right things are committed.

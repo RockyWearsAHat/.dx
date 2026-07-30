@@ -34,7 +34,7 @@ mod schema;
 mod store;
 pub mod stub;
 
-pub use store::{Saved, Stats, Store, Summary, SyncReport};
+pub use store::{discover as discover_documents, Saved, Stats, Store, Summary, SyncReport};
 
 use core::fmt;
 

@@ -49,6 +49,7 @@ dependencies = [
  "doc-core",
  "doc-run",
  "doc-shot",
+ "doc-store",
  "serde_json",
 ]
 

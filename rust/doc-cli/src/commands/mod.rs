@@ -8,6 +8,7 @@ pub mod edit;
 pub mod exec;
 pub mod find;
 pub mod setup;
+pub mod store;
 pub mod view;
 
 use crate::args::Args;
@@ -46,6 +47,8 @@ pub fn dispatch(command: &str, args: &Args) -> Result<Output, String> {
         "outline" => view::run_outline(args).map(Output::Document),
         "render" | "html" => view::run_render(args).map(Output::Document),
         "ls" | "list" => find::run_ls(args).map(Output::Document),
+        "textconv" => store::run_textconv(args).map(Output::Document),
+        "stats" => store::run_stats(args).map(Output::Document),
         "search" | "find" => find::run_search(args).map(Output::Document),
         "help" | "--help" | "-h" => setup::run_help(args).map(Output::Document),
         "version" | "--version" => Ok(Output::Document(format!(
@@ -60,6 +63,8 @@ pub fn dispatch(command: &str, args: &Args) -> Result<Output, String> {
         "append" => edit::run_append(args).map(Output::Report),
         "fmt" | "format" => edit::run_fmt(args).map(Output::Report),
         "run" => exec::run(args).map(Output::Report),
+        "sync" => store::run_sync(args).map(Output::Report),
+        "git-setup" => store::run_git_setup(args).map(Output::Report),
         "install" => setup::run_install(args).map(Output::Report),
         "doctor" => setup::run_doctor(args).map(Output::Report),
 
