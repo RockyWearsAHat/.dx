@@ -116,35 +116,46 @@ pub(super) fn parse_inline_block(trimmed: &str) -> Option<(String, &str)> {
     None
 }
 
-/// Build the nested list structure from flat `(text, indent)` items, faithfully reproducing
-/// the reference `buildNestedListStructure` — including its object-aliasing quirk where
-/// `nested` children attach to discarded stack copies, so the returned items never actually
-/// carry nesting. The result is the sequence of items at which the working stack emptied.
+/// The list of children at `depth` levels below `items`, following the last item at each
+/// level. When a level has no item to nest under, descent stops there and the shallowest
+/// available list is returned, so an over-indented first item still lands somewhere.
+fn child_list_at_depth(items: &mut Vec<Item>, depth: usize) -> &mut Vec<Item> {
+    let mut current = items;
+    for _ in 0..depth {
+        if current.is_empty() {
+            break;
+        }
+        let last = current.len() - 1;
+        current = &mut current[last].nested;
+    }
+    current
+}
+
+/// Build a nested list tree from flat `(text, indent)` pairs.
+///
+/// An item indented further than the item before it becomes that item's child; an item at
+/// the same or a shallower indent closes the deeper levels and continues at its own. Every
+/// input item appears exactly once in the result — nothing is dropped, whatever the
+/// indentation, which is what keeps a saved list identical to the one that was written.
+///
+/// Complexity: `O(n · d)` for `n` items nested `d` deep (`d` is the descent per item).
 pub(super) fn build_nested_list_structure(flat: &[(String, usize)]) -> Vec<Item> {
-    let mut result: Vec<Item> = Vec::new();
-    // The stack tracks only indents; the reference pushes copies, so child attachment is
-    // never observable in `result`. We model exactly that observable behavior.
-    let mut stack_indents: Vec<usize> = Vec::new();
+    let mut roots: Vec<Item> = Vec::new();
+    // Indents of the ancestors currently open, outermost first.
+    let mut open: Vec<usize> = Vec::new();
 
     for (text, indent) in flat {
-        while let Some(&top) = stack_indents.last() {
-            if top < *indent {
-                break;
-            }
-            stack_indents.pop();
+        while open.last().is_some_and(|&top| *indent <= top) {
+            open.pop();
         }
-
-        if stack_indents.is_empty() {
-            result.push(Item {
-                text: text.clone(),
-                ..Item::default()
-            });
-        }
-
-        stack_indents.push(*indent);
+        child_list_at_depth(&mut roots, open.len()).push(Item {
+            text: text.clone(),
+            ..Item::default()
+        });
+        open.push(*indent);
     }
 
-    result
+    roots
 }
 
 /// Split a list body's lines into `(text, indent)` pairs, recognizing `-`/`*` and `N.`
