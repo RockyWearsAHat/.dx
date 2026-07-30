@@ -879,7 +879,7 @@ mod tests {
     fn storage_is_smaller_than_the_source_it_holds() {
         let root = scratch("compaction");
         let mut store = Store::open(&root).expect("open");
-        let big = include_str!("../../../examples/showcase.dx");
+        let big = include_str!("../../doc-core/tests/fixtures/showcase.input.dx");
         store.ingest("showcase.dx", big).expect("ingest");
 
         let stats = store.stats().expect("stats");

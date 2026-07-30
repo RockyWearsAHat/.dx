@@ -328,27 +328,27 @@ mod tests {
     /// document `.dx` files (see the report for the exact node commands used).
     const REAL_DOC_CASES: &[(&str, &str)] = &[
         (
-            include_str!("../../../../examples/welcome.dx"),
+            include_str!("../../tests/fixtures/welcome.input.dx"),
             include_str!("../../tests/fixtures/welcome.expected.dx"),
         ),
         (
-            include_str!("../../../../examples/tutorial.dx"),
+            include_str!("../../tests/fixtures/tutorial.input.dx"),
             include_str!("../../tests/fixtures/tutorial.expected.dx"),
         ),
         (
-            include_str!("../../../../examples/block-reference.dx"),
+            include_str!("../../tests/fixtures/block-reference.input.dx"),
             include_str!("../../tests/fixtures/block-reference.expected.dx"),
         ),
         (
-            include_str!("../../../../examples/compactness-comparison.dx"),
+            include_str!("../../tests/fixtures/compactness-comparison.input.dx"),
             include_str!("../../tests/fixtures/compactness-comparison.expected.dx"),
         ),
         (
-            include_str!("../../../../examples/footprint-pair.dx"),
+            include_str!("../../tests/fixtures/footprint-pair.input.dx"),
             include_str!("../../tests/fixtures/footprint-pair.expected.dx"),
         ),
         (
-            include_str!("../../../../documents/compact-proof.dx"),
+            include_str!("../../tests/fixtures/compact-proof.input.dx"),
             include_str!("../../tests/fixtures/compact-proof.expected.dx"),
         ),
     ];

@@ -549,9 +549,9 @@ mod tests {
     #[test]
     fn every_real_example_renders_without_leaking_block_markers() {
         for source in [
-            include_str!("../../../../examples/welcome.dx"),
-            include_str!("../../../../examples/tutorial.dx"),
-            include_str!("../../../../examples/block-reference.dx"),
+            include_str!("../../tests/fixtures/welcome.input.dx"),
+            include_str!("../../tests/fixtures/tutorial.input.dx"),
+            include_str!("../../tests/fixtures/block-reference.input.dx"),
         ] {
             let page = html(&parse(source), &HtmlOptions::default());
             assert!(!page.contains("::end"), "raw block marker leaked into HTML");

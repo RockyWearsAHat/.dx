@@ -21,9 +21,38 @@ print(np.percentile([12, 18, 9, 44, 15], 95))
 ::end
 ```
 
-That is the whole idea. The file is plain text, so `cat`, `grep`, `git diff`, and any editor
-work on it. Open it in VS Code and it renders as a page. Run `dx run` and the code executes
-and stores what it produced, right there in the file, for whoever opens it next.
+That is the document. Open it in VS Code and it renders as a page — clean, always, like a
+sheet of paper. Run `dx run` and the code executes and stores what it produced, so whoever
+opens it next sees the results, not just the source.
+
+### Where the document actually lives
+
+On disk, `notes.dx` is one line:
+
+```text
+~ dx1 c939d5becfb64b14193566ffed7ccf8217c90bf5c90e6ba2a5ce8bf87903c823
+```
+
+The content is in the workspace store, in `.doc/`, held as **content-addressed chunks** — one
+per block, compressed, and stored once no matter how many documents or versions share it. Edit
+one paragraph in a fifty-block document and only that paragraph is new bytes.
+
+Everything that reads a document resolves that pointer and gets the real thing: `dx text`,
+`dx render`, the editor, and every MCP tool an agent calls. Git does too — after `dx git-setup`,
+`git diff`, `git show`, and `git log -p` render document diffs, not digests:
+
+```diff
+ ::paragraph id=intro
+-The numbers below are computed when this document runs.
++The numbers below are recomputed on every run.
+ ::end
+```
+
+The digest is *in* the pointer so that the file changes exactly when the content does. Git
+keeps tracking each document individually, and nothing has to be kept in sync by hand.
+
+Measured on this repository's six example documents: 17,357 bytes of canonical source becomes
+an 8,564-byte pack — 49%, losslessly.
 
 ---
 
@@ -65,9 +94,27 @@ dx search   "deploy" .               # find documents by content
 Add `--section <block-id>` to any reading command to get one part of a long document.
 `dx help` lists everything.
 
+### The store
+
+```bash
+dx sync      .          # adopt, restore, and repair — run this in a new project
+dx git-setup .          # make git diff/show/log -p render documents
+dx stats     .          # documents, block sharing, compaction
+dx textconv  notes.dx   # print what a pointer stands for
+```
+
+`dx sync` is the one command that repairs a workspace. It adopts any plain-text `.dx` file
+something else wrote, rebuilds the index from `.doc/repo.dxcp` when it is missing — the
+fresh-clone case, where all you have is pointers and the committed pack — and rewrites pointers
+that drifted. It never discards content: a pointer it cannot resolve is reported, not blanked.
+
+Commit `.doc/repo.dxcp` — that is where your documents are. `dx git-setup` adds the
+`.gitignore` lines that keep the rebuildable index out.
+
 ### Writing
 
-Edit `.dx` files in any editor — they are text. When you want a targeted change:
+Edit `.dx` files in your editor and they render as you go. When you want a targeted change from
+the command line:
 
 ```bash
 dx new    guide.dx --title "Deployment guide"
@@ -134,24 +181,36 @@ An assistant without MCP support needs no configuration at all — `dx` is a com
 ## How it fits together
 
 ```text
-                    ┌─────────────┐
-     notes.dx ─────►│  doc-core   │──► HTML page  ──► browser, editor, screenshot
-    (plain text)    │  parse +    │──► Markdown   ──► agents, diffs
-                    │  render     │──► outline    ──► navigation
-                    └──────┬──────┘
-                           │ compiled twice
-              ┌────────────┴────────────┐
-        native binary              WebAssembly
-        (dx CLI, dx mcp)           (VS Code extension)
+   notes.dx            .doc/index.db  +  .doc/repo.dxcp
+  (one-line   ────────►  chunks, manifests, packs  ◄──── the content
+   pointer)                        │
+                                   │ resolve (always the true document)
+                                   ▼
+                            ┌─────────────┐
+                            │  doc-core   │──► HTML page ──► browser, editor, screenshot
+                            │  parse +    │──► Markdown  ──► agents, git diffs
+                            │  render     │──► outline   ──► navigation
+                            └──────┬──────┘
+                                   │ compiled twice
+                      ┌────────────┴────────────┐
+                native binary              WebAssembly
+                (dx CLI, dx mcp)           (VS Code extension)
 ```
 
 One engine, compiled for both hosts. That is what guarantees a document cannot look like
 one thing in your editor and another thing to an agent — the editor and the CLI produce
-byte-identical HTML.
+byte-identical HTML, and there is a test that asserts it.
+
+A chunk holds the exact canonical text the writer would emit for one block, so reassembling a
+document is concatenation rather than re-serialization. That is what makes the store lossless:
+it cannot drop a field it had not heard of. Each saved version keeps a manifest — a list of the
+chunks it is made of — so an old revision stays readable for almost nothing, which is what lets
+`git log -p` render history.
 
 | Crate | Responsibility |
 |-------|----------------|
-| `rust/doc-core` | The format and the views: parse, canonical write, HTML, Markdown, outline, sections. No OS dependencies; compiles to wasm |
+| `rust/doc-core` | The format and the views: parse, canonical write, HTML, Markdown, outline, sections, and content-addressed chunks. No OS dependencies; compiles to wasm |
+| `rust/doc-store` | The SQLite chunk store and the resolver: manifests, packs, git routing, pointers |
 | `rust/doc-run` | Executing code blocks: language plans, dependency installation, sandboxes, timeouts |
 | `rust/doc-shot` | Rendering a document to PNG with an installed Chromium browser |
 | `rust/doc-cli` | The `dx` command and the MCP server |

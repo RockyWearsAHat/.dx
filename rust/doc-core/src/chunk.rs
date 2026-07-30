@@ -338,19 +338,19 @@ mod tests {
     const REAL_DOCUMENTS: &[(&str, &str)] = &[
         (
             "examples/welcome.dx",
-            include_str!("../../../examples/welcome.dx"),
+            include_str!("../tests/fixtures/welcome.input.dx"),
         ),
         (
             "examples/tutorial.dx",
-            include_str!("../../../examples/tutorial.dx"),
+            include_str!("../tests/fixtures/tutorial.input.dx"),
         ),
         (
             "examples/showcase.dx",
-            include_str!("../../../examples/showcase.dx"),
+            include_str!("../tests/fixtures/showcase.input.dx"),
         ),
         (
             "examples/block-reference.dx",
-            include_str!("../../../examples/block-reference.dx"),
+            include_str!("../tests/fixtures/block-reference.input.dx"),
         ),
     ];
 
