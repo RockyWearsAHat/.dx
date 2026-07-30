@@ -235,26 +235,30 @@ fn checklist_html(block: &Block, values: &Values) -> String {
     out
 }
 
-/// Render a code block: a labelled header bar plus the verbatim source.
+/// Render a code block: the verbatim source, and a marginal note saying what it is.
+///
+/// There is no header bar and no badges. What the block *is* — its language, whether it runs,
+/// what it needs — goes into one `data-label` attribute that the stylesheet sets as a faint
+/// note in the margin. The code is the content; everything else stays quiet.
 fn code_html(block: &Block, text: &str) -> String {
     let language = if block.language.is_empty() {
         "text"
     } else {
         &block.language
     };
-    let mut head = format!("<span>{}</span>", escape_html(language));
+
+    let mut parts = vec![language.to_string()];
     if block.run {
-        head.push_str("<span class=\"dx-badge dx-badge-run\">run</span>");
+        parts.push("run".to_string());
     }
     if !block.deps.is_empty() {
-        head.push_str(&format!(
-            "<span class=\"dx-badge\">{}</span>",
-            escape_html(&block.deps)
-        ));
+        parts.push(block.deps.clone());
     }
+
     format!(
-        "<div{}>\n<div class=\"dx-code-head\">{head}</div>\n<pre><code class=\"language-{}\">{}</code></pre>\n</div>",
+        "<div{} data-label=\"{}\">\n<pre><code class=\"language-{}\">{}</code></pre>\n</div>",
         attributes(block, &["dx-code"]),
+        escape_html(&parts.join(" · ")),
         escape_html(language),
         escape_html(text)
     )
@@ -265,30 +269,31 @@ fn code_html(block: &Block, text: &str) -> String {
 /// A block that declared `format=svg` or `format=html` had its code *draw* something, so
 /// the output is rendered as markup rather than quoted as text — that is what lets a
 /// generated chart appear as a chart. The markup is sanitized like any author markup.
+/// A successful run needs no announcement: the result sits under the code that produced it,
+/// set apart by the stylesheet, and that is all a reader needs. A *failure* is different — it
+/// is the one thing about a run worth saying out loud, so only errors carry a note.
 fn output_html(block: &Block, text: &str) -> String {
     let failed = block.status == "error" || block.exit != 0;
     if !failed && !block.format.is_empty() {
         return rendered_output_html(block, text);
     }
-    let (badge, classes): (&str, &[&str]) = if failed {
-        (
-            "<span class=\"dx-badge dx-badge-error\">error</span>",
-            &["dx-output", "dx-output-error"],
-        )
+    if !failed {
+        return format!(
+            "<div{}>\n<pre>{}</pre>\n</div>",
+            attributes(block, &["dx-output"]),
+            escape_html(text)
+        );
+    }
+
+    let note = if block.exit != 0 {
+        format!("error · exit {}", block.exit)
     } else {
-        (
-            "<span class=\"dx-badge dx-badge-ok\">ok</span>",
-            &["dx-output"],
-        )
-    };
-    let exit = if block.exit != 0 {
-        format!("<span>exit {}</span>", block.exit)
-    } else {
-        String::new()
+        "error".to_string()
     };
     format!(
-        "<div{}>\n<div class=\"dx-output-head\"><span>output</span>{badge}{exit}</div>\n<pre>{}</pre>\n</div>",
-        attributes(block, classes),
+        "<div{} data-note=\"{}\">\n<pre>{}</pre>\n</div>",
+        attributes(block, &["dx-output", "dx-output-error"]),
+        escape_html(&note),
         escape_html(text)
     )
 }
@@ -304,8 +309,7 @@ fn rendered_output_html(block: &Block, text: &str) -> String {
         // The block promised markup and produced none; show what it did print instead of
         // silently rendering an empty box.
         return format!(
-            "<div{}>\n<div class=\"dx-output-head\"><span>output</span>\
-             <span class=\"dx-badge dx-badge-error\">no {} produced</span></div>\n<pre>{}</pre>\n</div>",
+            "<div{} data-note=\"no {} produced\">\n<pre>{}</pre>\n</div>",
             attributes(block, &["dx-output", "dx-output-error"]),
             escape_html(&block.format),
             escape_html(text)
@@ -443,21 +447,33 @@ mod tests {
     }
 
     #[test]
-    fn runnable_code_shows_its_badges_and_output() {
+    fn a_code_block_names_itself_in_one_marginal_label() {
         let out = fragment(
             "::code id=c lang=python run deps=rich\nprint(1)\n::end\n\n::output id=o for=c status=ok\n1\n::end\n",
         );
-        assert!(out.contains("dx-badge-run"));
-        assert!(out.contains(">rich<"));
-        assert!(out.contains("dx-badge-ok"));
-        assert!(out.contains("<pre>1</pre>"));
+        // Language, runnability, and dependencies in one quiet attribute — no header bar and
+        // no pills in the markup at all.
+        assert!(out.contains("data-label=\"python · run · rich\""), "{out}");
+        assert!(!out.contains("dx-badge"), "{out}");
+        assert!(!out.contains("dx-code-head"), "{out}");
+
+        // A successful run is not announced; the result simply follows the code.
+        assert!(out.contains("<pre>1</pre>"), "{out}");
+        assert!(!out.contains("dx-output-head"), "{out}");
+        assert!(!out.contains("data-note"), "success needs no note: {out}");
+    }
+
+    #[test]
+    fn a_plain_code_block_still_says_what_language_it_is() {
+        let out = fragment("::code id=c lang=js\nconst x = 1;\n::end\n");
+        assert!(out.contains("data-label=\"js\""), "{out}");
     }
 
     #[test]
     fn failed_output_is_marked_with_its_exit_code() {
         let out = fragment("::output id=o for=c status=error exit=2\nboom\n::end\n");
         assert!(out.contains("dx-output-error"));
-        assert!(out.contains("exit 2"));
+        assert!(out.contains("data-note=\"error · exit 2\""), "{out}");
     }
 
     #[test]
