@@ -9,7 +9,7 @@
 use super::attrs::{attr, parse_leading_attributes, Attr};
 use super::lines::{
     build_nested_list_structure, parse_block_header, parse_checklist_line, parse_inline_block,
-    parse_list_items, unwrap_synthetic_paragraph_wrappers,
+    parse_list_items,
 };
 use super::util::{
     clamp_heading_level, js_trim, js_trim_end, normalize_class_name, parse_boolean_attribute,
@@ -163,8 +163,7 @@ fn push_block(blocks: &mut Vec<Block>, block_type: &str, attrs: &[Attr], content
 /// Parse a DOCSRC body (block syntax) into raw, un-normalized blocks. Port of
 /// `parseDocsrcBlocks`.
 pub(super) fn parse_docsrc_blocks(body: &str) -> Vec<Block> {
-    let unwrapped = unwrap_synthetic_paragraph_wrappers(body);
-    let stripped = strip_leading_newlines(&unwrapped);
+    let stripped = strip_leading_newlines(body);
     let lines: Vec<String> = stripped.split('\n').map(str::to_string).collect();
     let mut blocks: Vec<Block> = Vec::new();
 

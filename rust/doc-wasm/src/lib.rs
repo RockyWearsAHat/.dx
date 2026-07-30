@@ -23,7 +23,7 @@
 
 mod dto;
 
-use dto::DocumentDto;
+use dto::{ChunkDto, DocumentDto};
 use wasm_bindgen::prelude::*;
 
 /// Serialize any displayable error into a JS `Error`-friendly string value.
@@ -62,26 +62,33 @@ pub fn stringify(doc_json: &str) -> Result<String, JsValue> {
     Ok(doc_core::format::stringify(&document))
 }
 
-/// Pack a document (JSON, [`dto::DocumentDto`] shape) into the DOCB1 binary codec bytes.
+/// Split a document (JSON, [`dto::DocumentDto`] shape) into its content-addressed chunks,
+/// returned as JSON: `[{"hash": "<sha256 hex>", "text": "<canonical block source>"}, …]`.
 ///
-/// Mirrors the reference `packDocument`. Returns the packed bytes as a `Uint8Array`, or an
-/// error if `doc_json` is not valid JSON of the expected shape.
+/// This is the same split the native store uses, so an editor and the CLI address a block
+/// identically. Returns an error if `doc_json` is not valid JSON of the expected shape.
 #[wasm_bindgen]
-pub fn pack(doc_json: &str) -> Result<Vec<u8>, JsValue> {
+pub fn split_chunks(doc_json: &str) -> Result<String, JsValue> {
     let dto: DocumentDto = serde_json::from_str(doc_json).map_err(js_err)?;
     let document = (&dto).into();
-    Ok(doc_core::docbin::pack(&document))
+    let chunks: Vec<ChunkDto> = doc_core::chunk::split(&document)
+        .into_iter()
+        .map(|chunk| ChunkDto {
+            hash: chunk.hash,
+            text: chunk.text,
+        })
+        .collect();
+    serde_json::to_string(&chunks).map_err(js_err)
 }
 
-/// Unpack DOCB1 binary bytes back into a document, returned as JSON ([`dto::DocumentDto`]).
+/// Rebuild canonical `.dx` source from ordered per-block chunk texts (a JSON array of
+/// strings), the inverse of [`split_chunks`].
 ///
-/// Mirrors the reference `unpackDocument`. Returns an error if `blob` is not a valid DOCB1
-/// payload (bad magic, truncated, …).
+/// Returns an error if `texts_json` is not a JSON array of strings.
 #[wasm_bindgen]
-pub fn unpack(blob: &[u8]) -> Result<String, JsValue> {
-    let document = doc_core::docbin::unpack(blob).map_err(|err| js_err(format!("{err:?}")))?;
-    let dto = DocumentDto::from(&document);
-    serde_json::to_string(&dto).map_err(js_err)
+pub fn join_chunks(texts_json: &str) -> Result<String, JsValue> {
+    let texts: Vec<String> = serde_json::from_str(texts_json).map_err(js_err)?;
+    Ok(doc_core::chunk::join(texts.iter().map(String::as_str)))
 }
 
 /// Render `.dx` source to a self-contained HTML page.
