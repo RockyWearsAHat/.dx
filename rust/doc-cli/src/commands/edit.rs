@@ -1,32 +1,28 @@
-//! Writing commands: `new`, `fmt`, `set`, and `append`.
+//! Writing commands: `new`, `fmt`, `set`, `append`, `insert`, and `remove`.
 //!
 //! Editing a `.dx` file with an ordinary text editor is always allowed and always safe —
 //! these commands exist because *targeted* edits are safer still. `dx set` replaces one
 //! block by id without touching a byte of the rest, which is what lets an agent change a
 //! paragraph in a long document without rewriting (and risking) the whole file.
+//!
+//! They are also the whole vocabulary the editing surfaces speak. Clicking a paragraph in
+//! DX.app and typing into it is `dx source` then `dx set`; pressing Return at the end of it
+//! is `dx insert`; emptying a block and pressing Backspace is `dx remove`. A person editing
+//! a page and an agent editing a document are doing the identical thing through the identical
+//! commands, which is the only way the two can be trusted to agree.
 
 use std::path::{Path, PathBuf};
 
+use doc_core::edit;
 use doc_core::format::{parse, stringify};
-use doc_core::model::{Block, Document};
+use doc_core::model::Block;
 
 use crate::args::Args;
 use crate::workspace;
 
-/// Block kinds `dx append` accepts, matching the format's own block types.
-const APPENDABLE: &[&str] = &[
-    "paragraph",
-    "heading",
-    "quote",
-    "code",
-    "bulleted-list",
-    "numbered-list",
-    "checklist",
-    "rule",
-    "html",
-    "svg",
-    "mermaid",
-];
+/// Block kinds `dx append` accepts — the format's own authorable kinds, named once in
+/// `doc-core` so the command line and every editing surface agree on what may be written.
+const APPENDABLE: &[&str] = edit::AUTHORABLE;
 
 /// `dx new <file>` — create a document with a title heading and an opening paragraph.
 pub fn run_new(args: &Args) -> Result<String, String> {
@@ -97,11 +93,8 @@ pub fn run_set(args: &Args) -> Result<String, String> {
         .ok_or_else(|| "a block id is required — see `dx outline <file>`".to_string())?;
     let body = body_argument(args)?;
 
-    let mut document = parse(&workspace::read(&path)?);
-    let index = find_block(&document, id)?;
-    apply_body(&mut document.blocks[index], &body);
-
-    workspace::save(&path, &document)?;
+    let updated = edit::set_block(&workspace::read(&path)?, id, &body)?;
+    workspace::save(&path, &parse(&updated))?;
     Ok(format!("updated `{id}` in {}\n", path.display()))
 }
 
@@ -127,52 +120,58 @@ pub fn run_append(args: &Args) -> Result<String, String> {
         deps: args.value("deps").unwrap_or_default().to_string(),
         ..Block::default()
     };
-    apply_body(&mut block, &body);
+    edit::set_body(&mut block, &body);
     document.blocks.push(block);
 
     workspace::save(&path, &document)?;
     Ok(format!("appended to {}\n", path.display()))
 }
 
-/// Put `body` into whichever field carries content for this block kind.
+/// `dx source <file> --block ID` — the exact characters of one block, and nothing else.
 ///
-/// List blocks keep their content as items, so a body of lines becomes one item per line;
-/// every other kind stores text directly.
-fn apply_body(block: &mut Block, body: &str) {
-    match block.kind.as_str() {
-        "bulleted-list" | "numbered-list" | "checklist" => {
-            block.items = body
-                .lines()
-                .map(|line| line.trim().trim_start_matches(['-', '*']).trim())
-                .filter(|line| !line.is_empty())
-                .map(|line| doc_core::model::Item {
-                    text: line.to_string(),
-                    ..doc_core::model::Item::default()
-                })
-                .collect();
-            block.text.clear();
-        }
-        "image" => block.alt = body.to_string(),
-        _ => block.text = body.to_string(),
+/// This is what an editing surface puts in the field when a reader clicks a paragraph: not
+/// the rendered HTML, which has already lost the difference between the text and the way it
+/// is drawn, but the text the author actually wrote.
+///
+/// Reading only. With no `--block` it prints the whole document's canonical source.
+pub fn run_source(args: &Args) -> Result<String, String> {
+    let path = path_argument(args, 0, "a .dx file is required")?;
+    let source = workspace::read(&path)?;
+
+    match args.value("block").or_else(|| args.positional(1)) {
+        Some(id) => edit::block_source(&source, id),
+        None => Ok(stringify(&parse(&source))),
     }
 }
 
-/// Locate a block by id, listing the real ids when the requested one is absent.
-fn find_block(document: &Document, id: &str) -> Result<usize, String> {
-    let wanted = id.trim().trim_start_matches('#').to_ascii_lowercase();
-    document
-        .blocks
-        .iter()
-        .position(|block| block.id.to_ascii_lowercase() == wanted)
-        .ok_or_else(|| {
-            let available = document
-                .blocks
-                .iter()
-                .map(|block| block.id.clone())
-                .collect::<Vec<_>>()
-                .join(", ");
-            format!("no block named `{id}`. Available: {available}")
-        })
+/// `dx insert <file> --after ID` — add a block directly after another one.
+///
+/// `dx append` can only reach the end of a document, which makes it useless for the one
+/// thing a person writing a page does constantly: press Return in the middle and keep going.
+/// The new block's id is printed so the caller can put the cursor in it.
+pub fn run_insert(args: &Args) -> Result<String, String> {
+    let path = path_argument(args, 0, "a .dx file is required")?;
+    let (updated, id) = edit::insert_after(
+        &workspace::read(&path)?,
+        args.value("after"),
+        args.value("type").unwrap_or("paragraph"),
+        args.value("text").unwrap_or_default(),
+    )?;
+    workspace::save(&path, &parse(&updated))?;
+    Ok(format!("{id}\n"))
+}
+
+/// `dx remove <file> <block-id>` — take one block out of a document.
+pub fn run_remove(args: &Args) -> Result<String, String> {
+    let path = path_argument(args, 0, "a .dx file is required")?;
+    let id = args
+        .value("block")
+        .or_else(|| args.positional(1))
+        .ok_or_else(|| "a block id is required — see `dx outline <file>`".to_string())?;
+
+    let updated = edit::remove_block(&workspace::read(&path)?, id)?;
+    workspace::save(&path, &parse(&updated))?;
+    Ok(format!("removed `{id}` from {}\n", path.display()))
 }
 
 /// Read the new block body from `--text`, `--from <file>`, or standard input.

@@ -15,8 +15,15 @@
 
 mod args;
 mod commands;
+mod daemon;
+mod desktop;
+mod extension;
+mod home;
 mod install;
 mod mcp;
+mod policies;
+mod service;
+mod state;
 mod workspace;
 
 use std::io::{self, BufReader, Write};
@@ -42,6 +49,10 @@ fn main() -> ExitCode {
     }
 
     let parsed = Args::parse(&raw[1..]);
+    // Both servers run until they are stopped, so neither returns an `Output` to print.
+    if command == "serve" {
+        return serve_documents(&parsed);
+    }
     match commands::dispatch(&command, &parsed) {
         Ok(output) => emit(&output, &parsed),
         Err(message) => {
@@ -97,6 +108,32 @@ fn serve_mcp() -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             let _ = writeln!(io::stderr(), "dx mcp — fatal I/O error: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Run `dx serve`, the local rendering service, until the process is stopped.
+///
+/// The banner goes to stdout: unlike `dx mcp` there is no protocol stream to keep clean, and
+/// a person who started a server wants to see which port it took.
+fn serve_documents(args: &Args) -> ExitCode {
+    let port = match args.value("port") {
+        None => None,
+        Some(value) => match value.parse::<u16>() {
+            Ok(port) => Some(port),
+            Err(_) => {
+                let _ = writeln!(io::stderr(), "`{value}` is not a port number");
+                return ExitCode::FAILURE;
+            }
+        },
+    };
+
+    let mut stdout = io::stdout().lock();
+    match daemon::serve(port, &mut stdout) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(message) => {
+            let _ = writeln!(io::stderr(), "{}", message.trim_end());
             ExitCode::FAILURE
         }
     }

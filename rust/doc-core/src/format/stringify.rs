@@ -58,6 +58,12 @@ fn block_header(block: &Block) -> String {
             }
             format!("::output {}", attributes.join(" "))
         }
+        "nav" => {
+            if !block.label.is_empty() {
+                attributes.push(format!("label={}", format_attribute_value(&block.label)));
+            }
+            format!("::nav {}", attributes.join(" "))
+        }
         "image" => {
             if !block.src.is_empty() {
                 attributes.push(format!("src={}", format_attribute_value(&block.src)));
@@ -93,7 +99,11 @@ fn block_header(block: &Block) -> String {
 }
 
 /// Render nested list items as indented `- text` lines. Port of `blockBody`'s `toLines`.
-fn list_lines(items: &[Item], depth: usize, out: &mut Vec<String>) {
+///
+/// Also the showing half of [`crate::edit::body`] for list blocks: the editable text of a
+/// list is exactly the body lines the canonical writer would put in the file, so nesting is
+/// visible in the field and survives the save.
+pub(crate) fn list_lines(items: &[Item], depth: usize, out: &mut Vec<String>) {
     let indent = "  ".repeat(depth);
     for item in items {
         let text = js_trim(&item.text);
@@ -109,7 +119,10 @@ fn list_lines(items: &[Item], depth: usize, out: &mut Vec<String>) {
 /// Build the body text (between header and `::end`) for a block. Port of `blockBody`.
 fn block_body(block: &Block) -> String {
     match block.kind.as_str() {
-        "bulleted-list" | "numbered-list" => {
+        // Lists and nav share a body shape: indented `- text` lines. A nav with no
+        // entries writes an empty body, which is how "show this document's contents"
+        // survives the round-trip.
+        "bulleted-list" | "numbered-list" | "nav" => {
             let mut lines = Vec::new();
             list_lines(&block.items, 0, &mut lines);
             lines.join("\n")

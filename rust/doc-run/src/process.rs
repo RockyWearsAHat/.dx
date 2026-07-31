@@ -1,9 +1,15 @@
 //! Running one child process: capture its output, and never hang.
 //!
-//! Two guarantees matter here. First, a runaway block cannot wedge the document — every
-//! process gets a deadline and is killed when it passes. Second, what the reader sees is
-//! what the process printed: stdout and stderr are both captured, with stderr appended
-//! under a marker so an error message is never silently dropped.
+//! Three guarantees matter here.
+//!
+//! 1. **A runaway block cannot wedge the document.** Every process gets a deadline, and when
+//!    it passes the whole tree it started is killed — not just the process dx launched, which
+//!    on a `sh -c "thing &"` is the one process that has already exited.
+//! 2. **What the reader sees is what the process printed.** stdout and stderr are both
+//!    captured, with stderr under a marker, so an error is never silently dropped.
+//! 3. **The child inherits an environment, not the reader's.** See [`child_environment`]: a
+//!    shell full of API tokens is the most valuable thing on a developer's machine, and a
+//!    block has no business being handed it.
 
 use std::io::Read;
 use std::path::Path;
@@ -101,8 +107,9 @@ pub fn run(spec: &CommandSpec, working_dir: &Path, timeout: Duration) -> Capture
         .current_dir(working_dir)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    for (key, value) in &spec.env {
+        .stderr(Stdio::piped())
+        .env_clear();
+    for (key, value) in child_environment(spec) {
         command.env(key, value);
     }
 
@@ -123,6 +130,10 @@ pub fn run(spec: &CommandSpec, working_dir: &Path, timeout: Duration) -> Capture
             Err(_) => break 1,
         }
         if Instant::now() >= deadline {
+            // Descendants first, while this process is still alive to be their ancestor.
+            // Once it is reaped they are re-parented and there is no trail left to follow —
+            // and a `sh -c "sleep 999 &"` is a block whose direct child exits immediately.
+            kill_tree(child.id());
             let _ = child.kill();
             let _ = child.wait();
             timed_out = true;
@@ -139,6 +150,131 @@ pub fn run(spec: &CommandSpec, working_dir: &Path, timeout: Duration) -> Capture
         exit,
         timed_out,
     }
+}
+
+/// Variables forwarded from dx's own environment, and nothing else.
+///
+/// Everything a block needs to *work* is here — where to find programs, how to format
+/// numbers and dates. Everything a block could want to *steal* is not: `GITHUB_TOKEN`,
+/// `AWS_SECRET_ACCESS_KEY`, `OPENAI_API_KEY`, and the rest of what accumulates in a
+/// developer's shell never reach it.
+///
+/// This is an allow-list and stays one. A deny-list of "the secret-looking names" would be
+/// wrong the first time someone exported a credential under a name nobody predicted.
+const FORWARDED: &[&str] = &[
+    "PATH",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "TZ",
+    "TERM",
+    // Windows cannot start a process without these.
+    "SYSTEMROOT",
+    "WINDIR",
+    "COMSPEC",
+    "NUMBER_OF_PROCESSORS",
+    "PROCESSOR_ARCHITECTURE",
+];
+
+/// The environment a block's process actually gets: [`FORWARDED`], then `spec`'s own.
+///
+/// `spec`'s variables are applied last, so a caller that redirects `HOME` or `TMPDIR` into
+/// the block's directory always wins over whatever was inherited.
+fn child_environment(spec: &CommandSpec) -> Vec<(String, String)> {
+    let mut environment: Vec<(String, String)> = FORWARDED
+        .iter()
+        .filter_map(|name| {
+            std::env::var(name)
+                .ok()
+                .map(|value| ((*name).to_string(), value))
+        })
+        .collect();
+    for (key, value) in &spec.env {
+        environment.retain(|(existing, _)| existing != key);
+        environment.push((key.clone(), value.clone()));
+    }
+    environment
+}
+
+/// Kill `pid`'s descendants — frozen first, then reaped — so nothing it started outlives it.
+///
+/// The freeze is what makes the kill airtight rather than a race: signals land one process
+/// at a time, and a parent whose child dies is immediately runnable again — a
+/// `(sleep 20; write) &` subshell used to slip its write into the gap between the kill that
+/// took its `sleep` and the one aimed at it. A `SIGSTOP`ped process cannot run anything, so
+/// the whole tree is stopped (twice — a process can fork between the table read and the
+/// freeze), and only then killed. `doc-run/tests/attacks.rs` holds the marker-file proof.
+///
+/// Best-effort by design: it reads the process table through `ps`, which is the only way to
+/// walk children without `unsafe`. A process that forks faster than the table can be read
+/// can outrun it. What it does reliably catch is the ordinary case — a block that started a
+/// server, or backgrounded a job, and then hit its deadline.
+///
+/// A process orphaned by a block that *exited* normally is not reachable this way at all,
+/// because its parent link is gone. It is still inside the sandbox, so it can write nothing
+/// and reach nothing; it is CPU, and the machine's own scheduler is what bounds it.
+fn kill_tree(pid: u32) {
+    if cfg!(windows) {
+        let _ = Command::new("taskkill")
+            .args(["/T", "/F", "/PID", &pid.to_string()])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        return;
+    }
+
+    let mut targets = descendants_of(pid);
+    signal_all("STOP", &targets);
+    // Anything forked between the read and the freeze shows up in a second look; a stopped
+    // process cannot fork, so two passes converge.
+    for late in descendants_of(pid) {
+        if !targets.contains(&late) {
+            targets.push(late);
+        }
+    }
+    signal_all("STOP", &targets);
+    signal_all("KILL", &targets);
+}
+
+/// Send one signal to every pid in `targets`, in a single `kill` invocation.
+fn signal_all(signal: &str, targets: &[u32]) {
+    if targets.is_empty() {
+        return;
+    }
+    let mut command = Command::new("kill");
+    command.arg(format!("-{signal}"));
+    for pid in targets {
+        command.arg(pid.to_string());
+    }
+    let _ = command.stdout(Stdio::null()).stderr(Stdio::null()).status();
+}
+
+/// Every process descended from `pid`, in breadth-first order.
+fn descendants_of(pid: u32) -> Vec<u32> {
+    let Ok(listing) = Command::new("ps").args(["-Ao", "pid=,ppid="]).output() else {
+        return Vec::new();
+    };
+    let table: Vec<(u32, u32)> = String::from_utf8_lossy(&listing.stdout)
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            Some((fields.next()?.parse().ok()?, fields.next()?.parse().ok()?))
+        })
+        .collect();
+
+    let mut found = Vec::new();
+    let mut frontier = vec![pid];
+    // Bounded by the table: every process is added at most once, so this cannot loop even
+    // if the table reports a cycle.
+    while let Some(parent) = frontier.pop() {
+        for (child, _) in table.iter().filter(|(_, ppid)| *ppid == parent) {
+            if *child != pid && !found.contains(child) {
+                found.push(*child);
+                frontier.push(*child);
+            }
+        }
+    }
+    found
 }
 
 /// Read a child pipe on its own thread so a full pipe buffer can never deadlock the wait

@@ -9,6 +9,7 @@
 //! (`dx section <id>`) or edit one block, so it does not have to rewrite a whole file to
 //! change a paragraph.
 
+use super::nav::entries as nav_entries;
 use super::template::{self, Values};
 use crate::model::{Block, Document, Item};
 
@@ -36,7 +37,7 @@ pub fn text(document: &Document, options: &TextOptions) -> String {
         if is_presentation(block) && !options.include_presentation {
             continue;
         }
-        let body = block_text(block, &values);
+        let body = block_text(block, document, &values);
         if body.is_empty() {
             continue;
         }
@@ -62,7 +63,10 @@ fn is_presentation(block: &Block) -> bool {
 }
 
 /// Render one block to Markdown.
-fn block_text(block: &Block, values: &Values) -> String {
+///
+/// `document` is what an empty `nav` block reads to list the document's own headings; no
+/// other block looks past itself.
+fn block_text(block: &Block, document: &Document, values: &Values) -> String {
     let body = template::interpolate(&block.text, values);
 
     match block.kind.as_str() {
@@ -81,6 +85,20 @@ fn block_text(block: &Block, values: &Values) -> String {
             .map(|item| {
                 let mark = if item.checked { "x" } else { " " };
                 format!("- [{mark}] {}", template::interpolate(&item.text, values))
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+        // Nav becomes an ordinary Markdown link list — which is exactly what renders on
+        // GitHub, in a diff, and in an agent's reading of the document.
+        "nav" => nav_entries(block, document)
+            .iter()
+            .map(|entry| {
+                format!(
+                    "{}- [{}]({})",
+                    "  ".repeat(entry.depth),
+                    template::interpolate(&entry.name, values),
+                    entry.target
+                )
             })
             .collect::<Vec<_>>()
             .join("\n"),
@@ -201,6 +219,21 @@ mod tests {
             "::heading level=2 id=h\nTitle\n::end\n\n::paragraph id=p\nBody\n::end\n\n::bulleted-list id=l\n- a\n- b\n::end\n",
         );
         assert_eq!(out, "## Title\n\nBody\n\n- a\n- b\n");
+    }
+
+    #[test]
+    fn nav_renders_as_a_markdown_link_list() {
+        let out = render("::nav id=n\n- [Setup](setup.dx)\n  - api.dx#errors\n::end\n");
+        assert_eq!(out, "- [Setup](setup.dx)\n  - [errors](api.dx#errors)\n");
+    }
+
+    #[test]
+    fn an_empty_nav_lists_the_documents_own_headings() {
+        let out = render(
+            "::heading level=1 id=title\nGuide\n::end\n\n::nav id=n\n::end\n\n\
+             ::heading level=2 id=setup\nSetup\n::end\n",
+        );
+        assert_eq!(out, "# Guide\n\n- [Setup](#setup)\n\n## Setup\n");
     }
 
     #[test]

@@ -1,91 +1,82 @@
 ::heading level=1 id=welcome-title
-Welcome to DOC Platform
-::end
-
-::style id=welcome-style
-.html-wrap table {
-	width: 100%;
-	border-collapse: collapse;
-	margin: 0.5rem 0 1rem;
-}
-
-.html-wrap th,
-.html-wrap td {
-	padding: 0.45rem 0.6rem;
-	text-align: left;
-	border-bottom: 1px solid rgba(130, 190, 255, 0.24);
-}
-
-.html-wrap thead th {
-	color: #eef7ff;
-	border-bottom-color: rgba(130, 190, 255, 0.48);
-}
-
-.html-wrap tbody tr:nth-child(odd) {
-	background: rgba(15, 31, 52, 0.35);
-}
-
-.svg-wrap svg {
-	width: min(980px, 100%);
-	height: auto;
-	border-radius: 10px;
-	border: 1px solid rgba(130, 190, 255, 0.26);
-}
+Welcome to dx
 ::end
 
 ::paragraph id=welcome-lead
-DOC uses explicit typed blocks so documents parse deterministically and render consistently in editor, capture, and MCP workflows.
+A .dx file is a sheet of paper you can run. It holds typed blocks — prose, tables, drawings, code — so the same document parses deterministically, renders identically in an editor, a browser, and an agent's eyes, and keeps whatever its code produced.
 ::end
 
 ::heading level=2 id=what-this-example-shows
 What this example shows
 ::end
 
-::code id=welcome-kpi-grid lang=html
-<div>
-	<table>
-		<thead><tr><th>Capability</th><th>Status</th><th>Why it matters</th></tr></thead>
-		<tbody>
-			<tr><td>Typed blocks</td><td>Yes</td><td>No grammar ambiguity for parser/tooling.</td></tr>
-			<tr><td>Scoped styles</td><td>Yes</td><td>Visual polish without global side effects.</td></tr>
-			<tr><td>SVG/HTML blocks</td><td>Yes</td><td>Charts and tables are native document content.</td></tr>
-			<tr><td>SQLite + archive</td><td>Yes</td><td>Portable storage with compact payloads.</td></tr>
-		</tbody>
-	</table>
-</div>
+::html id=welcome-kpi-grid
+<table>
+	<thead><tr><th>Capability</th><th>Status</th><th>Why it matters</th></tr></thead>
+	<tbody>
+		<tr><td>Typed blocks</td><td>Yes</td><td>No grammar ambiguity for parser or tooling.</td></tr>
+		<tr><td>Tables and drawings</td><td>Yes</td><td>A chart is document content, not an attachment.</td></tr>
+		<tr><td>Content-addressed store</td><td>Yes</td><td>Every read resolves a pointer to the true document.</td></tr>
+		<tr><td>One renderer</td><td>Yes</td><td>Editor, CLI, and agent see the same bytes.</td></tr>
+	</tbody>
+</table>
 ::end
 
 ::heading level=2 id=pipeline-chart
-Pipeline chart
+How a document reaches a reader
 ::end
 
-::code id=welcome-flow lang=svg
-<svg viewBox="0 0 940 240" role="img" aria-label="Document pipeline">
-	<rect width="940" height="240" fill="#0a1122"/>
-	<g fill="#dff3ff" font-family="monospace" font-size="14">
-		<rect x="30" y="82" width="180" height="56" rx="10" fill="#204b78"/><text x="72" y="116">DX Source</text>
-		<rect x="252" y="82" width="180" height="56" rx="10" fill="#236190"/><text x="306" y="116">Parser</text>
-		<rect x="474" y="82" width="180" height="56" rx="10" fill="#2a78a4"/><text x="524" y="116">Renderer</text>
-		<rect x="696" y="82" width="210" height="56" rx="10" fill="#1f8b82"/><text x="748" y="116">Capture + MCP</text>
-		<path d="M210 110 L252 110 M432 110 L474 110 M654 110 L696 110" stroke="#77c7ff" stroke-width="3" fill="none"/>
+::svg id=welcome-flow
+<svg viewBox="0 0 720 120" role="img" aria-label="A document goes from source, through the parser and the renderer, to a page an agent or a person reads">
+	<g fill="none" stroke="currentColor" stroke-width="1" stroke-opacity="0.5">
+		<rect x="1" y="34" width="150" height="44"/>
+		<rect x="191" y="34" width="150" height="44"/>
+		<rect x="381" y="34" width="150" height="44"/>
+		<rect x="571" y="34" width="148" height="44"/>
+		<path d="M151 56 L185 56 M341 56 L375 56 M531 56 L565 56"/>
+		<path d="M177 50 L185 56 L177 62 M367 50 L375 56 L367 62 M557 50 L565 56 L557 62" stroke-linecap="round" stroke-linejoin="round"/>
+	</g>
+	<g fill="currentColor" font-family="monospace" font-size="13" text-anchor="middle">
+		<text x="76" y="61">source</text>
+		<text x="266" y="61">parse</text>
+		<text x="456" y="61">render</text>
+		<text x="645" y="61">read</text>
+	</g>
+	<g fill="currentColor" fill-opacity="0.55" font-family="monospace" font-size="11" text-anchor="middle">
+		<text x="76" y="99">.dx text</text>
+		<text x="266" y="99">typed blocks</text>
+		<text x="456" y="99">one engine</text>
+		<text x="645" y="99">page or image</text>
 	</g>
 </svg>
 ::end
 
 ::heading level=2 id=readiness-chart
-Readiness chart
+Where the work stands
 ::end
 
-::code id=welcome-readiness lang=svg
-<svg viewBox="0 0 940 210" role="img" aria-label="Feature readiness chart">
-	<rect width="940" height="210" fill="#0b1424"/>
-	<g font-family="monospace" font-size="13" fill="#e7f4ff">
-		<text x="30" y="34">Capability readiness (%)</text>
-		<text x="30" y="72">Typed blocks</text><rect x="200" y="58" width="680" height="14" fill="#4de0be"/>
-		<text x="30" y="104">Render parity</text><rect x="200" y="90" width="646" height="14" fill="#6fc6ff"/>
-		<text x="30" y="136">Storage integrity</text><rect x="200" y="122" width="663" height="14" fill="#8ad9ff"/>
-		<text x="30" y="168">Tooling ergonomics</text><rect x="200" y="154" width="612" height="14" fill="#7ed4b4"/>
+::svg id=welcome-readiness
+<svg viewBox="0 0 720 180" role="img" aria-label="Bar chart: typed blocks 96 percent, render parity 92 percent, storage integrity 94 percent, tooling 87 percent">
+	<g font-family="monospace" font-size="12" fill="currentColor">
+		<text x="0" y="20" fill-opacity="0.55">capability readiness (%)</text>
+		<text x="0" y="58">typed blocks</text>
+		<text x="0" y="90">render parity</text>
+		<text x="0" y="122">storage integrity</text>
+		<text x="0" y="154">tooling</text>
 	</g>
+	<g fill="currentColor" fill-opacity="0.22">
+		<rect x="170" y="46" width="480" height="12"/>
+		<rect x="170" y="78" width="460" height="12"/>
+		<rect x="170" y="110" width="470" height="12"/>
+		<rect x="170" y="142" width="435" height="12"/>
+	</g>
+	<g font-family="monospace" font-size="12" fill="currentColor" fill-opacity="0.55">
+		<text x="662" y="57">96</text>
+		<text x="662" y="89">92</text>
+		<text x="662" y="121">94</text>
+		<text x="662" y="153">87</text>
+	</g>
+	<line x1="170" y1="166" x2="670" y2="166" stroke="currentColor" stroke-width="1" stroke-opacity="0.25"/>
 </svg>
 ::end
 
@@ -95,7 +86,7 @@ Quick checklist
 
 ::checklist id=welcome-checklist
 [x] Parse canonical source
-[x] Render charts and tables
-[x] Persist with stable structure
-[ ] Add one custom chart and one custom table
+[x] Render tables and drawings
+[x] Persist with a stable structure
+[ ] Add one chart and one table of your own
 ::end

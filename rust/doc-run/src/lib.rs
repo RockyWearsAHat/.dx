@@ -24,20 +24,39 @@
 //! only executes what actually changed.
 //!
 //! # Safety
-//! Running a document runs its code, with the permissions of whoever started it. That is
-//! the point of the feature and it is never implicit: it happens only through `dx run` or
-//! the `dx_run` tool, never while reading or rendering. Setting `DX_NO_EXEC=1` disables
-//! execution entirely — every block is then reported as blocked rather than run.
+//! Running a document runs code someone else wrote, so it does not run with the reader's
+//! authority. Every block executes inside a kernel-imposed sandbox — read widely, write only
+//! its own directory, reach no network — described in full in [`confine`]. A machine that
+//! cannot impose that boundary does not run the block; it reports it as blocked and says
+//! why.
+//!
+//! Execution is never implicit either: it happens only through `dx run` or the `dx_run`
+//! tool, never while reading or rendering. `DX_NO_EXEC=1` disables it entirely.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 #![warn(clippy::all)]
 
+pub mod confine;
 pub mod plan;
 pub mod process;
 pub mod toolchain;
 
-mod sandbox;
+mod workdir;
+
+/// Serializes tests that touch process environment variables (`HOME`, `DX_UNCONFINED`,
+/// `DX_CACHE_DIR`).
+///
+/// The environment is process-global, so a test that mutates it races every concurrently
+/// running sibling that reads it. Any test that sets, removes, or asserts on one of these
+/// variables must hold this lock for its whole body.
+#[cfg(test)]
+pub(crate) fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+    static ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    // Poison-tolerant: a failed sibling must not cascade into every later env test.
+    ENV.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -46,6 +65,7 @@ use doc_core::digest::sha256_hex;
 use doc_core::format::{parse, stringify};
 use doc_core::model::{runner_for_language, Block, Document};
 
+use confine::Grant;
 use plan::parse_deps;
 use process::Capture;
 
@@ -62,8 +82,11 @@ const BLOCKED_EXIT: i32 = 126;
 #[derive(Debug, Clone)]
 pub struct RunOptions {
     /// Directory the document lives in; blocks run here so relative paths resolve.
+    ///
+    /// Readable, and — this is the point of the sandbox — not writable. A block opens the
+    /// spreadsheet next to the document; it does not get to replace it.
     pub document_dir: PathBuf,
-    /// Root of the per-block sandbox cache.
+    /// Root of the per-block working directories and the shared toolchain caches.
     pub cache_root: PathBuf,
     /// Timeout for blocks that do not set their own.
     pub default_timeout: Duration,
@@ -77,7 +100,7 @@ impl Default for RunOptions {
     fn default() -> Self {
         Self {
             document_dir: PathBuf::from("."),
-            cache_root: sandbox::default_cache_root(),
+            cache_root: workdir::default_cache_root(),
             default_timeout: Duration::from_secs(DEFAULT_TIMEOUT_SECONDS),
             force: false,
             only: None,
@@ -248,8 +271,11 @@ fn execute(
         return blocked("execution is disabled (DX_NO_EXEC is set); no code was run");
     }
 
-    let sandbox_dir = options.cache_root.join(runner).join(fingerprint);
-    let prepared = match plan::build(runner, &block.text, deps, &sandbox_dir) {
+    let dirs = plan::Dirs {
+        block: options.cache_root.join(runner).join(fingerprint),
+        toolchains: options.cache_root.join("toolchains"),
+    };
+    let prepared = match plan::build(runner, &block.text, deps, &dirs) {
         Ok(prepared) => prepared,
         Err(message) => return blocked(&message),
     };
@@ -260,23 +286,52 @@ fn execute(
         options.default_timeout
     };
 
-    match sandbox::prepare(&sandbox_dir, &prepared, timeout) {
-        Ok(()) => {}
-        Err(message) => return blocked(&message),
+    // Installing declared libraries is the one phase that may reach the network, and it is
+    // confined in every other way — an `npm install` runs the package's own scripts.
+    let writable = vec![dirs.block.clone(), dirs.toolchains.clone()];
+    let installing = Grant::offline(writable.clone()).with_network();
+    if let Err(message) = workdir::prepare(&dirs.block, &prepared, &installing, timeout) {
+        return blocked(&message);
     }
 
-    let working_dir = if prepared.run_in_sandbox {
-        sandbox_dir.clone()
-    } else {
-        options.document_dir.clone()
+    // The block's own code: the same directories writable, and no network at all.
+    let command = match confine::confine(
+        &home_in_block(&prepared.run, block, &dirs),
+        &Grant::offline(writable),
+    ) {
+        Ok(command) => command,
+        Err(message) => return blocked(&message),
     };
-    let command = prepared
-        .run
-        .clone()
-        .with_env("DX_BLOCK_ID", block.id.clone())
-        .with_env("DX_SANDBOX", sandbox_dir.to_string_lossy().into_owned());
 
-    process::run(&command, &working_dir, timeout)
+    let mut capture = process::run(&command, &options.document_dir, timeout);
+    if confine::overridden() {
+        capture.output = format!("{}\n{}", confine::UNCONFINED_NOTICE, capture.output);
+    }
+    capture
+}
+
+/// Point the block's home, temp, and cache directories at its own working directory.
+///
+/// Not decoration: the sandbox makes the reader's home read-only, and a toolchain whose
+/// first act is to write `~/.matplotlib` or `~/.cache` would fail on a line the author never
+/// wrote. Redirecting them means the ordinary libraries work *and* their scratch files land
+/// somewhere the block is allowed to put them.
+fn home_in_block(
+    run: &process::CommandSpec,
+    block: &Block,
+    dirs: &plan::Dirs,
+) -> process::CommandSpec {
+    let block_dir = dirs.block.to_string_lossy().into_owned();
+    run.clone()
+        .with_env("HOME", block_dir.clone())
+        .with_env("TMPDIR", block_dir.clone())
+        .with_env("TEMP", block_dir.clone())
+        .with_env(
+            "XDG_CACHE_HOME",
+            dirs.toolchains.to_string_lossy().into_owned(),
+        )
+        .with_env("DX_BLOCK_ID", block.id.clone())
+        .with_env("DX_SANDBOX", block_dir)
 }
 
 /// Whether the `DX_NO_EXEC` kill switch is set.

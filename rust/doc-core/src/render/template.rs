@@ -14,8 +14,14 @@
 //!
 //! Only top-level scalar members participate — strings, numbers, and booleans. Nested
 //! objects and arrays are skipped rather than stringified, because a rendered `{"a":1}`
-//! in the middle of a sentence is never what the author meant. An unknown placeholder
-//! renders as the empty string, matching the reference renderer.
+//! in the middle of a sentence is never what the author meant.
+//!
+//! **An unknown placeholder is left exactly as written.** It used to render as the empty
+//! string, which silently deleted the author's text: a typo in a key erased the word it stood
+//! for, and a document *explaining* `{{name}}` lost the token mid-sentence with nothing to say
+//! it had. This is the rule `nav` labels already follow — deleting part of a sentence silently
+//! is worse than showing a brace — and a malformed `{{ not a key }}` has always survived, so
+//! blanking the well-formed ones was the odd case out.
 
 use crate::model::{Block, Document};
 
@@ -43,7 +49,7 @@ pub fn collect(document: &Document) -> Values {
     values
 }
 
-/// Replace every `{{ key }}` in `text` with its value, or the empty string when unknown.
+/// Replace every `{{ key }}` in `text` with its value, leaving unknown keys as written.
 #[must_use]
 pub fn interpolate(text: &str, values: &[(String, String)]) -> String {
     if !text.contains("{{") {
@@ -65,8 +71,10 @@ pub fn interpolate(text: &str, values: &[(String, String)]) -> String {
             continue;
         }
         out.push_str(&rest[..open]);
-        if let Some((_, value)) = values.iter().find(|(name, _)| name == key) {
-            out.push_str(value);
+        match values.iter().find(|(name, _)| name == key) {
+            Some((_, value)) => out.push_str(value),
+            // Nothing declares this key. Keep the author's characters rather than erase them.
+            None => out.push_str(&rest[open..open + 2 + close + 2]),
         }
         rest = &after[close + 2..];
     }
@@ -249,12 +257,26 @@ mod tests {
     }
 
     #[test]
-    fn substitutes_known_keys_and_blanks_unknown_ones() {
+    fn substitutes_known_keys_and_leaves_unknown_ones_as_written() {
         let values = vec![("phase".to_string(), "authoring".to_string())];
         assert_eq!(
             interpolate("Phase: {{ phase }} / {{missing}}.", &values),
-            "Phase: authoring / ."
+            "Phase: authoring / {{missing}}."
         );
+    }
+
+    #[test]
+    fn a_document_may_write_about_a_placeholder_without_losing_it() {
+        // Blanking an unknown key deleted the author's text with nothing to show for it: the
+        // tutorial's own sentence about `{{name}}` came out as a bare full stop, and a typo in
+        // a key silently erased the word it stood for. The token is prose until something
+        // declares it.
+        assert_eq!(
+            interpolate("write them into prose with {{name}}.", &[]),
+            "write them into prose with {{name}}."
+        );
+        // The spacing an author used inside the braces is theirs, and survives too.
+        assert_eq!(interpolate("{{ spaced }}", &[]), "{{ spaced }}");
     }
 
     #[test]

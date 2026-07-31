@@ -1,17 +1,16 @@
 //! DOCSRC — the canonical, human/AI-shared text serialization of a [`Document`].
 //!
-//! This module is a byte-exact port of the TypeScript reference (`src/doc-format.ts`).
-//! It owns two halves of the format contract:
+//! `docs/dx-format-contract.md` is the authority on the behavior; this module is its
+//! implementation, and owns two halves of the format contract:
 //!
-//! - [`stringify`] — the **canonical writer**: turns a [`Document`] into DOCSRC text,
-//!   byte-identical to the reference `stringifyDocFile`. One `::type attrs` opening line
-//!   per block, body lines as-is, a standalone `::end`, one blank line between blocks, and
-//!   a trailing newline. It never emits synthetic `paragraph-N` wrappers or single-line
-//!   `::x ... ::end` blocks.
+//! - [`stringify`] — the **canonical writer**: turns a [`Document`] into DOCSRC text. One
+//!   `::type attrs` opening line per block, body lines as-is, a standalone `::end`, one
+//!   blank line between blocks, and a trailing newline. It never emits synthetic
+//!   `paragraph-N` wrappers or single-line `::x ... ::end` blocks.
 //! - [`parse`] — the **reader/normalizer**: turns DOCSRC (or `@doc` frontmatter, or legacy
-//!   Markdown) into a normalized [`Document`], recovering malformed inline forms the same
-//!   way the reference does. It preserves `id`/`class`, list-item boundaries, and block
-//!   order, and never turns a valid block into a paragraph of literal `::heading … ::end`.
+//!   Markdown) into a normalized [`Document`], recovering malformed inline forms. It
+//!   preserves `id`/`class`, list-item boundaries, and block order, and never turns a valid
+//!   block into a paragraph of literal `::heading … ::end`.
 //!
 //! `::style`/`::stylesheet`/`::script` blocks are presentation-only and carry no searchable
 //! text in the model.
@@ -45,6 +44,12 @@ mod util;
 pub use source::parse;
 pub use stringify::{stringify, stringify_blocks, BLOCK_SEPARATOR};
 
+// The list-line rules, shared with `crate::edit` so a surface shows a list as the lines the
+// writer puts in the file and reads them back by the parser's own grammar — one definition
+// of each rule, two directions.
+pub(crate) use lines::{build_nested_list_structure, parse_checklist_line, parse_list_items};
+pub(crate) use stringify::list_lines;
+
 /// The block kinds DOCSRC understands. Any other `::type` opening normalizes to
 /// `paragraph`, matching the reference `BLOCK_TYPES` allow-list.
 const BLOCK_TYPES: &[&str] = &[
@@ -56,6 +61,7 @@ const BLOCK_TYPES: &[&str] = &[
     "code",
     "image",
     "checklist",
+    "nav",
     "rule",
     "style",
     "stylesheet",
@@ -90,6 +96,25 @@ mod tests {
     }
 
     #[test]
+    fn a_nav_block_round_trips_including_an_empty_one() {
+        // The empty body is the feature — it means "this document's contents" — so the
+        // writer must not fill it in, the way an empty list gets a placeholder item.
+        let input = "::nav id=side class=sidebar label=\"{n}. {name}\"\n\
+                     - [Setup](setup.dx)\n  - api.dx#errors\n::end\n\n::nav id=contents\n\n::end\n";
+        assert_eq!(round_trip(input), input);
+    }
+
+    #[test]
+    fn a_nav_without_a_label_template_writes_no_label_attribute() {
+        // Additive rule: a new attribute serializes to nothing when unset, or every
+        // existing document reformats on its next save.
+        assert_eq!(
+            round_trip("::nav id=n\n- a.dx\n::end\n"),
+            "::nav id=n\n- a.dx\n::end\n"
+        );
+    }
+
+    #[test]
     fn recovers_inline_single_line_block() {
         assert_eq!(
             round_trip("::heading level=2 id=h Hello there ::end\n"),
@@ -101,6 +126,25 @@ mod tests {
     fn recovers_trailing_end_on_content_line_and_rewrites_lang() {
         assert_eq!(
             round_trip("::code id=c language=js\nconst x = 1; ::end\n"),
+            "::code id=c lang=js\nconst x = 1;\n::end\n"
+        );
+    }
+
+    #[test]
+    fn a_line_that_merely_mentions_the_close_token_keeps_all_of_its_text() {
+        // Writing *about* the format destroyed content: the recovery rule for a trailing
+        // `::end` matched the token anywhere in a line, so a sentence explaining what `::end`
+        // is was cut at the moment it said so, and the rest of the block went with it.
+        let prose = "::paragraph id=p\nA block ends with `::end` on its own line.\n::end\n";
+        assert_eq!(round_trip(prose), prose);
+
+        // The same defect truncated a drawing at a label, taking every element after it.
+        let drawing = "::svg id=s\n<text>::end</text>\n<line x1=\"0\"/>\n::end\n";
+        assert_eq!(round_trip(drawing), drawing);
+
+        // And the documented recovery still recovers: whitespace before, nothing after.
+        assert_eq!(
+            round_trip("::code id=c lang=js\nconst x = 1; ::end\n"),
             "::code id=c lang=js\nconst x = 1;\n::end\n"
         );
     }
@@ -324,8 +368,13 @@ mod tests {
         assert_eq!(round_trip(&once), once);
     }
 
-    /// Byte-exact canonical outputs captured from the TS reference for the real example and
-    /// document `.dx` files (see the report for the exact node commands used).
+    /// Byte-exact canonical output for each real example and document, captured from this
+    /// crate with `dx fmt`.
+    ///
+    /// These are captured output, not scripture. Regenerating one is correct when a defect is
+    /// being fixed — several of them once encoded genuine data loss — but a fixture edited to
+    /// make a convenient change pass is how a regression gets blessed. Refresh the pair, read
+    /// the diff, and say what changed and why.
     const REAL_DOC_CASES: &[(&str, &str)] = &[
         (
             include_str!("../../tests/fixtures/welcome.input.dx"),

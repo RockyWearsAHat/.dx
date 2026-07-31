@@ -137,7 +137,9 @@ fn is_runnable(document: &Document, index: usize) -> bool {
 fn block_content(document: &Document, index: usize) -> String {
     let block = &document.blocks[index];
     match block.kind.as_str() {
-        "bulleted-list" | "numbered-list" | "checklist" => block
+        // A nav's preview is its entries as written; an empty one previews as empty
+        // because what it will list depends on the document around it.
+        "bulleted-list" | "numbered-list" | "checklist" | "nav" => block
             .items
             .iter()
             .map(|item| item.text.as_str())

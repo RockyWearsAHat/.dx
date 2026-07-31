@@ -1,8 +1,19 @@
-//! Turning a code block into an execution plan: files to write, then commands to run.
+//! Turning a code block into an execution plan: files to write, libraries to install, then
+//! the command that runs the code.
 //!
-//! Every language is described the same way — some files, an optional one-time setup step
-//! that installs libraries, and the command that actually runs the code. Adding a language
-//! means adding one function here, not a new code path through the engine.
+//! Every language is described the same way, and the shape is what makes the sandbox
+//! possible:
+//!
+//! | Phase | Gets the network | Runs in |
+//! |-------|------------------|---------|
+//! | `setup` — install the declared libraries, compile the project | yes | the block directory |
+//! | `run` — the author's code | **no** | the document's directory |
+//!
+//! Splitting them is not tidiness. A block's own code must never reach the network (see
+//! [`crate::confine`]), and `uv`, `npm`, `cargo`, `go`, and `gem` all have to. So every
+//! language is arranged to do its fetching *first*, under its own phase, and to run with
+//! everything already on disk — which is why `rust` builds a binary in setup and then runs
+//! that binary, rather than calling `cargo run` and needing the network mid-execution.
 //!
 //! # Where dependencies come from
 //! A block declares libraries with `deps`:
@@ -11,46 +22,69 @@
 //! ::code id=chart lang=python run deps="matplotlib numpy"
 //! ```
 //!
-//! Each language installs them the way its own users would: `uv` (or a virtualenv) for
-//! Python, `npm install` for Node, `Cargo.toml` for Rust, `go get` for Go, `gem install`
-//! for Ruby. Installs happen in a per-fingerprint cache directory, so the second run of an
-//! unchanged block skips setup entirely.
+//! Each language installs them the way its own users would. Installs happen in a
+//! per-fingerprint block directory, so the second run of an unchanged block skips setup
+//! entirely, and each toolchain's *download* cache is shared across blocks in a directory dx
+//! owns — never in the reader's home, which the sandbox keeps read-only.
 
-use std::path::Path;
+use std::path::PathBuf;
 
 use crate::process::CommandSpec;
 use crate::toolchain::{first_available, have, missing_toolchain_message};
 
+/// The two directories a plan is built against.
+#[derive(Debug, Clone)]
+pub struct Dirs {
+    /// This block's own directory, named after its fingerprint. Writable; nothing else is.
+    pub block: PathBuf,
+    /// Where the toolchains keep what they download, shared across blocks.
+    ///
+    /// Every toolchain is pointed here explicitly, because its default is somewhere under
+    /// the reader's home directory and the sandbox does not let a block write there. A
+    /// shared cache is also the difference between one download and one per block.
+    pub toolchains: PathBuf,
+}
+
+impl Dirs {
+    /// Absolute path to a file inside the block directory, as a string.
+    fn block_path(&self, name: &str) -> String {
+        self.block.join(name).to_string_lossy().into_owned()
+    }
+
+    /// Absolute path to one toolchain's cache, as a string.
+    fn cache(&self, tool: &str) -> String {
+        self.toolchains.join(tool).to_string_lossy().into_owned()
+    }
+}
+
 /// A prepared execution for one code block.
 #[derive(Debug, Clone)]
 pub struct Plan {
-    /// Files to materialize in the sandbox, as `(relative path, contents)`.
+    /// Files to materialize in the block directory, as `(relative path, contents)`.
     pub files: Vec<(String, String)>,
-    /// One-time dependency installation commands, run in the sandbox.
+    /// Dependency installation and compilation, run once in the block directory with the
+    /// network available.
     pub setup: Vec<CommandSpec>,
-    /// The command that runs the block's code.
+    /// The command that runs the block's code, offline, in the document's directory.
     pub run: CommandSpec,
-    /// Run in the sandbox rather than beside the document.
-    ///
-    /// Most languages run in the document's own directory, so `open("data.csv")` finds the
-    /// file sitting next to the `.dx`. Project-shaped toolchains (Cargo, Go modules) must
-    /// run from their project root instead.
-    pub run_in_sandbox: bool,
 }
 
 /// Build the execution plan for `runner`, or explain which toolchain is missing.
 ///
-/// `sandbox` is the per-block cache directory; absolute paths into it are baked into the
-/// returned commands so the code can run from anywhere.
-pub fn build(runner: &str, code: &str, deps: &[String], sandbox: &Path) -> Result<Plan, String> {
+/// Absolute paths into `dirs.block` are baked into the returned commands, so the code can be
+/// run from the document's directory and still find the files that were written for it.
+///
+/// # Errors
+/// Returns a sentence naming what to install when the language's toolchain is absent.
+pub fn build(runner: &str, code: &str, deps: &[String], dirs: &Dirs) -> Result<Plan, String> {
     match runner {
-        "python" => python(code, deps, sandbox),
-        "node" => node(code, deps, sandbox),
-        "deno" => deno(code, sandbox),
-        "bash" => bash(code, sandbox),
-        "rust" => rust(code, deps),
-        "go" => go(code, deps),
-        "ruby" => ruby(code, deps, sandbox),
+        "python" => python(code, deps, dirs),
+        "node" => node(code, deps, dirs),
+        "deno" => deno(code, dirs),
+        "bash" => bash(code, dirs),
+        "rust" => rust(code, deps, dirs),
+        "go" => go(code, deps, dirs),
+        "ruby" => ruby(code, deps, dirs),
         other => Err(format!("no runner for `{other}`")),
     }
 }
@@ -68,50 +102,56 @@ pub fn parse_deps(deps: &str) -> Vec<String> {
         .collect()
 }
 
-/// Absolute path to a file inside the sandbox, as a string.
-fn sandbox_path(sandbox: &Path, name: &str) -> String {
-    sandbox.join(name).to_string_lossy().into_owned()
-}
+/// Python: a virtual environment built in setup, and the interpreter inside it at run time.
+///
+/// `uv` builds it when present because it is far faster; `python -m venv` when it is not.
+/// Either way the run command is the same interpreter inside the block's own `.venv`, which
+/// is what lets the code run with no network and no writes anywhere but its own directory.
+fn python(code: &str, deps: &[String], dirs: &Dirs) -> Result<Plan, String> {
+    let script = dirs.block_path("block.py");
+    let venv = dirs.block_path(".venv");
+    let venv_python = dirs.block_path(venv_relative_python());
+    let files = vec![("block.py".to_string(), code.to_string())];
 
-/// Python: `uv` when available (it resolves dependencies per script), else a cached
-/// virtualenv, else the bare interpreter for dependency-free blocks.
-fn python(code: &str, deps: &[String], sandbox: &Path) -> Result<Plan, String> {
-    let script = sandbox_path(sandbox, "block.py");
-
-    if have("uv") {
-        return Ok(Plan {
-            files: vec![("block.py".to_string(), with_inline_metadata(code, deps))],
-            setup: Vec::new(),
-            run: CommandSpec::new("uv", &["run", "--quiet", "--no-project", &script]),
-            run_in_sandbox: false,
-        });
-    }
-
-    let interpreter = first_available(&["python3", "python"])
-        .ok_or_else(|| missing_toolchain_message("python", &["uv", "python3"]))?;
-
+    // No libraries to install: the system interpreter can run the script as it is, and
+    // building a virtual environment for it would be a download for nothing.
     if deps.is_empty() {
+        let interpreter = first_available(&["python3", "python"])
+            .ok_or_else(|| missing_toolchain_message("python", &["python3", "uv"]))?;
         return Ok(Plan {
-            files: vec![("block.py".to_string(), code.to_string())],
+            files,
             setup: Vec::new(),
             run: CommandSpec::new(interpreter, &[&script]),
-            run_in_sandbox: false,
         });
     }
 
-    let venv = sandbox_path(sandbox, ".venv");
-    let venv_python = sandbox_path(sandbox, venv_relative_python());
-    let mut install = CommandSpec::new(venv_python.clone(), &["-m", "pip", "install", "--quiet"]);
-    install.args.extend(deps.iter().cloned());
+    let mut setup = Vec::new();
+    if have("uv") {
+        setup.push(with_cache(
+            CommandSpec::new("uv", &["venv", "--quiet", &venv]),
+            "UV_CACHE_DIR",
+            dirs.cache("uv"),
+        ));
+        let mut install = CommandSpec::new(
+            "uv",
+            &["pip", "install", "--quiet", "--python", &venv_python],
+        );
+        install.args.extend(deps.iter().cloned());
+        setup.push(with_cache(install, "UV_CACHE_DIR", dirs.cache("uv")));
+    } else {
+        let interpreter = first_available(&["python3", "python"])
+            .ok_or_else(|| missing_toolchain_message("python", &["python3", "uv"]))?;
+        setup.push(CommandSpec::new(interpreter, &["-m", "venv", &venv]));
+        let mut install =
+            CommandSpec::new(venv_python.clone(), &["-m", "pip", "install", "--quiet"]);
+        install.args.extend(deps.iter().cloned());
+        setup.push(with_cache(install, "PIP_CACHE_DIR", dirs.cache("pip")));
+    }
 
     Ok(Plan {
-        files: vec![("block.py".to_string(), code.to_string())],
-        setup: vec![
-            CommandSpec::new(interpreter, &["-m", "venv", &venv]),
-            install,
-        ],
+        files,
+        setup,
         run: CommandSpec::new(venv_python, &[&script]),
-        run_in_sandbox: false,
     })
 }
 
@@ -124,26 +164,19 @@ fn venv_relative_python() -> &'static str {
     }
 }
 
-/// Prepend PEP 723 inline script metadata so `uv` installs the declared dependencies.
-fn with_inline_metadata(code: &str, deps: &[String]) -> String {
-    if deps.is_empty() {
-        return code.to_string();
-    }
-    let listed = deps
-        .iter()
-        .map(|dep| format!("#   \"{dep}\","))
-        .collect::<Vec<_>>()
-        .join("\n");
-    format!("# /// script\n# dependencies = [\n{listed}\n# ]\n# ///\n{code}")
+/// Point a toolchain's download cache at a directory dx owns and the sandbox allows.
+fn with_cache(spec: CommandSpec, variable: &str, directory: String) -> CommandSpec {
+    spec.with_env(variable, directory)
 }
 
-/// Node: dependencies install into the sandbox with npm; the script runs as an ES module.
-fn node(code: &str, deps: &[String], sandbox: &Path) -> Result<Plan, String> {
+/// Node: dependencies install into the block directory with npm; the script runs as an ES
+/// module against what setup already fetched.
+fn node(code: &str, deps: &[String], dirs: &Dirs) -> Result<Plan, String> {
     if !have("node") {
         return Err(missing_toolchain_message("javascript", &["node"]));
     }
-    let script = sandbox_path(sandbox, "block.mjs");
-    let modules = sandbox_path(sandbox, "node_modules");
+    let script = dirs.block_path("block.mjs");
+    let modules = dirs.block_path("node_modules");
     let mut files = vec![("block.mjs".to_string(), code.to_string())];
     let mut setup = Vec::new();
 
@@ -164,59 +197,97 @@ fn node(code: &str, deps: &[String], sandbox: &Path) -> Result<Plan, String> {
             &["install", "--silent", "--no-audit", "--no-fund", "--save"],
         );
         install.args.extend(deps.iter().cloned());
-        setup.push(install);
+        setup.push(with_cache(install, "npm_config_cache", dirs.cache("npm")));
     }
 
     Ok(Plan {
         files,
         setup,
         run: CommandSpec::new("node", &[&script]).with_env("NODE_PATH", modules),
-        run_in_sandbox: false,
     })
 }
 
-/// TypeScript via Deno, which resolves `npm:` and `jsr:` imports from the code itself.
-fn deno(code: &str, sandbox: &Path) -> Result<Plan, String> {
+/// TypeScript via Deno: setup fetches every remote import, and the run is offline.
+///
+/// Deno's own permission flags are set as narrowly as the sandbox already is. They are
+/// redundant with it on purpose — two independent things have to fail before a block gets
+/// out, and `--allow-all` (which this used to pass) is the wrong default to leave lying
+/// around for whoever reads this next.
+fn deno(code: &str, dirs: &Dirs) -> Result<Plan, String> {
     if !have("deno") {
         return Err(missing_toolchain_message("typescript", &["deno"]));
     }
-    let script = sandbox_path(sandbox, "block.ts");
+    let script = dirs.block_path("block.ts");
+    let cache = dirs.cache("deno");
     Ok(Plan {
         files: vec![("block.ts".to_string(), code.to_string())],
-        setup: Vec::new(),
-        run: CommandSpec::new("deno", &["run", "--allow-all", "--quiet", &script]),
-        run_in_sandbox: false,
+        setup: vec![with_cache(
+            CommandSpec::new("deno", &["cache", "--quiet", &script]),
+            "DENO_DIR",
+            cache.clone(),
+        )],
+        run: with_cache(
+            CommandSpec::new(
+                "deno",
+                &[
+                    "run",
+                    "--quiet",
+                    "--cached-only",
+                    "--allow-read",
+                    "--allow-env",
+                    "--allow-sys",
+                    &script,
+                ],
+            ),
+            "DENO_DIR",
+            cache,
+        ),
     })
 }
 
 /// Shell scripts run under bash, which exists on macOS and Linux and ships with Git on
 /// Windows.
-fn bash(code: &str, sandbox: &Path) -> Result<Plan, String> {
+fn bash(code: &str, dirs: &Dirs) -> Result<Plan, String> {
     let shell = first_available(&["bash", "sh"])
         .ok_or_else(|| missing_toolchain_message("shell", &["bash"]))?;
-    let script = sandbox_path(sandbox, "block.sh");
+    let script = dirs.block_path("block.sh");
     Ok(Plan {
         files: vec![("block.sh".to_string(), code.to_string())],
         setup: Vec::new(),
         run: CommandSpec::new(shell, &[&script]),
-        run_in_sandbox: false,
     })
 }
 
-/// Rust compiles as a tiny Cargo project so `deps` become real crate dependencies.
-fn rust(code: &str, deps: &[String]) -> Result<Plan, String> {
+/// Rust compiles as a tiny Cargo project in setup, and the run is the binary that produced.
+///
+/// `cargo run` would have to resolve, download, and compile *during* the run, which is
+/// exactly the phase that has no network. Building first also means a re-run of an unchanged
+/// block starts a program rather than starting cargo.
+fn rust(code: &str, deps: &[String], dirs: &Dirs) -> Result<Plan, String> {
     if !have("cargo") {
         return Err(missing_toolchain_message("rust", &["cargo"]));
     }
+    let binary = dirs.block_path(&format!("target/release/dx-block{}", exe_suffix()));
     Ok(Plan {
         files: vec![
             ("Cargo.toml".to_string(), cargo_manifest(deps)),
             ("src/main.rs".to_string(), code.to_string()),
         ],
-        setup: Vec::new(),
-        run: CommandSpec::new("cargo", &["run", "--quiet", "--release"]),
-        run_in_sandbox: true,
+        setup: vec![
+            CommandSpec::new("cargo", &["build", "--quiet", "--release"])
+                .with_env("CARGO_HOME", dirs.cache("cargo")),
+        ],
+        run: CommandSpec::new(binary, &[]),
     })
+}
+
+/// Executable suffix for a compiled block, which Windows adds and nothing else does.
+fn exe_suffix() -> &'static str {
+    if cfg!(windows) {
+        ".exe"
+    } else {
+        ""
+    }
 }
 
 /// Build a `Cargo.toml` whose `[dependencies]` mirror the block's `deps`.
@@ -237,17 +308,23 @@ fn cargo_manifest(deps: &[String]) -> String {
     )
 }
 
-/// Go builds as a module so `go get` can fetch declared packages.
-fn go(code: &str, deps: &[String]) -> Result<Plan, String> {
+/// Go builds a module in setup — fetching declared packages — and runs the built binary.
+fn go(code: &str, deps: &[String], dirs: &Dirs) -> Result<Plan, String> {
     if !have("go") {
         return Err(missing_toolchain_message("go", &["go"]));
     }
+    let binary = dirs.block_path(&format!("dx-block{}", exe_suffix()));
     let mut setup = Vec::new();
     if !deps.is_empty() {
         let mut get = CommandSpec::new("go", &["get"]);
         get.args.extend(deps.iter().cloned());
-        setup.push(get);
+        setup.push(go_env(get, dirs));
     }
+    setup.push(go_env(
+        CommandSpec::new("go", &["build", "-o", &binary, "."]),
+        dirs,
+    ));
+
     Ok(Plan {
         files: vec![
             (
@@ -257,18 +334,24 @@ fn go(code: &str, deps: &[String]) -> Result<Plan, String> {
             ("main.go".to_string(), code.to_string()),
         ],
         setup,
-        run: CommandSpec::new("go", &["run", "."]),
-        run_in_sandbox: true,
+        run: CommandSpec::new(binary, &[]),
     })
 }
 
-/// Ruby installs gems into the sandbox so a block cannot disturb the system gem set.
-fn ruby(code: &str, deps: &[String], sandbox: &Path) -> Result<Plan, String> {
+/// Point Go's three caches into dx's own directory, since the reader's home is read-only.
+fn go_env(spec: CommandSpec, dirs: &Dirs) -> CommandSpec {
+    spec.with_env("GOPATH", dirs.cache("go"))
+        .with_env("GOMODCACHE", dirs.cache("go-mod"))
+        .with_env("GOCACHE", dirs.cache("go-build"))
+}
+
+/// Ruby installs gems into the block directory so a block cannot disturb the system gem set.
+fn ruby(code: &str, deps: &[String], dirs: &Dirs) -> Result<Plan, String> {
     if !have("ruby") {
         return Err(missing_toolchain_message("ruby", &["ruby"]));
     }
-    let script = sandbox_path(sandbox, "block.rb");
-    let gem_home = sandbox_path(sandbox, "gems");
+    let script = dirs.block_path("block.rb");
+    let gem_home = dirs.block_path("gems");
     let mut setup = Vec::new();
     if !deps.is_empty() {
         let mut install = CommandSpec::new(
@@ -276,23 +359,24 @@ fn ruby(code: &str, deps: &[String], sandbox: &Path) -> Result<Plan, String> {
             &["install", "--no-document", "--install-dir", &gem_home],
         );
         install.args.extend(deps.iter().cloned());
-        setup.push(install);
+        setup.push(install.with_env("GEM_SPEC_CACHE", dirs.cache("gem")));
     }
     Ok(Plan {
         files: vec![("block.rb".to_string(), code.to_string())],
         setup,
         run: CommandSpec::new("ruby", &[&script]).with_env("GEM_HOME", gem_home),
-        run_in_sandbox: false,
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
-    fn sandbox() -> PathBuf {
-        PathBuf::from("/tmp/dx-sandbox")
+    fn dirs() -> Dirs {
+        Dirs {
+            block: PathBuf::from("/tmp/dx-block"),
+            toolchains: PathBuf::from("/tmp/dx-toolchains"),
+        }
     }
 
     #[test]
@@ -303,23 +387,53 @@ mod tests {
     }
 
     #[test]
-    fn python_plans_write_the_script_and_run_beside_the_document() {
-        let plan = build("python", "print(1)", &[], &sandbox()).expect("python plan");
+    fn python_plans_write_the_script_and_run_it() {
+        let plan = build("python", "print(1)", &[], &dirs()).expect("python plan");
         assert_eq!(plan.files[0].0, "block.py");
-        assert!(!plan.run_in_sandbox);
         assert!(plan.run.display().contains("block.py"));
+        // Nothing to install, so nothing needs the network at all.
+        assert!(plan.setup.is_empty());
+    }
+
+    /// The rule the whole sandbox rests on: fetching happens in `setup`, which is the only
+    /// phase given the network. A `run` command that would have to download something is a
+    /// block that fails offline — or, worse, a reason to hand the network back to it.
+    #[test]
+    fn every_language_fetches_in_setup_and_never_in_the_run() {
+        // Whole arguments, not substrings: `--cached-only` is deno being told the opposite
+        // — use what is already on disk and fail rather than reach for the network.
+        let fetching = [
+            "install", "get", "add", "cache", "fetch", "download", "sync",
+        ];
+        for runner in ["python", "node", "deno", "bash", "rust", "go", "ruby"] {
+            let Ok(plan) = build(runner, "x", &["some-dep".into()], &dirs()) else {
+                continue; // Toolchain absent on this machine; nothing to check.
+            };
+            for argument in &plan.run.args {
+                assert!(
+                    !fetching.contains(&argument.as_str()),
+                    "{runner} would fetch during its run: {}",
+                    plan.run.display()
+                );
+            }
+        }
     }
 
     #[test]
-    fn python_dependencies_reach_the_runner_one_way_or_another() {
-        let plan = build("python", "import rich", &["rich".into()], &sandbox())
+    fn python_dependencies_are_installed_into_a_venv_the_run_then_uses() {
+        let plan = build("python", "import rich", &["rich".into()], &dirs())
             .expect("python plan with deps");
-        let declares_dependency = plan.files[0].1.contains("\"rich\"")
-            || plan
-                .setup
+        assert!(
+            plan.setup
                 .iter()
-                .any(|step| step.display().contains("rich"));
-        assert!(declares_dependency, "dependency never gets installed");
+                .any(|step| step.display().contains("rich")),
+            "dependency never gets installed"
+        );
+        assert!(
+            plan.run.display().contains(".venv"),
+            "{}",
+            plan.run.display()
+        );
     }
 
     #[test]
@@ -329,26 +443,68 @@ mod tests {
         assert!(manifest.contains("rand = \"*\""));
     }
 
+    /// A compiled language builds in setup and runs the artifact, so the run needs neither a
+    /// compiler nor a network.
     #[test]
-    fn project_shaped_languages_run_from_their_own_root() {
+    fn compiled_languages_run_the_binary_they_built() {
         if have("cargo") {
-            let plan = build("rust", "fn main() {}", &[], &sandbox()).expect("rust plan");
-            assert!(plan.run_in_sandbox);
-            assert!(plan.files.iter().any(|(name, _)| name == "Cargo.toml"));
+            let plan = build("rust", "fn main() {}", &[], &dirs()).expect("rust plan");
+            assert!(plan.setup[0].display().contains("build"));
+            assert!(plan.run.display().contains("dx-block"));
+            assert!(!plan.run.display().contains("cargo"));
+        }
+        if have("go") {
+            let plan = build("go", "package main\nfunc main() {}", &[], &dirs()).expect("go plan");
+            assert!(plan
+                .setup
+                .last()
+                .expect("build step")
+                .display()
+                .contains("build"));
+            assert!(!plan.run.display().contains("go build"));
+        }
+    }
+
+    /// Every toolchain's downloads land in a directory dx owns. The default is under the
+    /// reader's home, which the sandbox keeps read-only — a block would fail on a cache miss.
+    #[test]
+    fn toolchain_caches_are_pointed_away_from_the_readers_home() {
+        for (runner, variable) in [
+            ("python", "UV_CACHE_DIR"),
+            ("node", "npm_config_cache"),
+            ("rust", "CARGO_HOME"),
+            ("go", "GOMODCACHE"),
+        ] {
+            let Ok(plan) = build(runner, "x", &["dep".into()], &dirs()) else {
+                continue;
+            };
+            let named = plan.setup.iter().any(|step| {
+                step.env
+                    .iter()
+                    .any(|(key, value)| key == variable && value.starts_with("/tmp/dx-toolchains"))
+            });
+            // uv may be absent, in which case python uses PIP_CACHE_DIR instead.
+            let alternative = plan.setup.iter().any(|step| {
+                step.env
+                    .iter()
+                    .any(|(_, value)| value.starts_with("/tmp/dx-toolchains"))
+            });
+            assert!(named || alternative, "{runner} keeps its cache in $HOME");
+        }
+    }
+
+    #[test]
+    fn deno_no_longer_runs_with_every_permission_granted() {
+        if have("deno") {
+            let plan = build("deno", "console.log(1)", &[], &dirs()).expect("deno plan");
+            assert!(!plan.run.display().contains("--allow-all"));
+            assert!(!plan.run.display().contains("--allow-write"));
+            assert!(!plan.run.display().contains("--allow-net"));
         }
     }
 
     #[test]
     fn an_unknown_runner_is_an_error_not_a_panic() {
-        assert!(build("cobol", "x", &[], &sandbox()).is_err());
-    }
-
-    #[test]
-    fn inline_metadata_is_only_added_when_there_are_dependencies() {
-        assert_eq!(with_inline_metadata("x", &[]), "x");
-        let with = with_inline_metadata("x", &["rich".into()]);
-        assert!(with.starts_with("# /// script"));
-        assert!(with.contains("\"rich\""));
-        assert!(with.ends_with("x"));
+        assert!(build("cobol", "x", &[], &dirs()).is_err());
     }
 }

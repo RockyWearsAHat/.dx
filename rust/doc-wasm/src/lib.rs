@@ -1,14 +1,14 @@
 //! `doc-wasm` — WebAssembly bindings around [`doc_core`].
 //!
 //! This crate compiles the runtime-agnostic [`doc_core`] engine to `wasm32` and exposes a
-//! thin, documented JavaScript API via `wasm-bindgen`. The point is parser parity: the
-//! in-editor block editor calls the *same* Rust DOCSRC parser and codecs that the native
-//! backend uses, eliminating the historical dual-parser drift between the webview and the
-//! server.
+//! thin, documented JavaScript API via `wasm-bindgen`. The point is that there is one
+//! engine: the VS Code editor and the github.com extension call the *same* Rust DOCSRC
+//! parser, renderer, and codecs the `dx` binary calls, so no surface can drift from
+//! another.
 //!
 //! # Boundary conventions
 //! - Documents cross the boundary as JSON strings shaped by [`dto::DocumentDto`]
-//!   (`camelCase`, `type` for block kind), matching the TypeScript reference shape.
+//!   (`camelCase`, `type` for block kind — the shape JavaScript hosts expect).
 //! - Binary payloads (packed documents, compressed frames, hash inputs) cross as byte
 //!   slices (`&[u8]` in, `Vec<u8>` out), which `wasm-bindgen` maps to `Uint8Array`.
 //! - Fallible operations return `Result<_, JsValue>`; the error is a JS string. Infallible
@@ -33,10 +33,10 @@ fn js_err(message: impl core::fmt::Display) -> JsValue {
 
 /// Parse DOCSRC (`.dx`) source text into a canonical document, returned as JSON.
 ///
-/// `path` is the document's path; it is accepted for API symmetry with the TypeScript
-/// reference (`parseDocFile(path, text)`) but, like the core [`doc_core::format::parse`],
-/// it does not influence the canonical block output — filename-derived title fallback is a
-/// host concern, not part of the format core. `text` is the raw `.dx` source.
+/// `path` is the document's path. Like the core [`doc_core::format::parse`], it does not
+/// influence the canonical block output — a filename-derived title is a host concern, not
+/// part of the format core — but it is accepted so a host can pass what it already has and
+/// keep its call sites uniform. `text` is the raw `.dx` source.
 ///
 /// The returned JSON is a [`dto::DocumentDto`]: canonical blocks (unique ids, clamped
 /// heading levels, recovered inline forms) plus any `@doc` header metadata.
@@ -162,17 +162,62 @@ pub fn render_section(text: &str, selector: &str) -> String {
         .unwrap_or_default()
 }
 
-/// Compress bytes with the `dxz1` LZSS codec used for bundle storage.
+/// The canonical `.dx` source of one document held in a `DXCP1` pack.
 ///
-/// This is infallible; it returns the compressed frame as a `Uint8Array`.
+/// This is the whole reason a pack is committed rather than kept in a database: given the
+/// pack bytes and a workspace-relative path, any host — a browser extension reading a
+/// repository on github.com, an editor, a build — can recover the true document without the
+/// `dx` binary, a SQLite file, or a network service. The pack is the content; this is how it
+/// is read.
+///
+/// Returns an error when the bytes are not a pack, or when the pack holds no such path.
+#[wasm_bindgen]
+pub fn pack_document(pack: &[u8], path: &str) -> Result<String, JsValue> {
+    let decoded = doc_core::chunk::decode_pack(pack).map_err(js_err)?;
+    decoded
+        .source(path)
+        .ok_or_else(|| js_err(format!("the pack holds no document at {path}")))
+}
+
+/// Every document path a `DXCP1` pack carries, as a JSON array of strings.
+///
+/// Useful for saying *what is* in a pack when a lookup misses — a reader who asked for the
+/// wrong path should be told the right ones, not handed nothing.
+#[wasm_bindgen]
+pub fn pack_paths(pack: &[u8]) -> Result<String, JsValue> {
+    let decoded = doc_core::chunk::decode_pack(pack).map_err(js_err)?;
+    let paths: Vec<&str> = decoded
+        .entries
+        .iter()
+        .map(|entry| entry.path.as_str())
+        .collect();
+    serde_json::to_string(&paths).map_err(js_err)
+}
+
+/// The stylesheet [`render_html`] pages are styled with.
+///
+/// A host that embeds a rendered fragment — a webview, a page on github.com — needs the
+/// same CSS the standalone page inlines, or the document would read as one thing in one
+/// place and another somewhere else.
+#[wasm_bindgen]
+pub fn stylesheet() -> String {
+    doc_core::render::stylesheet().to_string()
+}
+
+/// Compress bytes into a `dxz` frame, the store's framed format.
+///
+/// `doc_core::compress` chooses the smallest encoding (currently DEFLATE, or stored when
+/// nothing beats it) and names the codec in the frame's four magic bytes. Infallible; it
+/// returns the frame as a `Uint8Array`.
 #[wasm_bindgen]
 pub fn compress(input: &[u8]) -> Vec<u8> {
     doc_core::compress::compress(input)
 }
 
-/// Decompress a `dxz1` frame produced by [`compress`].
+/// Decompress any `dxz` frame, whichever codec its magic names — including `DXZ1` (LZSS),
+/// which is no longer written but is decoded forever.
 ///
-/// Returns the original bytes, or an error if `frame` is not a valid `dxz1` frame.
+/// Returns the original bytes, or an error if `frame` is not a valid `dxz` frame.
 #[wasm_bindgen]
 pub fn decompress(frame: &[u8]) -> Result<Vec<u8>, JsValue> {
     doc_core::compress::decompress(frame).map_err(|err| js_err(format!("{err:?}")))
@@ -223,4 +268,89 @@ struct HitDto {
     path: String,
     /// Relevance score (higher is better).
     score: f64,
+}
+
+/// The editable text of one block — what a surface puts in the field when a reader clicks it.
+///
+/// The same [`doc_core::edit`] the `dx` command line calls, so a block edited in the VS Code
+/// webview and the same block edited in DX.app are edited by one implementation.
+///
+/// Returns an error naming the ids that do exist when `id` names no block.
+#[wasm_bindgen]
+pub fn block_source(text: &str, id: &str) -> Result<String, JsValue> {
+    doc_core::edit::block_source(text, id).map_err(js_err)
+}
+
+/// Replace one block's body, returning the whole document's canonical source.
+///
+/// Every other block comes back byte-identical.
+///
+/// Returns an error naming the ids that do exist when `id` names no block.
+#[wasm_bindgen]
+pub fn set_block(text: &str, id: &str, body: &str) -> Result<String, JsValue> {
+    doc_core::edit::set_block(text, id, body).map_err(js_err)
+}
+
+/// Add a block of `kind` after the block called `after`, or at the top when `after` is empty.
+///
+/// Returns JSON `{"source": "<canonical .dx>", "id": "<the new block's id>"}` — the id is
+/// what lets the caller put the reader's cursor in the block they just created.
+///
+/// Returns an error when `kind` is not authorable or `after` names no block.
+#[wasm_bindgen]
+pub fn insert_block(text: &str, after: &str, kind: &str, body: &str) -> Result<String, JsValue> {
+    let anchor = (!after.is_empty()).then_some(after);
+    let (source, id) = doc_core::edit::insert_after(text, anchor, kind, body).map_err(js_err)?;
+    serde_json::to_string(&InsertedDto { source, id }).map_err(js_err)
+}
+
+/// Take one block out, returning the document's canonical source without it.
+///
+/// Returns an error naming the ids that do exist when `id` names no block.
+#[wasm_bindgen]
+pub fn remove_block(text: &str, id: &str) -> Result<String, JsValue> {
+    doc_core::edit::remove_block(text, id).map_err(js_err)
+}
+
+/// The HTML one block renders to with `body` in it, saving nothing.
+///
+/// This is what keeps a page rendered while a reader writes on it: the surface hands over
+/// the characters currently in the field and gets back the block as it will be read. The
+/// same [`doc_core::edit::preview_block`] DX.app reaches through `dx render --block`, so
+/// what a reader sees mid-sentence in an editor and on a Mac is the same markup.
+///
+/// `theme` is `auto`, `light`, or `dark`; `document_css` opts into the document's own
+/// `::style` blocks, matching [`render_html`] so a previewed block is styled like the page
+/// it sits in.
+///
+/// Returns an error naming the ids that do exist when `id` names no block.
+#[wasm_bindgen]
+pub fn preview_block(
+    text: &str,
+    id: &str,
+    body: &str,
+    theme: &str,
+    document_css: bool,
+) -> Result<String, JsValue> {
+    doc_core::edit::preview_block(
+        text,
+        id,
+        body,
+        &doc_core::render::HtmlOptions {
+            theme: doc_core::render::Theme::parse(theme),
+            document_css,
+            ..doc_core::render::HtmlOptions::default()
+        },
+    )
+    .map_err(js_err)
+}
+
+/// JSON shape returned by [`insert_block`].
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct InsertedDto {
+    /// The document's canonical source, with the new block in it.
+    source: String,
+    /// The id the new block was given.
+    id: String,
 }

@@ -10,7 +10,7 @@ use doc_core::format::parse;
 use doc_core::model::Document;
 use doc_core::render::{html, outline, section, text, HtmlOptions, TextOptions, Theme};
 use doc_run::{run_document, RunOptions};
-use doc_shot::{capture, ShotOptions};
+use doc_shot::{capture_pages, ShotOptions};
 use serde_json::{json, Value};
 
 use super::encode::base64;
@@ -25,8 +25,8 @@ pub type ToolResult = Result<Vec<Value>, String>;
 /// Dispatch a tool call by name.
 pub fn call(name: &str, args: &Value, root: &Path) -> ToolResult {
     match name {
-        "dx_view" => view(args, root),
         "dx_read" => read(args, root),
+        "dx_source" => source(args, root),
         "dx_outline" => outline_of(args, root),
         "dx_list" => list(args, root),
         "dx_search" => search(args, root),
@@ -38,42 +38,82 @@ pub fn call(name: &str, args: &Value, root: &Path) -> ToolResult {
     }
 }
 
-/// `dx_view` — the rendered document as an image, with a text fallback.
-fn view(args: &Value, root: &Path) -> ToolResult {
+/// `dx_read` — the document as the pages of its rendered page, in order.
+///
+/// Reading a document means *looking* at it. A `.dx` document renders to a page, and what
+/// is on that page — a table's alignment, a chart a code block drew, where the eye lands —
+/// is in the rendering, not in the source. So a read returns pictures: one per page, each
+/// labelled with the block ids on it so the reader can come back for one part
+/// (`section`) instead of the next picture.
+///
+/// A machine with no browser still gets the document, as Markdown. That is a degraded
+/// read, not a failure, and it says so.
+fn read(args: &Value, root: &Path) -> ToolResult {
     let document = selected(args, root)?;
+    let path = string(args, "path").unwrap_or("document");
     let options = ShotOptions {
         width: number(args, "width").unwrap_or(doc_shot::DEFAULT_WIDTH),
         theme: Theme::parse(string(args, "theme").unwrap_or("auto")),
         ..ShotOptions::default()
     };
 
-    match capture(&document, &options) {
-        Ok(shot) => Ok(vec![
-            json!({
-                "type": "text",
-                "text": format!(
-                    "Rendered view of {} ({}x{} px).",
-                    string(args, "path").unwrap_or("document"),
-                    shot.width,
-                    shot.height
-                )
-            }),
-            json!({
-                "type": "image",
-                "data": base64(&shot.png),
-                "mimeType": "image/png"
-            }),
-        ]),
-        // No browser on this machine: the reader still gets the document, as text.
-        Err(reason) => Ok(vec![text_content(&format!(
-            "Could not render an image: {reason}\n\nFalling back to text:\n\n{}",
-            text(&document, &TextOptions::default())
-        ))]),
+    let pages = match capture_pages(&document, &options) {
+        Ok(pages) if !pages.is_empty() => pages,
+        // No browser, or nothing captured: the reader still gets the document, as text.
+        Ok(_) => {
+            return Ok(vec![text_content(&fallback_text(
+                &document,
+                "captured no pages",
+            ))])
+        }
+        Err(reason) => return Ok(vec![text_content(&fallback_text(&document, &reason))]),
+    };
+
+    let total = pages[0].total;
+    let mut content = vec![text_content(&opening_line(path, &pages, total))];
+    for page in &pages {
+        content.push(text_content(&format!(
+            "Page {} of {total}{}",
+            page.number,
+            if page.blocks.is_empty() {
+                String::new()
+            } else {
+                format!(" — blocks: {}", page.blocks.join(", "))
+            }
+        )));
+        content.push(json!({
+            "type": "image",
+            "data": base64(&page.shot.png),
+            "mimeType": "image/png"
+        }));
     }
+    Ok(content)
 }
 
-/// `dx_read` — the document as Markdown.
-fn read(args: &Value, root: &Path) -> ToolResult {
+/// The line that opens a read: what was rendered, and what to do about what was not.
+fn opening_line(path: &str, pages: &[doc_shot::Page], total: usize) -> String {
+    let shown = pages.len();
+    if shown < total {
+        return format!(
+            "{path} — pages 1–{shown} of {total}. The rest was not rendered: call dx_read \
+             again with `section` set to a block id from dx_outline to read further, which \
+             is cheaper and sharper than paging through the whole document."
+        );
+    }
+    format!("{path} — {total} page(s), rendered whole.")
+}
+
+/// The Markdown a read falls back to, saying plainly that this is not the page.
+fn fallback_text(document: &Document, reason: &str) -> String {
+    format!(
+        "Could not render page images: {reason}\n\nThis is the document as text, which \
+         omits how it is laid out:\n\n{}",
+        text(document, &TextOptions::default())
+    )
+}
+
+/// `dx_source` — the document's exact text, for quoting and editing.
+fn source(args: &Value, root: &Path) -> ToolResult {
     let document = selected(args, root)?;
     Ok(vec![text_content(&text(
         &document,
@@ -230,7 +270,7 @@ fn run(args: &Value, root: &Path) -> ToolResult {
         "allSucceeded": report.all_succeeded(),
         "saved": report.changed,
         "results": results,
-        "next": "Call dx_view on this path to see the results rendered.",
+        "next": "Call dx_read on this path to see the results rendered.",
     }))])
 }
 
@@ -342,9 +382,9 @@ mod tests {
     }
 
     #[test]
-    fn read_returns_the_document_as_markdown() {
-        let root = project("read");
-        let items = call("dx_read", &json!({ "path": "guide.dx" }), &root).expect("read");
+    fn source_returns_the_document_as_markdown() {
+        let root = project("source");
+        let items = call("dx_source", &json!({ "path": "guide.dx" }), &root).expect("source");
         let body = text_of(&items);
         assert!(body.contains("# Guide"));
         assert!(body.contains("Then run it."));
@@ -355,13 +395,52 @@ mod tests {
         let root = project("section");
         let body = text_of(
             &call(
-                "dx_read",
+                "dx_source",
                 &json!({ "path": "guide.dx", "section": "setup" }),
                 &root,
             )
-            .expect("read"),
+            .expect("source"),
         );
         assert!(body.contains("Install it first."));
+        assert!(!body.contains("Then run it."));
+    }
+
+    #[test]
+    fn reading_returns_pages_labelled_with_what_is_on_them() {
+        let root = project("read");
+        let items = call("dx_read", &json!({ "path": "guide.dx" }), &root).expect("read");
+        let body = text_of(&items);
+
+        if items.iter().any(|item| item["type"] == "image") {
+            // Every image is preceded by the line that says which page it is and which
+            // blocks are on it, so a reader can ask for one part next.
+            assert!(body.contains("Page 1 of"));
+            assert!(body.contains("blocks:"));
+            for item in items.iter().filter(|item| item["type"] == "image") {
+                assert_eq!(item["mimeType"], "image/png");
+                let data = item["data"].as_str().expect("image data");
+                assert!(data.starts_with("iVBOR"), "not a PNG payload");
+            }
+        } else {
+            // No browser here: the read degrades to text and says so rather than failing.
+            assert!(body.contains("Could not render page images"));
+            assert!(body.contains("# Guide"), "fallback must carry the content");
+        }
+    }
+
+    #[test]
+    fn a_read_of_one_section_renders_only_that_section() {
+        let root = project("read-section");
+        let items = call(
+            "dx_read",
+            &json!({ "path": "guide.dx", "section": "setup" }),
+            &root,
+        )
+        .expect("read");
+        let body = text_of(&items);
+        // Whether it rendered or fell back to text, it must never widen to the whole
+        // document: a section read that quietly returns everything wastes the reader's
+        // context on what they did not ask for.
         assert!(!body.contains("Then run it."));
     }
 
@@ -463,28 +542,6 @@ mod tests {
         assert!(std::fs::read_to_string(root.join("runnable.dx"))
             .expect("read")
             .contains("from-mcp"));
-    }
-
-    #[test]
-    fn view_always_returns_something_readable() {
-        let root = project("view");
-        let items = call("dx_view", &json!({ "path": "guide.dx" }), &root).expect("view");
-        let has_image = items.iter().any(|item| item["type"] == "image");
-        let has_text = items.iter().any(|item| item["type"] == "text");
-        assert!(has_text, "view must always say what it returned");
-        if has_image {
-            let data = items
-                .iter()
-                .find(|item| item["type"] == "image")
-                .and_then(|item| item["data"].as_str())
-                .expect("image data");
-            assert!(data.starts_with("iVBOR"), "not a PNG payload");
-        } else {
-            assert!(
-                text_of(&items).contains("Guide"),
-                "fallback must carry content"
-            );
-        }
     }
 
     #[test]

@@ -4,6 +4,7 @@
 //! one, run one, find one, or set up the platform. [`dispatch`] is the only place that maps
 //! a command word to code, so adding a verb means adding one row.
 
+pub mod browser;
 pub mod edit;
 pub mod exec;
 pub mod find;
@@ -50,6 +51,7 @@ pub fn dispatch(command: &str, args: &Args) -> Result<Output, String> {
         "textconv" => store::run_textconv(args).map(Output::Document),
         "stats" => store::run_stats(args).map(Output::Document),
         "search" | "find" => find::run_search(args).map(Output::Document),
+        "source" => edit::run_source(args).map(Output::Document),
         "help" | "--help" | "-h" => setup::run_help(args).map(Output::Document),
         "version" | "--version" => Ok(Output::Document(format!(
             "dx {}\n",
@@ -61,11 +63,14 @@ pub fn dispatch(command: &str, args: &Args) -> Result<Output, String> {
         "new" => edit::run_new(args).map(Output::Report),
         "set" => edit::run_set(args).map(Output::Report),
         "append" => edit::run_append(args).map(Output::Report),
+        "insert" => edit::run_insert(args).map(Output::Report),
+        "remove" | "rm" => edit::run_remove(args).map(Output::Report),
         "fmt" | "format" => edit::run_fmt(args).map(Output::Report),
         "run" => exec::run(args).map(Output::Report),
         "sync" => store::run_sync(args).map(Output::Report),
         "git-setup" => store::run_git_setup(args).map(Output::Report),
-        "install" => setup::run_install(args).map(Output::Report),
+        "setup" | "install" => setup::run_setup(args).map(Output::Report),
+        "browser" | "extension" => browser::run(args).map(Output::Report),
         "doctor" => setup::run_doctor(args).map(Output::Report),
 
         other => Err(format!("unknown command `{other}`\n\n{}", setup::HELP)),

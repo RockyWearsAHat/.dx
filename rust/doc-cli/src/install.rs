@@ -5,12 +5,15 @@
 //! and how it stores a server, and [`Registration::write`] merges an entry in — leaving
 //! every other server in the file untouched.
 //!
-//! Registration is additive and idempotent: running `dx install` twice changes nothing the
+//! Registration is additive and idempotent: running `dx setup` twice changes nothing the
 //! second time, and removing the entry by hand is enough to undo it.
 
 use std::path::{Path, PathBuf};
 
 use serde_json::{json, Map, Value};
+
+use crate::home;
+use crate::state;
 
 /// Name the server is registered under, in every assistant.
 pub const SERVER_KEY: &str = "dx";
@@ -115,12 +118,13 @@ impl Registration {
             .ok_or_else(|| format!("`{key}` in {} is not an object", self.config.display()))?;
 
         servers.insert(SERVER_KEY.to_string(), server_entry(command));
-        write_file(
+        state::write_file(
             &self.config,
-            &format!(
+            format!(
                 "{}\n",
                 serde_json::to_string_pretty(&config).map_err(|error| error.to_string())?
-            ),
+            )
+            .as_bytes(),
         )?;
         Ok(true)
     }
@@ -138,7 +142,7 @@ impl Registration {
         let block = format!(
             "{separator}[mcp_servers.{SERVER_KEY}]\ncommand = \"{command}\"\nargs = [\"mcp\"]\n"
         );
-        write_file(&self.config, &format!("{existing}{block}"))?;
+        state::write_file(&self.config, format!("{existing}{block}").as_bytes())?;
         Ok(true)
     }
 }
@@ -148,20 +152,10 @@ fn server_entry(command: &str) -> Value {
     json!({ "command": command, "args": ["mcp"] })
 }
 
-/// Write a config file, creating its directory.
-fn write_file(path: &Path, contents: &str) -> Result<(), String> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|error| format!("could not create {}: {error}", parent.display()))?;
-    }
-    std::fs::write(path, contents)
-        .map_err(|error| format!("could not write {}: {error}", path.display()))
-}
-
 /// Every assistant registration this machine could have.
 #[must_use]
 pub fn registrations() -> Vec<Registration> {
-    let Some(home) = home_dir() else {
+    let Some(home) = home::home() else {
         return Vec::new();
     };
 
@@ -227,10 +221,10 @@ fn vscode_user_dir(home: &Path) -> PathBuf {
     home.join(".config").join("Code").join("User")
 }
 
-/// Where `dx install` puts the binary when the caller does not choose.
+/// Where `dx setup` puts the binary when the caller does not choose.
 #[must_use]
 pub fn default_bin_dir() -> PathBuf {
-    let home = home_dir().unwrap_or_else(|| PathBuf::from("."));
+    let home = home::home_or_here();
     if cfg!(windows) {
         return std::env::var_os("LOCALAPPDATA")
             .map(PathBuf::from)
@@ -239,14 +233,6 @@ pub fn default_bin_dir() -> PathBuf {
             .join("dx");
     }
     home.join(".local").join("bin")
-}
-
-/// The current user's home directory.
-fn home_dir() -> Option<PathBuf> {
-    std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .map(PathBuf::from)
-        .filter(|path| !path.as_os_str().is_empty())
 }
 
 /// Configuration text for assistants this installer does not know about.

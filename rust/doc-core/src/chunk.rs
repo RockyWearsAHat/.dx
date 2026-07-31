@@ -237,14 +237,14 @@ impl Reader<'_> {
 ///
 /// Entries reference chunks by index into the chunk table rather than by hash, so a
 /// document costs a few bytes per block beyond the block bodies themselves. The whole
-/// payload is `dxz1`-compressed as one stream, so redundancy *between* chunks compresses
-/// too.
+/// payload is compressed as one `dxz` frame ([`crate::compress`] picks the codec and names
+/// it in the frame's magic), so redundancy *between* chunks compresses too.
 ///
 /// Layout:
 /// ```text
 ///   [0..5]   magic b"DXCP1"
 ///   [5..9]   u32 LE length of the compressed payload
-///   [9..]    dxz1(payload)
+///   [9..]    dxz(payload) — a dxz frame, codec named by its own magic
 ///
 ///   payload:
 ///     varint chunk count, then per chunk: varint byte length, chunk text

@@ -4,10 +4,11 @@
 //! for that reader: each one says what it returns, when to reach for it, and which tool to
 //! use instead when this is the wrong one.
 //!
-//! The ordering is deliberate. `dx_view` — the *picture* of a document — comes before the
-//! text tools, and its description says to prefer it. An agent that can see a rendered
-//! table, chart, or diagram reasons about the actual result instead of imagining one from
-//! source, which is the whole reason the viewing path exists.
+//! The ordering is deliberate. `dx_read` — which returns the *pages* of the rendered
+//! document as images — comes first, because that is what reading a `.dx` document means:
+//! a document renders to a page, and a reader who sees the page reasons about the real
+//! result instead of imagining one from source. `dx_source` is the second-choice tool, for
+//! when the exact characters matter.
 
 use serde_json::{json, Value};
 
@@ -15,8 +16,8 @@ use serde_json::{json, Value};
 /// keep [`catalogue`] and this list in step.
 #[cfg(test)]
 pub const TOOL_NAMES: &[&str] = &[
-    "dx_view",
     "dx_read",
+    "dx_source",
     "dx_outline",
     "dx_list",
     "dx_search",
@@ -30,8 +31,8 @@ pub const TOOL_NAMES: &[&str] = &[
 #[must_use]
 pub fn catalogue() -> Value {
     json!([
-        view_tool(),
         read_tool(),
+        source_tool(),
         outline_tool(),
         list_tool(),
         search_tool(),
@@ -60,16 +61,19 @@ fn section_property() -> Value {
     })
 }
 
-/// `dx_view` — see the document as a picture.
-fn view_tool() -> Value {
+/// `dx_read` — look at the document, page by page.
+fn read_tool() -> Value {
     json!({
-        "name": "dx_view",
-        "description": "LOOK at a .dx document: returns the rendered page as an image. \
-                        PREFER THIS over dx_read whenever the document contains tables, \
-                        charts, diagrams, SVG, layout, or captured program output — you will \
-                        see the actual rendered result instead of inferring it from source. \
-                        Use `section` to view one part of a long document. Falls back to \
-                        Markdown text automatically if this machine has no browser installed.",
+        "name": "dx_read",
+        "description": "READ a .dx document: returns the rendered page as images, one per \
+                        page, in order. This is the normal way to read a document — you see \
+                        it as it actually renders, including tables, diagrams, charts, and \
+                        the output its code produced, instead of inferring the result from \
+                        source. Each page is labelled with the block ids on it. For a long \
+                        document, call dx_outline first and then pass `section` to read just \
+                        the part you need. Falls back to Markdown text automatically if this \
+                        machine has no browser installed. Use dx_source when you need the \
+                        exact characters (to quote or edit them).",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -82,7 +86,7 @@ fn view_tool() -> Value {
                 },
                 "width": {
                     "type": "number",
-                    "description": "Image width in pixels. Default: 1200."
+                    "description": "Page width in pixels. Default: 1200."
                 }
             },
             "required": ["path"]
@@ -90,15 +94,16 @@ fn view_tool() -> Value {
     })
 }
 
-/// `dx_read` — the words, as Markdown.
-fn read_tool() -> Value {
+/// `dx_source` — the exact words, as Markdown.
+fn source_tool() -> Value {
     json!({
-        "name": "dx_read",
-        "description": "Read a .dx document as Markdown, with headings, lists, code fences, \
-                        and captured output preserved. Use this when you need the exact text \
-                        (to quote it, edit it, or search within it). For anything visual, use \
-                        dx_view instead. Set `ids` to true to get each block's id, which you \
-                        need for dx_edit and for section selection.",
+        "name": "dx_source",
+        "description": "Get a .dx document's exact text as Markdown, with headings, lists, \
+                        code fences, and captured output preserved. Use this when the \
+                        characters matter — quoting a line, checking wording, or preparing a \
+                        dx_edit. To read the document as it renders, use dx_read. Set `ids` \
+                        to true to get each block's id, which you need for dx_edit and for \
+                        section selection.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -121,7 +126,7 @@ fn outline_tool() -> Value {
         "description": "Map a .dx document without reading all of it: one row per block with \
                         its id, kind, heading level, size, a preview, and whether it is \
                         runnable code. Call this first on a long document, then fetch only \
-                        the sections you need with dx_view or dx_read.",
+                        the sections you need with dx_read.",
         "inputSchema": {
             "type": "object",
             "properties": { "path": path_property() },
@@ -154,8 +159,8 @@ fn search_tool() -> Value {
     json!({
         "name": "dx_search",
         "description": "Search every .dx document in a project by content and title, best \
-                        matches first. Returns paths and titles; follow up with dx_view or \
-                        dx_read on the ones that look right.",
+                        matches first. Returns paths and titles; follow up with dx_read on the \
+                        ones that look right.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -177,7 +182,7 @@ fn render_tool() -> Value {
         "name": "dx_render",
         "description": "Get the document as a self-contained HTML page (no external assets). \
                         Use this to embed or publish a document. To simply look at it, use \
-                        dx_view, which returns an image instead of markup.",
+                        dx_read, which returns the rendered pages as images instead of markup.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -224,7 +229,7 @@ fn edit_tool() -> Value {
         "name": "dx_edit",
         "description": "Replace the body of one block, leaving every other block byte-for-byte \
                         unchanged. This is the safe way to edit a long document. Get block ids \
-                        from dx_outline or from dx_read with ids=true.",
+                        from dx_outline or from dx_source with ids=true.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -246,7 +251,7 @@ fn run_tool() -> Value {
                         declare with deps=\"…\", and stores each result in the document as an \
                         ::output block. Nothing else in this server executes anything. \
                         Unchanged blocks are skipped, so re-running is cheap. After running, \
-                        call dx_view to see the results rendered.",
+                        call dx_read to see the results rendered.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -281,13 +286,30 @@ mod tests {
     }
 
     #[test]
-    fn the_viewing_tool_comes_first_and_says_to_prefer_it() {
+    fn reading_a_document_means_looking_at_it() {
+        // The first tool an agent sees is the one that returns the rendered pages, and it
+        // says so in the first clause — a text-first reader misses what the page shows.
         let tools = catalogue();
         let first = &tools.as_array().expect("array")[0];
-        assert_eq!(first["name"], "dx_view");
+        assert_eq!(first["name"], "dx_read");
         let description = first["description"].as_str().expect("description");
-        assert!(description.contains("PREFER THIS"));
-        assert!(description.contains("image"));
+        assert!(description.starts_with("READ"));
+        assert!(description.contains("images"));
+        assert!(description.contains("section"));
+    }
+
+    #[test]
+    fn the_exact_text_is_still_one_call_away() {
+        let tools = catalogue();
+        let source = tools
+            .as_array()
+            .expect("array")
+            .iter()
+            .find(|tool| tool["name"] == "dx_source")
+            .expect("dx_source");
+        let description = source["description"].as_str().expect("description");
+        assert!(description.contains("exact"));
+        assert!(description.contains("dx_edit"));
     }
 
     #[test]
