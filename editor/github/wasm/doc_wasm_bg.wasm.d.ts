@@ -1,0 +1,28 @@
+/* tslint:disable */
+/* eslint-disable */
+export const memory: WebAssembly.Memory;
+export const block_source: (a: number, b: number, c: number, d: number, e: number) => void;
+export const build_index_and_search: (a: number, b: number, c: number, d: number, e: number) => void;
+export const compress: (a: number, b: number, c: number) => void;
+export const decompress: (a: number, b: number, c: number) => void;
+export const insert_block: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => void;
+export const join_chunks: (a: number, b: number, c: number) => void;
+export const pack_document: (a: number, b: number, c: number, d: number, e: number) => void;
+export const pack_paths: (a: number, b: number, c: number) => void;
+export const parse: (a: number, b: number, c: number, d: number, e: number) => void;
+export const preview_block: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => void;
+export const remove_block: (a: number, b: number, c: number, d: number, e: number) => void;
+export const render_html: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
+export const render_outline: (a: number, b: number, c: number) => void;
+export const render_section: (a: number, b: number, c: number, d: number, e: number) => void;
+export const render_text: (a: number, b: number, c: number, d: number) => void;
+export const set_block: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
+export const sha1_hex: (a: number, b: number, c: number) => void;
+export const sha256_hex: (a: number, b: number, c: number) => void;
+export const split_chunks: (a: number, b: number, c: number) => void;
+export const stringify: (a: number, b: number, c: number) => void;
+export const stylesheet: (a: number) => void;
+export const __wbindgen_add_to_stack_pointer: (a: number) => number;
+export const __wbindgen_export: (a: number, b: number) => number;
+export const __wbindgen_export2: (a: number, b: number, c: number, d: number) => number;
+export const __wbindgen_export3: (a: number, b: number, c: number) => void;

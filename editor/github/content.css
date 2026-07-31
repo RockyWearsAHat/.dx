@@ -1,0 +1,98 @@
+/* How a resolved document sits on a github.com page.
+ *
+ * The document itself is rendered inside a shadow root by doc-core's own stylesheet, so
+ * nothing here styles document content — that would be a second renderer, and the whole
+ * point is that there is one. These rules only place the container on the page and style the
+ * two things GitHub has no equivalent for: the notice shown when resolution fails, and the
+ * document diff that replaces a one-line digest change.
+ *
+ * Colors come from GitHub's own CSS variables, so light and dark follow the reader's setting
+ * with no theme detection of our own. */
+
+/* The container being replaced is not always a block: GitHub's blame view renders its file
+ * region as a flex row, so the host claims the row rather than being sized as one word of it.
+ *
+ * The host must not become a scroll container. `overflow-x: auto` cannot stand alone — the
+ * other axis computes to `auto` with it — and a vertical scroll container inside that flex row
+ * stopped growing with its content, showing a single line's worth of a whole document with the
+ * rest scrolled out of sight. Wide content scrolls inside the shadow root instead, where the
+ * height is free to follow the document. */
+.dx-github-doc {
+  padding: 0;
+  margin: 0;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.dx-github-notice {
+  padding: 12px 16px;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--fgColor-muted, var(--color-fg-muted, #656d76));
+  border-top: 1px solid var(--borderColor-default, var(--color-border-default, #d0d7de));
+}
+
+/* The document diff: line numbers, a marker, the line.
+ *
+ * A changed line is marked by its glyph, its weight, and a rule down its edge — never by a
+ * fill. Tinting the row means owning a background colour, and a background colour has to
+ * agree with a foreground it does not control: GitHub's diff variables are absent on some
+ * pages, and any hard-coded fallback is right in one theme and unreadable in the other. That
+ * is not hypothetical — light tints under GitHub's dark-mode ink made changed lines almost
+ * invisible here. Leaving the text at the page's own ink cannot go wrong in either theme,
+ * and it is the same rule the document itself follows: structure from type and hairlines. */
+.dx-github-diff {
+  overflow-x: auto;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+  line-height: 20px;
+}
+
+.dx-github-diff table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.dx-github-diff td {
+  padding: 0 10px;
+  vertical-align: top;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* A line number is never wrapped: the cell is sized to the content, not the other way round.
+ * The `word-break` the line text needs would otherwise break `102` across two rows. */
+.dx-github-diff .dx-line-number {
+  width: 1%;
+  min-width: 44px;
+  text-align: right;
+  white-space: nowrap;
+  word-break: normal;
+  color: var(--fgColor-muted, var(--color-fg-subtle, #6e7781));
+  user-select: none;
+}
+
+/* Changed lines: the marker and the weight carry it, and a rule marks the edge. A border's
+ * hue needs no contrast with text, so these are the one place a colour is safe. */
+.dx-github-diff .dx-added .dx-line,
+.dx-github-diff .dx-removed .dx-line {
+  font-weight: 600;
+}
+
+.dx-github-diff .dx-added .dx-line {
+  box-shadow: inset 2px 0 0 var(--borderColor-success-emphasis, #1a7f37);
+}
+
+.dx-github-diff .dx-removed .dx-line {
+  box-shadow: inset 2px 0 0 var(--borderColor-danger-emphasis, #cf222e);
+}
+
+/* A collapsed run is a stated count, set quiet and ruled off — not a filled band, for the
+ * same reason the changed lines are not tinted. */
+.dx-github-diff .dx-skip-cell {
+  padding: 6px 10px;
+  color: var(--fgColor-muted, var(--color-fg-muted, #656d76));
+  border-top: 1px solid var(--borderColor-muted, var(--color-border-muted, #d8dee4));
+  border-bottom: 1px solid var(--borderColor-muted, var(--color-border-muted, #d8dee4));
+}

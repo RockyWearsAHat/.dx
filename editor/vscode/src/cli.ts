@@ -20,7 +20,7 @@ export interface CliResult {
 }
 
 /**
- * Places `dx install` puts the binary, checked when it is not on `PATH`.
+ * Places `dx setup` puts the binary, checked when it is not on `PATH`.
  *
  * An editor launched from the desktop does not always inherit the `PATH` a terminal has, so
  * `dx` can be installed and working in a shell yet invisible here. Looking in the handful of
@@ -85,7 +85,7 @@ export function missingCliMessage(): string {
   return (
     `Could not find the "${cliPath()}" command, or any dx binary in ` +
     `${installLocations().join(', ')}. ` +
-    'Install the dx CLI and run `dx install`, or set "dx.cliPath" to its full path. ' +
+    'Install the dx CLI and run `dx setup`, or set "dx.cliPath" to its full path. ' +
     'Viewing documents does not need it — only running code and exporting images do.'
   );
 }

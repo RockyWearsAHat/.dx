@@ -12,20 +12,41 @@
  * running code blocks and exporting images.
  */
 
+import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
 
 import { runCli } from './cli';
 import { engine, outlineOf } from './engine';
-import { makeNonce, previewHtml } from './preview';
+import { blockHtml, makeNonce, previewHtml, sheetHtml, Surface } from './preview';
 
 /** View type of the rendered document editor. */
 const VIEW_TYPE = 'dx.document';
 
+/**
+ * Read the shared editing surface out of the packaged extension.
+ *
+ * `editor/build.sh` copies `editor/surface` in beside the wasm, for the same reason it
+ * copies the same two files into DX.app: one source, packed into each thing that ships it.
+ * A package built without them still opens documents — read-only, and saying nothing about
+ * it, because a reader who cannot edit is no worse off than they were before.
+ */
+function loadSurface(context: vscode.ExtensionContext): Surface | undefined {
+  try {
+    const directory = path.join(context.extensionPath, 'surface');
+    return {
+      js: fs.readFileSync(path.join(directory, 'edit.js'), 'utf8'),
+      css: fs.readFileSync(path.join(directory, 'edit.css'), 'utf8'),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 /** Activate the extension: register the editor and the commands. */
 export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
-    vscode.window.registerCustomEditorProvider(VIEW_TYPE, new DxEditorProvider(), {
+    vscode.window.registerCustomEditorProvider(VIEW_TYPE, new DxEditorProvider(loadSurface(context)), {
       webviewOptions: { retainContextWhenHidden: true },
       supportsMultipleEditorsPerDocument: true,
     }),
@@ -50,6 +71,9 @@ export function deactivate(): void {
  * source control, and external edits all behave normally.
  */
 class DxEditorProvider implements vscode.CustomTextEditorProvider {
+  /** The shared editing surface, read once from the extension's own directory. */
+  public constructor(private readonly surface?: Surface) {}
+
   /** Render `document` into `panel` and keep the two in step. */
   public resolveCustomTextEditor(
     document: vscode.TextDocument,
@@ -57,26 +81,55 @@ class DxEditorProvider implements vscode.CustomTextEditorProvider {
   ): void {
     panel.webview.options = { enableScripts: true };
 
+    // The text this webview last wrote. An edit made on the page comes back as a change to
+    // the document, and rebuilding the page for it would throw away the caret the reader is
+    // still typing into — the page has already shown that edit, from the same engine. A
+    // change that is *not* this one came from somewhere else, and does need a fresh page.
+    let written: string | undefined;
+
     const refresh = (): void => {
       panel.webview.html = previewHtml(
         document.getText(),
         path.basename(document.fileName),
-        makeNonce()
+        makeNonce(),
+        this.surface
       );
     };
     refresh();
 
     const onChange = vscode.workspace.onDidChangeTextDocument((event) => {
-      if (event.document.uri.toString() === document.uri.toString()) {
-        refresh();
+      if (event.document.uri.toString() !== document.uri.toString()) {
+        return;
       }
+      if (event.document.getText() === written) {
+        written = undefined;
+        return;
+      }
+      refresh();
     });
     const onTheme = vscode.window.onDidChangeActiveColorTheme(refresh);
-    const onMessage = panel.webview.onDidReceiveMessage((message: { command?: string }) => {
-      if (typeof message.command === 'string') {
-        void vscode.commands.executeCommand(message.command, document.uri);
+    const onMessage = panel.webview.onDidReceiveMessage(
+      (message: { command?: string; dxEdit?: EditCall }) => {
+        if (typeof message.command === 'string') {
+          void vscode.commands.executeCommand(message.command, document.uri);
+          return;
+        }
+        if (message.dxEdit) {
+          const call = message.dxEdit;
+          void applyEdit(document, call, (text) => {
+            written = text;
+          }).then((outcome) => {
+            // The change event has already fired by now, if it was going to; an edit that
+            // produced the same text does not raise one. Either way the note has served its
+            // purpose, and a stale one would swallow a later change that happened to match.
+            written = undefined;
+            void panel.webview.postMessage({
+              dxReply: { call: call.call, value: outcome.value, error: outcome.error },
+            });
+          });
+        }
       }
-    });
+    );
 
     panel.onDidDispose(() => {
       onChange.dispose();
@@ -84,6 +137,107 @@ class DxEditorProvider implements vscode.CustomTextEditorProvider {
       onMessage.dispose();
     });
   }
+}
+
+/** One call from the shared editor: an operation, a block, and what to do with it. */
+interface EditCall {
+  /** Correlates this call with its reply. */
+  readonly call: number;
+  /** `source`, `draw`, `commit`, or `remove`. */
+  readonly op: string;
+  /** The block the call is about. */
+  readonly id?: string;
+  /** The body being written, for `draw` and `commit`. */
+  readonly text?: string;
+  /** `insert` when Return should start the next paragraph after this one. */
+  readonly then?: string;
+}
+
+/** What an edit produced: an answer for the caller, or a failure to show on the page. */
+interface EditOutcome {
+  /**
+   * The answer, for calls that have one.
+   *
+   * `source` answers with characters; `draw` with one block's HTML; `commit` and `remove`
+   * with `{ document, focus }` — the re-rendered document for the page to swap in, and the
+   * block to open once it is there.
+   */
+  value?: string | { document: string; focus?: string };
+  /** A sentence the editor shows on the page. */
+  error?: string;
+}
+
+/**
+ * Perform one editing call against `document`.
+ *
+ * Every change goes through a `WorkspaceEdit` rather than writing the file, so undo, dirty
+ * state, and source control all behave exactly as they do for text a person typed — which is
+ * the whole reason this surface edits a `TextDocument` instead of calling the `dx` binary.
+ *
+ * The document operations themselves are `doc-core`'s, through the wasm engine: the same
+ * code `dx set` and DX.app run, so a block cannot come out of an edit shaped differently
+ * depending on which surface made it.
+ */
+async function applyEdit(
+  document: vscode.TextDocument,
+  call: EditCall,
+  wrote: (text: string) => void
+): Promise<EditOutcome> {
+  const source = document.getText();
+  const id = call.id ?? '';
+
+  try {
+    switch (call.op) {
+      case 'source':
+        return { value: engine().block_source(source, id) };
+
+      // A read, and the only call that changes nothing: what the block would look like with
+      // the characters currently in the field.
+      case 'draw':
+        return { value: blockHtml(source, id, call.text ?? '') };
+
+      case 'commit': {
+        let updated = engine().set_block(source, id, call.text ?? '');
+        let focus: string | undefined;
+        if (call.then === 'insert') {
+          const inserted = JSON.parse(
+            engine().insert_block(updated, id, 'paragraph', '')
+          ) as { source: string; id: string };
+          updated = inserted.source;
+          focus = inserted.id;
+        }
+        wrote(updated);
+        await replaceAll(document, updated);
+        return { value: { document: sheetHtml(updated), focus } };
+      }
+
+      case 'remove': {
+        const updated = engine().remove_block(source, id);
+        wrote(updated);
+        await replaceAll(document, updated);
+        return { value: { document: sheetHtml(updated) } };
+      }
+
+      default:
+        return { error: `unknown editor operation \`${call.op}\`` };
+    }
+  } catch (failure) {
+    return { error: failure instanceof Error ? failure.message : String(failure) };
+  }
+}
+
+/** Replace a document's whole text with `text`, as one undoable edit. */
+async function replaceAll(document: vscode.TextDocument, text: string): Promise<void> {
+  if (document.getText() === text) {
+    return;
+  }
+  const edit = new vscode.WorkspaceEdit();
+  const whole = new vscode.Range(
+    document.positionAt(0),
+    document.positionAt(document.getText().length)
+  );
+  edit.replace(document.uri, whole, text);
+  await vscode.workspace.applyEdit(edit);
 }
 
 /** Open the raw DOCSRC of the active document in a normal text editor. */

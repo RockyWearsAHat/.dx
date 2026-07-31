@@ -19,6 +19,28 @@ export interface Engine {
   render_text(text: string, includeIds: boolean): string;
   /** Outline `.dx` source as a JSON array of block entries. */
   render_outline(text: string): string;
+
+  // Editing. These are `doc_core::edit`, the same operations `dx source`, `dx set`,
+  // `dx insert`, `dx remove`, and `dx render --block` perform — so a block edited here and a
+  // block edited in DX.app or by an agent goes through one implementation. Each throws with a
+  // sentence naming the ids that exist when the one asked for does not.
+
+  /** The editable text of one block: what goes in the field when a reader clicks it. */
+  block_source(text: string, id: string): string;
+  /** Replace one block's body, returning the whole document's canonical source. */
+  set_block(text: string, id: string, body: string): string;
+  /** Add a block after `after` (or at the top when empty). Returns `{source, id}` as JSON. */
+  insert_block(text: string, after: string, kind: string, body: string): string;
+  /** Take one block out, returning the canonical source without it. */
+  remove_block(text: string, id: string): string;
+  /** One block's HTML with `body` in it, saving nothing — the live half of writing. */
+  preview_block(
+    text: string,
+    id: string,
+    body: string,
+    theme: string,
+    documentCss: boolean
+  ): string;
 }
 
 /** One row of a document outline. */

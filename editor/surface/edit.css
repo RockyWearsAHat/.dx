@@ -1,0 +1,119 @@
+/**
+ * The look of writing on a page — which is, as far as possible, no look at all.
+ *
+ * The page is a blank sheet: one paper tone, one ink, no second surface. An editor that
+ * dropped a bordered, tinted input box onto it would be exactly the second surface the
+ * stylesheet spends its whole length refusing, and the document would stop looking like a
+ * document the moment anyone touched it.
+ *
+ * The page has two shapes while a block is open, and `edit.js` chooses between them by
+ * asking what the block renders to:
+ *
+ * - **The field stands in for the block** when the block renders to the characters it is
+ *   written in — plain prose, a code listing. The block steps out of the flow and the field
+ *   takes its place, its type, and its margins, all borrowed from the live element rather
+ *   than restated here. Nothing on the page moves.
+ * - **The field is a note under the block** when the renderer made something the source does
+ *   not show: a bullet, a strong word, a table, a drawing. The block stays exactly where it
+ *   was and keeps redrawing as the characters change; the source sits beneath it in the same
+ *   marginal mono the sheet already uses for its own pencil notes.
+ *
+ * Every colour here comes from a variable `doc-core`'s stylesheet publishes. A name it does
+ * not define is not a fallback — it is an invalid declaration the browser drops.
+ */
+
+.dx-editable [data-block-id] {
+  cursor: text;
+}
+
+/* A link inside a block is still a link, and still says so. */
+.dx-editable a {
+  cursor: pointer;
+}
+
+/* An empty block still has to be clickable.
+   Pressing Return makes a paragraph with nothing in it — which draws nothing, occupies no
+   height, and therefore cannot be clicked back into. The reader is left with a block they
+   can see the gap of and never reach again. One empty line of space is the whole fix, and it
+   costs nothing on a page with no empty blocks in it. */
+.dx-editable [data-block-id]:empty::after {
+  content: "";
+  display: inline-block;
+  width: 100%;
+  min-height: 1.2em;
+}
+
+/* The block the field is standing in for. Out of the flow, not out of the document: it is
+   still the element the renderer drew and the one the next keystroke redraws. */
+.dx-hidden {
+  display: none;
+}
+
+/* Where the writing happens. One hairline in the margin, the same weight as every other rule
+   on the page — enough to find, not enough to announce. It marks the field rather than the
+   block, because the field is the part that is yours. */
+.dx-write {
+  position: relative;
+  margin: 0 0 1.15rem;
+}
+.dx-write::before {
+  content: "";
+  position: absolute;
+  left: -0.9rem;
+  top: 0.1em;
+  bottom: 0.1em;
+  width: 1px;
+  background: var(--dx-rule);
+}
+
+/* Some blocks already draw a rule down their own margin: a quotation, a listing. Standing in
+   for one of those, the field inherits that rule and does not get a second — two hairlines a
+   couple of characters apart is a page that has started to look like a form. */
+.dx-write.dx-ruled::before {
+  display: none;
+}
+
+/* A note under a block that is drawing itself: the source, set the way the sheet sets every
+   other marginal note. Spaced off the block by less than a paragraph, because the two are one
+   thing being looked at. */
+.dx-write:not(.dx-standin) {
+  margin-top: 0.5rem;
+}
+.dx-write:not(.dx-standin) .dx-field {
+  font: 400 0.83rem/1.65 var(--dx-mono);
+  color: var(--dx-muted);
+  white-space: pre-wrap;
+  tab-size: 2;
+}
+
+.dx-field {
+  display: block;
+  width: 100%;
+  /* A field with nothing in it yet is still a field. Without a floor it collapses to no
+     height at all, which is a caret you cannot see in a block you cannot type into — the
+     exact state a reader lands in the moment they press Return. */
+  min-height: 1.4em;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  outline: none;
+  background: none;
+  resize: none;
+  overflow: hidden;
+  /* Inherited, not chosen. When the field stands in for a block, `edit.js` copies the
+     block's own type over these — so a heading edits at heading size and code at code size
+     because the renderer said so, not because a second type scale was written down here. */
+  font: inherit;
+  color: inherit;
+  letter-spacing: inherit;
+  line-height: inherit;
+  text-align: inherit;
+  -webkit-appearance: none;
+}
+
+/* A failure the reader has to see, in the one voice the page keeps for failures. */
+.dx-edit-error {
+  margin: 0.4rem 0 1.15rem;
+  font: 400 0.68rem/1.6 var(--dx-mono);
+  color: var(--dx-error);
+}
