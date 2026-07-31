@@ -84,7 +84,7 @@ fn child_list_at_depth(items: &mut Vec<Item>, depth: usize) -> &mut Vec<Item> {
 /// indentation, which is what keeps a saved list identical to the one that was written.
 ///
 /// Complexity: `O(n · d)` for `n` items nested `d` deep (`d` is the descent per item).
-pub(super) fn build_nested_list_structure(flat: &[(String, usize)]) -> Vec<Item> {
+pub(crate) fn build_nested_list_structure(flat: &[(String, usize)]) -> Vec<Item> {
     let mut roots: Vec<Item> = Vec::new();
     // Indents of the ancestors currently open, outermost first.
     let mut open: Vec<usize> = Vec::new();
@@ -106,7 +106,10 @@ pub(super) fn build_nested_list_structure(flat: &[(String, usize)]) -> Vec<Item>
 /// Split a list body's lines into `(text, indent)` pairs, recognizing `-`/`*` and `N.`
 /// markers, with an indentation-preserving fallback for unmarked lines. Port of the
 /// `itemsWithIndent` mapping inside `parseDocsrcBlocks`.
-pub(super) fn parse_list_items(lines: &[String]) -> Vec<(String, usize)> {
+///
+/// Also the reading half of [`crate::edit::set_body`] for list blocks, so a surface's lines
+/// are read by exactly the grammar a document's own body lines are.
+pub(crate) fn parse_list_items(lines: &[String]) -> Vec<(String, usize)> {
     let mut out = Vec::new();
     for line in lines {
         if let Some((indent, text)) = match_list_marker(line) {
@@ -130,10 +133,8 @@ fn match_list_marker(line: &str) -> Option<(usize, &str)> {
     let body = &line[indent..];
 
     // Bulleted: `[-*]\s+`.
-    if let Some(rest) = body.strip_prefix(['-', '*']) {
-        if let Some(after_ws) = strip_leading_inline_ws(rest) {
-            return Some((indent, after_ws));
-        }
+    if let Some(after_ws) = strip_bullet_marker(body) {
+        return Some((indent, after_ws));
     }
 
     // Numbered: `\d+\.\s+`.
@@ -152,9 +153,20 @@ fn match_list_marker(line: &str) -> Option<(usize, &str)> {
     None
 }
 
+/// Strip one leading `-`/`*` bullet marker — the marker plus at least one whitespace
+/// character — returning the text after it.
+///
+/// This is the single definition of what counts as a bullet, used by [`match_list_marker`]
+/// (and through it by every reader of list lines, including [`crate::edit::set_body`]):
+/// `None` for a line like `--verbose` or `*emphasis*`, which is text that merely starts
+/// with a marker character, not a marked item.
+pub(crate) fn strip_bullet_marker(text: &str) -> Option<&str> {
+    strip_leading_inline_ws(text.strip_prefix(['-', '*'])?)
+}
+
 /// Match a checklist line `[x]`/`[ ]` + text (after trimming). Returns `(checked, text)`.
 /// Port of `/^\s*\[(x| )\]\s*(.*)$/i` applied to the trimmed line.
-pub(super) fn parse_checklist_line(trimmed: &str) -> Option<(bool, String)> {
+pub(crate) fn parse_checklist_line(trimmed: &str) -> Option<(bool, String)> {
     let rest = trimmed.strip_prefix('[')?;
     let token = rest.chars().next()?;
     let checked = match token {

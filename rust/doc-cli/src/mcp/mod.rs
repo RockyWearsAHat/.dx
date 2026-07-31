@@ -97,9 +97,10 @@ fn initialize() -> Value {
         "instructions": "This project uses .dx documents: plain-text block documents that \
                          render to pages and can execute their own code blocks. Start with \
                          dx_list to see what exists and dx_outline to map a document. \
-                         Prefer dx_view (an image of the rendered page) over dx_read when a \
-                         document contains tables, diagrams, or program output — seeing the \
-                         rendered result beats inferring it from source."
+                         dx_read returns the rendered pages as images, which is how to \
+                         read one: you see the real result, including tables, diagrams, and \
+                         the output its code produced. Use dx_source when you need the exact \
+                         characters, and `section` to read one part of a long document."
     })
 }
 
@@ -204,7 +205,8 @@ mod tests {
         assert_eq!(response["result"]["serverInfo"]["name"], "dx");
         assert!(response["result"]["capabilities"]["tools"].is_object());
         let instructions = response["result"]["instructions"].as_str().expect("text");
-        assert!(instructions.contains("dx_view"));
+        assert!(instructions.contains("dx_read"));
+        assert!(instructions.contains("images"));
     }
 
     #[test]
@@ -222,7 +224,7 @@ mod tests {
             &request(
                 3,
                 "tools/call",
-                json!({ "name": "dx_read", "arguments": { "path": "guide.dx" } }),
+                json!({ "name": "dx_source", "arguments": { "path": "guide.dx" } }),
             ),
             &root,
         )

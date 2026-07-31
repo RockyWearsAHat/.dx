@@ -1,24 +1,61 @@
-//! `dxz1` — the document platform's own byte compressor.
+//! `dxz` — the document platform's byte compressor, and the frames it writes.
 //!
-//! A self-contained LZSS (Lempel–Ziv sliding-window) codec. Because the platform owns
-//! both ends of the bundle format, the codec is not required to interoperate with
-//! DEFLATE or brotli — only to round-trip exactly. This Rust implementation produces
-//! **byte-identical** frames to the TypeScript reference (`src/core/compress.ts`), so a
-//! bundle written by the native binary decompresses in the wasm editor and vice versa.
+//! Storage compactness is a product requirement here: a document's content lives in a
+//! committed pack, so every byte saved is a byte not carried in the repository forever.
+//! Compression is therefore **chosen per payload, not fixed**: [`compress`] encodes the
+//! input each supported way and keeps the smallest result. That has two consequences worth
+//! relying on — the stored form is never larger than the raw bytes plus a header, and a
+//! better codec can be added later without a migration.
+//!
+//! # Frames
+//! Every frame opens with four magic bytes naming its codec, then the original byte length:
+//!
+//! | Magic  | Codec | Written by [`compress`] | Read by [`decompress`] |
+//! |--------|-------|-------------------------|------------------------|
+//! | `DXZ1` | Self-contained LZSS | no (superseded) | **yes** |
+//! | `DXZ2` | DEFLATE (`miniz_oxide`, pure Rust) | yes, when smallest | yes |
+//! | `DXZ3` | Stored, uncompressed | yes, when nothing beats it | yes |
+//!
+//! `DXZ1` is still decoded and always will be: packs written before `DXZ2` existed are
+//! committed in real repositories, and a format that stops reading its own history loses
+//! documents. This is why the codec is named in the frame rather than assumed.
+//!
+//! DEFLATE was chosen over the heavier options (brotli, LZMA) because it is pure Rust with
+//! no `unsafe`, compiles to `wasm32` for the editor without bloating the bundle, and closes
+//! most of the gap: on this repository's own examples it stores what LZSS wrote in 49% of
+//! source size in 32% instead.
 //!
 //! Frame layout:
 //! ```text
-//!   [0..3]  magic 'DXZ1'
-//!   [4..7]  original byte length (u32, big-endian)
-//!   [8..]   token stream
+//!   [0..4]  magic — 'DXZ1' | 'DXZ2' | 'DXZ3'
+//!   [4..8]  original byte length (u32, big-endian)
+//!   [8..]   codec payload
 //! ```
-//! Token stream: a flag byte precedes each group of up to 8 tokens; bit `(7 - i)`, MSB
-//! first, marks token `i` as a back-reference (`1`) or literal (`0`).
+//! For `DXZ1` the payload is the LZSS token stream: a flag byte precedes each group of up
+//! to 8 tokens; bit `(7 - i)`, MSB first, marks token `i` as a back-reference (`1`) or a
+//! literal (`0`).
 
 use core::fmt;
 
-const MAGIC: u32 = 0x4458_5a31; // 'DXZ1'
+/// Magic of the original self-contained LZSS frame: decoded forever, no longer written.
+const MAGIC_LZSS: &[u8; 4] = b"DXZ1";
+/// Magic of a DEFLATE frame.
+const MAGIC_DEFLATE: &[u8; 4] = b"DXZ2";
+/// Magic of a stored (uncompressed) frame.
+const MAGIC_STORED: &[u8; 4] = b"DXZ3";
+/// Magic plus the original-length field.
 const HEADER_LENGTH: usize = 8;
+
+/// The largest output any `dxz` frame may decode to.
+///
+/// A frame's declared length is four bytes of untrusted input, so it bounds an allocation and
+/// an inflate only if it is itself bounded. 256 MiB is far above any repository's compressed
+/// documents and far below the size at which a claim becomes a way to stop the process.
+const MAX_DECOMPRESSED: usize = 256 * 1024 * 1024;
+
+/// Compression level used for DEFLATE frames: the highest, because a pack is written once
+/// and read many times, and it is committed.
+const DEFLATE_LEVEL: u8 = 10;
 
 const MIN_MATCH: usize = 3;
 const MAX_MATCH: usize = 258; // length byte 0..=255 maps to MIN_MATCH..=258
@@ -34,15 +71,47 @@ fn hash_at(input: &[u8], pos: usize) -> usize {
         & HASH_MASK
 }
 
-/// Compress raw bytes into a `dxz1` frame. Infallible: every input round-trips.
+/// Compress raw bytes into the smallest frame any supported codec produces.
+///
+/// Infallible, and never inflating: if no codec beats the input itself, the bytes are
+/// stored as they are and the cost is the 8-byte header. Every frame this returns
+/// round-trips through [`decompress`] exactly — that is asserted for text, binary,
+/// repetitive, random, and empty input, because storage that loses a byte is the one defect
+/// this format cannot survive.
+///
+/// Complexity: `O(n)` in the input size, plus DEFLATE's own bounded match search.
+#[must_use]
+pub fn compress(input: &[u8]) -> Vec<u8> {
+    let deflated = miniz_oxide::deflate::compress_to_vec(input, DEFLATE_LEVEL);
+    if HEADER_LENGTH + deflated.len() < HEADER_LENGTH + input.len() {
+        return frame(MAGIC_DEFLATE, input.len(), &deflated);
+    }
+    frame(MAGIC_STORED, input.len(), input)
+}
+
+/// Assemble a frame: magic, original length, payload.
+fn frame(magic: &[u8; 4], original_length: usize, payload: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(HEADER_LENGTH + payload.len());
+    out.extend_from_slice(magic);
+    out.extend_from_slice(&(original_length as u32).to_be_bytes());
+    out.extend_from_slice(payload);
+    out
+}
+
+/// Compress raw bytes into a `DXZ1` LZSS frame.
+///
+/// No longer written by [`compress`] — DEFLATE is smaller on every realistic document —
+/// but kept because the decoder must stay honest about what it can produce, and the
+/// round-trip tests exercise both directions of the frame that existing packs contain.
 ///
 /// Complexity: `O(n · MAX_CHAIN)` time, where `n` is the input length and `MAX_CHAIN`
 /// is the fixed cap on match-candidate probes per position — so the LZSS match search is
 /// bounded to linear time in `n` — and `O(n)` extra space for the hash chain tables.
-pub fn compress(input: &[u8]) -> Vec<u8> {
+#[cfg_attr(not(test), allow(dead_code))]
+fn lzss_compress(input: &[u8]) -> Vec<u8> {
     let n = input.len();
     let mut out: Vec<u8> = Vec::with_capacity(HEADER_LENGTH + n);
-    out.extend_from_slice(&MAGIC.to_be_bytes());
+    out.extend_from_slice(MAGIC_LZSS);
     out.extend_from_slice(&(n as u32).to_be_bytes());
 
     let mut head = vec![-1i32; HASH_SIZE];
@@ -145,23 +214,26 @@ fn insert(input: &[u8], head: &mut [i32], prev: &mut [i32], pos: usize, n: usize
     }
 }
 
-/// An error encountered while decoding a `dxz1` frame.
+/// An error encountered while decoding a `dxz` frame.
 #[derive(Debug, PartialEq, Eq)]
 pub enum DecompressError {
-    /// The frame is shorter than the header or has the wrong magic bytes.
+    /// The frame is shorter than the header, or names a codec this build cannot read.
     InvalidMagic,
-    /// The token stream ended before producing the declared number of bytes.
+    /// The payload ended before producing the declared number of bytes.
     Truncated,
     /// A back-reference pointed outside the already-decoded output.
     CorruptMatch,
+    /// The DEFLATE payload is damaged.
+    Damaged,
 }
 
 impl fmt::Display for DecompressError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let message = match self {
-            DecompressError::InvalidMagic => "dxz1: invalid frame magic",
-            DecompressError::Truncated => "dxz1: truncated frame",
-            DecompressError::CorruptMatch => "dxz1: corrupt match token",
+            DecompressError::InvalidMagic => "dxz: unknown frame codec",
+            DecompressError::Truncated => "dxz: truncated frame",
+            DecompressError::CorruptMatch => "dxz: corrupt match token",
+            DecompressError::Damaged => "dxz: damaged compressed payload",
         };
         f.write_str(message)
     }
@@ -180,17 +252,59 @@ fn read_u32_be(bytes: &[u8], offset: usize) -> u32 {
     ])
 }
 
-/// Decompress a `dxz1` frame produced by [`compress`].
+/// Decompress any `dxz` frame, whichever codec wrote it.
 ///
-/// Complexity: `O(n)` time and space in the decompressed output length, since each output
-/// byte is produced once by copying a literal or an already-emitted back-reference.
+/// The codec comes from the frame's magic, so a pack written by an older build still reads.
+/// In every case the result is checked against the length the frame declares: a payload
+/// that decodes to the wrong size is reported, never returned short.
+///
+/// Complexity: `O(n)` time and space in the decompressed output length.
 pub fn decompress(frame: &[u8]) -> Result<Vec<u8>, DecompressError> {
-    if frame.len() < HEADER_LENGTH || read_u32_be(frame, 0) != MAGIC {
+    if frame.len() < HEADER_LENGTH {
         return Err(DecompressError::InvalidMagic);
     }
-
     let original_length = read_u32_be(frame, 4) as usize;
-    let mut out: Vec<u8> = Vec::with_capacity(original_length);
+    // The declared length is four attacker-controlled bytes, and it is read *before* a single
+    // byte of payload is examined. Trusting it to size an allocation lets a twelve-byte frame
+    // ask for four gigabytes; trusting it to bound an inflate lets a small payload expand
+    // without limit. Neither is a real document, so both are refused here rather than
+    // survived.
+    if original_length > MAX_DECOMPRESSED {
+        return Err(DecompressError::Damaged);
+    }
+    let payload = &frame[HEADER_LENGTH..];
+
+    // The header-length check above guarantees four bytes; the slice pattern proves it to
+    // the compiler, so no fallible conversion (and no panic path) is needed.
+    let &[m0, m1, m2, m3, ..] = frame else {
+        return Err(DecompressError::InvalidMagic);
+    };
+    match &[m0, m1, m2, m3] {
+        MAGIC_DEFLATE => {
+            let out = miniz_oxide::inflate::decompress_to_vec_with_limit(payload, original_length)
+                .map_err(|_| DecompressError::Damaged)?;
+            if out.len() != original_length {
+                return Err(DecompressError::Truncated);
+            }
+            Ok(out)
+        }
+        MAGIC_STORED => {
+            if payload.len() != original_length {
+                return Err(DecompressError::Truncated);
+            }
+            Ok(payload.to_vec())
+        }
+        MAGIC_LZSS => lzss_decompress(frame, original_length),
+        _ => Err(DecompressError::InvalidMagic),
+    }
+}
+
+/// Decompress the token stream of a `DXZ1` frame.
+fn lzss_decompress(frame: &[u8], original_length: usize) -> Result<Vec<u8>, DecompressError> {
+    // Grown as tokens are decoded rather than reserved from the declared length: the frame is
+    // untrusted, and the loop below already stops at `Truncated` when the tokens run out, so
+    // a frame that claims more than it carries costs only what it actually decoded.
+    let mut out: Vec<u8> = Vec::new();
     let mut i = HEADER_LENGTH;
 
     while out.len() < original_length {
@@ -238,9 +352,24 @@ mod tests {
     use super::*;
 
     fn round_trip(bytes: &[u8]) {
+        // Whatever codec won, the bytes must come back exactly, and the frame must never
+        // be bigger than storing the input outright.
         let frame = compress(bytes);
-        assert_eq!(&frame[0..4], b"DXZ1");
+        assert!(
+            [MAGIC_DEFLATE, MAGIC_STORED].contains(&frame[0..4].try_into().expect("magic")),
+            "unexpected codec: {:?}",
+            &frame[0..4]
+        );
+        assert!(
+            frame.len() <= HEADER_LENGTH + bytes.len(),
+            "compression inflated"
+        );
         assert_eq!(decompress(&frame).unwrap(), bytes);
+
+        // The superseded frame still decodes: packs in real repositories contain it.
+        let legacy = lzss_compress(bytes);
+        assert_eq!(&legacy[0..4], MAGIC_LZSS);
+        assert_eq!(decompress(&legacy).unwrap(), bytes);
     }
 
     #[test]
@@ -278,23 +407,67 @@ mod tests {
         round_trip(&data);
     }
 
+    /// A frame's declared length is untrusted input. Before this was bounded, each of these
+    /// asked the allocator for the declared size before looking at the payload — so a frame
+    /// smaller than this comment could stop the process.
     #[test]
-    fn matches_typescript_reference_vectors() {
-        // Frames captured from the TypeScript reference (`src/core/compress.ts`). Equal
-        // bytes here prove native and wasm builds interoperate with each other.
+    fn a_frame_cannot_claim_a_length_it_does_not_carry() {
+        for magic in [MAGIC_LZSS, MAGIC_DEFLATE, MAGIC_STORED] {
+            let mut frame = magic.to_vec();
+            frame.extend_from_slice(&u32::MAX.to_be_bytes()); // "four gigabytes follow"
+            frame.extend_from_slice(b"they do not");
+            assert!(
+                decompress(&frame).is_err(),
+                "{} accepted an impossible length",
+                String::from_utf8_lossy(magic)
+            );
+        }
+    }
+
+    /// A small payload that inflates without limit is the other half of the same problem.
+    #[test]
+    fn a_deflate_payload_cannot_expand_past_what_the_frame_declared() {
+        let bomb = compress(&vec![0u8; 4 * 1024 * 1024]);
+        assert_eq!(&bomb[..4], MAGIC_DEFLATE, "a run of zeros should deflate");
+
+        // Keep the payload, understate the length: inflating must stop at the declared size
+        // rather than run to completion and hand back more than was promised.
+        let mut lying = MAGIC_DEFLATE.to_vec();
+        lying.extend_from_slice(&64u32.to_be_bytes());
+        lying.extend_from_slice(&bomb[HEADER_LENGTH..]);
+        assert!(decompress(&lying).is_err());
+    }
+
+    #[test]
+    fn frames_written_before_deflate_still_decode() {
+        // Frames captured before DEFLATE existed, byte-for-byte. Two things are pinned:
+        // the LZSS writer still produces exactly these bytes, and — the part that matters
+        // for anyone with a pack already committed — `decompress` still reads them.
         fn hex(bytes: &[u8]) -> String {
             bytes.iter().map(|b| format!("{b:02x}")).collect()
         }
-        assert_eq!(hex(&compress(b"")), "44585a310000000000");
-        assert_eq!(hex(&compress(b"abc")), "44585a310000000300616263");
-        assert_eq!(
-            hex(&compress(b"hello hello hello hello")),
-            "44585a31000000170268656c6c6f200e0006"
-        );
-        assert_eq!(
-            hex(&compress("::heading level=1 id=x\nHi\n::end\n".as_bytes())),
-            "44585a3100000020003a3a68656164696e0067206c6576656c3d00312069643d780a4800690a3a3a656e640a"
-        );
+        fn unhex(text: &str) -> Vec<u8> {
+            (0..text.len())
+                .step_by(2)
+                .map(|i| u8::from_str_radix(&text[i..i + 2], 16).expect("hex"))
+                .collect()
+        }
+
+        for (source, frame) in [
+            ("", "44585a310000000000"),
+            ("abc", "44585a310000000300616263"),
+            (
+                "hello hello hello hello",
+                "44585a31000000170268656c6c6f200e0006",
+            ),
+            (
+                "::heading level=1 id=x\nHi\n::end\n",
+                "44585a3100000020003a3a68656164696e0067206c6576656c3d00312069643d780a4800690a3a3a656e640a",
+            ),
+        ] {
+            assert_eq!(hex(&lzss_compress(source.as_bytes())), frame);
+            assert_eq!(decompress(&unhex(frame)).expect("legacy frame"), source.as_bytes());
+        }
     }
 
     #[test]

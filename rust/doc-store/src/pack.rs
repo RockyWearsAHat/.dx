@@ -9,9 +9,11 @@
 //!   reaches a teammate.
 //!
 //! Both are `DXCP1` containers ([`doc_core::chunk`]): chunk bodies deduplicated across every
-//! document in the pack, referenced by index, and `dxz1`-compressed as one stream. Splitting
-//! by route rather than writing one pack means committing a document does not rewrite the
-//! bytes of unrelated local notes.
+//! document in the pack, referenced by index, and compressed as one `dxz` frame — the codec
+//! is named by the frame's magic ([`doc_core::compress`] currently writes DEFLATE or stored,
+//! and `DXZ1` frames from older builds are decoded forever). Splitting by route rather than
+//! writing one pack means committing a document does not rewrite the bytes of unrelated
+//! local notes.
 
 use std::collections::BTreeMap;
 use std::fs;

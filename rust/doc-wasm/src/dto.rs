@@ -2,8 +2,8 @@
 //!
 //! `doc-core` is deliberately serde-free, so the JavaScript boundary needs its own
 //! serializable mirror of [`Document`], [`Block`], and [`Item`]. These DTOs use
-//! `camelCase` field names so the JSON is idiomatic on the JS side and matches the
-//! TypeScript reference shape (`className`, `scriptType`, …). Conversions in both
+//! `camelCase` field names (`className`, `scriptType`, …) so the JSON is idiomatic on the
+//! JS side and needs no renaming there. Conversions in both
 //! directions are total and lossless: `core -> dto -> core` reproduces the original
 //! document exactly, which is what keeps `parse`/`stringify`/`split` round-trips stable.
 
@@ -37,8 +37,8 @@ pub struct ItemDto {
 
 /// Serializable mirror of [`doc_core::model::Block`].
 ///
-/// Field names match the TypeScript reference block shape (`className`, `scriptType`)
-/// so the JSON crosses the boundary unchanged.
+/// Field names are `camelCase` (`className`, `scriptType`) so the JSON crosses the
+/// boundary in the shape a JavaScript host reads directly.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BlockDto {
@@ -81,7 +81,10 @@ pub struct BlockDto {
     /// Stylesheet media query (only for `stylesheet`).
     #[serde(default)]
     pub media: String,
-    /// List/checklist items.
+    /// Name template for a `nav` entry given as a bare target (only for `nav`).
+    #[serde(default)]
+    pub label: String,
+    /// List/checklist/nav items.
     #[serde(default)]
     pub items: Vec<ItemDto>,
     /// Whether a `code` block is executable (the bare `run` attribute).
@@ -171,6 +174,7 @@ impl From<&Block> for BlockDto {
             alt: block.alt.clone(),
             href: block.href.clone(),
             media: block.media.clone(),
+            label: block.label.clone(),
             items: block.items.iter().map(ItemDto::from).collect(),
             run: block.run,
             deps: block.deps.clone(),
@@ -200,6 +204,7 @@ impl From<&BlockDto> for Block {
             alt: dto.alt.clone(),
             href: dto.href.clone(),
             media: dto.media.clone(),
+            label: dto.label.clone(),
             items: dto.items.iter().map(Item::from).collect(),
             run: dto.run,
             deps: dto.deps.clone(),

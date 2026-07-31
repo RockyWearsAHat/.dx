@@ -6,8 +6,10 @@
 
 use std::path::{Path, PathBuf};
 
+use doc_core::edit;
+use doc_core::format::parse;
 use doc_core::model::Document;
-use doc_core::render::{html, outline, section, text, HtmlOptions, TextOptions, Theme};
+use doc_core::render::{self, html, outline, section, text, HtmlOptions, TextOptions, Theme};
 use doc_shot::{capture, ShotOptions};
 
 use crate::args::Args;
@@ -68,13 +70,39 @@ fn marks_for(row: &doc_core::render::OutlineEntry) -> String {
 }
 
 /// `dx render <file>` — the document as a self-contained HTML page.
+///
+/// `--fragment` emits just the `.dx-doc` container, which is what a surface swaps in when a
+/// block changed and the page around it did not. `--block <id>` narrows that to one block,
+/// and `--body <text>` renders it with a body that has not been saved — the two together are
+/// how a page keeps rendering while a reader is still typing into it.
 pub fn run_render(args: &Args) -> Result<String, String> {
-    let document = selected_document(args)?;
-    Ok(html(&document, &html_options(args)))
+    let Some(id) = args.value("block") else {
+        let document = selected_document(args)?;
+        return Ok(html(&document, &html_options(args)));
+    };
+
+    let source = workspace::read(&document_path(args)?)?;
+    let options = html_options(args);
+    match args.value("body") {
+        Some(body) => edit::preview_block(&source, id, body, &options),
+        None => {
+            let document = parse(&source);
+            // Asked for first, so a mistyped id is answered with the ids that do exist
+            // rather than with nothing.
+            edit::find(&document, id)?;
+            Ok(render::block(&document, id, &options).unwrap_or_default())
+        }
+    }
 }
 
 /// `dx png <file>` — the document as an image, written to a file.
+///
+/// With `--pages` it writes one image per page — `notes-1.png`, `notes-2.png`, … — which is
+/// the same division an agent gets from `dx_read`, for anyone driving `dx` from a shell.
 pub fn run_png(args: &Args) -> Result<String, String> {
+    if args.present("pages") {
+        return run_png_pages(args);
+    }
     let path = document_path(args)?;
     let document = selected_document(args)?;
     let shot = capture(
@@ -99,6 +127,65 @@ pub fn run_png(args: &Args) -> Result<String, String> {
         shot.width,
         shot.height
     ))
+}
+
+/// `dx png <file> --pages` — one image per page, numbered in reading order.
+///
+/// The report names every file written and says which blocks are on each page, so the
+/// caller can go straight to `--section` for the part they actually wanted.
+fn run_png_pages(args: &Args) -> Result<String, String> {
+    let path = document_path(args)?;
+    let document = selected_document(args)?;
+    let pages = doc_shot::capture_pages(
+        &document,
+        &ShotOptions {
+            width: args.number("width").unwrap_or(doc_shot::DEFAULT_WIDTH),
+            theme: theme_of(args),
+            document_css: args.present("doc-css"),
+            page_height: args
+                .number("page-height")
+                .unwrap_or(doc_shot::DEFAULT_PAGE_HEIGHT),
+            ..ShotOptions::default()
+        },
+    )?;
+
+    let stem = page_stem(args.value("out"), &path);
+    let mut out = String::new();
+    for page in &pages {
+        let target = page_target(&stem, page.number);
+        std::fs::write(&target, &page.shot.png)
+            .map_err(|error| format!("could not write {}: {error}", target.display()))?;
+        out.push_str(&format!(
+            "wrote {} ({}x{} px) — blocks: {}\n",
+            target.display(),
+            page.shot.width,
+            page.shot.height,
+            page.blocks.join(", ")
+        ));
+    }
+
+    let total = pages.first().map_or(0, |page| page.total);
+    if pages.len() < total {
+        out.push_str(&format!(
+            "stopped after {} of {total} pages — use --section to read further\n",
+            pages.len()
+        ));
+    }
+    Ok(out)
+}
+
+/// The base name page images are numbered from: `--out` when given, else the document's path.
+///
+/// The extension comes off either way, because the page number goes *between* the name and the
+/// extension. Leaving it on turned `--out pages.png` into `pages.png-1.png`.
+fn page_stem(out: Option<&str>, path: &Path) -> PathBuf {
+    out.map_or_else(|| path.to_path_buf(), PathBuf::from)
+        .with_extension("")
+}
+
+/// Where page `number` is written, given the stem [`page_stem`] chose.
+fn page_target(stem: &Path, number: usize) -> PathBuf {
+    PathBuf::from(format!("{}-{number}.png", stem.display()))
 }
 
 /// `dx open <file>` — render to a temporary page and open it in the default browser.
@@ -165,13 +252,19 @@ pub fn document_path(args: &Args) -> Result<PathBuf, String> {
         .ok_or_else(|| "a .dx file is required".to_string())
 }
 
-/// Build HTML options from `--theme`, `--fragment`, `--doc-css`, and `--hidden`.
+/// Build HTML options from `--theme`, `--fragment`, `--doc-css`, `--hidden`, and
+/// `--show-code`.
+///
+/// Code starts folded, because a page is read for what it says. `--show-code` is for the
+/// renders that are read without a pointer — a printed sheet, a page archived as a file —
+/// where a fold is a listing the reader has no way to open.
 fn html_options(args: &Args) -> HtmlOptions {
     HtmlOptions {
         theme: theme_of(args),
         fragment: args.present("fragment"),
         include_hidden: args.present("hidden"),
         document_css: args.present("doc-css"),
+        collapse_code: !args.present("show-code"),
         title: args.value("title").unwrap_or_default().to_string(),
     }
 }
@@ -208,6 +301,43 @@ mod tests {
         let out = run_text(&args(&[&path.to_string_lossy()])).expect("text");
         assert!(out.contains("# Top"));
         assert!(out.contains("## Beta"));
+    }
+
+    /// `--block` is what a surface calls between keystrokes, so it has to answer with the
+    /// block alone and with the same markup the page carries.
+    #[test]
+    fn one_block_renders_as_the_page_carries_it() {
+        let path = fixture("block");
+        let file = path.to_string_lossy().into_owned();
+
+        let one = run_render(&args(&[&file, "--block", "alpha"])).expect("block");
+        assert!(one.contains("Alpha"), "{one}");
+        assert!(!one.contains("Beta"), "{one}");
+        assert!(!one.contains("<!doctype"), "{one}");
+
+        let page = run_render(&args(&[&file, "--fragment"])).expect("page");
+        assert!(page.contains(one.trim()), "{one}\n\nnot found in\n{page}");
+    }
+
+    /// `--body` renders characters that were never saved, and saves none of them: this is
+    /// how a page keeps rendering while a reader is still typing into it.
+    #[test]
+    fn a_body_is_drawn_without_being_written() {
+        let path = fixture("body");
+        let file = path.to_string_lossy().into_owned();
+
+        let drawn =
+            run_render(&args(&[&file, "--block", "alpha", "--body=Still typing"])).expect("draw");
+        assert!(drawn.contains("Still typing"), "{drawn}");
+        assert_eq!(workspace::read(&path).expect("source"), SAMPLE);
+    }
+
+    #[test]
+    fn an_unknown_block_names_the_ones_that_exist() {
+        let path = fixture("unknown-block");
+        let failure = run_render(&args(&[&path.to_string_lossy(), "--block", "nope"]))
+            .expect_err("no such block");
+        assert!(failure.contains("alpha"), "{failure}");
     }
 
     #[test]
@@ -253,5 +383,16 @@ mod tests {
     #[test]
     fn a_missing_file_argument_is_a_clear_error() {
         assert!(run_text(&args(&[])).unwrap_err().contains("required"));
+    }
+
+    #[test]
+    fn a_page_number_goes_before_the_extension_not_after_the_whole_name() {
+        // `--out pages.png` used to produce `pages.png-1.png`, because only the default
+        // path had its extension stripped.
+        let named = page_stem(Some("pages.png"), Path::new("notes.dx"));
+        assert_eq!(page_target(&named, 1), PathBuf::from("pages-1.png"));
+
+        let defaulted = page_stem(None, Path::new("dir/notes.dx"));
+        assert_eq!(page_target(&defaulted, 2), PathBuf::from("dir/notes-2.png"));
     }
 }

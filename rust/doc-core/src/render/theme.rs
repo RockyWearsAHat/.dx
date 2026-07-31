@@ -174,6 +174,11 @@ li > ul, li > ol { margin: 0.3rem 0 0; }
 .dx-checklist .dx-mark { font-family: var(--dx-mono); font-size: 0.85em; color: var(--dx-muted); }
 .dx-checklist .dx-done { color: var(--dx-muted); }
 
+/* Navigation is a list of names on the same sheet — no panel, no rail, no highlight. */
+.dx-nav ul { list-style: none; padding-left: 0; margin: 0; }
+.dx-nav ul ul { padding-left: 1.15rem; }
+.dx-nav li { margin: 0.2rem 0; }
+
 /* A quotation is set in from the margin by a rule. No fill. */
 blockquote {
   margin: 0 0 1.15rem;
@@ -201,7 +206,7 @@ hr {
   background: none;
 }
 
-.dx-code::after {
+.dx-code:not(.dx-code-folded)::after {
   content: attr(data-label);
   position: absolute;
   top: 0.1rem;
@@ -215,11 +220,52 @@ hr {
   user-select: none;
 }
 @media (hover: hover) {
-  .dx-code:hover::after { opacity: 1; }
+  .dx-code:not(.dx-code-folded):hover::after { opacity: 1; }
 }
 
+/* A folded block's label is the line you open it with. It is the same faint pencil note in
+   the same mono — a `summary` here is a line of type, not a control, so it gets no box, no
+   fill, and no focus ring beyond the text going to full ink.
+
+   It sits at the left, in the column the code will appear in, because a note in the right
+   margin is something a reader's eye skips and this one has to be found: it is the only
+   thing standing where a listing used to be. The marker is one small glyph for the same
+   reason — a reader has to be able to tell that something is folded, and a character is the
+   lightest way to say so on a sheet with no second surface. */
+.dx-code-folded > summary {
+  display: block;
+  list-style: none;
+  cursor: pointer;
+  font: 400 0.68rem/1.6 var(--dx-mono);
+  letter-spacing: 0.02em;
+  color: var(--dx-faint);
+  user-select: none;
+  transition: color 0.15s ease;
+}
+.dx-code-folded > summary::-webkit-details-marker { display: none; }
+.dx-code-folded > summary::before {
+  content: "\25B8";
+  display: inline-block;
+  width: 1.1ch;
+  margin-right: 0.6ch;
+}
+.dx-code-folded[open] > summary::before { content: "\25BE"; }
+.dx-code-folded > summary:hover,
+.dx-code-folded > summary:focus-visible {
+  color: var(--dx-muted);
+  outline: none;
+}
+/* Open, the label is a caption over the listing and needs the gap a caption has. */
+.dx-code-folded[open] > summary { margin-bottom: 0.5rem; }
+
 /* Long lines wrap rather than scroll out of view. A rendered document is also read as a
-   static image, where a horizontal scrollbar silently truncates code and output. */
+   static image, where a horizontal scrollbar silently truncates code and output.
+
+   What a wrap must not do is look like a new line of code. A continuation that restarts at
+   column 0 reads as the next statement and destroys the indentation the code is structured
+   by, so each line hangs: its wrapped remainder sits indented under it, which is the mark
+   that says "this is still the line above". It has to be per line — `text-indent` on the
+   `pre` applies to the first line box only, and indents everything after it instead. */
 .dx-code pre, .dx-output pre {
   margin: 0;
   padding: 0;
@@ -230,6 +276,17 @@ hr {
   font-size: 0.83rem;
   line-height: 1.65;
   tab-size: 2;
+}
+
+/* One line of preformatted text, hanging so its wrapped remainder sits under it.
+
+   `min-height` is what keeps a blank line blank: an empty element generates no line box and
+   would collapse to nothing, silently closing up the spacing the author wrote into the code. */
+.dx-line {
+  display: block;
+  padding-left: 2ch;
+  text-indent: -2ch;
+  min-height: 1lh;
 }
 
 /* Inline code is monospace and nothing else — a tint or a border mid-sentence marks the page
@@ -333,6 +390,9 @@ figcaption {
   body { background: #fff; font-size: 11pt; }
   .dx-doc { max-width: none; padding: 0; }
   .dx-code::after { display: none; }
+  /* A folded block keeps its label on paper — it is the only thing saying a listing is
+     there — but loses the marker, which promises an opening the page cannot perform. */
+  .dx-code-folded > summary::before { display: none; }
   h1, h2, h3, h4 { break-after: avoid; }
   .dx-code, .dx-output, table, figure { break-inside: avoid; }
 }
@@ -368,6 +428,30 @@ mod tests {
         let css = stylesheet();
         assert!(css.contains("white-space: pre-wrap"));
         assert!(css.contains("overflow-wrap: anywhere"));
+    }
+
+    #[test]
+    fn a_wrapped_line_is_indented_so_it_cannot_be_read_as_a_new_one() {
+        let css = stylesheet();
+        // Per line, not per block: `text-indent` on the `pre` would apply to its first line
+        // box alone, indenting every *other* line instead of the wrapped remainders.
+        let rule = css
+            .split(".dx-line {")
+            .nth(1)
+            .expect("a rule for one preformatted line")
+            .split('}')
+            .next()
+            .expect("its body");
+        assert!(
+            rule.contains("text-indent: -2ch") && rule.contains("padding-left: 2ch"),
+            "a continuation must hang below its own line: {rule}"
+        );
+        // An empty element generates no line box, so without this a blank line in the source
+        // closes up and the code loses the spacing its author wrote.
+        assert!(
+            rule.contains("min-height: 1lh"),
+            "a blank line must keep its height: {rule}"
+        );
     }
 
     #[test]

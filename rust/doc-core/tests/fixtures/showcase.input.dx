@@ -6,6 +6,10 @@ A Notepad for Code
 This document is not describing a program. It **is** one. The code blocks below run on your machine, pull in real libraries, and store what they produced right back into this file — so the next person to open it sees the results, not just the source.
 ::end
 
+::nav id=contents
+
+::end
+
 ::heading level=2 id=numbers
 Numbers, computed here
 ::end
@@ -90,7 +94,7 @@ What an agent sees
 ::end
 
 ::bulleted-list id=agent-tools
-- `dx_view` returns this page as an image — the chart above arrives as a picture.
+- `dx_read` returns this page as images — the chart above arrives as a picture.
 - `dx_outline` maps the blocks so only the relevant section has to be fetched.
 - `dx_run` executes the code and reports what each block produced.
 - `dx_edit` changes one block by id without rewriting the rest of the file.

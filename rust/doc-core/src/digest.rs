@@ -1,8 +1,8 @@
 //! Cryptographic digests (SHA-256, SHA-1) over raw bytes.
 //!
 //! Pure implementations with no dependencies, producing lowercase hex strings that are
-//! byte-for-byte identical to the TypeScript reference (`src/core/digest.ts`) and to
-//! `openssl`/Node `crypto`. Used to fingerprint packed documents and source text.
+//! byte-for-byte identical to `openssl` and Node's `crypto`. Used to fingerprint packed
+//! documents and source text — a `.dx` pointer carries one of these.
 
 /// Lowercase hex digits, indexed by nibble value.
 const HEX_DIGITS: &[u8; 16] = b"0123456789abcdef";

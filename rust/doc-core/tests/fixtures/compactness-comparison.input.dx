@@ -2,33 +2,8 @@
 Compactness Comparison
 ::end
 
-::style id=compactness-style
-.html-wrap table {
-	width: 100%;
-	border-collapse: collapse;
-	margin: 0.5rem 0 1rem;
-	font-size: 0.95rem;
-}
-
-.html-wrap th,
-.html-wrap td {
-	text-align: left;
-	padding: 0.5rem 0.65rem;
-	border-bottom: 1px solid rgba(111, 198, 255, 0.22);
-}
-
-.html-wrap thead th {
-	border-bottom-color: rgba(111, 198, 255, 0.5);
-	color: #eef7ff;
-}
-
-.html-wrap tbody tr:nth-child(odd) {
-	background: rgba(11, 28, 46, 0.35);
-}
-::end
-
 ::paragraph id=compactness-summary
-This DX file and compactness-comparison.md use the same dataset and the same formulas.
+This document and `compactness-comparison.md` carry the same three payloads and the same formulas. The question is what each costs once it is stored.
 ::end
 
 ::heading level=2 id=shared-baseline
@@ -42,10 +17,10 @@ Shared baseline payloads
 ::end
 
 ::paragraph id=measurement-rules
-Reduction bytes are computed as md_bytes - packed_bytes. Reduction percent is reduction_bytes / md_bytes * 100.
+Reduction bytes are `md_bytes - packed_bytes`. Reduction percent is `reduction_bytes / md_bytes * 100`.
 ::end
 
-::code id=compactness-metrics hidden language=json
+::code id=compactness-metrics hidden lang=json
 [
 	{"sample":"Baseline-A","md_bytes":920,"dx_source_bytes":874,"packed_bytes":502,"reduction_bytes":418,"reduction_pct":45.43},
 	{"sample":"Baseline-B","md_bytes":1016,"dx_source_bytes":968,"packed_bytes":556,"reduction_bytes":460,"reduction_pct":45.28},
@@ -53,10 +28,10 @@ Reduction bytes are computed as md_bytes - packed_bytes. Reduction percent is re
 ]
 ::end
 
-::code id=compactness-table language=html
+::html id=compactness-table
 <table>
 	<thead>
-		<tr><th>Sample</th><th>Markdown (B)</th><th>DX Source (B)</th><th>Packed (B)</th><th>Reduction (B)</th><th>Reduction (%)</th></tr>
+		<tr><th>Sample</th><th>Markdown (B)</th><th>DX source (B)</th><th>Packed (B)</th><th>Reduction (B)</th><th>Reduction</th></tr>
 	</thead>
 	<tbody>
 		<tr><td>Baseline-A</td><td>920</td><td>874</td><td>502</td><td>418</td><td>45.43%</td></tr>
@@ -66,28 +41,43 @@ Reduction bytes are computed as md_bytes - packed_bytes. Reduction percent is re
 </table>
 ::end
 
-::code id=compactness-bars language=svg
-<svg viewBox="0 0 980 320" role="img" aria-label="Markdown vs packed bytes">
-	<rect x="0" y="0" width="980" height="320" fill="#0a1122" />
-	<g font-family="monospace" font-size="14" fill="#dff3ff">
-		<text x="32" y="34">Bytes by sample (1px = 1 byte / 2)</text>
-		<text x="32" y="88">Baseline-A</text>
-		<rect x="170" y="72" width="460" height="16" fill="#6fc6ff" />
-		<rect x="170" y="92" width="251" height="16" fill="#4de0be" />
-
-		<text x="32" y="148">Baseline-B</text>
-		<rect x="170" y="132" width="508" height="16" fill="#6fc6ff" />
-		<rect x="170" y="152" width="278" height="16" fill="#4de0be" />
-
-		<text x="32" y="208">Baseline-C</text>
-		<rect x="170" y="192" width="420" height="16" fill="#6fc6ff" />
-		<rect x="170" y="212" width="224" height="16" fill="#4de0be" />
-
-		<text x="170" y="276">Blue: Markdown bytes | Green: Packed bytes</text>
+::svg id=compactness-bars
+<svg viewBox="0 0 720 250" role="img" aria-label="Paired bars per baseline: Markdown against packed bytes. Baseline-A 920 against 502, Baseline-B 1016 against 556, Baseline-C 840 against 448">
+	<g font-family="monospace" font-size="12" fill="currentColor">
+		<text x="0" y="16" fill-opacity="0.55">bytes by sample — 1 px is 2 bytes</text>
+		<text x="0" y="60">Baseline-A</text>
+		<text x="0" y="128">Baseline-B</text>
+		<text x="0" y="196">Baseline-C</text>
+	</g>
+	<g fill="currentColor">
+		<g fill-opacity="0.45">
+			<rect x="100" y="44" width="460" height="14"/>
+			<rect x="100" y="112" width="508" height="14"/>
+			<rect x="100" y="180" width="420" height="14"/>
+		</g>
+		<g fill-opacity="0.18">
+			<rect x="100" y="62" width="251" height="14"/>
+			<rect x="100" y="130" width="278" height="14"/>
+			<rect x="100" y="198" width="224" height="14"/>
+		</g>
+	</g>
+	<g font-family="monospace" font-size="11" fill="currentColor" fill-opacity="0.55">
+		<text x="570" y="55">920</text>
+		<text x="570" y="73">502</text>
+		<text x="618" y="123">1016</text>
+		<text x="618" y="141">556</text>
+		<text x="530" y="191">840</text>
+		<text x="530" y="209">448</text>
+	</g>
+	<g font-family="monospace" font-size="11" fill="currentColor">
+		<rect x="0" y="228" width="16" height="9" fill-opacity="0.45"/>
+		<text x="24" y="237" fill-opacity="0.55">markdown</text>
+		<rect x="120" y="228" width="16" height="9" fill-opacity="0.18"/>
+		<text x="144" y="237" fill-opacity="0.55">packed</text>
 	</g>
 </svg>
 ::end
 
 ::quote id=compactness-conclusion
-Packed DX payloads remain roughly 45-47% smaller than Markdown while preserving typed block structure.
+Packed dx payloads stay roughly 45–47% smaller than the same content in Markdown, and keep their typed block structure while doing it.
 ::end

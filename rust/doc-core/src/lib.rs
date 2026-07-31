@@ -29,6 +29,7 @@
 pub mod chunk;
 pub mod compress;
 pub mod digest;
+pub mod edit;
 pub mod format;
 pub mod model;
 pub mod render;

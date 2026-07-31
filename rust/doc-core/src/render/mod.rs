@@ -19,13 +19,15 @@
 mod escape;
 mod html;
 mod inline;
+mod nav;
 mod outline;
 mod template;
 mod text;
 mod theme;
 
 pub use escape::{escape_html, sanitize_markup};
-pub use html::{html, HtmlOptions};
+pub use html::{block, html, HtmlOptions};
+pub use nav::{entries as nav_entries, NavEntry};
 pub use outline::{outline, section, OutlineEntry};
 pub use text::{text, TextOptions};
 pub use theme::{stylesheet, Theme};

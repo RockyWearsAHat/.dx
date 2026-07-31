@@ -11,3 +11,5 @@ repository.workspace = true
 crate-type = ["rlib", "cdylib"]
 
 [dependencies]
+# Pure-Rust DEFLATE: no unsafe, no C, and it compiles to wasm32 with the rest of the crate.
+miniz_oxide = "0.8"

@@ -2,7 +2,9 @@
 //!
 //! # Shape
 //! Content lives in `chunks`, addressed by the SHA-256 of the chunk's canonical block text
-//! and stored `dxz1`-compressed. A **manifest** is a whole document version: it is keyed by
+//! and stored as a `dxz` frame ([`doc_core::compress`] — the codec is named in each frame's
+//! magic, and old `DXZ1` frames are decoded forever). A **manifest** is a whole document
+//! version: it is keyed by
 //! the digest of that version's canonical source, and `manifest_chunks` lists the chunks it is
 //! made of, in order. `documents` then just names a path and points at the manifest that is
 //! current for it.

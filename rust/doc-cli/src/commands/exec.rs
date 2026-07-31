@@ -76,16 +76,34 @@ fn summary(report: &RunReport) -> String {
             entry.id,
             entry.status,
             timing,
-            first_line(&entry.output),
+            preview(&entry.output),
             width = width
         ));
     }
     out
 }
 
-/// The first line of an output, for the one-line-per-block summary.
-fn first_line(output: &str) -> String {
-    output.lines().next().unwrap_or("").trim().to_string()
+/// How wide a one-line preview may be before it is cut short.
+const PREVIEW_WIDTH: usize = 56;
+
+/// A one-line preview of what a block produced, for the per-block summary.
+///
+/// A block that drew something produced markup, and quoting the opening tag of an SVG tells a
+/// reader nothing while filling their terminal with a line they cannot read. Such an output is
+/// named instead of quoted; anything else is its first line, cut to [`PREVIEW_WIDTH`].
+fn preview(output: &str) -> String {
+    let first = output.lines().next().unwrap_or("").trim();
+    if first.starts_with("<svg") {
+        return "a drawing".to_string();
+    }
+    if first.starts_with('<') {
+        return "markup".to_string();
+    }
+    if first.chars().count() <= PREVIEW_WIDTH {
+        return first.to_string();
+    }
+    let cut: String = first.chars().take(PREVIEW_WIDTH - 1).collect();
+    format!("{}…", cut.trim_end())
 }
 
 #[cfg(test)]

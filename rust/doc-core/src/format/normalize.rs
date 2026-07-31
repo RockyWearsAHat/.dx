@@ -57,6 +57,13 @@ fn normalize_block(block: &Block, index: usize, registry: &mut IdRegistry) -> Bl
                 items
             };
         }
+        // Nav keeps whatever entries it has, including none: an empty nav renders this
+        // document's contents, so inventing a placeholder entry would replace a working
+        // table of contents with the word "List item".
+        "nav" => {
+            normalized.items = normalize_list_items(&block.items, &block.text);
+            normalized.label = js_trim(&block.label).to_string();
+        }
         "image" => {
             normalized.src = js_trim(&block.src).to_string();
             normalized.alt = js_trim(&block.alt).to_string();

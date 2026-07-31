@@ -1,9 +1,9 @@
-//! The in-memory document model shared by the binary codec and the DOCSRC parser.
+//! The in-memory document model every view and every store path shares.
 //!
-//! A document is metadata plus an ordered list of typed blocks. The model mirrors the
-//! TypeScript reference shape closely enough that the binary codec round-trips
-//! byte-for-byte. Document metadata values are kept as their raw JSON text (exactly the
-//! bytes the wire format stores), so the core needs no JSON dependency.
+//! A document is metadata plus an ordered list of typed blocks. Nothing here is a wire
+//! format: a block is stored as the canonical DOCSRC text `format::stringify` writes for
+//! it, so no field can be lost to a codec that had not heard of it. Document metadata
+//! values are kept as their raw JSON text, so the core needs no JSON dependency.
 
 /// One item of a list or checklist block. `checked` is meaningful only for checklists.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -45,6 +45,9 @@ pub struct Block {
     pub href: String,
     /// Stylesheet media query (only for `stylesheet`).
     pub media: String,
+    /// Name template for a `nav` entry that gives a target but no name (only for `nav`),
+    /// e.g. `label="{n}. {name}"`. Empty means the default, `{name}`.
+    pub label: String,
     /// List/checklist items.
     pub items: Vec<Item>,
     /// Whether a `code` block is executable (the bare `run` attribute).
@@ -111,6 +114,21 @@ pub struct Document {
 }
 
 impl Document {
+    /// Position of the block called `id`, or `None` when no block carries it.
+    ///
+    /// This is the document's own rule for what "the block called `id`" means, and every
+    /// caller uses it: editing, rendering one block, and the command line all match ids the
+    /// same way. Matching ignores case and a leading `#`, so `#Intro` and `intro` find the
+    /// same block — a reader copying an id out of a heading link should not have to know the
+    /// difference.
+    #[must_use]
+    pub fn block_index(&self, id: &str) -> Option<usize> {
+        let wanted = id.trim().trim_start_matches('#').to_ascii_lowercase();
+        self.blocks
+            .iter()
+            .position(|block| block.id.to_ascii_lowercase() == wanted)
+    }
+
     /// Text of the first `heading` block, or empty when there is none.
     pub fn first_heading_text(&self) -> &str {
         for block in &self.blocks {

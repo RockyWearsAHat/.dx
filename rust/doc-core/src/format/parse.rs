@@ -122,6 +122,15 @@ fn push_block(blocks: &mut Vec<Block>, block_type: &str, attrs: &[Attr], content
                 .filter(|item| !item.text.is_empty())
                 .collect();
         }
+        // Nav: one navigation target per line, parsed exactly like list items so an
+        // indented entry nests. An **empty body is meaningful** — it asks for this
+        // document's own contents — so no default entry is invented here or in
+        // normalization.
+        "nav" => {
+            block.label = js_trim(attr(attrs, "label")).to_string();
+            let flat = parse_list_items(content_lines);
+            block.items = build_nested_list_structure(&flat);
+        }
         // Rule: a horizontal divider carries no fields.
         "rule" => {}
         // Style: inline CSS body, trailing-trimmed but otherwise verbatim.
@@ -222,14 +231,13 @@ pub(super) fn parse_docsrc_blocks(body: &str) -> Vec<Block> {
         while cursor < lines.len() {
             let body_line = &lines[cursor];
             let body_trimmed = js_trim(body_line);
-            let end_index = body_line.find("::end");
 
             if body_trimmed == "::end" {
                 found_end = true;
                 break;
             }
 
-            if let Some(idx) = end_index {
+            if let Some(idx) = trailing_end_index(body_line) {
                 let before_end = js_trim_end(&body_line[..idx]);
                 if !before_end.is_empty() {
                     content_lines.push(before_end.to_string());
@@ -250,6 +258,31 @@ pub(super) fn parse_docsrc_blocks(body: &str) -> Vec<Block> {
     }
 
     blocks
+}
+
+/// Where a body line's *trailing* close token starts, if it has one.
+///
+/// The format's recovery rule is "trailing close token on same line as content" — a body line
+/// like `    } ::end` closes its block. The rule is deliberately narrow: `::end` counts only when
+/// whitespace precedes it and nothing but whitespace follows, which is the same shape
+/// [`parse_inline_block`] matches for a whole single-line block.
+///
+/// It has to stay narrow, because the alternative destroys prose. Matching `::end` anywhere in
+/// a line meant that a document *describing* the format lost content: a paragraph reading
+/// "a block ends with `::end` on its own line" was cut at the backtick, and an SVG label
+/// containing `::end` truncated the drawing and everything under it. A block terminates on a
+/// line of its own, or at the end of a line — never in the middle of a sentence.
+fn trailing_end_index(body_line: &str) -> Option<usize> {
+    let lower = body_line.to_ascii_lowercase();
+    let index = lower.rfind("::end")?;
+    if !body_line[index + "::end".len()..]
+        .chars()
+        .all(char::is_whitespace)
+    {
+        return None;
+    }
+    let precedes = body_line[..index].chars().next_back()?;
+    precedes.is_whitespace().then_some(index)
 }
 
 /// Remove a leading `::type` prefix (case-insensitive ASCII letters and `-`) from a raw
