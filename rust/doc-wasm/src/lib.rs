@@ -300,7 +300,12 @@ pub fn set_block(text: &str, id: &str, body: &str) -> Result<String, JsValue> {
 #[wasm_bindgen]
 pub fn insert_block(text: &str, after: &str, kind: &str, body: &str) -> Result<String, JsValue> {
     let anchor = (!after.is_empty()).then_some(after);
-    let (source, id) = doc_core::edit::insert_after(text, anchor, kind, body).map_err(js_err)?;
+    let insertion = doc_core::edit::Insertion {
+        kind,
+        body,
+        ..doc_core::edit::Insertion::default()
+    };
+    let (source, id) = doc_core::edit::insert_after(text, anchor, &insertion).map_err(js_err)?;
     serde_json::to_string(&InsertedDto { source, id }).map_err(js_err)
 }
 

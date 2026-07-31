@@ -44,13 +44,27 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     };
 
+    let parsed = Args::parse(&raw[1..]);
+    // Both servers run until they are stopped, so neither returns an `Output` to print —
+    // which is exactly why `--help` has to be answered here, before either starts.
+    if (command == "mcp" || command == "serve") && parsed.present("help") {
+        print!("{}", commands::setup::HELP);
+        return ExitCode::SUCCESS;
+    }
+    // The servers cannot go through the dispatch table (they never return an `Output`),
+    // but a flag they do not read is refused by the same formatter, never swallowed.
     if command == "mcp" {
+        if let Some(refused) = commands::refuse_unknown_flags("mcp", &parsed, &[]) {
+            let _ = writeln!(io::stderr(), "{refused}");
+            return ExitCode::FAILURE;
+        }
         return serve_mcp();
     }
-
-    let parsed = Args::parse(&raw[1..]);
-    // Both servers run until they are stopped, so neither returns an `Output` to print.
     if command == "serve" {
+        if let Some(refused) = commands::refuse_unknown_flags("serve", &parsed, &["port"]) {
+            let _ = writeln!(io::stderr(), "{refused}");
+            return ExitCode::FAILURE;
+        }
         return serve_documents(&parsed);
     }
     match commands::dispatch(&command, &parsed) {

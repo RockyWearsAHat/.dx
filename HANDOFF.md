@@ -2,9 +2,137 @@
 
 _Resume point after `/compact` or `/clear`. Update after every task or wave (see CLAUDE.md)._
 
-Last updated: 2026-07-30
+Last updated: 2026-07-31
 
-## This wave: review findings fixed (edit round-trip, kill_tree race, stale docs)
+## This wave: full-history audit, five defects fixed, in-editor diff restored, everything committed
+
+The whole git history (60 commits) was audited against the working tree: every design promise
+(one engine, store resolution, sandbox, allow-list escaping, paper aesthetic, one install) was
+re-verified with `file:line` evidence and the gates re-run — all survive. Three audit agents +
+two implementer agents; findings and fixes:
+
+1. **`dx search --limit` was refused** (HIGH — the new flag table missed it because `--limit`
+   was documented nowhere). Row and HELP now carry it; guard test extended; two new tests
+   (accepted + honored).
+2. **Explicit-id refusal had a slugify gap**: `--id "My Id"` when `my-id` exists escaped the
+   refusal and was silently renamed. `edit::colliding_id` now slugifies the candidate through
+   the registry's own `slugify_heading` before matching; refusal names the taken id. Tests in
+   both crates pin it, file byte-unchanged.
+3. **The stale-engine check was a permanent false positive**: `build-app.sh` codesigns the
+   bundled `dx`, so whole-file bytes never matched `current_exe()` even from the same build —
+   the alarm always fired from a dev binary. `desktop.rs` now compares Mach-O **`LC_UUID`**
+   (hand-parsed, thin + universal; any parse failure is "cannot tell", never "stale").
+   Proven live: same link through a signature → clean; a genuinely older binary → stale line.
+4. **`dx insert` gained `--id`/`--level`** (parity with `append`; both documented in HELP).
+5. **One refusal path**: the duplicate `edit::authorable` pre-check in `run_append` removed;
+   both verbs refuse through `doc_core::edit::insert_after` alone.
+6. **Lost TS-era capability restored — in-editor `.dx` diff.** VS Code's git ignores
+   `textconv`, so "Open Changes" showed two pointer lines. New "DX: Open Changes"
+   (`dx.openChanges`): a `dx-text:` `TextDocumentContentProvider` resolves HEAD (via
+   `git show`) and the working copy through **`dx textconv`** — the same driver git runs, no
+   store logic in TS. Unresolvable side shows dx's own sentence, never empty. The working
+   side follows unsaved edits. `editor/vscode/src/changes.ts` + `policy.ts` (CSP + nonce
+   extracted and **pinned by test**: `img-src data:`, no `https:`, nonce 32-hex).
+7. Cleanliness: `.gsh/` agent artifacts untracked + gitignored; CLAUDE.md test count trued
+   (545); `erase()` failure note now lands block→note→field like the save path.
+- **Validated**: `cargo test` **545 passing, 0 failed**; clippy `-D warnings` clean;
+  `fmt --check` clean; `./editor/build.sh` rerun after the doc-core change; node suites
+  **34/34 github, 20/20 vscode** (9 new); `tsc --noEmit` clean; `packaging/build-app.sh`
+  rebuilt, installed via the fresh bundle's own `dx setup`,
+  `/Applications/DX.app/Contents/MacOS/dx` `cmp`-identical, and `target/release/dx doctor`
+  prints **no stale line** (the false positive is gone, and a real mismatch still says so).
+- Known minor: `dx append --type widget` with no `--text`/`--from` reads stdin before the
+  kind refusal (body gathered first). The vscode node tests import `.ts` directly and rely
+  on node ≥23.6 type-stripping (v23.9 here).
+
+## Previous wave: eight review findings fixed (append through one engine, refusals unified, no more silent staleness)
+
+1. **`dx append` is `insert_after` now** — the hand-built Block in `run_append` is gone.
+   `edit::Insertion` grew `id` and `level` (additive; `..default()` callers untouched), and
+   the authorable-kind refusal lives once in `edit::authorable`. New behavior, on purpose:
+   an explicit `--id` a block already answers to is **refused with a sentence** (matching by
+   the document's own rule, so `#Intro` collides with `intro`) instead of the registry
+   silently renaming; the file is left untouched. `insert`/`append` error text unified to
+   "cannot add".
+2. **One flag-refusal formatter** (`commands::refuse_unknown_flags`), used by dispatch,
+   `dx serve`, and — new — `dx mcp`, which used to swallow every flag silently
+   (`dx mcp --root /x` now errors naming "no flags").
+3. **`require_code_for_attributes` uses `present()`**, so a trailing valueless `--lang`/
+   `--deps` (parsed boolean) is refused on prose instead of slipping through.
+4. **A stale installed DX.app says so.** `desktop::Outcome::StaleEngine`: when the running
+   binary is not the one inside `/Applications/DX.app` (byte comparison, size first;
+   "cannot read" is "cannot tell", never "stale"), both `dx setup`'s report line and
+   `dx doctor` name the remedy — rebuild `packaging/build-app.sh`, run that bundle's
+   `dx setup`. Verified live: `target/debug/dx doctor` prints the stale line; the installed
+   app's own doctor does not. Copy semantics unchanged.
+5. **A refused save no longer strands the editor** (`editor/surface/edit.js`): on
+   `commit`/`remove` rejection the editing state is `resume`d — field kept with the typed
+   text, re-focused, Escape/blur/retry alive again; `erase` re-attaches the field it had
+   removed; opening another block closes an abandoned failed attempt instead of leaving two
+   fields. No JS harness for edit.js — verified by code reading; all three host copies
+   (vscode/surface, packaging bundle, /Applications) confirmed to carry the fix.
+6. **Webview CSP matches DX.app**: `img-src data:` (dropped `https:` — a document must not
+   reach the network on any host), and the CSP nonce is `crypto.randomBytes`, not
+   `Math.random`.
+- **Validated**: `cargo test` **537 passing, 0 failed** (7 new); clippy `-D warnings` clean;
+  `fmt --check` clean; `./editor/build.sh` rerun; node suites **34/34 github, 11/11
+  vscode**; `tsc --noEmit` clean; `packaging/build-app.sh` rebuilt, installed via the fresh
+  bundle's `dx setup`, `/Applications/DX.app/Contents/MacOS/dx` `cmp`-identical to the
+  build. Nothing committed.
+
+## Previous wave: the stale DX.app rebuilt, reinstalled, and editing re-proven
+
+"Blocks are not editable in DX.app" was reported. Root cause: **staleness, not a code
+defect** — `/Applications/DX.app` and `~/.local/bin/dx` still dated Jul 30 19:19 (the
+build before the edit round-trip and arg-parsing waves), while the current tree had never
+been repackaged. The pending "rebuild `packaging/build-app.sh`" step from the last two
+waves is now done.
+
+- **Rebuilt**: `cargo build --release -p doc-cli`, `./editor/build.sh` (both wasm engines),
+  `packaging/build-app.sh` (2.8 MB bundle, ad-hoc signed).
+- **Installed**: `dx setup` run **from the fresh bundle's own binary** — running it from
+  `target/release` leaves an already-installed `/Applications/DX.app` in place by design
+  (`desktop.rs`: a bundle under Applications is never moved; only the *running* bundle is
+  copied in over it). After the bundle-run setup: `/Applications/DX.app/Contents/MacOS/dx`
+  is byte-identical to the fresh bundle (`cmp` clean), `~/.local/bin/dx` matches it, the
+  surface files in `Resources/surface` are current, and `dx serve` restarted on the new
+  binary. Behavioral proof of freshness: `dx insert --help` prints help without inserting.
+- **Editing re-proven with real CGEvents** (Quartz `CGEventPost`, never System Events)
+  against `/tmp/dxfix/welcome.dx` (a store pointer). Screenshots in the session scratchpad
+  (`/private/tmp/claude-501/-Users-alexwaldmann-Desktop-DOC/68f79089-*/scratchpad/0*.png`):
+  - click a paragraph → field appears in place, hairline rule, caret at end (`02`);
+  - typing ` Typed by *CGEvents* now.` → block re-renders live, *CGEvents* italicised
+    before any save, source written beneath (`03`);
+  - Return → saved and re-rendered in place, next empty paragraph focused, **no reload**
+    (scroll and layout intact, `04`); pointer digest changed on disk, file stayed one line;
+  - typing then Escape → discarded: digest unchanged, text nowhere in content (`05`).
+- Remaining gap: none new. The VS Code webview end-to-end drive and the store submissions
+  (below) are still the open items. Nothing committed this wave.
+
+## Previous wave: three CLI arg-parsing defects fixed
+
+1. **`--help` never runs the command it was asked about.** `dx insert <file> --help` used to
+   perform a real insert (a stray empty block, exit 0). `commands::dispatch` now answers
+   `--help` with the help text before any command runs, and `dx serve`/`dx mcp` do the same
+   in `main` since they bypass dispatch. (`dx --help` already exited 0; pinned by test.)
+2. **A flag a command does not read is refused by name, never swallowed.** The dispatch
+   table (`commands/mod.rs::COMMANDS`) now carries each verb's flags; anything else errors
+   with the accepted list (`` `dx set` does not take --lang. It takes --text, --from``).
+   `dx insert` gained `--lang`/`--run`/`--deps` (parity with `append`) via
+   `edit::Insertion`, so a runnable code block can be authored mid-document; both commands
+   refuse those attributes on a non-code `--type`, where the format would drop them.
+3. **An insert never steals an existing block's id.** `doc_core::edit::insert_after` used to
+   let the new block's natural name claim an existing id (old `code-3` silently became
+   `code-3-2`, breaking nav targets and references). The new block now yields and takes the
+   next free suffix; every existing id stays put. Same rule for heading-slug collisions.
+- **Validated**: `cargo test` **530 passing, 0 failed** (10 new); clippy `-D warnings` clean;
+  `fmt --check` clean; `./editor/build.sh` rerun (doc-wasm signature change) and node suites
+  **34/34 github, 11/11 vscode**; all three defects re-driven against the release binary in a
+  scratch store and confirmed fixed.
+- **Next step**: done in the wave above (rebuilt, reinstalled, re-verified). The commit is
+  still owed.
+
+## Previous wave: review findings fixed (edit round-trip, kill_tree race, stale docs)
 
 - **`edit::body`/`set_body` are now true inverses for lists — content and structure.** A
   list's editable text is the writer's own body lines (`stringify::list_lines`: indented
@@ -44,8 +172,7 @@ Last updated: 2026-07-30
   expectation updated for the deliberate contract change (a list's editable text now
   carries its `- ` markers); `dx fmt examples/*.dx documents/*.dx --check` unchanged.
   (Daemon flake `no_other_origin_…` was rewritten by the ACAO fix; not seen since.)
-- **Next step**: `packaging/build-app.sh` — the DX.app bundle still carries the previous
-  engine and surface until it is rebuilt.
+- **Next step**: done — see the 2026-07-31 wave at the top (rebuilt and reinstalled).
 
 ## Previous wave: the page keeps rendering while you write on it
 
@@ -437,11 +564,8 @@ actually permits).
 
 ## NEXT STEP
 
-**This wave is not committed**, and neither are the two before it — `git status` shows ~159
-paths, including the TypeScript deletions and the new `packaging/app/`. Review and commit
-before anything else.
-
-Then, in order:
+Earlier waves are committed (`git status` clean as of 2026-07-30, before the CLI
+arg-parsing wave above). In order:
 
 0. **Open a `.dx` in VS Code by hand** and check the webview: click a block, type, save. What
    needs confirming is that the page is no longer rebuilt on each edit (the caret and the

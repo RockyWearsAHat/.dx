@@ -459,15 +459,18 @@ READ
   dx png      <file> --pages                    one image per page, in order
   dx open     <file> [--section ID]             open the rendered page in a browser
   dx ls       [dir]                             every .dx document in a project
-  dx search   <query> [dir]                     find documents by content
+  dx search   <query> [dir] [--limit N]         find documents by content
 
 WRITE
   dx new      <file> [--title T]                create a document
   dx source   <file> [--block ID]               the exact characters, to edit
   dx set      <file> <block-id> --text T        replace one block
   dx insert   <file> --after ID [--type T]      add a block after another
+              [--id ID] [--level N]             name it, or set a heading's level
+              [--lang L] [--run] [--deps D]     a runnable one, with --type code
   dx remove   <file> <block-id>                 take a block out
   dx append   <file> --type T --text T          add a block at the end
+              [--id ID] [--level N]             name it, or set a heading's level
   dx fmt      <file...> [--check]               rewrite in canonical form
 
 STORE

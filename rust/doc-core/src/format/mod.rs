@@ -50,6 +50,11 @@ pub use stringify::{stringify, stringify_blocks, BLOCK_SEPARATOR};
 pub(crate) use lines::{build_nested_list_structure, parse_checklist_line, parse_list_items};
 pub(crate) use stringify::list_lines;
 
+// The id rule itself, shared with `crate::edit` so a surface can ask what an id *would*
+// become before the writer names it — one slugifier, not a second one that could disagree
+// with the registry about which spellings are the same id.
+pub(crate) use util::slugify_heading;
+
 /// The block kinds DOCSRC understands. Any other `::type` opening normalizes to
 /// `paragraph`, matching the reference `BLOCK_TYPES` allow-list.
 const BLOCK_TYPES: &[&str] = &[

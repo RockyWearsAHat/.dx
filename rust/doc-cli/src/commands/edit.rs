@@ -15,14 +15,9 @@ use std::path::{Path, PathBuf};
 
 use doc_core::edit;
 use doc_core::format::{parse, stringify};
-use doc_core::model::Block;
 
 use crate::args::Args;
 use crate::workspace;
-
-/// Block kinds `dx append` accepts — the format's own authorable kinds, named once in
-/// `doc-core` so the command line and every editing surface agree on what may be written.
-const APPENDABLE: &[&str] = edit::AUTHORABLE;
 
 /// `dx new <file>` — create a document with a title heading and an opening paragraph.
 pub fn run_new(args: &Args) -> Result<String, String> {
@@ -99,31 +94,29 @@ pub fn run_set(args: &Args) -> Result<String, String> {
 }
 
 /// `dx append <file>` — add a block to the end of a document.
+///
+/// The same operation as `dx insert`, anchored on the last block — one engine, one rule
+/// set: the new block's id is stable against the document's existing ids, and an explicit
+/// `--id` some block already answers to is refused with a sentence, never silently renamed.
 pub fn run_append(args: &Args) -> Result<String, String> {
     let path = path_argument(args, 0, "a .dx file is required")?;
-    let kind = args.value("type").unwrap_or("paragraph").to_string();
-    if !APPENDABLE.contains(&kind.as_str()) {
-        return Err(format!(
-            "cannot append a `{kind}` block. Supported: {}",
-            APPENDABLE.join(", ")
-        ));
-    }
+    let kind = args.value("type").unwrap_or("paragraph");
+    require_code_for_attributes(kind, args)?;
     let body = body_argument(args)?;
 
-    let mut document = parse(&workspace::read(&path)?);
-    let mut block = Block {
+    let source = workspace::read(&path)?;
+    let insertion = edit::Insertion {
         kind,
-        id: args.value("id").unwrap_or_default().to_string(),
-        language: args.value("lang").unwrap_or_default().to_string(),
-        level: args.number("level").unwrap_or(2) as u8,
+        body: &body,
+        id: args.value("id").unwrap_or_default(),
+        level: args.number("level").map_or(0, |level| level as u8),
+        language: args.value("lang").unwrap_or_default(),
         run: args.present("run"),
-        deps: args.value("deps").unwrap_or_default().to_string(),
-        ..Block::default()
+        deps: args.value("deps").unwrap_or_default(),
     };
-    edit::set_body(&mut block, &body);
-    document.blocks.push(block);
-
-    workspace::save(&path, &document)?;
+    let last = parse(&source).blocks.last().map(|block| block.id.clone());
+    let (updated, _) = edit::insert_after(&source, last.as_deref(), &insertion)?;
+    workspace::save(&path, &parse(&updated))?;
     Ok(format!("appended to {}\n", path.display()))
 }
 
@@ -149,16 +142,44 @@ pub fn run_source(args: &Args) -> Result<String, String> {
 /// `dx append` can only reach the end of a document, which makes it useless for the one
 /// thing a person writing a page does constantly: press Return in the middle and keep going.
 /// The new block's id is printed so the caller can put the cursor in it.
+///
+/// It takes every flag `dx append` takes — `--id` and `--level` as well as `--lang`,
+/// `--run`, and `--deps` — because they are one operation with one anchor: a block a caller
+/// could name at the end of a document but not in the middle of it is a difference between
+/// two spellings of the same edit, and nothing an author could explain.
 pub fn run_insert(args: &Args) -> Result<String, String> {
     let path = path_argument(args, 0, "a .dx file is required")?;
-    let (updated, id) = edit::insert_after(
-        &workspace::read(&path)?,
-        args.value("after"),
-        args.value("type").unwrap_or("paragraph"),
-        args.value("text").unwrap_or_default(),
-    )?;
+    let kind = args.value("type").unwrap_or("paragraph");
+    require_code_for_attributes(kind, args)?;
+    let insertion = edit::Insertion {
+        kind,
+        body: args.value("text").unwrap_or_default(),
+        id: args.value("id").unwrap_or_default(),
+        level: args.number("level").map_or(0, |level| level as u8),
+        language: args.value("lang").unwrap_or_default(),
+        run: args.present("run"),
+        deps: args.value("deps").unwrap_or_default(),
+    };
+    let (updated, id) =
+        edit::insert_after(&workspace::read(&path)?, args.value("after"), &insertion)?;
     workspace::save(&path, &parse(&updated))?;
     Ok(format!("{id}\n"))
+}
+
+/// Refuse `--lang`/`--run`/`--deps` on a block that is not code, where the format would
+/// silently drop them — the caller would believe they authored a runnable block.
+///
+/// Presence is what matters, not a value: a trailing valueless `--lang` parses as a
+/// boolean flag, and it still says "I meant a code block".
+fn require_code_for_attributes(kind: &str, args: &Args) -> Result<(), String> {
+    let carries_code_attributes =
+        args.present("lang") || args.present("run") || args.present("deps");
+    if carries_code_attributes && kind != "code" {
+        return Err(format!(
+            "--lang, --run, and --deps describe a code block — pass --type code, not --type {kind}"
+        ));
+    }
+    Ok(())
 }
 
 /// `dx remove <file> <block-id>` — take one block out of a document.
@@ -281,6 +302,45 @@ mod tests {
         assert!(raw.contains("- one\n- two"));
     }
 
+    /// The defect this pins down: `dx insert --lang … --run --deps …` used to exit 0 while
+    /// dropping all three, so a runnable block could only be authored by hand-writing source.
+    #[test]
+    fn insert_authors_a_runnable_code_block() {
+        let path = scratch("insert-code").join("doc.dx");
+        let file = path.to_string_lossy().into_owned();
+        workspace::write_text(&path, "::paragraph id=p\nstart\n::end\n").expect("seed");
+
+        let id = run_insert(&args(&[
+            &file, "--after", "p", "--type", "code", "--lang", "python", "--run", "--deps",
+            "requests", "--text", "print(1)",
+        ]))
+        .expect("insert code");
+
+        let raw = workspace::read(&path).expect("resolve");
+        assert!(
+            raw.contains(&format!(
+                "::code id={} lang=python run deps=requests",
+                id.trim()
+            )),
+            "{raw}"
+        );
+    }
+
+    #[test]
+    fn insert_refuses_code_attributes_on_a_block_that_is_not_code() {
+        let path = scratch("insert-attrs").join("doc.dx");
+        let file = path.to_string_lossy().into_owned();
+        workspace::write_text(&path, "::paragraph id=p\nx\n::end\n").expect("seed");
+
+        let error = run_insert(&args(&[&file, "--after", "p", "--lang", "python"]))
+            .expect_err("should fail");
+        assert!(error.contains("--type code"), "{error}");
+        assert_eq!(
+            workspace::read(&path).expect("resolve"),
+            "::paragraph id=p\nx\n::end\n"
+        );
+    }
+
     #[test]
     fn append_rejects_a_block_type_the_format_does_not_have() {
         let path = scratch("append-bad").join("doc.dx");
@@ -288,7 +348,96 @@ mod tests {
         workspace::write_text(&path, "::paragraph id=p\nx\n::end\n").expect("seed");
         let error = run_append(&args(&[&file, "--type", "widget", "--text", "x"]))
             .expect_err("should fail");
-        assert!(error.contains("cannot append"));
+        assert!(error.contains("cannot add"));
+    }
+
+    /// The defect this pins down: an explicit `--id` a block already carried used to be
+    /// resolved by the registry silently renaming — now it is refused, and the file is
+    /// left untouched.
+    #[test]
+    fn append_refuses_an_id_the_document_already_uses() {
+        let path = scratch("append-dup-id").join("doc.dx");
+        let file = path.to_string_lossy().into_owned();
+        workspace::write_text(&path, "::paragraph id=p\nx\n::end\n").expect("seed");
+
+        let error =
+            run_append(&args(&[&file, "--id", "p", "--text", "again"])).expect_err("should fail");
+        assert!(error.contains("already exists"), "{error}");
+        assert_eq!(
+            workspace::read(&path).expect("resolve"),
+            "::paragraph id=p\nx\n::end\n"
+        );
+
+        run_append(&args(&[&file, "--id", "note", "--text", "fresh"])).expect("append");
+        assert!(workspace::read(&path)
+            .expect("resolve")
+            .contains("::paragraph id=note\nfresh\n::end"));
+    }
+
+    /// `dx insert` takes every flag `dx append` takes: the same block, at a different
+    /// anchor. `--id` and `--level` used to be refused by name here and accepted there.
+    #[test]
+    fn insert_names_and_levels_a_block_exactly_as_append_does() {
+        let path = scratch("insert-id-level").join("doc.dx");
+        let file = path.to_string_lossy().into_owned();
+        workspace::write_text(&path, "::paragraph id=p\nstart\n::end\n").expect("seed");
+
+        let id = run_insert(&args(&[
+            &file, "--after", "p", "--type", "heading", "--id", "callout", "--level", "3",
+            "--text", "Deep",
+        ]))
+        .expect("insert");
+        assert_eq!(id.trim(), "callout");
+        assert!(workspace::read(&path)
+            .expect("resolve")
+            .contains("::heading level=3 id=callout\nDeep\n::end"));
+
+        run_append(&args(&[
+            &file, "--type", "heading", "--id", "tail", "--level", "3", "--text", "End",
+        ]))
+        .expect("append");
+        assert!(workspace::read(&path)
+            .expect("resolve")
+            .contains("::heading level=3 id=tail\nEnd\n::end"));
+    }
+
+    /// An id is slugified on its way into the document, so a spelling that lands on a taken
+    /// one is the same collision — refused with the sentence, and the file left alone.
+    #[test]
+    fn a_differently_spelled_id_that_lands_on_a_taken_one_is_refused() {
+        let path = scratch("insert-slug-id").join("doc.dx");
+        let file = path.to_string_lossy().into_owned();
+        let before = "::paragraph id=my-id\nx\n::end\n";
+        workspace::write_text(&path, before).expect("seed");
+
+        let inserted = run_insert(&args(&[
+            &file, "--after", "my-id", "--id", "My Id", "--text", "again",
+        ]))
+        .expect_err("should be refused");
+        assert!(inserted.contains("`my-id` already exists"), "{inserted}");
+
+        let appended = run_append(&args(&[&file, "--id", "My Id", "--text", "again"]))
+            .expect_err("should be refused");
+        assert!(appended.contains("`my-id` already exists"), "{appended}");
+
+        assert_eq!(workspace::read(&path).expect("resolve"), before);
+    }
+
+    /// A trailing `--lang` with no value parses as a boolean flag, and it still means
+    /// "code" — it must be refused on prose, not silently swallowed.
+    #[test]
+    fn a_valueless_code_flag_is_still_refused_on_prose() {
+        let path = scratch("append-bare-lang").join("doc.dx");
+        let file = path.to_string_lossy().into_owned();
+        workspace::write_text(&path, "::paragraph id=p\nx\n::end\n").expect("seed");
+
+        for flag in ["--lang", "--deps"] {
+            let error = run_append(&args(&[&file, "--text", "y", flag])).expect_err("should fail");
+            assert!(error.contains("--type code"), "{error}");
+        }
+        let error = run_insert(&args(&[&file, "--after", "p", "--text", "y", "--lang"]))
+            .expect_err("should fail");
+        assert!(error.contains("--type code"), "{error}");
     }
 
     #[test]

@@ -122,6 +122,32 @@ mod tests {
         assert!(!out.contains("misc.dx"));
     }
 
+    /// `--limit` bounds the hits, which is how a caller asks for the best few instead of
+    /// every match. It reached this function all along; the command table refused it by
+    /// name, so nobody could type it.
+    #[test]
+    fn search_honors_the_limit_it_is_given() {
+        let root = std::env::temp_dir().join("dx-find-tests-limit");
+        let _ = std::fs::remove_dir_all(&root);
+        for name in ["a", "b", "c"] {
+            workspace::save(
+                &root.join(format!("{name}.dx")),
+                &parse(&format!(
+                    "::heading level=1 id=h\nRollout {name}\n::end\n\n::paragraph id=p\nkubernetes rollout steps\n::end\n"
+                )),
+            )
+            .expect("seed");
+        }
+        let directory = root.to_string_lossy().into_owned();
+
+        let all = run_search(&args(&["kubernetes", &directory])).expect("search");
+        assert_eq!(all.lines().count(), 3);
+
+        let bounded =
+            run_search(&args(&["kubernetes", &directory, "--limit", "2"])).expect("search");
+        assert_eq!(bounded.lines().count(), 2);
+    }
+
     #[test]
     fn search_with_no_match_reports_the_query() {
         let root = project("search-empty");

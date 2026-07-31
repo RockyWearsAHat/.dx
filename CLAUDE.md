@@ -261,7 +261,7 @@ change.
 
 ```bash
 cd rust
-cargo test                                  # must be green (521 tests)
+cargo test                                  # must be green (545 tests)
 cargo clippy --all-targets -- -D warnings   # must be clean
 cargo fmt --check                           # must be clean
 ```

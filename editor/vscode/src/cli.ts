@@ -57,17 +57,17 @@ function resolveCli(): string {
 }
 
 /**
- * Run `dx` with `args` in the document's directory.
+ * Run `dx` with `args` in `directory` — the document's own, for every caller so far.
  *
  * Resolves rather than rejects on failure: the caller shows the message to the reader, and
  * a non-zero exit from `dx run` (a code block that failed) is a result, not a crash.
  */
-export function runCli(args: string[], documentPath: string): Promise<CliResult> {
+export function runCli(args: string[], directory: string): Promise<CliResult> {
   return new Promise((resolve) => {
     execFile(
       resolveCli(),
       args,
-      { cwd: path.dirname(documentPath), maxBuffer: 16 * 1024 * 1024 },
+      { cwd: directory, maxBuffer: 16 * 1024 * 1024 },
       (error, stdout, stderr) => {
         const output = `${stdout}${stderr}`.trim();
         if (error && (error as NodeJS.ErrnoException).code === 'ENOENT') {

@@ -66,7 +66,7 @@ pub(super) fn normalize_class_name(value: &str) -> String {
 
 /// Lowercase, replace each run of non-`[a-z0-9]` with `-`, trim leading/trailing `-`, and
 /// fall back to `block` when the result is empty. Port of `slugifyHeading`.
-pub(super) fn slugify_heading(heading: &str) -> String {
+pub(crate) fn slugify_heading(heading: &str) -> String {
     let lowered = heading.to_lowercase();
     let mut slug = String::with_capacity(lowered.len());
     let mut prev_dash = false;

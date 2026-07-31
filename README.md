@@ -395,6 +395,12 @@ The rendered page is editable, exactly as it is in DX.app: click a block, type, 
 for the next one. Edits here go through the text document, so undo, dirty state, and source
 control behave as they do for text you typed by hand.
 
+**DX: Open Changes** compares the document with the version in `HEAD` — as documents. The
+editor's own "Open Changes" shows two pointer lines whose digests differ, because `git diff`
+applies the driver `dx git-setup` installed and VS Code's git integration does not; this
+resolves both sides through `dx textconv` first, so what you read is the prose that changed. A
+side that cannot be resolved says so, in dx's own words.
+
 ---
 
 ## Writing on the page
