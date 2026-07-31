@@ -43,22 +43,84 @@ Body text
 
 ## Supported Blocks
 
-- `heading` attrs: `level`, `id`, `class`
-- `paragraph` attrs: `id`, `class`
-- `quote` attrs: `id`, `class`
-- `bulleted-list` attrs: `id`, `class`
-- `numbered-list` attrs: `id`, `class`
-- `code` attrs: `id`, `class`, `lang` or `language`, `run`, `deps`, `timeout`, `format`
-- `output` attrs: `id`, `class`, `for`, `status`, `exit`, `hash`, `format`
-- `image` attrs: `id`, `class`, `src`
-- `rule` attrs: `id`, `class`
-- `script` attrs: `id`, `class`, `type`, `src`, `module`
+Every block accepts `id` and `class`; the attributes below are what each adds.
+
+- `heading` attrs: `level`
+- `paragraph` attrs: none
+- `quote` attrs: none
+- `bulleted-list` attrs: none
+- `numbered-list` attrs: none
+- `checklist` attrs: none — one `[x] text` / `[ ] text` line per item
+- `code` attrs: `lang` or `language`, `run`, `deps`, `timeout`, `format`
+- `output` attrs: `for`, `status`, `exit`, `hash`, `format`
+- `image` attrs: `src`
+- `nav` attrs: `label`
+- `rule` attrs: none
+- `html` attrs: none — author markup, rendered through the allow-list in `render::escape`
+- `svg` attrs: none — a drawing, sanitized the same way
+- `graph` / `mermaid` attrs: none — kept verbatim and shown as its own source
+- `script` attrs: `type`, `src`, `module`
+- `style` attrs: `media` — applied only when the caller opts in with `--doc-css`
+- `stylesheet` attrs: `href`, `media` — same opt-in
+
+An unrecognized `::type` folds to `paragraph` and keeps its text, so a document written by a
+newer `dx` never loses content when an older one reads it.
 
 All block types also support boolean presence attrs:
 
 - `hidden` (equivalent to `hidden=true`)
 - `module` (for `script` blocks, equivalent to `module=true`)
 - `run` (for `code` blocks, equivalent to `run=true`)
+
+## Navigation
+
+A `nav` block is a list of places to go. Its body holds one target per line, written like a
+list item, and an indented line nests under the one above it:
+
+```text
+::nav id=side class=sidebar label="{n}. {name}"
+- [Install first](setup.dx)
+- api.dx#errors
+- #results
+::end
+```
+
+Two forms, and the difference is where the name comes from:
+
+| Entry | Name shown |
+|-------|------------|
+| `[Install first](setup.dx)` | `Install first` — the author wrote it, and `label` does not apply |
+| `api.dx#errors` | Expanded from `label`, which defaults to `{name}` |
+
+`label` tokens, expanded per entry:
+
+| Token | Value |
+|-------|-------|
+| `{name}` | The most specific name the target carries: for `#id` in this document, the text of the heading it addresses; otherwise the fragment, then the file stem |
+| `{target}` | The target exactly as written |
+| `{path}` | The path half of the target, without the fragment |
+| `{n}` | The entry's 1-based position |
+
+An unknown token is left as written rather than blanked — a name is prose the author chose, and
+deleting part of it silently is worse than showing a brace.
+
+**An empty body means this document's own contents:** every heading below the title, in order,
+nested by level. That is the whole feature for most documents — one block, nothing to maintain:
+
+```text
+::nav id=contents
+
+::end
+```
+
+Two consequences of that rule are part of the contract. Normalization never invents an entry for
+an empty `nav` — unlike a list, which gets a placeholder item — because the empty body *is* the
+instruction. And a `nav` that resolves to nothing renders as nothing, not as an empty list.
+
+Resolution is a pure function of the document it sits in: it never reads another file. A
+cross-document entry is named from its target text alone. This is why the editor, the CLI, an
+agent, and the GitHub extension all show the same navigation — the renderer that compiles to
+wasm has no filesystem to consult, so there is nothing to disagree about.
 
 ## Executable Code and Captured Output
 
@@ -105,6 +167,25 @@ Recovery behavior:
 - Parse into proper typed blocks.
 - Normalize IDs/classes.
 - Persist back to canonical multi-line block form on next save.
+
+**Recovery must never cost content.** The trailing close token is recognized only when
+whitespace precedes it and nothing but whitespace follows — the same shape a single-line block
+has. Matching `::end` anywhere in a line instead meant a document that *described* the format
+lost text: a sentence reading "a block ends with `::end` on its own line" was cut at the
+backtick, and an SVG label containing the token truncated the drawing and everything under it.
+A block closes on a line of its own, or at the end of a line, never mid-sentence.
+
+## Placeholders
+
+A `{{key}}` in any block's text is replaced with the value a JSON `script` block declared for
+that key (see [Supported Blocks](#supported-blocks)). Only top-level scalars participate;
+nested objects and arrays are skipped rather than stringified.
+
+**An unknown key is left exactly as written.** Blanking it deletes the author's characters with
+nothing to show that it happened — a typo in a key erases the word it stood for, and a document
+explaining `{{name}}` loses the token mid-sentence. This is the rule `nav` labels already
+follow, and a malformed `{{ not a key }}` has always survived; the well-formed unknown was the
+odd case out.
 
 ## CSS Safety Contract
 
@@ -171,3 +252,34 @@ how it is stored is part of the contract because it is what makes storage lossle
 - On disk a `.dx` file is a one-line pointer, `~ dx1 <64 hex digits>`, naming the digest of the
   document's canonical source. A file is a pointer only if its first line matches that form
   exactly; anything else is content to be adopted, never discarded.
+- A **pack** (`DXCP1`) is a set of documents in one file: distinct chunk bodies once each,
+  entries referencing them by index, and the whole payload compressed as a single stream so
+  redundancy *between* blocks compresses too. `.doc/repo.dxcp` is committed; it is the content.
+
+### Compression frames
+
+The pack's payload is wrapped in a `dxz` frame whose first four bytes name the codec that wrote
+it. That indirection is what lets compaction improve without a migration, and what guarantees a
+pack written by an older build still reads.
+
+| Magic | Codec | Written | Read |
+|-------|-------|---------|------|
+| `DXZ1` | Self-contained LZSS | no longer | **always** — packs in real repositories contain it |
+| `DXZ2` | DEFLATE, pure Rust (`miniz_oxide`) | when smallest | yes |
+| `DXZ3` | Stored, uncompressed | when nothing beats it | yes |
+
+Two properties follow, and both are tested:
+
+- **Compression never inflates.** The smallest encoding wins, and storing the bytes as they are
+  is always one of the candidates, so the stored form never exceeds the input plus an 8-byte
+  header — however incompressible the content.
+- **A decoded payload is checked against the length its frame declares.** A payload that
+  decodes to the wrong size is an error, never a short read.
+
+Measured on this repository's six examples: 17,381 bytes of canonical source become a
+5,982-byte pack — 34.4%, byte-for-byte recoverable. The previous LZSS-only codec produced
+49.3% of source from the same corpus.
+
+A heavier codec (brotli, LZMA) would save a few points more. DEFLATE was chosen because it is
+pure Rust with no `unsafe`, compiles to `wasm32` with the rest of the engine, and keeps the
+editor's bundle small. Adding one later means adding a magic, not converting anything.
