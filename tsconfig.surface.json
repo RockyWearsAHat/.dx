@@ -1,7 +1,0 @@
-{
-  "extends": "./tsconfig.json",
-  "include": [
-    "vscode-extension/media/webview-surface-controller.ts"
-  ],
-  "exclude": []
-}
