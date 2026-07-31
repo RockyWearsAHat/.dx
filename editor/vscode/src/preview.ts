@@ -2,45 +2,120 @@
  * Turning a rendered page into something a VS Code webview will display.
  *
  * A webview runs under a strict content-security policy, so the page it is given must
- * carry no external references and no scripts. That is exactly what the renderer already
- * produces, so this module only has three jobs: state the policy, add the small toolbar
- * the reader interacts with, and pick a palette that matches the editor.
+ * carry no external references and no scripts of the *document's* own. That is exactly what
+ * the renderer already produces, so this module has four jobs: state the policy, add the
+ * small toolbar the reader interacts with, pick a palette that matches the editor, and put
+ * the shared editing surface on the page.
+ *
+ * The editing surface is `editor/surface/edit.js`, the same file DX.app loads. Nothing about
+ * *how editing behaves* is decided here — only how its four calls reach the extension host,
+ * which on this surface is `postMessage` and on that one is a `WKScriptMessageHandler`.
  */
 
 import * as vscode from 'vscode';
 
 import { engine } from './engine';
 
+/** The shared editing surface's files, read once from the extension's own directory. */
+export interface Surface {
+  /** `editor/surface/edit.js`. */
+  readonly js: string;
+  /** `editor/surface/edit.css`. */
+  readonly css: string;
+}
+
+/**
+ * The bridge from the shared editor to the extension host.
+ *
+ * Each of the editor's calls becomes one message and one reply, correlated by a sequence
+ * number because a webview's `postMessage` is one-way. Nothing else crosses: an edit answers
+ * with the re-rendered document and the page swaps that element in, so the webview's HTML is
+ * built once and there is no position to hand back afterwards.
+ */
+const BRIDGE = `
+const dxPending = new Map();
+let dxSequence = 0;
+
+function dxCall(payload) {
+  const call = ++dxSequence;
+  return new Promise((resolve, reject) => {
+    dxPending.set(call, { resolve, reject });
+    vscodeApi.postMessage({ dxEdit: Object.assign({ call }, payload) });
+  });
+}
+
+window.addEventListener('message', (event) => {
+  const message = event.data || {};
+  if (message.dxReply) {
+    const waiting = dxPending.get(message.dxReply.call);
+    if (waiting) {
+      dxPending.delete(message.dxReply.call);
+      if (message.dxReply.error) waiting.reject(new Error(message.dxReply.error));
+      else waiting.resolve(message.dxReply.value);
+    }
+  }
+});
+
+if (window.dxEditor) {
+  window.dxEditor.attach({
+    source: (id) => dxCall({ op: 'source', id }),
+    draw: (id, text) => dxCall({ op: 'draw', id, text }),
+    commit: (id, text, then) => dxCall({ op: 'commit', id, text, then }),
+    remove: (id) => dxCall({ op: 'remove', id }),
+  });
+}
+`;
+
 /** Content-security policy for the rendered document: styles and images only. */
 const POLICY =
   "default-src 'none'; style-src 'unsafe-inline'; img-src data: https:; font-src data:;";
 
-/** The toolbar shown above every rendered document. */
+/**
+ * The toolbar shown above every rendered document.
+ *
+ * It is written in the document's own margin, not in a strip of interface bolted above it: the
+ * same paper tone, the same hairline, the marginal mono the renderer uses for its own pencil
+ * notes. Only the palette variables `doc-core` actually publishes may appear here — a name the
+ * stylesheet does not define is not a fallback, it is an invalid declaration the browser drops,
+ * which is how this bar spent a release rendering unstyled.
+ *
+ * A sticky bar has to carry `--dx-bg`, because the page scrolls under it. That is the paper's
+ * own tone, so it stays one surface rather than becoming a second.
+ */
 const TOOLBAR = `
 <div class="dx-bar">
   <span class="dx-bar-title" id="dx-title"></span>
   <span class="dx-bar-spacer"></span>
-  <button data-command="dx.editSource">Edit source</button>
-  <button data-command="dx.run">Run code</button>
-  <button data-command="dx.exportPng">Export image</button>
+  <button data-command="dx.editSource">edit source</button>
+  <button data-command="dx.run">run</button>
+  <button data-command="dx.exportPng">export image</button>
 </div>
 <style>
   .dx-bar {
     position: sticky; top: 0; z-index: 10;
-    display: flex; align-items: center; gap: 0.5rem;
-    padding: 0.45rem 0.9rem;
-    background: var(--dx-surface-2); border-bottom: 1px solid var(--dx-border);
-    font: 500 0.78rem var(--dx-sans);
+    display: flex; align-items: baseline; gap: 1.15rem;
+    padding: 0.5rem 1.75rem;
+    background: var(--dx-bg);
+    border-bottom: 1px solid var(--dx-rule);
+    font: 400 0.68rem/1.6 var(--dx-mono);
+    letter-spacing: 0.02em;
   }
-  .dx-bar-title { color: var(--dx-muted); }
+  .dx-bar-title { color: var(--dx-faint); }
   .dx-bar-spacer { flex: 1; }
   .dx-bar button {
     font: inherit; cursor: pointer;
-    padding: 0.2rem 0.6rem; border-radius: 6px;
-    border: 1px solid var(--dx-border);
-    background: var(--dx-bg); color: var(--dx-text);
+    padding: 0; border: 0; background: none;
+    color: var(--dx-muted);
+    text-decoration: underline;
+    text-decoration-color: transparent;
+    text-underline-offset: 3px;
   }
-  .dx-bar button:hover { border-color: var(--dx-accent); color: var(--dx-accent); }
+  .dx-bar button:hover,
+  .dx-bar button:focus-visible {
+    color: var(--dx-text);
+    text-decoration-color: var(--dx-rule);
+    outline: none;
+  }
 </style>
 <script>
   const vscodeApi = acquireVsCodeApi();
@@ -55,10 +130,19 @@ const TOOLBAR = `
 /**
  * Render `source` into a complete webview page.
  *
- * `nonce` authorizes the toolbar's own script — the only script on the page. The document's
- * own content stays script-free, which is what lets the policy stay this strict.
+ * `nonce` authorizes the toolbar, the shared editor, and the bridge between them — and
+ * nothing else. The document's own content stays script-free, which is what lets the policy
+ * name its scripts one by one: markup that came from the document carries no nonce and so
+ * cannot run even if it somehow arrived with a `<script>` in it.
+ *
+ * `surface` is optional; without it the page renders exactly as it did before, read-only.
  */
-export function previewHtml(source: string, title: string, nonce: string): string {
+export function previewHtml(
+  source: string,
+  title: string,
+  nonce: string,
+  surface?: Surface
+): string {
   const configuration = vscode.workspace.getConfiguration('dx');
   const page = engine().render_html(
     source,
@@ -72,9 +156,50 @@ export function previewHtml(source: string, title: string, nonce: string): strin
     'id="dx-title"></span>',
     `id="dx-title">${escapeHtml(title)}</span>`
   );
+  // The editor goes after the toolbar's script, because the bridge it installs calls
+  // `acquireVsCodeApi()` — which may be called exactly once per page, and the toolbar
+  // already did.
+  const editing = surface
+    ? `<style>${surface.css}</style>\n<script nonce="${nonce}">${surface.js}\n${BRIDGE}</script>`
+    : '';
 
   return injectHead(page, `<meta http-equiv="Content-Security-Policy" content="${policy}">`)
-    .replace('<body>', `<body>\n${toolbar}`);
+    .replace('<body>', `<body>\n${toolbar}`)
+    .replace('</body>', `${editing}\n</body>`);
+}
+
+/**
+ * The document's blocks, without the page around them — what an edit hands back.
+ *
+ * The webview replaces this one element instead of rebuilding its HTML, so the reader keeps
+ * their scroll position, their caret, and the page they were already looking at.
+ */
+export function sheetHtml(source: string): string {
+  const configuration = vscode.workspace.getConfiguration('dx');
+  return engine().render_html(
+    source,
+    resolveTheme(configuration.get<string>('theme', 'match-editor')),
+    true,
+    configuration.get<boolean>('documentCss', false)
+  );
+}
+
+/**
+ * One block as the page would draw it, with `body` in it — saving nothing.
+ *
+ * The live half of writing on a page: what a reader types is `.dx` source, and this is what
+ * that source says. It renders with the same theme and the same options as the page around
+ * it, so a block being written is set exactly like the blocks that are not.
+ */
+export function blockHtml(source: string, id: string, body: string): string {
+  const configuration = vscode.workspace.getConfiguration('dx');
+  return engine().preview_block(
+    source,
+    id,
+    body,
+    resolveTheme(configuration.get<string>('theme', 'match-editor')),
+    configuration.get<boolean>('documentCss', false)
+  );
 }
 
 /** Map the configured theme onto a palette the renderer understands. */

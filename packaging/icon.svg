@@ -1,0 +1,35 @@
+<!--
+  The extension's icon: a blank sheet of paper, written on.
+
+  The same rule the renderer keeps — one paper tone, one ink, no second surface. The colours
+  are `doc-core`'s own `--dx-bg`, `--dx-text`, `--dx-rule`, `--dx-muted` and `--dx-accent`, so
+  the icon and the page it stands for are literally the same palette. Nothing is rounded,
+  tinted, gradiented, or shadowed.
+
+  It has to survive 16px, which is what the shapes are chosen for: a sheet, a heading, three
+  ruled lines of writing, and one line of code. At 16px a wordmark would be a smudge, so there
+  is no wordmark.
+
+  Every shape is a filled <rect>, and that is a constraint rather than a coincidence:
+  build-icons.py rasterizes this file directly and understands nothing else. A shape it cannot
+  draw fails the build loudly instead of quietly going missing from the icon.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <!-- The sheet's edge, then the sheet: two rects rather than a stroke, so the whole icon is
+       one kind of shape. Edge to edge, because an icon that is mostly margin reads as smaller
+       than its neighbours in a toolbar. -->
+  <rect x="12" y="4" width="104" height="120" fill="#e2ded2"/>
+  <rect x="14" y="6" width="100" height="116" fill="#fdfcf9"/>
+
+  <!-- A heading, in the accent. One line, because a page has one title. -->
+  <rect x="30" y="26" width="52" height="9" fill="#35618e"/>
+
+  <!-- Written lines, ragged right, the way real text sets. -->
+  <rect x="30" y="52" width="68" height="6" fill="#1c1a17"/>
+  <rect x="30" y="67" width="68" height="6" fill="#1c1a17"/>
+  <rect x="30" y="82" width="44" height="6" fill="#1c1a17"/>
+
+  <!-- A rule, then a line of code: what makes a .dx a notepad for code and not just a page. -->
+  <rect x="30" y="97" width="68" height="2" fill="#e2ded2"/>
+  <rect x="30" y="106" width="30" height="6" fill="#6b665c"/>
+</svg>
