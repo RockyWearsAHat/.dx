@@ -20,7 +20,7 @@
 
 use crate::format::{
     build_nested_list_structure, list_lines, parse, parse_checklist_line, parse_list_items,
-    stringify,
+    slugify_heading, stringify,
 };
 use crate::model::{Block, Document, Item};
 use crate::render::{self, HtmlOptions};
@@ -198,52 +198,152 @@ pub fn preview_block(
     Ok(render::block(&document, &block_id, options).unwrap_or_default())
 }
 
-/// Add a block of `kind` directly after the block called `after`, returning the new source
-/// and the id the new block was given.
+/// A block to be created by [`insert_after`]: its kind, the body a person typed, and — for
+/// a `code` block — the execution attributes only that kind carries.
+///
+/// `language`, `run`, and `deps` mean nothing on any other kind and are dropped by
+/// normalization there, exactly as they would be if hand-written in the file; a surface
+/// that wants to reject them earlier (as `dx insert` does) checks before calling.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Insertion<'a> {
+    /// One of [`AUTHORABLE`].
+    pub kind: &'a str,
+    /// The typed body, read the way [`set_body`] reads it for this kind.
+    pub body: &'a str,
+    /// The id to give the new block; empty lets the document name it. It is slugified the
+    /// way every other id is, and any spelling that lands on an id some block already
+    /// answers to is refused, never taken — a silent rename would break every reference
+    /// pointing at the block that held it.
+    pub id: &'a str,
+    /// A heading's level (1–4); 0 means the default, 2.
+    pub level: u8,
+    /// A code block's `lang` attribute; empty means unset.
+    pub language: &'a str,
+    /// Whether a code block is marked `run`.
+    pub run: bool,
+    /// A code block's `deps` attribute; empty means unset.
+    pub deps: &'a str,
+}
+
+/// Refuse a kind [`insert_after`] cannot create, naming the ones it can.
+///
+/// The one sentence for every surface that authors blocks — `dx append`, `dx insert`, and
+/// the editors — so "what may be written" is answered identically wherever it is asked.
+///
+/// # Errors
+/// Returns that sentence when `kind` is not one of [`AUTHORABLE`].
+pub fn authorable(kind: &str) -> Result<(), String> {
+    if AUTHORABLE.contains(&kind) {
+        return Ok(());
+    }
+    Err(format!(
+        "cannot add a `{kind}` block. Supported: {}",
+        AUTHORABLE.join(", ")
+    ))
+}
+
+/// The existing id an explicit `id` would land on, or `None` when it is free (or empty).
+///
+/// The check has to be made against the id the writer *will* produce, not the characters the
+/// caller typed: an id is slugified on its way into the document (`My Id` becomes `my-id`),
+/// so comparing the raw spelling let `--id "My Id"` past the refusal below and the registry
+/// then resolved the collision the silent way, by renaming the new block to `my-id-2`. The
+/// caller asked for a name and got a different one, which is exactly what refusing exists to
+/// prevent.
+fn colliding_id(document: &Document, id: &str) -> Option<String> {
+    if id.is_empty() {
+        return None;
+    }
+    let wanted = slugify_heading(id.trim().trim_start_matches('#'));
+    document
+        .blocks
+        .iter()
+        .find(|block| block.id == wanted)
+        .map(|block| block.id.clone())
+}
+
+/// Add `block` directly after the block called `after`, returning the new source and the id
+/// the new block was given.
 ///
 /// `after` being `None` puts the block at the very top, which is what a reader gets when
 /// they ask for something before the first line.
 ///
+/// The new block never takes an id the document already uses: when its natural name (the
+/// same rule that named every other id) belongs to an existing block, the new block yields
+/// and takes the next free suffix instead. An insert that silently renamed some *other*
+/// block would break every nav target and external reference pointing at it.
+///
+/// An explicit [`Insertion::id`] that some block already answers to is refused with a
+/// sentence, never taken: the registry would otherwise resolve the collision by renaming,
+/// silently, and whichever block lost the name would lose its references with it. The
+/// refusal is against the id the writer would produce, so every spelling that slugifies onto
+/// a taken name is refused too — see [`colliding_id`].
+///
 /// # Errors
-/// Returns a message when `kind` is not authorable, or when no block carries `after`.
+/// Returns a message when the kind is not authorable, when no block carries `after`, or
+/// when an explicit id is already in use.
 pub fn insert_after(
     source: &str,
     after: Option<&str>,
-    kind: &str,
-    text: &str,
+    block: &Insertion,
 ) -> Result<(String, String), String> {
-    if !AUTHORABLE.contains(&kind) {
-        return Err(format!(
-            "cannot insert a `{kind}` block. Supported: {}",
-            AUTHORABLE.join(", ")
-        ));
-    }
+    authorable(block.kind)?;
 
     let mut document = parse(source);
+    if let Some(taken) = colliding_id(&document, block.id) {
+        return Err(format!(
+            "a block named `{taken}` already exists — pick an unused id, or leave the id out \
+             and the document will choose one",
+        ));
+    }
+    let existing_ids: Vec<String> = document
+        .blocks
+        .iter()
+        .map(|block| block.id.clone())
+        .collect();
     let at = match after {
         Some(id) => find(&document, id)? + 1,
         None => 0,
     };
 
-    let mut block = Block {
-        kind: kind.to_string(),
-        level: 2,
+    let mut new_block = Block {
+        kind: block.kind.to_string(),
+        id: block.id.to_string(),
+        level: if block.level == 0 { 2 } else { block.level },
+        language: block.language.to_string(),
+        run: block.run,
+        deps: block.deps.to_string(),
         ..Block::default()
     };
-    set_body(&mut block, text);
-    document.blocks.insert(at, block);
+    set_body(&mut new_block, block.body);
+    document.blocks.insert(at, new_block);
 
     // Parsing the result is what names the new block, by the same rule that named every
     // other id in the document — rather than a second id scheme invented here that could
     // collide with the first.
-    let rendered = stringify(&document);
-    let named = parse(&rendered);
-    let id = named
+    let named = parse(&stringify(&document));
+    let natural = named
         .blocks
         .get(at)
         .map(|block| block.id.clone())
         .unwrap_or_default();
-    Ok((stringify(&named), id))
+    if !existing_ids.contains(&natural) {
+        return Ok((stringify(&named), natural));
+    }
+
+    // The natural name belongs to an existing block, which the naming pass would have
+    // renamed out from under its references. Give the new block the next free suffix —
+    // the registry's own collision rule — explicitly, so every existing id stays put.
+    let mut count = 2;
+    let fresh = loop {
+        let candidate = format!("{natural}-{count}");
+        if !existing_ids.contains(&candidate) {
+            break candidate;
+        }
+        count += 1;
+    };
+    document.blocks[at].id = fresh.clone();
+    Ok((stringify(&document), fresh))
 }
 
 /// Take one block out, returning the document's canonical source without it.
@@ -434,9 +534,19 @@ mod tests {
         );
     }
 
+    /// A prose insertion: the kind and the typed body, nothing else.
+    fn prose<'a>(kind: &'a str, body: &'a str) -> Insertion<'a> {
+        Insertion {
+            kind,
+            body,
+            ..Insertion::default()
+        }
+    }
+
     #[test]
     fn inserting_puts_the_block_where_it_was_asked_for_and_names_it() {
-        let (after, id) = insert_after(SAMPLE, Some("intro"), "paragraph", "New.").expect("insert");
+        let (after, id) =
+            insert_after(SAMPLE, Some("intro"), &prose("paragraph", "New.")).expect("insert");
         assert!(!id.is_empty(), "the new block was not named");
         let document = parse(&after);
         let at = find(&document, &id).expect("the new block");
@@ -447,9 +557,72 @@ mod tests {
 
     #[test]
     fn inserting_with_no_anchor_puts_the_block_first() {
-        let (after, id) = insert_after(SAMPLE, None, "paragraph", "Top.").expect("insert");
+        let (after, id) = insert_after(SAMPLE, None, &prose("paragraph", "Top.")).expect("insert");
         let document = parse(&after);
         assert_eq!(find(&document, &id).expect("new"), 0);
+    }
+
+    /// The attributes a runnable block carries arrive with it — an insert that dropped
+    /// `lang`/`run`/`deps` could only author code that cannot execute.
+    #[test]
+    fn inserting_a_code_block_carries_its_execution_attributes() {
+        let insertion = Insertion {
+            kind: "code",
+            body: "print(1)",
+            language: "python",
+            run: true,
+            deps: "requests",
+            ..Insertion::default()
+        };
+        let (after, id) = insert_after(SAMPLE, Some("intro"), &insertion).expect("insert");
+        let document = parse(&after);
+        let block = &document.blocks[find(&document, &id).expect("new")];
+        assert_eq!(block.language, "python");
+        assert!(block.run);
+        assert_eq!(block.deps, "requests");
+        assert_eq!(block.text, "print(1)");
+    }
+
+    /// The bug this pins down: a new block whose natural name collided with an existing id
+    /// used to *take* that id, silently renaming the existing block — which broke every nav
+    /// target and reference pointing at it. The new block yields; every existing id stays.
+    #[test]
+    fn inserting_never_steals_an_existing_blocks_id() {
+        let source = "::paragraph id=intro\nHello.\n::end\n\n::code id=code-2 lang=python\nprint(1)\n::end\n";
+        let (after, id) =
+            insert_after(source, Some("intro"), &prose("code", "x = 2")).expect("insert");
+        let document = parse(&after);
+
+        let kept = &document.blocks[find(&document, "code-2").expect("the original block")];
+        assert_eq!(kept.language, "python", "the existing block was renamed");
+        assert_ne!(id, "code-2", "the new block took an existing id");
+        assert_eq!(
+            document.blocks[find(&document, &id).expect("new")].text,
+            "x = 2"
+        );
+    }
+
+    /// The same rule holds when the collision comes from a heading's text, where the
+    /// natural name is the slug readers link to: the anchor stays with the original.
+    #[test]
+    fn inserting_a_duplicate_heading_leaves_the_original_anchor_in_place() {
+        let source =
+            "::paragraph id=intro\nHello.\n::end\n\n::heading level=2 id=guide\nGuide\n::end\n";
+        let (after, id) =
+            insert_after(source, Some("intro"), &prose("heading", "Guide")).expect("insert");
+        let document = parse(&after);
+
+        let original = find(&document, "guide").expect("the original heading");
+        assert_eq!(
+            original,
+            document.blocks.len() - 1,
+            "`guide` moved to a different block"
+        );
+        assert_ne!(id, "guide", "the new heading took an existing anchor");
+        assert!(
+            find(&document, &id).is_ok(),
+            "the new heading was not named"
+        );
     }
 
     #[test]
@@ -475,7 +648,94 @@ mod tests {
 
     #[test]
     fn an_output_block_cannot_be_written_by_hand() {
-        let error = insert_after(SAMPLE, Some("intro"), "output", "5").expect_err("should fail");
-        assert!(error.contains("cannot insert"));
+        let error =
+            insert_after(SAMPLE, Some("intro"), &prose("output", "5")).expect_err("should fail");
+        assert!(error.contains("cannot add"));
+    }
+
+    /// An explicit id names the new block — the caller who chose it can reference it.
+    #[test]
+    fn inserting_with_an_explicit_id_uses_it() {
+        let insertion = Insertion {
+            kind: "paragraph",
+            body: "Named.",
+            id: "callout",
+            ..Insertion::default()
+        };
+        let (after, id) = insert_after(SAMPLE, Some("intro"), &insertion).expect("insert");
+        assert_eq!(id, "callout");
+        let document = parse(&after);
+        assert_eq!(
+            document.blocks[find(&document, "callout").expect("callout")].text,
+            "Named."
+        );
+    }
+
+    /// The defect this pins down: an explicit id a block already answered to used to be
+    /// resolved by the registry renaming somebody, silently. It is refused with a sentence,
+    /// and however the caller spelled the id, since matching is the document's own rule.
+    #[test]
+    fn inserting_refuses_an_explicit_id_that_is_already_taken() {
+        for taken in ["intro", "#Intro", " intro "] {
+            let insertion = Insertion {
+                kind: "paragraph",
+                body: "x",
+                id: taken,
+                ..Insertion::default()
+            };
+            let error = insert_after(SAMPLE, Some("title"), &insertion).expect_err("should fail");
+            assert!(error.contains("already exists"), "{error}");
+        }
+    }
+
+    /// The defect this pins down: the refusal compared the characters the caller typed,
+    /// while the writer slugifies them — so `My Id` slipped past the guard and came back
+    /// renamed to `my-id-2`, which is the silent rename refusing exists to prevent. Every
+    /// spelling that lands on a taken id is refused, and it names the id that is taken.
+    #[test]
+    fn inserting_refuses_an_id_that_slugifies_onto_a_taken_one() {
+        let source = "::heading level=1 id=title\nGuide\n::end\n\n\
+                      ::paragraph id=my-id\nOriginal.\n::end\n";
+        for spelling in ["My Id", "my id", "My  Id!", "MY-ID"] {
+            let insertion = Insertion {
+                kind: "paragraph",
+                body: "x",
+                id: spelling,
+                ..Insertion::default()
+            };
+            let error =
+                insert_after(source, Some("title"), &insertion).expect_err("should be refused");
+            assert!(error.contains("`my-id` already exists"), "{error}");
+        }
+
+        // A spelling that lands somewhere free is still accepted, under its slugified name.
+        let insertion = Insertion {
+            kind: "paragraph",
+            body: "x",
+            id: "Another Note",
+            ..Insertion::default()
+        };
+        let (after, id) = insert_after(source, Some("title"), &insertion).expect("insert");
+        assert_eq!(id, "another-note");
+        assert!(after.contains("::paragraph id=another-note"), "{after}");
+    }
+
+    /// An explicit level reaches the block; 0 (the default) means level 2.
+    #[test]
+    fn inserting_a_heading_carries_its_level() {
+        let insertion = Insertion {
+            kind: "heading",
+            body: "Deep",
+            level: 3,
+            ..Insertion::default()
+        };
+        let (after, id) = insert_after(SAMPLE, Some("intro"), &insertion).expect("insert");
+        let document = parse(&after);
+        assert_eq!(document.blocks[find(&document, &id).expect("new")].level, 3);
+
+        let (defaulted, id) =
+            insert_after(SAMPLE, Some("intro"), &prose("heading", "Plain")).expect("insert");
+        let document = parse(&defaulted);
+        assert_eq!(document.blocks[find(&document, &id).expect("new")].level, 2);
     }
 }

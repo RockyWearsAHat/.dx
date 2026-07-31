@@ -224,6 +224,10 @@
   async function edit(block) {
     const id = block.getAttribute('data-block-id');
     if (!id) return;
+    // Normally nothing is open here — a save already closed it. A save the host *refused*
+    // is the exception: it stays open so the reader can retry, and moving on to another
+    // block abandons the attempt rather than leaving two fields on the page.
+    if (open) close();
 
     let text = '';
     try {
@@ -394,21 +398,38 @@
    */
   function save(then) {
     if (!open) return settling;
-    const { id, field, original } = open;
+    const editing = open;
+    const { id, field, original } = editing;
     const text = field.value;
     if (text === original && then !== 'insert') {
       close();
       return settling;
     }
-    const block = open.block;
     open = null;
     generation += 1;
     if (timer) clearTimeout(timer);
     settling = host
       .commit(id, text, then)
       .then(apply)
-      .catch((error) => report(block, String(error)));
+      .catch((error) => {
+        report(editing.block, String(error));
+        resume(editing);
+      });
     return settling;
+  }
+
+  /**
+   * Put a refused save back in the reader's hands.
+   *
+   * The host said no, so the page still holds the field and the block exactly as they were
+   * mid-edit: make them the open state again, with the typed text and the caret, so the
+   * reader can fix and retry — or press Escape and lose only the attempt. Without this the
+   * field was stranded: not open, so Escape, blur, and retry all answered to nothing.
+   */
+  function resume(editing) {
+    if (open || !editing.field.isConnected) return;
+    open = editing;
+    editing.field.focus();
   }
 
   /**
@@ -474,7 +495,8 @@
   /** Take the open block out, and put the reader in the block above it. */
   function erase() {
     if (!open) return settling;
-    const { id, block, write } = open;
+    const editing = open;
+    const { id, block, write } = editing;
     const previous = block.previousElementSibling;
     const landing = previous ? previous.getAttribute('data-block-id') : null;
     open = null;
@@ -484,7 +506,15 @@
     settling = host
       .remove(id)
       .then((result) => apply(Object.assign({ focus: landing }, result || {})))
-      .catch((error) => report(block, String(error)));
+      .catch((error) => {
+        // The field came off the page before the call; a refusal puts it back where it
+        // was, so the block is still being edited rather than stuck half-hidden. It goes
+        // back *before* the note, so a refused delete reads where a refused save does:
+        // block, what went wrong, the field still holding the text.
+        if (block.isConnected) block.after(write);
+        report(block, String(error));
+        resume(editing);
+      });
     return settling;
   }
 

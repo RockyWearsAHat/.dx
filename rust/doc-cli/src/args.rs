@@ -88,6 +88,20 @@ impl Args {
     pub fn number(&self, name: &str) -> Option<u32> {
         self.value(name).and_then(|value| value.trim().parse().ok())
     }
+
+    /// The names of every option that is not in `allowed`, in the order given.
+    ///
+    /// This is how a command rejects a flag it would otherwise silently ignore — a
+    /// swallowed `--lang` is a caller who believes they authored a runnable block and
+    /// did not.
+    #[must_use]
+    pub fn unknown_options(&self, allowed: &[&str]) -> Vec<String> {
+        self.options
+            .iter()
+            .filter(|(name, _)| !allowed.contains(&name.as_str()))
+            .map(|(name, _)| name.clone())
+            .collect()
+    }
 }
 
 #[cfg(test)]
@@ -140,5 +154,15 @@ mod tests {
     fn collects_every_positional_for_multi_file_commands() {
         let args = parse(&["a.dx", "b.dx", "c.dx"]);
         assert_eq!(args.positionals().len(), 3);
+    }
+
+    #[test]
+    fn names_the_options_a_command_does_not_take() {
+        let args = parse(&["doc.dx", "--text", "x", "--lang", "python", "--run"]);
+        assert_eq!(
+            args.unknown_options(&["text", "lang", "run"]),
+            Vec::<String>::new()
+        );
+        assert_eq!(args.unknown_options(&["text"]), vec!["lang", "run"]);
     }
 }

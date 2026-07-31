@@ -31,3 +31,6 @@ editor/vscode/node_modules/
 # `packaging/` builds every shipped extension out of, so it has to be committed. Refresh both
 # builds with editor/build.sh; a stale one fails the node suite.
 editor/github/test/fixture/
+
+# Helpers/GSH workspace-tool artifacts — agent tooling state, not project content.
+/.gsh/

@@ -3,9 +3,9 @@
  *
  * A webview runs under a strict content-security policy, so the page it is given must
  * carry no external references and no scripts of the *document's* own. That is exactly what
- * the renderer already produces, so this module has four jobs: state the policy, add the
- * small toolbar the reader interacts with, pick a palette that matches the editor, and put
- * the shared editing surface on the page.
+ * the renderer already produces, so this module has three jobs: add the small toolbar the
+ * reader interacts with, pick a palette that matches the editor, and put the shared editing
+ * surface on the page. The policy itself is `policy.ts`.
  *
  * The editing surface is `editor/surface/edit.js`, the same file DX.app loads. Nothing about
  * *how editing behaves* is decided here — only how its four calls reach the extension host,
@@ -15,6 +15,7 @@
 import * as vscode from 'vscode';
 
 import { engine } from './engine';
+import { scriptPolicy } from './policy';
 
 /** The shared editing surface's files, read once from the extension's own directory. */
 export interface Surface {
@@ -65,10 +66,6 @@ if (window.dxEditor) {
   });
 }
 `;
-
-/** Content-security policy for the rendered document: styles and images only. */
-const POLICY =
-  "default-src 'none'; style-src 'unsafe-inline'; img-src data: https:; font-src data:;";
 
 /**
  * The toolbar shown above every rendered document.
@@ -151,7 +148,7 @@ export function previewHtml(
     configuration.get<boolean>('documentCss', false)
   );
 
-  const policy = POLICY.replace("default-src 'none'", `default-src 'none'; script-src 'nonce-${nonce}'`);
+  const policy = scriptPolicy(nonce);
   const toolbar = TOOLBAR.replace('<script>', `<script nonce="${nonce}">`).replace(
     'id="dx-title"></span>',
     `id="dx-title">${escapeHtml(title)}</span>`
@@ -230,14 +227,4 @@ function escapeHtml(value: string): string {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
-}
-
-/** A fresh nonce for one webview render. */
-export function makeNonce(): string {
-  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-  let nonce = '';
-  for (let index = 0; index < 32; index += 1) {
-    nonce += alphabet.charAt(Math.floor(Math.random() * alphabet.length));
-  }
-  return nonce;
 }

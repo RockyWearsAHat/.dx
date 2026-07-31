@@ -16,12 +16,23 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
 
+import { documentText, revisionText } from './changes';
 import { runCli } from './cli';
 import { engine, outlineOf } from './engine';
-import { blockHtml, makeNonce, previewHtml, sheetHtml, Surface } from './preview';
+import { makeNonce } from './policy';
+import { blockHtml, previewHtml, sheetHtml, Surface } from './preview';
 
 /** View type of the rendered document editor. */
 const VIEW_TYPE = 'dx.document';
+
+/**
+ * Scheme of the read-only text one side of a comparison is shown as.
+ *
+ * A `dx-text:` URI names a document and the revision to read it at, and resolves to what the
+ * pointer stands for. It is a URI rather than a temporary file so VS Code's own diff editor
+ * can open it, with its own history, folding, and word wrap.
+ */
+const TEXT_SCHEME = 'dx-text';
 
 /**
  * Read the shared editing surface out of the packaged extension.
@@ -45,12 +56,22 @@ function loadSurface(context: vscode.ExtensionContext): Surface | undefined {
 
 /** Activate the extension: register the editor and the commands. */
 export function activate(context: vscode.ExtensionContext): void {
+  const sides = new DxTextProvider();
   context.subscriptions.push(
     vscode.window.registerCustomEditorProvider(VIEW_TYPE, new DxEditorProvider(loadSurface(context)), {
       webviewOptions: { retainContextWhenHidden: true },
       supportsMultipleEditorsPerDocument: true,
     }),
+    vscode.workspace.registerTextDocumentContentProvider(TEXT_SCHEME, sides),
+    // A comparison the reader keeps typing into has to keep up, or it is quietly showing
+    // them a document they no longer have.
+    vscode.workspace.onDidChangeTextDocument((event) => {
+      if (event.document.uri.scheme === 'file' && event.document.uri.fsPath.endsWith('.dx')) {
+        sides.workingCopyChanged(event.document.uri);
+      }
+    }),
     vscode.commands.registerCommand('dx.editSource', editSource),
+    vscode.commands.registerCommand('dx.openChanges', openChanges),
     vscode.commands.registerCommand('dx.showRendered', showRendered),
     vscode.commands.registerCommand('dx.run', runCodeBlocks),
     vscode.commands.registerCommand('dx.exportHtml', exportHtml),
@@ -136,6 +157,42 @@ class DxEditorProvider implements vscode.CustomTextEditorProvider {
       onTheme.dispose();
       onMessage.dispose();
     });
+  }
+}
+
+/**
+ * Answers `dx-text:` URIs with the document the named revision holds.
+ *
+ * The URI carries the file's path and, in its query, the revision to read — empty for the
+ * working copy, which is taken from the editor rather than the disk so an unsaved change is
+ * part of the comparison. Both sides come back through `dx textconv`, so neither can be a
+ * pointer, and a side that cannot be resolved shows the sentence saying why: a comparison
+ * that quietly displays an empty document is a reader told their work vanished.
+ */
+class DxTextProvider implements vscode.TextDocumentContentProvider {
+  /** Raised for a side whose text has moved on. */
+  private readonly changed = new vscode.EventEmitter<vscode.Uri>();
+
+  /** VS Code asks for a side's text again whenever this fires for it. */
+  public readonly onDidChange = this.changed.event;
+
+  /** Say that the working copy of `file` is no longer what it was. */
+  public workingCopyChanged(file: vscode.Uri): void {
+    this.changed.fire(sideUri(file, ''));
+  }
+
+  /** The text of one side of a comparison. */
+  public async provideTextDocumentContent(uri: vscode.Uri): Promise<string> {
+    const file = vscode.Uri.file(uri.path).fsPath;
+    const revision = uri.query;
+    try {
+      const held = revision
+        ? await revisionText(file, revision)
+        : (await vscode.workspace.openTextDocument(vscode.Uri.file(file))).getText();
+      return await documentText(held, path.dirname(file), runCli);
+    } catch (failure) {
+      return failure instanceof Error ? failure.message : String(failure);
+    }
   }
 }
 
@@ -257,6 +314,32 @@ async function showRendered(uri?: vscode.Uri): Promise<void> {
 }
 
 /**
+ * Compare the document with the version git's `HEAD` holds — both as documents.
+ *
+ * This is the one thing the editor's own "Open Changes" cannot do: git applies the `dx`
+ * diff driver `dx git-setup` installed, VS Code's git integration does not, so its comparison
+ * is two pointer lines whose digests differ — true, and of no use to anyone. Here each side is
+ * resolved first, and what the reader sees is the prose that changed.
+ */
+async function openChanges(uri?: vscode.Uri): Promise<void> {
+  const target = await resolveUri(uri);
+  if (!target) {
+    return;
+  }
+  await vscode.commands.executeCommand(
+    'vscode.diff',
+    sideUri(target, 'HEAD'),
+    sideUri(target, ''),
+    `${path.basename(target.fsPath)} — HEAD ↔ working copy`
+  );
+}
+
+/** One side of a comparison: the document at `revision`, or the working copy when empty. */
+function sideUri(file: vscode.Uri, revision: string): vscode.Uri {
+  return vscode.Uri.from({ scheme: TEXT_SCHEME, path: file.path, query: revision });
+}
+
+/**
  * Run the document's code blocks, then reload it so the new output is visible.
  *
  * The file is saved first: `dx run` reads from disk, and running stale bytes would report
@@ -285,7 +368,7 @@ async function runCodeBlocks(uri?: vscode.Uri): Promise<void> {
       location: vscode.ProgressLocation.Notification,
       title: `Running ${runnable.length} code block${runnable.length === 1 ? '' : 's'}…`,
     },
-    () => runCli(['run', target.fsPath], target.fsPath)
+    () => runCli(['run', target.fsPath], path.dirname(target.fsPath))
   );
 
   // `dx run` writes results into the file; reload so the rendered view shows them.
@@ -323,7 +406,7 @@ async function exportPng(uri?: vscode.Uri): Promise<void> {
     await document.save();
   }
 
-  const result = await runCli(['png', target.fsPath], target.fsPath);
+  const result = await runCli(['png', target.fsPath], path.dirname(target.fsPath));
   if (result.ok) {
     void vscode.window.showInformationMessage(result.output || 'Exported an image.');
   } else {

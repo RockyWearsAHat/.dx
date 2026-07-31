@@ -73,6 +73,10 @@
         "icon": "$(play)"
       },
       {
+        "command": "dx.openChanges",
+        "title": "DX: Open Changes"
+      },
+      {
         "command": "dx.exportHtml",
         "title": "DX: Export as HTML"
       },
@@ -96,6 +100,10 @@
           "command": "dx.run",
           "when": "resourceExtname == .dx",
           "group": "navigation"
+        },
+        {
+          "command": "dx.openChanges",
+          "when": "resourceExtname == .dx"
         }
       ],
       "commandPalette": [
@@ -109,6 +117,10 @@
         },
         {
           "command": "dx.run",
+          "when": "resourceExtname == .dx"
+        },
+        {
+          "command": "dx.openChanges",
           "when": "resourceExtname == .dx"
         },
         {
