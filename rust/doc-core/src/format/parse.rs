@@ -56,6 +56,8 @@ fn push_block(blocks: &mut Vec<Block>, block_type: &str, attrs: &[Attr], content
         }
         // Code: `lang` wins over the `language` alias; body keeps interior whitespace
         // (only trailing newlines stripped) so indentation survives the round-trip.
+        // `src` names a sibling file whose current text is the listing — the stored body
+        // stays as written, and `resolve::hydrate` fills it in at view time.
         "code" => {
             let lang = attr(attrs, "lang");
             block.language = if lang.is_empty() {
@@ -63,6 +65,7 @@ fn push_block(blocks: &mut Vec<Block>, block_type: &str, attrs: &[Attr], content
             } else {
                 lang.to_string()
             };
+            block.src = js_trim(attr(attrs, "src")).to_string();
             block.run = parse_boolean_attribute(attr(attrs, "run"));
             block.deps = js_trim(attr(attrs, "deps")).to_string();
             block.timeout = attr(attrs, "timeout").trim().parse().unwrap_or(0);
@@ -133,9 +136,11 @@ fn push_block(blocks: &mut Vec<Block>, block_type: &str, attrs: &[Attr], content
         }
         // Rule: a horizontal divider carries no fields.
         "rule" => {}
-        // Style: inline CSS body, trailing-trimmed but otherwise verbatim.
+        // Style: inline CSS body, trailing-trimmed but otherwise verbatim. `media` scopes it
+        // the same way it scopes a `::stylesheet`, so "this dress is for print" is one word.
         "style" => {
             block.text = js_trim_end(&content_lines.join("\n")).to_string();
+            block.media = js_trim(attr(attrs, "media")).to_string();
         }
         // Stylesheet: resolve the link from `href`, then `src`, then the body, in that order.
         "stylesheet" => {
@@ -158,6 +163,14 @@ fn push_block(blocks: &mut Vec<Block>, block_type: &str, attrs: &[Attr], content
             block.script_type = js_trim(attr(attrs, "type")).to_string();
             block.src = js_trim(attr(attrs, "src")).to_string();
             block.module = parse_boolean_attribute(attr(attrs, "module"));
+            block.text = js_trim_end(&content_lines.join("\n")).to_string();
+        }
+        // Board: a canvas that arranges other blocks of this document as nodes. The body is
+        // one reference line per node (`- id x=.. y=.. w=.. to=..`) and is kept verbatim —
+        // the line grammar belongs to `render::board`, not the scanner. `height` is the
+        // viewport's height in CSS pixels; 0 means the renderer's default.
+        "board" => {
+            block.height = attr(attrs, "height").trim().parse().unwrap_or(0);
             block.text = js_trim_end(&content_lines.join("\n")).to_string();
         }
         // Unknown kinds (svg/html/graph/mermaid/…) keep their raw body verbatim.
@@ -299,4 +312,28 @@ fn strip_block_type_prefix(raw_line: &str) -> &str {
         return raw_line;
     }
     &after[type_end..]
+}
+
+/// What a `::kind attrs` opening line says, read by the scanner's own grammar: the kind it
+/// names, and whether it carries an explicit `id=` attribute.
+///
+/// This exists for [`crate::edit::replace_block`], which has to know both facts *before*
+/// trusting the line to a full parse — an unknown kind must be refused rather than silently
+/// folded to `paragraph`, and a header that names no id keeps the id the block already has.
+/// Reading the line here, with [`parse_block_header`] and [`parse_leading_attributes`], is
+/// what keeps editing surfaces from growing a second header grammar that could disagree
+/// with this one.
+///
+/// Returns `None` when the line is not a block opening at all (no `::kind` shape, or the
+/// close token `::end`).
+pub(crate) fn header_line_facts(line: &str) -> Option<(String, bool)> {
+    let trimmed = js_trim(line);
+    let (block_type, _) = parse_block_header(trimmed)?;
+    let block_type = block_type.to_lowercase();
+    if block_type == "end" {
+        return None;
+    }
+    let (attrs, _) = parse_leading_attributes(strip_block_type_prefix(trimmed));
+    let has_id = attrs.iter().any(|(key, _)| key == "id");
+    Some((block_type, has_id))
 }

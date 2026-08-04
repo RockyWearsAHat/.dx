@@ -24,6 +24,7 @@ use std::path::{Path, PathBuf};
 
 use doc_core::format::parse;
 use doc_core::model::Document;
+use doc_core::resolve::Resolver;
 use doc_store::{pack, stub, Stats, Store, StoreError, SyncReport};
 
 /// Markers that identify a workspace root, in the order they are trusted.
@@ -210,6 +211,35 @@ pub fn resolve_contents(text: &str, search_from: &Path) -> Result<String, String
          run `dx sync` there, or restore .doc/repo.dxcp",
         root.display()
     ))
+}
+
+/// The CLI's [`Resolver`]: a document's own folder on disk.
+///
+/// `file` reads a sibling file as it is; `document` reads a sibling `.dx` through
+/// [`read`], so a pointer resolves to its true content exactly as every other read does.
+/// The path law lives in `doc_core::resolve` — by the time a path reaches this struct it
+/// is already relative and downward — so this is transport, nothing more.
+pub struct FolderResolver {
+    /// The folder the document lives in; every reference is joined under it.
+    folder: PathBuf,
+}
+
+/// The resolver for references made by the document at `path`.
+#[must_use]
+pub fn resolver_for(path: &Path) -> FolderResolver {
+    FolderResolver {
+        folder: document_dir(path),
+    }
+}
+
+impl Resolver for FolderResolver {
+    fn file(&self, path: &str) -> Option<String> {
+        fs::read_to_string(self.folder.join(path)).ok()
+    }
+
+    fn document(&self, path: &str) -> Option<String> {
+        read(&self.folder.join(path)).ok()
+    }
 }
 
 /// Read and resolve the document at `path`.

@@ -457,18 +457,36 @@ READ
   dx render   <file> --block ID [--body=T]      one block, as the page draws it
   dx png      <file> [--section ID] [--out F]   render to an image
   dx png      <file> --pages                    one image per page, in order
+  dx play     <file> --script \"wait 500ms; key Space; scroll 200\"
+              [--node ID] [--fps N] [--out DIR] drive the rendered page with real
+              input — wait, key, click, scroll, hover — and write one PNG frame
+              per tick, each stamped with its moment and the action it shows.
+              --node clips every frame to one block. Nothing in the document
+              executes; targets are block ids from dx outline, or x,y pixels.
   dx open     <file> [--section ID]             open the rendered page in a browser
   dx ls       [dir]                             every .dx document in a project
   dx search   <query> [dir] [--limit N]         find documents by content
 
 WRITE
   dx new      <file> [--title T]                create a document
-  dx source   <file> [--block ID]               the exact characters, to edit
-  dx set      <file> <block-id> --text T        replace one block
+  dx source   <file> [--block ID] [--header]    the exact characters, to edit
+              --header prints the block's `::kind attrs` opening line
+  dx set      <file> <block-id> --text T        replace one block's body
+              [--header H]                      replace the whole block — a new
+              `::kind attrs` line retypes it; an empty H reads the text as plain
+              prose, markdown shorthand included
   dx insert   <file> --after ID [--type T]      add a block after another
               [--id ID] [--level N]             name it, or set a heading's level
               [--lang L] [--run] [--deps D]     a runnable one, with --type code
   dx remove   <file> <block-id>                 take a block out
+  dx check    <file> <checklist-id> --item N    tick or untick one box, by its
+                                                position, counting from zero
+  dx board    <file> <board-id>                 arrange a ::board's nodes
+              --place N --x X --y Y [--w W]     move or add the node named N
+                                                a size is pixels, `page`, or `fit`
+              --add --x X --y Y                 a fresh node, ready to write
+              --detach N                        take a node off the board
+              --link A --to B | --unlink A --to B   draw or erase an edge
   dx append   <file> --type T --text T          add a block at the end
               [--id ID] [--level N]             name it, or set a heading's level
   dx fmt      <file...> [--check]               rewrite in canonical form
@@ -508,11 +526,12 @@ PLATFORM
 COMMON FLAGS
   --section ID   render only one block or heading section
   --theme T      auto (default), light, or dark
-  --doc-css      apply the document's own ::style blocks
   --hidden       include blocks marked hidden
   --show-code    open every code block, for a page nobody can click (print, archive)
   --out FILE     write to a file instead of standard output ('-' means stdout)
   --pages        with dx png: one image per page, breaking between blocks
+  --scale N      with dx png: image pixels per CSS pixel (default 2, matching a
+                 high-density screen; 1 for CSS-pixel images)
 
 A RUNNABLE BLOCK
   ::code id=chart lang=python run deps=\"matplotlib\"

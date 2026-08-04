@@ -64,7 +64,14 @@ const PROBE_MS = 400;
 /// An allowlist rather than a lookup on the module: a message from a page must never be able
 /// to name an arbitrary export, and this also states the whole surface the page side depends
 /// on in one place. It is the same set the daemon answers (`daemon::engine::CALLS`).
-const ALLOWED = new Set(['pack_document', 'pack_paths', 'sha256_hex', 'render_html', 'stylesheet']);
+const ALLOWED = new Set([
+  'pack_document',
+  'pack_paths',
+  'sha256_hex',
+  'render_html',
+  'references',
+  'stylesheet',
+]);
 
 /// Decode base64 to bytes.
 function unbase64(text) {

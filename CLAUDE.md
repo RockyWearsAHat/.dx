@@ -44,10 +44,10 @@ The engine is Rust, in `rust/`, and it is the only thing on a user's or agent's 
 
 | Crate | Responsibility |
 |-------|----------------|
-| `doc-core` | The format and its views. `format` (DOCSRC parse/stringify), `render` (HTML, Markdown, outline, sections, `nav` resolution, and `block` — one block exactly as the page carries it), `edit` (the four block operations every editing surface performs, plus `preview_block`, which changes nothing), `chunk` (content-addressed per-block chunks and the `DXCP1` pack), plus `digest`, `compress`, `search`. No OS dependencies — this crate also compiles to `wasm32`. |
+| `doc-core` | The format and its views. `format` (DOCSRC parse/stringify, plus `mermaid`/`layout` — see below), `render` (HTML, Markdown, outline, sections, `nav` resolution, `board`, and `block` — one block exactly as the page carries it), `edit` (the block operations every editing surface performs — body, header, replace, insert, remove, tick a checklist box, arrange a board — plus `preview_block`, which changes nothing), `resolve` (what a document references past its own edge — `::code src=` files and `path.dx#block` board nodes — the path law, the reference grammar, and `hydrate`, which fills a view/run copy through a host-supplied `Resolver` and is **never serialized**; `docs/dx-format-contract.md` § References is the authority), `chunk` (content-addressed per-block chunks and the `DXCP1` pack), plus `digest`, `compress`, `search`. No OS dependencies — this crate also compiles to `wasm32`. |
 | `doc-store` | The SQLite chunk store and the resolver: manifests, packs, git routing, and the stub format. The authority for content. |
 | `doc-run` | Executing `::code … run` blocks: per-language plans, dependency install, timeouts, output capture, and `confine` — the kernel sandbox every block runs inside. |
-| `doc-shot` | Rendering a document to PNG through an installed Chromium browser (two passes: measure, then capture). `capture_pages` divides a document into page images, breaking between blocks. |
+| `doc-shot` | Rendering a document to PNG through an installed Chromium browser (two passes: measure, then capture). `capture_pages` divides a document into page images, breaking between blocks. `cdp` is a live DevTools session with the same browser (a hand-rolled WebSocket, no new dependency), and `play` drives the rendered page with scripted input — wait, key, click, scroll, hover — returning annotated PNG frames; it loads the same script-free render every screenshot uses, so nothing a document carries executes. `base64` is the platform's one copy of that codec (the MCP server encodes with it too). |
 | `doc-cli` | The `dx` binary: CLI commands, the MCP server (`dx mcp`), the local rendering service (`dx serve`, in `daemon/`), and the installer — `install` (MCP registration), `service` (the login agent that keeps `dx serve` running), `desktop` (`DX.app` and the LaunchServices registration that makes a double-clicked `.dx` open), `policies` (Firefox's policy file), `extension` (the browser extension and how each family receives it), `state` and `home` (shared by all five). |
 | `doc-wasm` | `doc-core` for JavaScript hosts. Built into `editor/vscode/wasm/`. |
 
@@ -63,21 +63,130 @@ is a surface running a different renderer.
 **`editor/surface` is the editor, and there is one of it.** `edit.js` and `edit.css` are what
 happens when a reader clicks a paragraph, and two rules are the whole of it:
 
-- **The block keeps rendering while it is written.** The rendered block stays exactly where it
-  was and redraws from the field as the characters change (`host.draw` → `edit::preview_block`,
-  debounced). The field is the block's *sibling*, never its child — a `<div>` inside a `<p>` is
-  not something a browser keeps, and a drawing has no inside to put a textarea in.
-  The exception is a block that renders to the characters it is written in: plain prose, and a
-  code listing, which is a fold over its own source. There the field **stands in** for the
-  block, borrowing its type and its box from the live element (`getComputedStyle`, never a
-  second copy of the type scale), so nothing on the page moves at all. The test for which
-  shape applies is structural — does the renderer add any element the source did not name —
-  so it needs no list of kinds to keep in step with the format.
-- **Saving replaces content, never the page.** `commit`/`remove` answer with the re-rendered
-  `.dx-doc` and `edit.js` swaps that one element. Nothing navigates: no flash, no lost scroll
-  position, no reattaching to a page that just appeared, and nothing to "restore" afterwards.
-  A host that reloads its whole view on every keystroke-sized edit is a window that blinks at
-  a reader who is mid-sentence.
+- **Clicking a block expands its controls — and the field is still the block.** A click
+  replaces the block's rendered content with its editing form, in the block's own place: the
+  writer's `::kind attrs` tag line (`edit::block_header`) in a quiet marginal mono above,
+  and a field holding the exact body beneath. The field is the block's child and *inherits*
+  its face — a heading is written at heading size, a listing in its own column, and the page
+  does not move when reading becomes writing. A plain paragraph shows no tag line (prose
+  carries no machinery); typing `::` at its start promotes the text into one. The tag line
+  is a control: rewriting it retypes the block on save (`edit::replace_block` — the body is
+  set by the block's own body rule and never re-scanned, so a listing containing `::end`
+  keeps every byte). A prose field stays dressed as what it says while it is written: it is
+  a `contenteditable` holding the exact source, decorated in place by the engine
+  (`render::field_html`, reached as `host.decorate` — `doc-wasm`'s `field_html` in VS Code,
+  `dx render --field` in DX.app), so `**bold**` is set in bold with its `**` still on the
+  line in the margin ink. The decoration keeps every character of the source in the field's
+  text — that is the invariant caret math stands on — and `edit.js` never tokenizes the
+  format itself: the marks' *meaning* is only ever the engine's. ⌘/Ctrl+B, I, E wrap or
+  unwrap the selection's mark, ⌘/Ctrl+K writes a link with the caret in the target, and
+  ⌘/Ctrl+Z is a rebuilt undo (decoration redraws defeat the browser's own). Ghost text and
+  a small menu at the caret complete kinds, per-kind attributes, and remembered values
+  (`localStorage`, `dx.autocomplete-history.v1`); Tab or Return accepts, Escape dismisses
+  the menu first and the field second. The menu is an opaque card in the page's own tone
+  (only variables the theme actually publishes — an unpublished name is a dropped
+  declaration, which is how it once shipped transparent), placed at the caret's rectangle
+  and flipped above it when the viewport below runs out. Arrows cross the
+  header/body seam at its edges; Enter in a non-tag header demotes the line back to prose.
+  The one dress inheritance cannot supply: `html`/`svg` source has nothing to inherit — the
+  field takes the listing's own mono (mirroring `.dx-code pre`), and a tag line naming
+  `code`/`html`/`svg`/`mermaid` dresses the body the same way before any save
+  (`.dx-writes-source`, which also strips the prose decoration: source means what it
+  spells). No note, no preview, no second copy of the block anywhere on the
+  sheet — a page with two renditions of one block is a form, not a page. Escape puts the
+  rendered content back untouched. Blank paper is writable: a click on the sheet starts the
+  next paragraph after the block above the click (a click that dismisses an open field only
+  dismisses — it never also creates), and a paragraph left empty is removed on close rather
+  than saved. The one structural wrinkle is the code fold: a `details` whose `summary` is
+  removed invents a default one, so editing leaves a hidden stub summary in its place
+  (`.dx-fold-stub`). A code block marked `run` (the renderer classes it `dx-runnable`)
+  carries one more word in its label line: a `run` control, drawn only when the host
+  offers `run(id)`, which executes that one block (`dx run --only`) and answers with the
+  re-rendered document — a failed block arrives as content (its output block on the page),
+  and only a run that changed nothing is reported as a sentence. A runnable block that was
+  *edited* runs by itself the moment its field closes — the code on the page is new, so the
+  output under it is stale, and showing what the changed code does is why it was changed.
+  A code block is also the one kind that opens **without** its tag line: a person editing
+  code wants the code, and the listing's own label already names it. ArrowUp at the very
+  start reveals the `::code …` line when the block needs retyping.
+
+  **A checklist's box is ticked by clicking it.** The renderer writes each mark's position
+  on it (`data-check`, counting from zero — a statement of fact, like `dx-runnable`), and
+  the surface turns those marks into checkboxes when the host offers `check(id, item)`,
+  which lands on `edit::toggle_check` — the same `dx check` an agent runs. The click ticks
+  and stops: it does not also open the list for writing, because ticking a thing off is
+  what a checklist is *for*. Nothing is drawn to say so — the box a reader clicks is the
+  same `[ ]` that was already on the page, taking the page's own ink under the pointer and
+  answering to Space and Return when focused. A render with no host keeps three characters
+  of ink and no affordance it cannot honour.
+
+  **A `::board` is a node editor on the sheet.** Its body is one reference line per node
+  (`- id x= y= w= h= to=`), each naming a block of the same document — usually one marked
+  `hidden`, so it lives on the board instead of in the page flow — resolved like `nav`,
+  never by reading another file.
+
+  **A node's box is stated, never measured.** `x y w h` are the whole of it, the node is
+  drawn at exactly that size (content longer than it scrolls inside), and every consumer
+  works from those four numbers: the renderer, `edit`, the surface, and an agent running
+  `dx board`. That is what lets a board be laid out identically by a browser, a PNG, and a
+  terminal — the alternative, guessing how tall a block renders, was tried and produced a
+  board that was one shape in the engine and another on the page. A dimension may state a
+  *rule* instead of a number — `w=page`/`h=page` (the page's own measures) or `w=fit`/`h=fit`
+  (the engine's deterministic estimate of the block's render, re-resolved as the block is
+  rewritten) — and stays stated: `board::resolve_sizes` turns rules into numbers from
+  nothing but the document, the line keeps the word forever, and an edit restating a rule's
+  own resolved number keeps the rule (`edit::place_into`), so a drag that only moves a
+  `fit` node does not strip the rule off it. Two consequences follow.
+  The **fit** is exact: `render::board::fit` scales the canvas on *both* axes so the whole
+  arrangement is in view from the first glance, and the surface re-fits by the same rule
+  until the reader pans or zooms (⌘/Ctrl or a pinch — a plain wheel scrolls the page, because
+  a board lives in a document). And **overlap is the engine's job**: `edit::settle` holds the
+  nodes that were just placed and pushes anything they cover out past the nearest border
+  (`edit::shove` — the shortest move that ends the overlap, never onto a negative coordinate,
+  and downwards on a tie so a plan still grows down the column). `dx board --place` cannot
+  leave one node buried any more than a drag can.
+
+  **A whole edge is a connection point.** Each side of a node carries a strip a line is
+  dragged out of, and dropping on another node lands on whichever of *its* sides is nearest —
+  so a connection goes from any edge of any node to any edge of any other, and the two sides
+  it was drawn between are kept (`to=steps:b-t`; a bare `to=steps` is unpinned and takes the
+  facing pair). Several edges meeting one side spread evenly along it, ordered by where their
+  other ends are, so a node with four connections fans them out instead of stacking them on a
+  dot and crossing them on the way in. Each edge is tethered at the source and ends in an
+  arrowhead, because an edge on a plan says *this, then that*, and may carry words
+  (`to=steps:b-t:on%20failure`, drawn on the middle of the curve) — a decision with two
+  unlabelled arrows out of it says nothing about which is which.
+
+  **An edge is never hidden by a box.** A node is painted over the edge sheet, so a line
+  passing under one is a line the reader simply loses. Two rules prevent it, both in
+  `render::board`. An *unpinned* end picks its side by cost (`clearest_sides`): a box across
+  the straight run outweighs any number of crossings, a shallow crossing costs more than a
+  square one — two lines meeting at a right angle read as one passing over the other, a narrow
+  one reads as a fork — and the facing pair breaks the tie, so a clear run keeps the
+  arrangement a board has always had. Then the curve itself bends: `controls` pushes both
+  handles square to the line, in growing steps and both directions, until the cubic clears
+  every box it does not join. Bending the handles rather than inserting a waypoint is what
+  keeps it mirrorable — the edge stays one cubic between the same two points.
+
+  The geometry is stated once in `render::board` (sides, spread, curve, clearance) and
+  mirrored in `edit.js` against the measured boxes — which are the stated boxes, so the two
+  cannot disagree.
+
+  The surface adds fit/pan/zoom, grip-drag, corner-reshape (double-click the corner to fit a
+  node to its content), edge-drag linking, pick-and-Delete, and double-click-to-add — but
+  **never writes a line itself**: every change is `host.board(id, action, spec)`, landing on
+  `edit::board_place`/`board_arrange`/`board_detach`/`board_link`, the same operations
+  `dx board` runs. Saving a board body creates a hidden paragraph for any line naming a block
+  the document does not have; detaching a node removes its line, its edges, and its block only
+  when the block was hidden and no other board shows it. After an edit, a node whose block
+  outgrew it grows to hold it — never shrinks, and never on a plain read. Nodes are ordinary
+  blocks: clicking inside one opens the same editor as anywhere else, and a checklist node's
+  boxes tick like any other's.
+- **Saving replaces content, never the page.** `commit`/`replace`/`remove` answer with the
+  re-rendered `.dx-doc` and `edit.js` swaps that one element. Nothing navigates: no flash,
+  no lost scroll position, no reattaching to a page that just appeared, and nothing to
+  "restore" afterwards. A host that reloads its whole view on every keystroke-sized edit is
+  a window that blinks at a reader who is mid-sentence.
 
 `editor/build.sh` copies the surface into `editor/vscode`, `packaging/build-app.sh` copies it
 into `DX.app`, and neither host owns a line of it — a Mac and an editor disagreeing about
@@ -86,13 +195,14 @@ what Return does would be two products wearing one name.
 What each host *does* own is the one thing only it can: how the calls get out.
 `Editor.swift` answers them by running the bundled `dx`; the VS Code webview answers them
 through `doc-wasm` and a `WorkspaceEdit`, so undo and source control keep working. Both land
-on `doc_core::edit`, which is also what `dx source`/`dx set`/`dx insert`/`dx remove` and
-`dx render --block` are — so a person typing on the page and an agent editing the file are
-doing the identical thing. **Never re-implement a block operation in a host.** "What is the
+on `doc_core::edit`, which is also what `dx source` (`--header` for the tag line),
+`dx set` (`--header` to retype), `dx insert`, `dx remove`, `dx check`, `dx render --block`,
+and `dx render --field` (the decorated field view, no file read) are — so
+a person typing on the page and an agent editing the file are doing the identical thing. **Never re-implement a block operation in a host.** "What is the
 editable text of a checklist?" has one answer, and a second one in an editor is a document
 that changes shape depending on which surface last touched it. The same goes for "what does
 this block look like": `render::block` is the page's own per-block renderer, so a block drawn
-alone mid-edit and the same block drawn in its page are byte-identical.
+alone (`dx render --block`) and the same block drawn in its page are byte-identical.
 
 `editor/github` is a browser extension that makes github.com show documents instead of
 pointers. It gets no editing surface: github.com shows other people's repositories, which are
@@ -187,14 +297,37 @@ change.
   convenient change pass is not. Review the regenerated diff and say what changed and why.
 - **Format changes are additive.** A new attribute must serialize to nothing when unset, or
   every existing document reformats on next save.
+- **A mermaid block is a board.** `::mermaid`/`::graph` is not a kind this format keeps:
+  `format::mermaid` reads the flowchart at parse time and `format::layout` arranges it into a
+  `::board` plus one hidden block per node, so the drawing arrives as something a reader can
+  take hold of instead of a listing nothing draws. This is the one conversion `parse` performs
+  — every other kind round-trips untouched — and it is deliberate: two diagram renderers that
+  have to agree is the thing this repository exists to avoid. Node labels, edge direction, and
+  edge labels all survive; mermaid's *shapes* do not, because a board node is a block and
+  blocks are dressed by the document's own CSS. Source this converter cannot read (a sequence
+  diagram, a Gantt chart, a dialect it does not know) is **left exactly as written** rather
+  than replaced with an empty canvas. `layout` guarantees no two boxes overlap, ranks the
+  nodes by longest path over the *forward* edges only (a loop has no longest path, and ranking
+  through one stretched a six-node chart to fifteen hundred pixels), and orders each rank by
+  barycentre so the links between ranks cross as little as they can.
+- **A document's CSS always applies.** `::style` reaches every surface with no flag to
+  forget, and it travels *inside* `.dx-doc` rather than the page `<head>` — that container is
+  what an editing host swaps on save, so CSS left in a head the host never re-reads is a
+  document that loses its dress the moment anyone touches it. It may dress and may not fetch:
+  `render::escape::escape_style` blanks any `url(…)` naming a host and neutralizes `@import`
+  and `expression(`. `docs/dx-format-contract.md` is the authority.
 - **Reading never executes, and never writes.** Parsing, rendering, screenshotting, and
   resolving a pointer must stay free of side effects — resolving must not even create the index.
-  This is what lets a page redraw itself on every pause in typing: `edit::preview_block` applies
-  a body to a *parsed copy* and throws it away, so a reader who types and then presses Escape
-  has changed no file.
+  `edit::preview_block` (`dx render --block --body`) applies a body to a *parsed copy* and
+  throws it away, so asking what a block would look like changes no file — and a reader who
+  types on the page and presses Escape has changed nothing at all.
   Only `dx run` and the `dx_run` tool execute code. This is why a `nav` block is resolved from
   the document it sits in and never by reading another file, and why `dx serve` reads no file,
-  writes none, and runs nothing.
+  writes none, and runs nothing. The one sanctioned outward read is `resolve::hydrate` — a
+  document's own stated references (`::code src=`, `path.dx#block` board nodes), confined to
+  the document's folder by `resolve::confined`, filled into a view/run copy that is never
+  saved, still executing nothing. `dx serve` keeps its rule: it reads no file even for this —
+  a caller passes resources in.
 - **Running a document does not give it your authority.** A `.dx` is something you were
   handed, so `doc-run::confine` puts every block inside a kernel sandbox — Seatbelt on macOS,
   bubblewrap on Linux — and the shape of it is the whole security model:
@@ -236,8 +369,16 @@ change.
   anything.
 - **An agent reads by looking.** `dx_read` returns the rendered pages as images, because a
   document renders to a page and the page is where the meaning is. Pages break between blocks,
-  never through a line, and never leave a heading without the text it titles. `dx_source` is the
-  exact text, for quoting and editing.
+  never through a line, and never leave a heading without the text it titles. The pages are
+  sized for the reader they serve (`ShotOptions::for_reading`): each stays under the
+  vision-ingestion limits (~1.15 MP, 1568 px longest edge), so the image the model sees is the
+  image the browser captured, pixel for pixel — capturing larger only produces an image
+  something else shrinks in transit. Human exports are the opposite trade: `dx png` captures
+  at device scale 2 by default (`--scale`), so an exported page matches a high-density screen.
+  `dx_source` is the exact text, for quoting and editing. `dx_play` (`dx play`) is the same read with hands: it
+  loads the render live over `doc-shot::cdp`, performs a small input script — wait, key,
+  click, scroll, hover — and returns frames stamped with their moment and action. It is still
+  a read: the page carries no scripts, input is synthetic, and nothing the document says runs.
 - **One engine.** If the editor and the CLI could render differently, they will. Render
   through `doc-core`; never re-implement a view. Rebuild the wasm after touching `doc-core` or
   the editor silently keeps the old renderer.
@@ -245,10 +386,9 @@ change.
   tints, grids, rounded boxes, or shadows. Structure comes from type, whitespace, and hairline
   rules. Nothing is announced unless it earns the space — a successful run says nothing; only a
   failure is called out. The editing field obeys this too: it has no border, no background, and
-  no box, and it takes either the block's own type or the marginal mono the sheet already uses
-  for pencil notes — the page does not become a form when it is touched. A block that draws its
-  own rule down the margin (a quotation, a listing) lends it to the field rather than being
-  given a second one beside it.
+  no box, and it always takes the block's own type — the page does not become a form when it
+  is touched. A block that draws its own rule down the margin (a quotation, a listing) lends
+  it to the field rather than being given a second one beside it.
 - **A document opens as what it says, not how it was made.** Code blocks render folded behind
   their own label (`HtmlOptions::collapse_code`); what the code *produced* stays on the page.
   The fold is `details`/`summary` and must stay CSS-only — no page may need a script to open
@@ -261,7 +401,7 @@ change.
 
 ```bash
 cd rust
-cargo test                                  # must be green (545 tests)
+cargo test                                  # must be green (627 tests)
 cargo clippy --all-targets -- -D warnings   # must be clean
 cargo fmt --check                           # must be clean
 ```

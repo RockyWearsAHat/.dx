@@ -5,7 +5,11 @@ use super::util::{clamp_heading_level_u8, format_attribute_value, js_trim, norma
 use crate::model::{Block, Document, Item};
 
 /// Build the `::type attrs` opening line for a normalized block. Port of `blockHeader`.
-fn block_header(block: &Block) -> String {
+///
+/// Also the showing half of [`crate::edit::block_header`]: the header an editing surface
+/// puts above a block's body is exactly the line this writer puts in the file, so what a
+/// reader sees is what an unchanged save writes back.
+pub(crate) fn block_header(block: &Block) -> String {
     let mut attributes: Vec<String> = vec![format!("id={}", format_attribute_value(&block.id))];
 
     let class_name = normalize_class_name(&block.class_name);
@@ -25,6 +29,10 @@ fn block_header(block: &Block) -> String {
         "code" => {
             if !block.language.is_empty() {
                 attributes.push(format!("lang={}", format_attribute_value(&block.language)));
+            }
+            // Unset `src` adds nothing, so no existing `::code` reformats on its next save.
+            if !block.src.is_empty() {
+                attributes.push(format!("src={}", format_attribute_value(&block.src)));
             }
             if block.run {
                 attributes.push("run".to_string());
@@ -70,6 +78,13 @@ fn block_header(block: &Block) -> String {
             }
             format!("::image {}", attributes.join(" "))
         }
+        // Unset `media` adds nothing, so no existing `::style` reformats on its next save.
+        "style" => {
+            if !block.media.is_empty() {
+                attributes.push(format!("media={}", format_attribute_value(&block.media)));
+            }
+            format!("::style {}", attributes.join(" "))
+        }
         "stylesheet" => {
             if !block.href.is_empty() {
                 attributes.push(format!("href={}", format_attribute_value(&block.href)));
@@ -78,6 +93,12 @@ fn block_header(block: &Block) -> String {
                 attributes.push(format!("media={}", format_attribute_value(&block.media)));
             }
             format!("::stylesheet {}", attributes.join(" "))
+        }
+        "board" => {
+            if block.height > 0 {
+                attributes.push(format!("height={}", block.height));
+            }
+            format!("::board {}", attributes.join(" "))
         }
         "script" => {
             if !block.script_type.is_empty() {

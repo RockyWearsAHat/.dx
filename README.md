@@ -270,6 +270,9 @@ dx outline  notes.dx                 # block ids, kinds, and previews
 dx render   notes.dx                 # a self-contained HTML page
 dx png      notes.dx                 # an image of the rendered page
 dx png      notes.dx --pages         # one image per page, in reading order
+dx play     notes.dx --script "wait 500ms; key Space; scroll 200"
+                                     # drive the rendered page with real input and
+                                     # keep one PNG frame per tick, annotated
 dx open     notes.dx                 # open it in your browser
 dx run      notes.dx                 # execute its code blocks
 dx ls       .                        # every .dx document in a project
@@ -289,6 +292,7 @@ dx render guide.dx --block intro     # that block as the page draws it
 dx set    guide.dx intro --text "New opening paragraph."
 dx insert guide.dx --after intro     # a new paragraph, in the middle
 dx remove guide.dx intro
+dx check  guide.dx steps --item 1    # tick the second box of a checklist
 dx append guide.dx --type code --lang python --run --text "print(1)"
 dx fmt    guide.dx                   # rewrite in canonical form
 ```
@@ -344,11 +348,12 @@ It reads no files, writes none, and runs nothing — `dx run` is not reachable f
 
 ## For AI agents
 
-`dx setup` registers the MCP server (`dx mcp`) with every assistant it finds. Nine tools:
+`dx setup` registers the MCP server (`dx mcp`) with every assistant it finds. Ten tools:
 
 | Tool | What it does |
 |------|--------------|
 | `dx_read` | **The document as page images** — one per page, in order, each labelled with the blocks on it |
+| `dx_play` | Drive the rendered page with scripted input — wait, key, click, scroll, hover — and get the frames back, each stamped with its moment and action |
 | `dx_source` | The exact text, as Markdown, for quoting and editing |
 | `dx_outline` | One row per block: id, kind, size, whether it is runnable |
 | `dx_list` | Every document in a project, with title and block count |
@@ -372,6 +377,15 @@ The same division from a shell:
 ```bash
 dx png notes.dx --pages          # notes-1.png, notes-2.png, … and what is on each
 ```
+
+**And it can watch the page react.** `dx_play` (and `dx play` from a shell) loads the same
+render in a live headless browser, performs a small script of real input events —
+`wait 500ms; key Space; click steps; scroll 200; hover intro` — and returns one frame per
+tick, each stamped with when it was taken and which action it shows landing. `node` clips
+every frame to one block's box, whose position an agent already knows from the block's own
+stated numbers. Nothing in the document executes: play drives the same script-free page a
+screenshot captures, so it is a read that can also see scrolling, hover, folds, and a board
+being handled.
 
 An assistant without MCP support needs no configuration at all: `dx` is a command, and
 `dx help` explains itself.
@@ -430,10 +444,59 @@ Code blocks start folded behind one faint line naming the language — a documen
 what it says, not how it was made — and what the code *produced* stays on the page. Click the
 label to see the listing.
 
+A checklist's boxes are boxes: click one to tick it off, and only that line of the file
+changes. It ticks wherever the checklist is — down the page, or inside a node on a board.
+
+### The board
+
+A `::board` is a node editor drawn on the sheet: its nodes are the document's own blocks,
+arranged on a canvas instead of down the page. `examples/example_site_plan.dx` is a whole
+website drafted on one — brief, audience, a palette tile, three real wireframes and the flow
+between them, the markup the home page becomes, and what has to be true before it ships. The
+wireframes are real HTML, dressed inside their nodes by the document's own `::style` — the
+same CSS that dresses the rest of the page.
+
+It opens **fitted**: whatever is on it, scaled on both axes, all of it in view. Drag a node
+by the label bar above it. Drag a connection out of **any edge of any node onto any edge of
+another** — a whole edge is the connection point, and the line stays on the two edges you
+drew it between, fanning out along a side when several meet there. Reshape a node from its
+bottom-right corner, or double-click that corner to fit it to what is in it. Drop a node on
+top of another and the board makes room: the one you placed stays where you put it, and what
+it landed on moves down. Click inside a node and you are writing in that block, the same as
+anywhere else on the page.
+
+An agent does all of it through one command:
+
+```bash
+dx board plan.dx plan --place brief --x 0 --y 0 --w 360 --h 170   # move and reshape
+dx board plan.dx plan --place measure --w page --h fit            # rules, not numbers
+dx board plan.dx plan --arrange "brief,0,0,360,170 sitemap,0,210,360,220"
+dx board plan.dx plan --link brief --to sitemap --from-side b --to-side t
+```
+
+A node's box — `x y w h` on its line — is the whole of where it is and how big it is, so a
+board is laid out identically by a browser, a PNG, and a terminal, and neither a drag nor a
+`dx board` call can leave one node covering another. A dimension may also be a rule instead
+of a number: `w=page` takes the page's own column, and `h=fit` sizes the node to the block
+it shows — and keeps fitting as that block is rewritten, because the line keeps the word,
+not the number it resolved to.
+
+### References — write it once, review it current
+
+A document can name what it does not carry, so nothing is pasted twice and nothing shown
+is stale. `::code id=listing src=src/lib.rs lang=rust` renders the file's **current**
+text as its listing — and with `run`, executes it, so the recorded output goes stale
+exactly when the file changes: the documentation is the test surface. A board node may
+name a block of a **sibling document** — `- plan.dx#step-one x=20 y=20` — and every board
+naming it shows the block as it is now. The saved document keeps the reference, never a
+copy; a reference that resolves to nothing renders as a sentence naming the path, never
+as silence; and a path can only walk downward from the document's own folder.
+`docs/dx-format-contract.md` § References has the rules.
+
 The same operations are what an agent uses (`dx source`, `dx set`, `dx insert`, `dx remove`,
-and `dx render --block` for the live draw), and both go through one implementation in
-`doc-core`, so a page edited by a person and a document edited by an agent cannot come out
-shaped differently.
+`dx check`, `dx board`, and `dx render --block` for the live draw), and both go through one
+implementation in `doc-core`, so a page edited by a person and a document edited by an agent
+cannot come out shaped differently.
 
 ---
 

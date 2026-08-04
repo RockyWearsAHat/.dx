@@ -64,6 +64,7 @@ use std::time::{Duration, Instant};
 use doc_core::digest::sha256_hex;
 use doc_core::format::{parse, stringify};
 use doc_core::model::{runner_for_language, Block, Document};
+use doc_core::resolve::{self, Resolver};
 
 use confine::Grant;
 use plan::parse_deps;
@@ -166,9 +167,20 @@ impl RunReport {
 /// Blocks execute in document order, so a later block sees files an earlier one wrote.
 /// A block that fails does not stop the rest — the failure is recorded in its `::output`
 /// and the document keeps going, which is what makes the result readable as a report.
+///
+/// `resolver` fills in `::code src=` listings before anything runs: the text executed is
+/// the referenced file's current text, and its fingerprint tracks the file, so editing
+/// the file makes the recorded output stale exactly like editing an inline body would.
+/// Execution reads from a hydrated copy while `::output` blocks fold into the document
+/// as written — the saved source keeps the reference, never a snapshot of the file. A
+/// listing whose file cannot be resolved is `blocked`, not run: the body standing in its
+/// place is a sentence about the missing file, and executing a sentence helps nobody.
+/// Callers with no folder to resolve against pass [`resolve::Nowhere`].
 #[must_use]
-pub fn run_document(source: &str, options: &RunOptions) -> RunReport {
+pub fn run_document(source: &str, options: &RunOptions, resolver: &dyn Resolver) -> RunReport {
     let document = parse(source);
+    let mut hydrated = document.clone();
+    let unresolved = resolve::hydrate(&mut hydrated, resolver);
     let mut runs: Vec<BlockRun> = Vec::new();
     let mut outputs: Vec<(String, Block)> = Vec::new();
 
@@ -177,6 +189,24 @@ pub fn run_document(source: &str, options: &RunOptions) -> RunReport {
             continue;
         };
         if !selected(block, options) {
+            continue;
+        }
+
+        // Hydration edits blocks in place and only ever appends, so the indices agree.
+        let block = &hydrated.blocks[index];
+        if let Some(problem) = unresolved.iter().find(|entry| entry.block == block.id) {
+            runs.push(BlockRun {
+                id: block.id.clone(),
+                language: block.language.clone(),
+                status: "blocked".to_string(),
+                exit: BLOCKED_EXIT,
+                output: problem.sentence.clone(),
+                duration_ms: 0,
+            });
+            outputs.push((
+                block.id.clone(),
+                output_block(block, "blocked", BLOCKED_EXIT, "", &problem.sentence),
+            ));
             continue;
         }
 
@@ -432,6 +462,7 @@ mod tests {
                 default_timeout: Duration::from_secs(60),
                 ..RunOptions::default()
             },
+            &resolve::Nowhere,
         )
     }
 
@@ -475,6 +506,55 @@ mod tests {
         assert_eq!(report.runs[1].status, "ok");
         assert!(report.source.contains("status=error exit=3"));
         assert!(!report.all_succeeded());
+    }
+
+    /// A plain-folder resolver, standing in for the CLI's store-aware one.
+    struct Folder(PathBuf);
+
+    impl Resolver for Folder {
+        fn file(&self, path: &str) -> Option<String> {
+            std::fs::read_to_string(self.0.join(path)).ok()
+        }
+        fn document(&self, path: &str) -> Option<String> {
+            std::fs::read_to_string(self.0.join(path)).ok()
+        }
+    }
+
+    #[test]
+    fn a_listing_whose_file_is_missing_is_blocked_never_executed() {
+        let source = "::code id=listing src=src/gone.sh lang=bash run\n::end\n";
+        let report = run_isolated(source, "missing-src");
+        assert_eq!(report.runs.len(), 1);
+        assert_eq!(report.runs[0].status, "blocked");
+        assert_eq!(report.runs[0].exit, BLOCKED_EXIT);
+        assert!(report.runs[0].output.contains("src/gone.sh"));
+        // The failure is on the page, and the saved source keeps the reference untouched.
+        assert!(report.source.contains("status=blocked"));
+        assert!(report.source.contains("src=src/gone.sh"));
+        assert!(!report.all_succeeded());
+    }
+
+    #[test]
+    fn a_listing_runs_its_files_current_text_and_saves_the_reference_not_a_copy() {
+        let root = std::env::temp_dir().join("dx-run-tests-src");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("src")).expect("scene");
+        std::fs::write(root.join("src/greet.sh"), "echo from the file\n").expect("fixture");
+        let report = run_document(
+            "::code id=greet src=src/greet.sh lang=bash run\n::end\n",
+            &RunOptions {
+                document_dir: root.clone(),
+                cache_root: root.join("cache"),
+                ..RunOptions::default()
+            },
+            &Folder(root.clone()),
+        );
+        assert_eq!(report.runs[0].status, "ok");
+        assert_eq!(report.runs[0].output, "from the file");
+        // The reference survives the save with its body empty: a reference, not a copy.
+        assert!(report
+            .source
+            .contains("::code id=greet lang=bash src=src/greet.sh run\n\n::end"));
     }
 
     #[test]
@@ -522,6 +602,7 @@ mod tests {
                 only: Some("b".to_string()),
                 ..RunOptions::default()
             },
+            &resolve::Nowhere,
         );
         assert_eq!(report.runs.len(), 1);
         assert_eq!(report.runs[0].id, "b");
@@ -547,6 +628,7 @@ mod tests {
                 cache_root: root.join("cache"),
                 ..RunOptions::default()
             },
+            &resolve::Nowhere,
         );
         assert_eq!(report.runs[0].output, "found me");
     }

@@ -14,7 +14,7 @@
 
 import * as vscode from 'vscode';
 
-import { engine } from './engine';
+import { engine, resourcesFor } from './engine';
 import { scriptPolicy } from './policy';
 
 /** The shared editing surface's files, read once from the extension's own directory. */
@@ -60,9 +60,15 @@ window.addEventListener('message', (event) => {
 if (window.dxEditor) {
   window.dxEditor.attach({
     source: (id) => dxCall({ op: 'source', id }),
+    parts: (id) => dxCall({ op: 'parts', id }),
     draw: (id, text) => dxCall({ op: 'draw', id, text }),
+    decorate: (text) => dxCall({ op: 'decorate', text }),
     commit: (id, text, then) => dxCall({ op: 'commit', id, text, then }),
+    replace: (id, header, body, then) => dxCall({ op: 'replace', id, header, body, then }),
     remove: (id) => dxCall({ op: 'remove', id }),
+    run: (id) => dxCall({ op: 'run', id }),
+    check: (id, item) => dxCall({ op: 'check', id, item }),
+    board: (id, action, spec) => dxCall({ op: 'board', id, action, spec }),
   });
 }
 `;
@@ -133,19 +139,23 @@ const TOOLBAR = `
  * cannot run even if it somehow arrived with a `<script>` in it.
  *
  * `surface` is optional; without it the page renders exactly as it did before, read-only.
+ * `documentDir` is the document's folder; with it, the document's references — sibling
+ * files behind `::code src=`, sibling documents behind board nodes — render as their
+ * current content instead of sentences.
  */
 export function previewHtml(
   source: string,
   title: string,
   nonce: string,
-  surface?: Surface
+  surface?: Surface,
+  documentDir?: string
 ): string {
   const configuration = vscode.workspace.getConfiguration('dx');
   const page = engine().render_html(
     source,
     resolveTheme(configuration.get<string>('theme', 'match-editor')),
     false,
-    configuration.get<boolean>('documentCss', false)
+    documentDir === undefined ? undefined : resourcesFor(source, documentDir)
   );
 
   const policy = scriptPolicy(nonce);
@@ -171,13 +181,13 @@ export function previewHtml(
  * The webview replaces this one element instead of rebuilding its HTML, so the reader keeps
  * their scroll position, their caret, and the page they were already looking at.
  */
-export function sheetHtml(source: string): string {
+export function sheetHtml(source: string, documentDir?: string): string {
   const configuration = vscode.workspace.getConfiguration('dx');
   return engine().render_html(
     source,
     resolveTheme(configuration.get<string>('theme', 'match-editor')),
     true,
-    configuration.get<boolean>('documentCss', false)
+    documentDir === undefined ? undefined : resourcesFor(source, documentDir)
   );
 }
 
@@ -194,8 +204,7 @@ export function blockHtml(source: string, id: string, body: string): string {
     source,
     id,
     body,
-    resolveTheme(configuration.get<string>('theme', 'match-editor')),
-    configuration.get<boolean>('documentCss', false)
+    resolveTheme(configuration.get<string>('theme', 'match-editor'))
   );
 }
 

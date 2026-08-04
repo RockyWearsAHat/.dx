@@ -2,9 +2,987 @@
 
 _Resume point after `/compact` or `/clear`. Update after every task or wave (see CLAUDE.md)._
 
-Last updated: 2026-07-31
+Last updated: 2026-08-04
 
-## This wave: full-history audit, five defects fixed, in-editor diff restored, everything committed
+## This wave, part 20: references (one source of truth), vision-sized agent pages, 2× exports
+
+**"Board nodes should be smart links so nothing is repeated and it's always up to date —
+including local code as the source of truth, reviewed in .dx. Images must export at full
+screen fidelity, and the agent must extract everything from its images accurately."** Done
+and validated end to end.
+
+- **`doc_core::resolve` (new module) — the resolver seam.** Two reference kinds:
+  `::code src=path` (sibling file's *current* text is the listing; `run` executes it) and
+  board node lines `- plan.dx#step x= y=` (one block of a sibling document, drawn current).
+  `confined` is the path law (relative, downward only; `..`/absolute/`:`/`\` refused before
+  any resolver is asked); `hydrate` fills a parsed view/run copy and is **never serialized**
+  (the stored doc keeps the reference + empty body — verified: `dx run` saves
+  `src=src/greet.sh` back with body empty); unresolved refs become sentences in the block's
+  place and `dx run` records them `blocked` instead of executing. Fingerprints hash the
+  file's text, so editing the file stales the recorded output (verified live: cached →
+  edit file → re-runs). `docs/dx-format-contract.md` § References is the authority.
+- **Wired everywhere, hosts transport only**: CLI (`workspace::resolver_for` — sibling `.dx`
+  through the store), MCP (`document_at` hydrates; `dx_source` stays exact), `doc-run`
+  (`run_document` takes `&dyn Resolver`; executes a hydrated copy, folds outputs into the
+  original), daemon (`render_html` optional 4th resources arg + new `references` call, CALLS
+  now 6), doc-wasm (`render_html(text, theme, fragment, resources?)` + `references(text)`),
+  VS Code (`engine.resourcesFor` reads workspace files, resolves pointer siblings via
+  `.doc/repo.dxcp` + `pack_document`), github extension (`content.js resourcesFor`: documents
+  from the committed pack, files via the session-carrying raw route).
+- **Vision-sized agent pages**: `ShotOptions::for_reading(width?)` — default 860 CSS px
+  (content column 46rem@17px + margins), page height derived so every page ≤ ~1.15 MP and
+  ≤ 1568 px edge → zero downscale between browser and model; `dx_read` uses it. Block-boundary
+  page breaks unchanged.
+- **2× human exports**: `ShotOptions.scale` (1–4; measure pass always 1×; `--window-size` is
+  CSS px, PNG = window × scale — verified empirically), `dx png` defaults `--scale 2`
+  (showcase: 2400×4478 actual pixels).
+- **Validation**: 683 Rust tests green (includes 9 new resolve tests + 2 doc-shot),
+  `clippy --all-targets -D warnings` clean, `cargo fmt --check` clean, github suite 34/34
+  (engine parity holds for both wasm builds), vscode suite 34/34 (new cross-boundary
+  reference test), `tsc --noEmit` clean, wasm rebuilt via `editor/build.sh`.
+- **Known gaps, deliberate**: editing a `src=` listing in an editor edits the stored (empty)
+  body, not the file — write-back is future work; `preview_block` does not hydrate; store
+  archives (`dx browser --from`, DX.app copy) need a rebuild at next release to carry the new
+  extension JS.
+
+**Next step**: teach the editing surface to open a `src=` listing as the file (read-only or
+write-back), and rebuild/re-package the browser-extension archives so the store copies carry
+`references` support.
+
+## Previous wave, part 19: lines enter the arrowhead dead-center, `page`/`fit` node sizes, and the plan redesigned from scratch
+
+**"Lines always enter in the center of the arrowhead. Redesign the whole example site from
+scratch. Allow a page width/height — or content autofit — for board nodes."** All three done
+and validated.
+
+- **Arrowhead entry**: an edge path is now a cubic to a `lead` point (≤16px out from the
+  arrival anchor along its side's normal) plus a **straight `L` tail** into the anchor —
+  `render::board::lead`/`curve`, mirrored verbatim as `leadOf`/`curveBetween` in `edit.js`
+  (labels ride the cubic's midpoint in both). A bent cubic is still turning as it arrives, so
+  the head pointed one way while the line came in another; the straight tail pins the head
+  square to the side and the line dead down its axis. Pinned by
+  `the_line_enters_the_arrowhead_straight_along_its_axis`.
+- **`w=page|fit`, `h=page|fit` in the node line** (additive; numbers unchanged): `page` →
+  the 680px column / 480px default viewport (`PAGE_NODE_WIDTH/HEIGHT`), `fit` → the engine's
+  deterministic estimate of the block's render (`board::resolve_sizes` + `fit_width`/
+  `fit_height`, metrics taken from `render::theme`'s own numbers; lists read `Block::items` —
+  the empty-`text` bug is pinned by `a_list_fits_to_its_items`). The box stays *stated*: rules
+  resolve from nothing but the document, every consumer draws the identical rectangle, and
+  `node_line` writes the word back forever. `edit::SizeSpec` (`Keep|Px|Page|Fit`) is the one
+  caller vocabulary — `dx board --place N --w page --h fit`, `--arrange "id,x,y,page,fit"` —
+  and `place_into` keeps a rule when an edit restates its own resolved number, so a surface
+  drag that only moves a `fit` node does not strip the rule (settle resolves before overlap
+  math, wasm keeps its numeric door). `--enable-nontrapping-float-to-int` added to doc-wasm's
+  wasm-opt flags (the new `f64 as u32` saturating casts emit `i32.trunc_sat_f64_u`).
+- **`examples/example_site_plan.dx` redesigned from scratch**: Hollow Fell, a dark-sky
+  observatory's booking site — night palette (night/zenith/starlight/ember), CSS-drawn skies
+  (milky-way band, moonrise, meteor streak, plough star field, every horizon a hard stop),
+  HOLLOW FELL wordmark SVG, home at desktop width, tonight's-sky and booking screens at phone
+  width, the hero as shipped markup (CSS sky, no base64 PNG), launch checklist, and a
+  `w=page h=fit` measure band the two bottom columns feed into. The brief, both checklists,
+  the sitemap, the wordmark (viewBox aspect), and the measure all sit on `h=fit` — the new
+  rules doing real work. Restored in passing: the repo root had been store-adopted again —
+  `tutorial.dx` was a *dangling* pointer (content gone from the pack; restored from HEAD),
+  `example_site_plan.dx` recovered through the store, root `.doc/repo.dxcp`/`index.db`
+  removed (tracked `.doc/README.md` kept).
+- **Docs in the same edit**: format contract (node-line rules), README (board section +
+  `--w page --h fit` example), CLAUDE.md (stated-box paragraph grew the rules), `dx` HELP.
+- **Validated**: cargo **672** green (242+275+2+5+44+13+42+49; 8 new), clippy `-D warnings`
+  clean, fmt clean; `editor/build.sh` rebuilt both engines, engine parity + suites green
+  (34 github + 33 vscode); example `dx fmt` idempotent, `--section plan` resolves all 11
+  nodes, full-page `dx png` inspected in both themes plus crops of every arrow junction —
+  every head entered dead-center on a straight run, no clipped list lines (the `fit`
+  estimator gained per-item lead after the first render showed clipping).
+
+**Next step**: nothing committed from parts 8–19; `/code-review` the accumulated diff, then
+commit. A DX.app (WebKit) look at the new plan before shipping visuals is still the
+part-12 discipline.
+
+## Previous wave, part 18: edge curves fixed at the root, and the plan redrawn as a design system
+
+**"Fix the arrows… rewrite the example site to be much more beautiful."** Both done and validated.
+
+- **The wobble had one cause**: `render::board::controls` gave each cubic handle
+  `clamp(span·0.42, 30, 160)` of reach regardless of room, so two nodes a short gap apart got
+  handles that overshot past each other and the curve hooked into an S. Each handle is now
+  capped at **half the run's advance along its own normal** (full reach kept when the run
+  starts against the normal, so loop-back edges still loop). Same rule mirrored verbatim in
+  `editor/surface/edit.js::controlsFor`. Arrowhead redrawn as a swept, slightly concave dart
+  (9-unit marker), replacing the squat 11-unit triangle.
+- **`examples/example_site_plan.dx` rewritten** as an aligned two-column spec: every
+  same-column edge is now a dead-straight vertical (node centres aligned at x=190 and x=650),
+  cross-edges (`browse`, `book`) curve through the gutters with their labels in clear space.
+  New nodes show a board holds anything: an `::svg` wordmark (brass point, tracked serif
+  caps), a palette tile with display/caption/interface voice rows, and the three screens at
+  the widths the site will really be — home at desktop width (three gallery cards), galleries
+  and booking at phone width (`MV` monogram bar). The `build` hero PNG was regenerated
+  (176×88, 3 KB, Up-filtered) to match the new `.dusk` art direction — dusk glow, light lane
+  on a dark sea.
+- **Validated**: 664 Rust tests green, clippy `-D warnings` clean, `fmt` clean;
+  `editor/build.sh` rebuilt both wasm engines and `engine.test.mjs` pins each to `dx render`'s
+  bytes (34 github + 33 vscode tests green); full-page `dx png` inspected in dark and light
+  with crops of every board region — no clipped node content, no edge under a box, every
+  arrowhead arriving square.
+
+Next step: nothing pending for boards; the plan document is the reference example.
+
+## Previous wave, part 17: tools reviewed to 100%, installed fresh, and the plan made beautiful in the real app
+
+**"Review the tools and completion… test with the example site dx document. Write it to be
+absolutely beautiful."** Reviewed, completed, and validated end to end.
+
+- **Tool completion review**: MCP catalogue holds all 10 tools including `dx_play` — but the
+  *installed* `~/.local/bin/dx` (Aug 1) predated part 15, so the live MCP server was one tool
+  short. `packaging/build-app.sh` rebuilt, running DX.app quit, installed via the fresh
+  bundle's own `dx setup`: `/Applications/DX.app` binary `cmp`-identical to the build,
+  `~/.local/bin/dx` now answers `dx play` (restart the assistant to see `dx_play` in MCP).
+- **Tools exercised against `examples/example_site_plan.dx`** (store copy in a scratch pad):
+  `dx sync` adopt → pointer, `dx check launch --item 2` ticked exactly that line,
+  `dx board --place --w/--h` kept `x y` (part 10's fix holds), `--link`/`--unlink`
+  round-tripped, `dx render --section plan` resolves all 10 nodes (part 16's fix holds),
+  `dx render --block build` draws the one block, `dx play` returned 8 annotated frames with
+  the board visibly mid-scroll. All green; 664 workspace tests pass, 0 failures.
+- **The plan rewritten to beautiful**, each fix found by crop or by the real app:
+  - *The `build` hero was a mud smear* — a 28px base64 PNG upscaled to 132px. Replaced with a
+    crafted 132×66 photograph (generated, grain-dithered, 8.4 KB): sun behind cloud upper
+    left, rain veils on the right, hard horizon, broken reflection lane in a lichen sea —
+    the document's own palette. It now reads as the photograph the site is about.
+  - *Labeled edges got real runs*: wireframes 240→230 wide (gutters 40→55) so `browse`/`book`
+    clear their arrowheads; `build`/`launch` dropped 30 (60px run for `becomes`).
+  - *Wireframe bars collided at 230* — `.wf .bar` mark and links touched. Bar gained
+    `gap: 12px`, mark 11px/0.15em, links 7.5px/0.08em, both `nowrap`.
+  - *`veil` had no form* (washed pale box in the grid) — added a dark radial anchor;
+    `pines`' glow moved off its treeline into the sky.
+  - **WebKit found one more real clip**: `sitemap`'s last item wraps "yet" onto a second line
+    in the real DX.app (Chromium keeps it to one) and h=240 hid it. h→270, rows below moved
+    down 30 to keep the 60px rhythm, board height recomputed by `fit`'s own formula
+    (0.79 × 1510 + 48 → 1242). Re-verified in the app: "yet" on its own line with slack.
+- **Validated**: `dx fmt` idempotent, `dx outline` clean, `--section plan` zero missing
+  blocks, full-page `dx png` inspected in both themes plus 2–3× crops of every region, and
+  the real DX.app (WebKit) driven page-by-page with frontmost-verified captures — no clipped
+  text, no bar collisions, labels clear everywhere. No Rust touched this session, so the
+  part 16 clippy/fmt/wasm gates stand; no fixture mirrors this example.
+
+**Next step**: unchanged — nothing from parts 8–17 is committed; `/code-review` the
+accumulated diff, then commit. The document open in DX.app is the scratch copy at
+`/tmp/dx_view_pad2`, kept for a by-hand look.
+
+## This wave, part 16: section-scoped boards resolve, and the site plan redesigned to be worth showing
+
+**"Read the handoff, make it work. Then redesign the website plan to actually be a beautiful
+'example' site plan."** Both halves done and validated.
+
+- **The part-13 engine bug is fixed**: `dx render`/`dx png --section <board-id>` used to draw
+  every node as `no block named '<id>'` — `render::outline::section` sliced the document
+  before the board resolved its node lines. `carry_presentation` now also carries every block
+  a `::board` inside the slice references (`board_references`, via `render::board::nodes` —
+  the board's own grammar, not a re-parse), cloned with `hidden` set so it lives on the board
+  instead of also appearing in the slice's flow. The whole document is untouched — the clone
+  is the slice's, reading still writes nothing. Two tests pin it (`outline.rs`): a board
+  section resolves all nodes exactly once, and a heading section holding a board resolves
+  nodes outside the slice. Live: `dx render examples/example_site_plan.dx --section plan` →
+  zero missing-block sentences, all 10 nodes + the board present.
+- **`examples/example_site_plan.dx` redesigned** (working `--section plan` renders drove it):
+  - *Photographs are now light, not smears*: each CSS photo is layered gradients with a
+    **hard-stop horizon** (coast frames), a radial sun/window glow, and one shared inset
+    vignette on `.wf .ph` — the difference between a tan fill and a photograph.
+  - *Composition rebalanced*: bottom row is now two 380-wide columns (`build` the shipped
+    hero, `launch` whose 6 items sit one per line instead of the old 460px wrapped tower),
+    and the `measure` quote is a centered 520-wide band both columns feed into — a symmetric
+    funnel closing the plan. Edge label `ships as` → `becomes` (the curve crossing the word
+    gap read as a hyphen).
+  - *Palette tile* gained a Georgia-italic type specimen line and taller swatches; captions
+    across the wireframes are Georgia italic (the photographer's caption voice, named in the
+    tile's own footnote).
+  - *Sizes verified by crop*, part-13 style: palette 260 (was clipping its last line), home
+    380 (the foot line was clipped under the two-line caption), measure 120; board height
+    recomputed from `fit`'s own formula (0.79 × 1450 + 48 → 1194), not guessed.
+- **Validated**: cargo 632/632 (2 new), clippy `-D warnings` clean, fmt clean;
+  `./editor/build.sh` rerun (doc-core touched — both wasm engines current); node 34/34
+  github + 33/33 vscode; `dx fmt` idempotent on the example, `dx outline` clean, full-page
+  `dx png` inspected in **both themes** plus 2× crops of every previously-clipped region.
+  No fixture mirrors this example, so no two-file change owed.
+
+**Next step**: nothing committed this wave (nor from parts 8–15); `/code-review` the
+accumulated diff, then commit. Per part 12's lesson, a DX.app (WebKit) look at the redesigned
+plan before calling the visuals final would be prudent — Chromium crops all clear, and every
+text node carries headroom, but WebKit metrics run taller.
+
+## This wave, part 15: `dx play` — phase 1 of the agent dev workspace, built
+
+**"Build it."** — phase 1 of the plan from part 14 is implemented end to end: a live browser
+session over the same bundled Chromium, an input-script vocabulary, a frame pipeline, and the
+`dx_play` MCP tool. Nothing in the security model changed: play loads the same script-free
+render every screenshot uses, so nothing a document carries executes (phase 2's sanctioned
+interactive kind remains unbuilt, by design of the phasing).
+
+- **`doc-shot::cdp`** — a DevTools session with the browser `browser::find` already locates:
+  launch with `--remote-debugging-port=0` + a scratch `--user-data-dir`, read the ws URL off
+  stderr, then a hand-rolled RFC 6455 WebSocket client over `TcpStream` (handshake, masked
+  frames, fragmentation, ping/pong, bounded message sizes — no new dependency beyond
+  `serde_json`). `open` (create/attach/navigate/load-wait), `command`, `evaluate`,
+  `screenshot(clip)` with `captureBeyondViewport`. Dropping the session kills the browser.
+- **`doc-shot::play`** — the harness. Script statements split on `;`/newline: `wait 500ms|2s`,
+  `key Space|Enter|Escape|arrows|PageDown|…|any char`, `click <block-id|x,y>`,
+  `scroll [target] <±px>` (over a target = that node's own overflow), `hover <target>`.
+  Targets resolve per action by walking `[data-block-id]` (no selector escaping), scrolled
+  into view first. Frames: one at start, one per landed action (annotated with the action's
+  own words), waits captured at `fps` (default 10, max 30), one at end; each `PlayFrame`
+  carries png/at_ms/note/width/height. Bounds stated up front, not truncated silently:
+  ≤100 actions, ≤30s total waiting, ≤300 frames. `--node <id>` clips every frame to that
+  block's box. `base64` (encode+decode) moved to `doc-shot` as the platform's one copy;
+  `mcp/encode.rs` deleted, MCP encodes through it.
+- **CLI `dx play`** — `dx play <file> --script "…" [--node ID] [--fps N] [--width/--height]
+  [--theme T] [--section ID] [--out DIR]`; writes `frame-NNN.png` into `<stem>-frames/` (or
+  `--out`) and reports each frame's moment + action. In the command table (flags enforced),
+  HELP updated.
+- **MCP `dx_play`** — second tool in the catalogue (after `dx_read`): same script, returns
+  interleaved text + image items, each frame stamped `t=…ms — action`. Over 12 frames the
+  answer thins waits but keeps every action frame plus first/last (`frame_sample`), and says
+  it did.
+- **Validated**: full workspace green — doc-shot 42 (incl. two live-browser play tests: an
+  annotated multi-action run, and a node clip smaller than the viewport + ghost-node
+  refusal), doc-cli 241 (incl. live CLI + MCP play tests), doc-core 266+2+5, doc-run 44,
+  doc-store 49, attacks 13; clippy `-D warnings` clean, fmt clean. Live smoke:
+  `dx play examples/showcase.dx --script "wait 300ms; scroll 600; key PageDown; hover
+  400,300; wait 200ms"` → 10 annotated frames; frame 5 visibly shows the page scrolled past
+  frame 0's viewport (looked at, not assumed). Fixed in passing: the two `DX_BROWSER` env
+  tests raced (process-global env, parallel tests) — now serialized on a mutex.
+- **Docs in the same edit**: README (command list, agent table now ten tools, a "watch the
+  page react" paragraph), CLAUDE.md (doc-shot crate row, "an agent reads by looking" grew
+  the play sentence), HELP text.
+
+**Next step**: phase 2 — a sanctioned interactive kind (a `run` block whose output mounts
+live inside its node), executed only under play/run inside the same confinement story; then
+phase 3 ergonomics (APNG assembly of frames, richer per-kind action vocabulary). Nothing
+committed this wave; `/code-review` first.
+
+## This wave, part 14: custom node size verified pixel-exact, and the agent-workspace question answered
+
+**"When you or I custom size a node and you view it do you get the custom size rendered
+pixel for pixel properly? Can you ensure?"** — verified yes, at every layer, and pinned:
+
+- **Renderer**: `render::board::node_html` writes the stated box straight into the node's own
+  style (`left/top/width/height`, board.rs:1052) — nothing is measured, content longer than
+  the box scrolls inside it. The only sizing above the node is the canvas's *uniform*
+  `scale()` from `fit` (clamped 0.1–1.5), so stated proportions are drawn proportions on
+  every surface; physical pixels are stated × fit scale, 1:1 when the arrangement fits the
+  column, and the surface's ⌘/pinch zoom reaches true 1:1.
+- **Surface**: a plain view never resizes a node — `growOutgrownNodes` has exactly one call
+  site, `apply()` (edit.js:946), the after-save path.
+- **Pinned**: new test `a_custom_sized_node_is_drawn_at_exactly_its_stated_box` (html.rs)
+  uses `x=-17 y=3 w=333 h=127` — numbers that are nobody's default, which the existing pin
+  (`w=280`, coincidentally the default width) could not distinguish from "default applied".
+- **Gates**: doc-core 266+2+5 green, clippy clean, fmt applied. Only a test added — no
+  behavior changed, other crates untouched.
+
+**The second ask — nodes agents can act on (scroll a view, press space to test a character's
+jump) and watch frame-by-frame as video — was assessed, not built**: it needs a live CDP
+session (doc-shot today is one-shot `--screenshot`, no input dispatch, no screencast) and a
+sanctioned interactive kind (render::escape strips scripts; "reading never executes" means
+playing must be an explicit run-shaped command). Phased design delivered in-conversation:
+1) `dx play` — CDP input + frame capture over the rendered doc as-is; 2) a confined
+interactive kind executed only under play/run; 3) `dx_play` MCP returning frames. Awaiting
+the user's go-ahead and phase choice.
+
+**Next step**: user picks a phase of `dx play` (or declines); nothing from this part is
+committed beyond the one test.
+
+## This wave, part 13: the site plan redesigned panel-by-panel, not as one document
+
+**"The website in the example site document is pretty terrible… render out just the board or
+individual nodes so that you can actually test how each view looks"**, then: **"generate an
+actually beautiful site design and layout that could be used to showcase how people will
+actually use DX to help guide agents."** `examples/example_site_plan.dx` rebuilt by rendering
+each panel in isolation (`dx png --section <id>` on a hidden-stripped scratch copy, plus
+magnified crops of the board) and fixing what each one showed:
+
+- **The canvas was the killer**: 1220px of stated boxes fit into a ~680px board box → every
+  node drew at ~0.56×, 10px wireframe type became 5–6px specks. Canvas is now 800 wide
+  (2-col thinking rows of 380, a 3-screen strip of 240s), so nodes render at ~0.85×.
+- **The `build` node was broken on dark theme** — its markup had no paper of its own, so it
+  rendered page-ink-on-dark and read unfinished. New `.ship` class: same bone paper as the
+  wireframes, because it is the same page.
+- **Wireframes redesigned as panels**: layered radial+linear gradients that read as
+  photographs instead of flat stretched fills, card counts (`seventeen frames`), Georgia
+  lede on the booking screen, consistent bar/foot furniture. Palette tile now carries the
+  exact hex values under each swatch — a spec an agent types from, which is the point.
+- **Copy reframed around guiding agents**: lead and closing now say it straight — a person
+  sketches the plan, `dx_read` hands an agent the same panels as pages, the checklist is the
+  work queue it ticks with `dx check` as it lands.
+- **Every node sized to its content** (scrollbar slivers and clipped footers found by crop
+  at 170%), then text-heavy nodes given headroom per part 12's WebKit lesson — Chromium
+  measurements alone are not enough for prose nodes.
+- **Engine bug found, not yet fixed**: `dx render`/`dx png --section <board-id>` renders
+  every node as `no block named '<id>'` — section narrowing drops the rest of the document
+  before the board resolves its references, violating "resolved from the document it sits
+  in" (nav's own rule). This is exactly the "render just the board" ask, and it fails today.
+- **Validated**: full-page `dx png` in dark and light themes, all 10 nodes fit with no
+  scrollbars, all 8 edges land with legible labels; `dx fmt` idempotent on the file
+  (canonical as written); `dx outline` clean. No Rust touched, so the cargo/clippy/fmt
+  gates stand as part 12 left them.
+
+**Next step**: fix section-scoped board resolution in `doc-core` (board/nav should resolve
+against the whole parsed document, not the section slice), with a test pinning it; then
+re-check the plan in the real DX.app per part 12's discipline.
+
+## This wave, part 12: validated against the real WebKit app, not just Chromium — two more real bugs found
+
+Part 11's fix was checked with `dx png` (Chromium, via `doc-shot`) and called done. The user
+pushed back with a real DX.app screenshot: **"I want actual views of the app... it can be a
+lot cleaner and properly sized for views, correct colors for arrows and as close to zero
+overlap as mathematically possible."** That screenshot showed clipped text in several nodes
+that Chromium never reproduced — the gap between "I rendered it once, headlessly" and "I
+looked at the thing the user actually opened" was exactly where the remaining defects were.
+
+- **Node sizes were guessed, not measured** — `w`/`h` in part 11 were eyeballed. Rebuilt them
+  properly: rendered the real document in a real browser (`claude-in-chrome`, not `dx png`),
+  cloned each node's `.dx-board-node-body` into an off-screen sibling with `height:auto` at
+  its real column width, and read `scrollHeight` — the same measurement "double-click the
+  corner to fit" does interactively, done for all 10 nodes at once. Every node's stated `h` is
+  now that measured natural height plus a real margin, and boxes are no longer forced into
+  uniform row heights — each column stacks to only what its own content needs (`sitemap`
+  alone is wider (320) and taller (390) than its row-mates, since nothing sits below it), which
+  is what "close to zero overlap as mathematically possible" means for a stated-box format:
+  not zero *margin*, but no box larger than it has to be to hold what's in it and clear its
+  neighbours. `board`'s declared viewport `height` was also recomputed from `render::board::fit`'s
+  own formula instead of guessed, so the canvas no longer sits in an oversized box with dead
+  space beneath it.
+- **Chromium measurement was not enough — WebKit needed more room.** Sized against the
+  Chromium numbers alone, a fresh DX.app screenshot (rebuilt bundle, real `.dx` opened through
+  LaunchServices, `screencapture`) still clipped `audience` and `brief` by about a line each:
+  WebKit's serif/mono metrics run measurably taller than Chromium's at the same width. Bumped
+  the safety margin from a thin buffer to +50% over the Chromium measurement across every
+  text-heavy node; re-verified live and every node now clears its content with room to spare
+  in the actual app, not just the headless renderer.
+- **A real cross-engine CSS bug, not a sizing problem**: in WebKit, a checklist item whose text
+  wrapped to two lines could tear the mark itself apart — `[` on one line, `]` on the next,
+  each baseline-aligned to a different line of its sibling flex item. `.dx-checklist .dx-mark`
+  had no `white-space: nowrap`/`flex-shrink: 0`, so under `align-items: baseline` WebKit was
+  willing to let the 3-character mark shrink and break internally when its flex sibling wrapped.
+  Fixed in `render::theme` (`.dx-checklist .dx-mark { white-space: nowrap; flex-shrink: 0; }`)
+  — a real defect in every checklist this format renders, not specific to the example; found
+  only because a real checklist item was long enough to wrap in the real engine that has the
+  narrowest tolerance for it.
+- **Arrowhead colour re-confirmed live, in WebKit**: cropped a zoom of the `home`→`menu`
+  "browse" arrow from the real DX.app screenshot — head and stem are the same muted tone.
+  Part 11's fallback CSS holds where it was actually meant to matter.
+- **Gates**: cargo **630**/630, clippy clean, fmt clean, `./editor/build.sh` rerun, node
+  **34/34** + **33/33**, all re-run after the `.dx-mark` fix.
+- **Validated live, twice, against the actual app**: `packaging/build-app.sh` rebuilt,
+  installed via the fresh bundle's own `dx setup` (`cmp`-verified against
+  `/Applications/DX.app`), a stray running instance quit first each time. A scratch copy of
+  `example_site_plan.dx` synced fresh (`dx sync` in `/tmp/dx_view_pad`) and opened via
+  LaunchServices (`open <pointer>.dx`) so the app was reading real store content, not a stale
+  cache. `screencapture` + page-down, twice — before and after the `.dx-mark` fix — confirms:
+  no clipped text anywhere in either half of the document, no node overlapping another, and
+  the previously-broken checklist item now wraps with its mark intact.
+- **Lesson for next time this file is touched**: `dx png` (Chromium) is fast for layout
+  iteration but is not the product's actual host CSS engine (WKWebView/WebKit is, for DX.app —
+  which is what a person actually opens). Treat a Chromium render as a first pass, and check
+  the real app before calling a visual fix done, the same way the format's own quality bar
+  treats `cargo test` as necessary but not sufficient without live validation.
+
+**Next step**: none owed — nothing in this wave has been committed; review the diff
+(`/code-review` first) before committing.
+
+## This wave, part 11: the arrowhead matches its stem everywhere, and the planner became a real site draft
+
+Two asks: "Fix the arrowhead color to the same as the arrow stem color," and "Rewrite the
+planner to be an `example_site_plan.dx` file and actually design a site, think of figma, the
+main purpose of this document is to draft an incredible site really quick."
+
+- **Arrowhead colour** (`render::theme`) — the marker's fill was `context-stroke` alone
+  (`render::board::edges_svg`), which recolours the head with whatever the path's stroke is
+  doing (default, hover, picked) **only in engines that understand the keyword**. WebKit (and
+  any renderer without support) treats the declaration as invalid and drops it, so the head
+  fell back to the marker's own default — black — while the stem carried the theme's
+  `var(--dx-faint)`, and a picked/hovered edge's stem recoloured while its head stayed black.
+  Fixed with the standard two-declaration CSS fallback: `.dx-board-edges marker path,
+  .dx-board-edges marker circle { fill: var(--dx-faint); fill: context-stroke; }` — an engine
+  that cannot parse the second declaration keeps the first, so the head always starts at the
+  same colour as the line's default stroke; an engine that can, still gets the live recolour
+  the board always had. No Rust logic changed, so `board.rs`'s own `context-stroke` assertion
+  still holds (the CSS layers on top, doesn't replace the SVG attribute).
+- **Found and fixed in passing**: the repo root had been `dx sync`-adopted again — a stray
+  `examples/planner.dx` **pointer** plus a root `.doc/repo.dxcp`/`index.db`, the exact mistake
+  CLAUDE.md's "do not run `dx sync` at the repository root" warns about (content recovered
+  through the store first via `dx text`/`dx source`, then the store and the pointer both
+  removed).
+- **`examples/example_site_plan.dx`** replaces `planner.dx`: a small coffee roaster's whole
+  site drafted on one `::board`, laid out as a clean three-row grid — foundations (a colour
+  and type style tile, the brief, an audience checklist, the sitemap) feeding down into three
+  real wireframes (home, menu, visit — actual `::svg` mockups, not placeholders) that flow
+  left to right (`to=…:r-l:browse` / `:visit`), feeding down into the home page's real
+  markup (`::html`), a success-metric quote, and the launch checklist. Every row is
+  column-aligned so the vertical feeds (`b-t`/`t-b`) run straight and unobstructed — no
+  obstacle-bending needed, which is what makes it read as an intentional grid rather than a
+  stress test of the router. Found and fixed while writing it: the `build` node's markup used
+  `<header>`/`<nav>`, neither on `escape::ALLOWED_ELEMENTS` — rewritten with `<div>`/`<span>`,
+  both already allowed, rather than touching the allow-list. `README.md`'s board section
+  updated to point at the new file and describe what it now shows.
+- **Gates**: cargo **630**/630, clippy `-D warnings` clean, fmt clean; `./editor/build.sh`
+  rerun (theme.rs is doc-core); node **34/34** github + **33/33** vscode.
+- **Validated live**: `dx render`/`dx png` on `example_site_plan.dx` — all 10 nodes present,
+  no `dx-board-missing` sentence, the 9 designed edges (plus the 2 labelled ones) all drawn;
+  a cropped zoom on the `home`→`menu` "browse" arrow confirms the head reads the same muted
+  grey as the stem, not black.
+
+**Next step**: none owed — nothing in this wave has been committed; review the diff
+(`/code-review` first) before committing.
+
+## This wave, part 10: bigger arrowheads, a live HTML node, and a node's box typed instead of only dragged
+
+Two screenshots of `planner.dx`'s board: arrowheads were "just a bit too small", and the
+`build` node showed folded code instead of the rendered markup the wireframe SVG node
+already showed. Then, mid-turn: "allow setting a node to a specific size via an agent or
+right clicking and opening a typing menu."
+
+- **Arrowheads** (`render::board::edges_svg`) — the marker's `markerWidth`/`markerHeight`
+  went `7`→`11` against the same `viewBox="0 0 8 8"` and `refX/refY`, so the head is ~43%
+  bigger with nothing else about the edge (position, curve, tether dot) touched.
+- **The `build` node now renders live**, not folded — it was `::code lang=html`, and code
+  always folds behind its label **by design** (non-negotiable per CLAUDE.md: a document
+  opens as what it says). The right primitive already existed and is used one node over:
+  `::html`, the same sanitized-inline-markup renderer the `wireframe` SVG node uses.
+  Changed `examples/planner.dx`'s `build` node from `::code lang=html` to `::html`. One gap
+  found along the way: `<main>` was not on `escape::ALLOWED_ELEMENTS` (a plain semantic
+  landmark, exactly as safe as the already-allowed `<section>`) — added, so the markup
+  keeps its wrapper instead of being unwrapped.
+- **`dx board --place` used to default an omitted `--x`/`--y` to `0`** — so resizing a node
+  with only `--w`/`--h` silently teleported it to the origin, the actual blocker behind "set
+  a node to a specific size via an agent" (`w`/`h` already had the right behavior: `0` keeps
+  the line's own). Fixed at the engine (`edit::board_place`/`place_into`, `x`/`y` now
+  `Option<i32>` — `None` keeps what the line says, mirroring `w`/`h`'s own `0`-means-keep
+  convention with a real optional instead of a magic number since `0,0` is a legitimate
+  coordinate). `doc-wasm`'s `board_place` wrapper always passes `Some(x), Some(y)` — the
+  surface's drag/resize always measures concrete numbers, so nothing there changes. CLI's
+  `run_board` no longer defaults a missing `--x`/`--y` to `0`; docstring updated. 5 new
+  tests (2 engine, 1 CLI regression pinning the exact bug, 2 mirror cases).
+- **Right-click a node for a typing menu** (`edit.js`) — `onNodeContextMenu` +
+  `openSizeMenu`/`closeSizeMenu`: a small `.dx-menu`-styled card (new `.dx-size-menu` CSS)
+  with four number inputs (`x y w h`) pre-filled from the node's measured box, `set` or
+  Enter applies through the *same* `arrange()` → `board_arrange` → settle path a drag
+  already uses (no new engine call), Escape or an outside click cancels without writing
+  anything. Suppressed while the right-click lands inside the node's own currently-open
+  editing field, so copy/paste there still gets the browser's native menu.
+- **Gates** — cargo **630**/630 (was 627; 3 new: 2 engine `board_place` cases + 1 CLI
+  regression pinning the exact `--x`/`--y` bug), clippy `-D warnings` clean, fmt clean;
+  node **34/34** github + **33/33** vscode
+  (unchanged — no wasm-boundary or `.d.ts` signature changed); `editor/build.sh` rerun
+  (both wasm engines current after the `escape.rs`/`board.rs` edits).
+- **Validated live**: static-rendered `planner.dx` in Chrome — zoomed screenshot shows the
+  visibly larger arrowhead; the `build` node shows "Bound by hand" / the image alt text /
+  price line / link, live, not a fold. `dx board planner.dx plan --place brief --w 500 --h
+  250` (no `--x`/`--y`) left `x=0 y=0` and only changed the box, confirmed by `dx text`.
+  Right-click menu driven in a from-scratch Chrome harness (real no-modules wasm +
+  real `edit.js`/`edit.css`, in-memory host wired straight to the wasm engine, no host
+  stub for the interaction under test): right-clicking a node opened its own menu
+  pre-filled with its real `x y w h`; typing `w=500` and clicking `set` wrote
+  `x=0 y=0 w=500 h=170` (position kept) and visibly re-settled the board; right-clicking a
+  second node showed *its* distinct values; Escape closed without writing anything.
+- **Installed** — VSIX repackaged + installed (surface byte-identical in
+  `~/.vscode/extensions/dx.dx-documents-1.0.0`); DX.app rebuilt via `build-app.sh`, the
+  running instance quit, reinstalled via the fresh bundle's own `dx setup` — binary and
+  surface both byte-identical to the built bundle, `dx doctor` prints no stale line.
+
+**Next step**: none owed from this wave — reload the VS Code window (picks up the fresh
+extension) and relaunch DX.app by hand if it's wanted open again. Nothing in this wave has
+been committed; review the diff (`/code-review` first) before committing.
+
+## This wave, part 9: the document's CSS applies everywhere, and mermaid became a board
+
+**"Fix the HTML/CSS renderer so it works globally… it seems to be working in some places but
+not in ::board//::graph blocks."** Then, asked about `::graph`: *"::mermaid is not a block
+because we have a better more interactive version of mermaid, mermaid blocks should be
+autoconverted… ensure that arrows are never overlapped by boxes… if they cross they must cross
+minimally with the most amount of perpendicular possible. Never overlap boxes if possible."*
+CSS was chosen **on everywhere, no exceptions**, which rewrites the old CSS Safety Contract.
+
+- **A document's CSS always applies** — `document_css` is gone as an option, a CLI flag
+  (`--doc-css`), a wasm parameter, and a VS Code setting. Two defects were behind the report:
+  the flag was off everywhere (DX.app ran plain `dx render`), *and* `html()` returned early for
+  a fragment before the CSS was ever attached — so every editing surface, which re-renders
+  fragments, dropped it. The `<style data-dx-document-css>` now leads `.dx-doc` itself, so page
+  and fragment carry identical bytes and a host that swaps `.dx-doc` swaps the dress with it.
+  Turning it on globally made `escape_style` load-bearing, so it was brought up to the bar the
+  inline `style="…"` path already held: remote `url(…)` is blanked (a beacon that fires on
+  render), `@import`/`expression(`/`behavior:` neutralized, `data:` image artwork kept.
+  `::stylesheet` still fetches — that is its stated purpose — but only for relative or
+  `http(s)` hrefs. `::style media=` now works, as the contract always claimed.
+- **A mermaid block is a board** — `format::mermaid` reads flowchart source at parse time and
+  `format::layout` arranges it into a `::board` plus one hidden block per node. Labels, edge
+  direction, and edge labels survive; source it cannot read (sequence, Gantt, unknown dialect)
+  is left exactly as written. `examples/block-reference.dx` is migrated and its fixtures
+  regenerated — that is the round-trip diff to review. Edge labels are new in the board format
+  (`to=b:r-l:on%20failure`, percent-encoded, absent when unset, so no existing line changes).
+- **Edges are never hidden, and boxes never overlap** — `clearest_sides` scores every side pair
+  (a box across the run outweighs any number of crossings; a shallow crossing costs more than a
+  square one; the facing pair breaks ties), then `controls` bends the cubic's handles square to
+  the line until it clears every box it does not join. `edit::shove` replaces settle's
+  always-downwards drop with the shortest escape past the nearest border, never onto a negative
+  coordinate, downwards on a tie. All mirrored in `edit.js`.
+
+**Validated:** `cargo test --workspace` 627 passing, `cargo clippy --all-targets` clean,
+`cargo fmt --check` clean; `node --test editor/github/test/*.test.mjs` 34 passing and
+`editor/vscode/test/*.test.mjs` 33 passing after `./editor/build.sh` rebuilt both wasm engines.
+Rendered proof at `dx png`: flowchart reads top-down, `yes`/`no` sit on their curves, the loop
+back-edge clears every box, and the document's own CSS dresses both the raw `::html` and the
+board nodes.
+
+**Fixed along the way:** ranking through a cycle stretched a six-node chart to ~1500px tall
+(`back_edges` now excludes loop-closing edges); node boxes were sized from a too-narrow
+character width and clipped their labels (metrics now read off `render::theme`'s own padding).
+
+**Next:** the surface can move an edge label but not yet *write* one — `dx board --link` takes
+no `--label`, and there is no click-to-edit on a label. That is the one gap in this part.
+
+## This wave, part 8: the board's geometry is data, not a guess
+
+Four asks about the board: connect from any edge to any edge, links that look like Blender's,
+fit the whole graph from the start, and stop nodes overlapping (grow downwards) — then, on
+review, **"don't estimate, fix html rendering, and allow agents to easily reshape and link
+nodes properly."**
+
+- **A node's box is stated** — the node line is now `- id x= y= w= h= to=` (`h` defaults to
+  180, additive: an old line reads back with the default and reformats to the same box). The
+  renderer draws the node at exactly that box (`left/top/width/height`) inside a
+  `.dx-board-node-body` that scrolls what does not fit, so the rectangle the engine does its
+  geometry against **is** the rectangle the browser lays out. The height *estimator* written
+  earlier in this wave (wrap arithmetic, `viewBox` ratios, a safety margin) is gone — every
+  consumer works from the same four numbers.
+- **Overlap is the engine's** — `edit::settle` holds the nodes just placed and drops anything
+  they cover to 28px below them, in reading order, downwards only (a board is a column, not a
+  wall). It runs inside `board_place` **and** `board_arrange`, so `dx board --place` cannot
+  leave a node buried any more than a drag can. The surface no longer computes displacements.
+- **Any edge to any edge** — `to=steps:b-t` pins the two sides a line was drawn between
+  (`l r t b`, `.` for unpinned; a bare `to=steps` still takes the facing pair). Every node
+  carries four edge strips; dropping on a node lands on *its* nearest side. Edges sharing a
+  side spread evenly along it, ordered by where their other ends are (`render::board::anchors`,
+  mirrored in `layoutEdges`), each tethered at the source and pointed at the target. Only a
+  *pinned* side reaches the page (`data-from-side`), so an unpinned edge re-routes as the board
+  moves. Unpinned sides now pick the **longer axis, vertical winning ties**.
+- **Fit on both axes** — `render::board::fit` (and `fitView`) scale to show everything, up to
+  1.5×, centred where it fits and pinned to the top where it does not. A board re-fits on
+  every change and on a column resize until the reader pans or zooms — which is now
+  **⌘/Ctrl+wheel or a pinch**: a plain wheel scrolls the page, because a board lives in a
+  document (found by driving it: the board ate page scroll).
+- **For agents** — `dx board --place … --w --h`, `--arrange "id,x,y,w,h …"` (a whole board in
+  one edit), `--link … --from-side --to-side`. Same wire through wasm
+  (`board_place`/`board_arrange`/`board_link`), the VS Code host, and `Engine.swift`.
+- **For humans** — corner reshapes both ways; double-clicking the corner fits a node to its
+  content; after an edit, a node whose block outgrew it grows (never shrinks, never on a plain
+  read — reading still writes nothing).
+- **Demo** — `examples/planner.dx` is now a website being designed on a board: brief, audience,
+  voice, sitemap, ink, an SVG wireframe, the markup, a measure, and a launch checklist, in a
+  vertical spine with a side column, every box sized to its content.
+- **Gates** — cargo **235+231+…** all green, clippy `-D warnings` clean, fmt clean; node
+  **34/34** github + **33/33** vscode; `tsc` clean; both wasm engines rebuilt
+  (`editor/build.sh`). `tests/fixtures/showcase.input.dx` had drifted from `examples/showcase.dx`
+  before this wave (different `latency_ms` data and re-run chart output); the example was
+  copied over the fixture to make the suite green again.
+- **Validated live** (Chrome, real pointer input, real no-modules wasm + real surface +
+  in-memory host over the actual `planner.dx`): board opened fitted at `scale(0.6)` with 9
+  nodes and 36 edge strips; dragging measure's **left** edge onto build's **right** wrote
+  `to=build:l-r`; dropping `voice` on `audience` left voice where dropped and cascaded
+  audience → ink → measure down by 28px each; double-clicking `ink`'s corner grew it to fit;
+  double-clicking empty paper added `node-1` with a full box and opened its field; clicking
+  inside a node opened the decorated field in place; a plain wheel scrolled the page.
+- Docs updated in the same edit: CLAUDE.md (the board section rewritten around the stated
+  box), README.md (a "The board" section with the agent commands), the format contract (the
+  node line, `h`, and the side suffix).
+
+**Next step**: reload the VS Code window and reopen `examples/planner.dx` in DX.app (neither
+was rebuilt/installed this wave — VSIX repackage + `packaging/build-app.sh` are the remaining
+install steps), drive the board by hand, then `/code-review` and commit the accumulated diff.
+
+## This wave, part 7: the boxes tick, and the charting reads
+
+Two asks after driving `examples/planner.dx` by hand: clean up the charting and planning,
+and make the checkboxes actually clickable in the boxes.
+
+- **Ticking a box, engine-first** — `edit::toggle_check(source, id, item)` flips one `[x]`/
+  `[ ]` marker by position and returns `(source, checked)`; every other item and block comes
+  back byte-identical. Refuses a non-checklist and an out-of-range position with sentences.
+  The renderer states which item each mark is — `data-check="N"` on `.dx-mark`, a fact like
+  `dx-runnable`, not an affordance — so no surface counts boxes itself.
+- **Reached everywhere** — wasm `toggle_check`; CLI `dx check <file> <id> --item N` (command
+  row + flag table + documented-flags guard + HELP + file-level test); vscode `check` op
+  through the wasm + `WorkspaceEdit`; `Editor.swift`/`Engine.swift` through the bundled
+  `dx check`; `preview.ts` and the DX.app attach script both grew the bridge row.
+- **Surface** — `dressChecks` turns marks into `role=checkbox` controls **only when the host
+  offers `check`** (the run-control rule), `onClick` ticks and stops (it does not also open
+  the list — ticking off is what a checklist is *for*), Space/Return tick a focused box. No
+  new ink: the box a reader clicks is the same `[ ]` that was on the page, taking the page's
+  own colour under the pointer. Works identically inside a board node.
+- **Charting cleanup** — board edges were drawn right-edge→left-edge unconditionally, so any
+  arrangement that was not strictly left-to-right hooked backwards and swooped across the
+  whole board (visible in the PNG of the old `planner.dx`). Now one rule, stated in the two
+  places that draw an edge (`render::board::sides` statically, `edgeCurve` in the surface
+  against measured boxes): leave the side of the source facing the target (centres compared),
+  arrive on whichever side of the target is nearer to where it left. Neither half needs a
+  node's height. Every edge ends in an **arrowhead** (an SVG `marker`, id carrying the
+  board's own id so two boards keep two, `fill="context-stroke"` so a picked edge's head is
+  picked too); `.dx-board-edges > path` is now a child selector so the head keeps its fill.
+  `examples/planner.dx` rearranged to read as a plan — edges point forward, and it says the
+  boxes are clickable.
+- **Gates** — cargo **592**/592 (7 new), clippy `-D warnings` clean, fmt clean; node **34/34**
+  github + **31/31** vscode (3 new: tick/untick across the boundary, every box names its
+  position, refusals as thrown sentences); `tsc` clean; `swiftc -typecheck` clean; helpers
+  `lint` clean on every file touched; `editor/build.sh` rerun (both engines), surface copies
+  byte-verified.
+- **Validated live** (headless Chrome, CDP `Input.dispatchMouseEvent` — real trusted input;
+  real no-modules wasm + real surface + in-memory host): 3 marks dressed as checkboxes,
+  clicking the second box **inside the board node** made exactly one `check steps 1` call,
+  wrote `[x] wire the save action`, ticked 1→2, and **did not open the editor**; Space on a
+  focused box ticked it back and the source came out byte-identical to the file; opening the
+  checklist for writing and pressing Escape left all 3 boxes still live (the restore path
+  keeps them — checked, not assumed); edges measured `goal->steps` straight and
+  `steps->sketch` out the left into the target's near side, both with `marker-end`, marker
+  fill computing to `context-stroke`.
+- **Installed** — VSIX repackaged + installed (surface byte-verified in
+  `~/.vscode/extensions/dx.dx-documents-1.0.0`); DX.app rebuilt and installed via the fresh
+  bundle's own `dx setup`, `/Applications/DX.app` binary + surface `cmp`-identical; a running
+  DX.app was quit first. `~/.local/bin/dx` answers `dx check`.
+- Docs updated in the same edit: CLAUDE.md (the box, the edge rule, the crate table, the
+  operations list), README.md (`dx check` in the writing commands, and what a box does).
+  The format contract needed no change — no new attribute; the `[x]`/`[ ]` spelling it
+  already documents is exactly what flips.
+
+**Next step**: reload the VS Code window (or reopen a document in DX.app) and drive
+`examples/planner.dx` by hand — tick a box on the board, drag a node and watch the arrow
+follow. If the feel is right, commit the accumulated diff as one unit (`/code-review` first).
+
+## This wave, part 6: the board (a node editor on the sheet), auto-run on close, and the code tag line folded away
+
+Three asks: an edited code block runs when its field closes; the `::code` editing header
+goes away; and a new **interactive board** — a Blender-style node editor inside the
+document for planning, whose nodes can be any dx block, in an iframe-like viewport that
+fits/zooms/pans and can never push past the side of the page.
+
+- **Format** — new `::board` kind (`height` attr, additive; body = one reference line per
+  node, `- <block-id> x= y= w= to=a,b`, kept **verbatim** so unknown keys survive). Nodes
+  are blocks of the *same document*, usually `hidden` (on the board, not in the flow).
+  `model::Block.height`, parse/stringify/normalize arms, round-trip tests. Contract doc
+  updated; `examples/planner.dx` added (canonical, renders 3 nodes).
+- **Renderer** — `render/board.rs` owns the node-line grammar both directions (`nodes`/
+  `parse_node_line`/`node_line`) plus `board_html`: clipping viewport (`height`, default
+  480), canvas statically scaled to the column when nodes outgrow it, edge cubics under the
+  nodes, each node rendered by the page's own `block_html` (missing ref → sentence; board-
+  in-board refused). Stylesheet: hairline frame/nodes, `.dx-board-edges` is
+  **pointer-events: none** — it spans the canvas and was swallowing clicks meant for nodes
+  (found live; the editing CSS re-enables the strokes for click-to-pick).
+- **Edit ops (engine, never JS)** — `edit::board_place` (move/resize/add; empty id → fresh
+  `node-N` + hidden paragraph), `board_detach` (line + edges + the block, only when hidden
+  and shown by no other board), `board_link` (idempotent, refuses self/missing ends);
+  `set_block`/`replace_block` on a board create hidden paragraphs for lines naming missing
+  blocks. `AUTHORABLE` += board. 10 new engine tests.
+- **Reached everywhere** — wasm `board_place`/`board_detach`/`board_link`; CLI `dx board`
+  (`--place/--add/--detach/--link --to/--unlink --x --y --w`, one action per call, flag
+  table + HELP + guard test + 2 file-level tests); vscode `board` op through the wasm +
+  `WorkspaceEdit`; Editor.swift/Engine.swift through the bundled `dx board`.
+- **Surface** (`edit.js`/`edit.css`) — `dressBoards`: per-board remembered view
+  (`boardViews`), fit-on-first-sight, wheel zoom at cursor (0.1–2.5×), drag-pan clamped so
+  content never leaves the viewport, grip drag → `place`, right-edge resize (handle kept
+  *inside* the border — the node clips overflow, an outside handle was unhittable), port
+  drag → `link` (dashed probe curve), grip click picks a node / stroke click picks an edge
+  → Delete detaches/unlinks (Escape lets go), double-click empty canvas → `add` + the new
+  block's editor opens in place. `layoutEdges` re-anchors the engine's static edge guesses
+  to measured boxes. Clicking a node's content edits it with the normal machinery; menu/
+  ghost placement divides by `zoomOf(block)` so completions land right inside a scaled
+  canvas. **Auto-run**: `save()` chains `autoRun(id)` after an *edited* commit/replace of a
+  `dx-runnable` block (unchanged Escape runs nothing). **Code tag line hidden**: code opens
+  body-only; ArrowUp at 0,0 reveals the header; `promote()` guarded so code text starting
+  `::` is never lifted.
+- **Gates** — cargo **585**/585 (30 new), clippy `-D warnings` clean, fmt clean; node
+  **34/34** github + **28/28** vscode (4 new: board ops across the boundary, board render,
+  refusal as thrown sentence); `tsc` clean; `swiftc -typecheck` clean; `editor/build.sh`
+  rerun (both engines), surface copies byte-verified.
+- **Validated live** (Chrome harness: real no-modules wasm + real surface + in-memory
+  host; CDP input): drag → `- goals x=40 y=189 w=300`, zoom anchored, pan clamped,
+  dblclick-add → `node-1` hidden paragraph opened for typing, `**bold**` decorated in a
+  scaled node, port-drag wrote `to=mock`, Delete removed line+edges+orphan block, resize
+  wrote `w=478`, code opened with **no** tag line, ArrowUp revealed
+  `::code id=demo lang=python run`, ⌘Return after an edit logged `commit demo` → `run
+  demo`, unchanged Escape ran nothing. Static render checked as PNG (`dx png`).
+- **Installed** — VSIX repackaged + installed (surface byte-verified in
+  `~/.vscode/extensions/dx.dx-documents-1.0.0`); DX.app rebuilt + installed via the fresh
+  bundle's own `dx setup`, `/Applications/DX.app` binary + surface `cmp`-identical; stale
+  DX.app process quit. `~/.local/bin/dx` answers `dx board`.
+- **Incident, repaired in passing** — the repo root had been `dx sync`-adopted again
+  (`.doc/repo.dxcp` + `examples/footprint-pair.dx` a pointer, `.doc/README.md` deleted):
+  content recovered *through the store*, example restored as plain text, root store
+  removed, README restored, fixture mirrors (`showcase`, `footprint-pair`) refreshed as
+  the sanctioned two-file change.
+
+(Superseded by part 7 above, which is the current resume point.)
+
+## This wave, part 5: the field stays dressed, marks and all — plus per-block run and the menu fixed
+
+Three complaints in one brief: code blocks could not be run from the page, the completion
+menu's design/overlap was "mid", and editing should keep the block *looking* rendered while
+showing all the characters that create it (`**bold**` bold, `**` visible), with ⌘/Ctrl
+formatting chords. Mid-implementation correction from the user, honored throughout:
+**no format logic in JS/TS** — the decoration is an engine render, not a JS tokenizer.
+
+- **Engine — `doc-core/src/render/field.rs`, `render::field_html(text)`**: the editing-field
+  view of source. Every character kept (the invariant caret math stands on — pinned by a
+  `text_of(field_html(s)) == s` property test), marks wrapped `.dx-mark`, bold/italic/code
+  styled as elements, links as `.dx-link-label`/`.dx-link-target`, list/checklist leads
+  (`- `, `1. `, `[ ] `, `- [x] `) in the margin ink. Scanners **shared with `inline.rs`**
+  (`split_code_spans`, `parse_link` made `pub(super)`) — one grammar, two emitters. One
+  documented, accepted difference: emphasis straddling a link decorates on the page but not
+  in the field (characters untouched). 7 new tests.
+- **Reached everywhere**: wasm `field_html`; CLI `dx render --field=TEXT` (reads no file;
+  flag table + documented-flags guard + test); `Engine.decorate` in DX.app.
+- **Renderer marks runnables**: `dx-runnable` class on `run` code blocks (`html.rs`, test).
+- **Surface rewrite (`edit.js`)**: prose kinds (paragraph/heading/quote/lists/checklist)
+  now edit in a `contenteditable` `.dx-field-rich` holding the exact source, decorated per
+  keystroke via `host.decorate(text)` — async with a ticket + text-equality stale-drop, caret
+  restored by source offset (`offsetAt`/`positionAt`; all field access goes through
+  `fieldText`/`spliceField`/`selection`/`setSelection`, which speak source offsets over both
+  element kinds). Source kinds keep the textarea. Enter/paste handled manually (a CE's native
+  Return invents elements); IME composition defers decoration; `.dx-writes-source` strips the
+  dress. **⌘/Ctrl+B/I/E** toggle `**`/`*`/`` ` `` around the selection, **⌘/Ctrl+K** writes
+  `[sel]()` caret-in-target, **⌘/Ctrl+Z/⇧Z** is a rebuilt undo/redo stack (decoration
+  redraws defeat native CE undo; textareas keep native). **Run**: `dressRunnables` puts a
+  `run` control in each `dx-runnable` summary (only when `host.run` exists), `running…`
+  while working; answer applies like any save; `close()` strips the inert restored control.
+- **Menu/ghost fixed**: `.dx-menu` used `var(--dx-panel)` — **never published by the theme,
+  so the card rendered transparent over the document**; now `--dx-bg` + hairline + shadow.
+  Placement by caret rectangle (`caretPoint`: selection rects for rich, canvas measure for
+  textareas), clamped to the block, **flips above the caret when the viewport below runs
+  out**. Ghost no longer fades the whole field to 0.2: textarea ghost mirrors with a
+  transparent `.dx-ghost-mirror` + faint rest; rich ghost is one floating word at the caret.
+- **Hosts**: vscode `decorate` (wasm, pure) + `run` ops (`dx run --only <id>` via CLI: save
+  if dirty → run → read disk → if unchanged reply the error sentence, else sync buffer via
+  `replaceAll`+save and reply `sheetHtml` — a failed *block* is content, its failure output
+  is on the page). Editor.swift: `decorate` sync, `run` on a background queue (a run takes
+  as long as the code; the main thread must repaint), same changed-file rule via `Data`
+  compare. Bridge/attach rows added both sides.
+- **Gates**: cargo **562**/562 (was 545; 17 new), clippy `-D warnings` clean, fmt clean;
+  `editor/build.sh` rerun (both engines); node **34/34** github + **25/25** vscode (new:
+  `field_html` across the boundary + every-char-kept); `tsc` clean; `swiftc -typecheck`
+  clean; surface copies byte-verified in `editor/vscode/surface`; release `dx render
+  --field` and `dx-runnable` class verified live against the built binary.
+- **Installed**: VSIX repackaged + installed, surface byte-verified in
+  `~/.vscode/extensions/dx.dx-documents-1.0.0/surface/`; DX.app rebuilt (`build-app.sh`) and
+  installed via the fresh bundle's own `dx setup` — `/Applications/DX.app` surface + binary
+  `cmp`-identical, `~/.local/bin/dx` answers `--field`. No DX.app process was running (a
+  running one keeps the old attach script — relaunch if one is).
+  Known accepted costs: DX.app spawns `dx render --field` per keystroke (small, and the
+  stale-drop absorbs latency); decoration redraw briefly shows a typed char undecorated;
+  VS Code may need a reload to shed a retained webview running the old surface.
+
+**Next step**: drive it live in either host (reload VS Code window first): type `**bold**`
+in a paragraph (dress + visible marks), ⌘B on a selection, complete `::code` (menu now
+opaque, flips at viewport bottom), and click `run` on a runnable block. If the feel is
+right, commit the accumulated diff as one unit (`/code-review` first).
+
+## This wave, part 4: the block controls expand — tag line, retype, and completions
+
+"When clicking a block it should expand the controls like it used to." Two Explore agents
+mapped the deleted TS editor at `d2f0098^` (behavior + visuals, full specs in that session's
+transcript): the real design was a **header/body expansion** — the block's `::kind attrs`
+line editable above a per-kind styled body, retyping the block on commit, with ghost-text
+autocomplete and a caret menu. Rebuilt on today's stack, engine-first:
+
+- **Engine** (`doc-core/src/edit.rs`): `block_header` (the writer's own opening line, via
+  the now-`pub(crate)` `stringify::block_header`) and `replace_block(source, id, header,
+  body)` — `::` header parsed by the scanner's own grammar (`format::header_line_facts`),
+  body applied via `set_body` (never re-scanned: a body containing `::end` keeps every
+  byte); empty header = plain text through `parse` (markdown shorthand included, may yield
+  several blocks). Id kept unless the header names one; unknown kinds and `output` refused;
+  no replacement ever steals an existing id. 8 new tests.
+- **Exposed everywhere**: wasm `block_header`/`replace_block`; CLI `dx source --header` and
+  `dx set --header` (prints the focus id bare, like `dx insert`); flag table + HELP + the
+  documented-flags guard test. Editor.swift `parts`/`replace` ops; vscode extension.ts
+  `parts`/`replace` through the wasm engine + `WorkspaceEdit`; engine.ts interface rows.
+- **Surface** (`editor/surface/edit.js|css`, whole-file rewrite around the part-1–3 core):
+  tag line `.dx-header` (mono 0.78rem muted, hidden for paragraphs), promotion (`::` typed
+  at the start of a plain paragraph lifts into the tag line), demotion (Enter on a non-tag
+  header), seam navigation (ArrowUp/Left at 0,0 up; ArrowDown/Right at end down; Delete at
+  header end joins), save routes: unchanged header → `commit`, changed → `replace`.
+  Completions: `::` kinds, per-kind attribute keys (`ATTRS`), seed + learned values
+  (`localStorage` `dx.autocomplete-history.v1`, cap 300), ghost overlay (`.dx-ghost`,
+  line-end only) + menu card (`.dx-menu`, `--dx-panel`, max 20 items), Tab/Enter accept,
+  Escape dismisses menu→field, Ctrl/Cmd+Space forces. `.dx-writes-source` dresses the body
+  mono as soon as the tag names code/html/svg/mermaid, before any save.
+- **Validated live in DX.app with CGEvents** (screenshots `s2–s12` in session scratchpad):
+  heading expands with `::heading level=1 id=head` over a heading-size field; rewriting it
+  `level=2` + ⌘Return re-renders at h2 and the file says so (id kept); paragraph opens with
+  no tag line; blank-click → `::` promotes with ghost `::paragraph` + full kind menu; `co` →
+  ghost `::code lang=`; Tab accepts; Return drops to body; ⌘Return lands
+  `::code id=paragraph-5 lang=bash` in the store. Escape restores byte-exact.
+  **Protocol notes**: activate `dx-app` and *verify frontmost* before every CGEvent (the
+  terminal steals front — two stray events landed there); quit/relaunch DX.app after
+  reinstalling (a running process keeps the old Swift attach script and the surface then
+  falls back to body-only); synthetic DOM events are dead in this Chrome (the automation
+  extension suppresses untrusted dispatch — page-world injection included), so the Chrome
+  harness cannot click; CGEvents are the way.
+- Gates: cargo **553**/553, clippy `-D warnings` clean, fmt clean; node **34**/34 github +
+  **24**/24 vscode (4 new: header/replace across the wasm boundary); `tsc --noEmit` clean;
+  helpers lint clean on all changed files. `editor/build.sh` rerun; VSIX repackaged +
+  installed (byte-verified); DX.app rebuilt + installed via the bundle's own `dx setup`
+  (byte-verified). CLAUDE.md editing section rewritten in the same wave.
+- **Incident, resolved**: `examples/showcase.dx` was found adopted into a root store
+  (`.doc/` at repo root — the thing CLAUDE.md forbids; came from the DX.app window opened
+  on it earlier). Store content was byte-identical to HEAD; restored via `git checkout`,
+  `.doc/` removed, github fixture regenerated, 34/34 again. Opening repo examples in DX.app
+  and *saving* would adopt them — keep scratch copies for that.
+- Known minor: ghost/menu measure with a canvas (`place()`); menu x can sit slightly off on
+  proportional fonts. The fold-state wrinkle from part 3 stands.
+
+**Next step**: click into blocks in VS Code or DX.app; if the feel is right, commit the
+accumulated diff as one unit (`/code-review` first), then strip the unused `draw` bridges
+from Editor.swift and vscode `preview.ts` (still unused by the surface).
+
+## This wave, part 3: per-kind editing dress completed — markup source edits as a listing
+
+The brief ("revert the missing specific styling for editing and seeing blocks as they are
+edited") was read as the **styled field**, per `dx-editing-original-design.md` — no preview,
+no second copy, no live redraw. A full per-kind survey in the Chrome harness (all 13 block
+kinds, field's computed style vs the block's rendered style) found inheritance already
+mirrors everything the block element carries — heading levels (31.2/22.4/18.4px w600),
+quote (italic, muted, its own bar lent to the field), lists in their own column, code
+(mono 13.28px, tab 2), mermaid (mono 12.8px muted) — because the field is the block's
+*child*; the TS editor needed explicit `.block-src-type-*` mirrors only because its field
+was a sibling. **The one real gap: `html`/`svg` fields edited markup as 17px prose serif,
+tab 8.** Fix in `edit.css`: the existing code-field rule now also covers
+`.dx-html.dx-editing .dx-field` and `.dx-svg.dx-editing .dx-field` — the page's one voice
+for source, values mirroring `.dx-code pre` (mono 0.83rem/1.65, tab-size 2, pre-wrap).
+TS-era pixel values (bordered code box, `--font-ui` headings) were deliberately **not**
+ported: the constraint is mirror *today's* rendered look, and today's page has no boxes.
+
+- **Validated live** in the Chrome harness (real `edit.js`+`edit.css` over the real wasm
+  engine; MutationObserver/microtask waits — timers stall in a hidden tab): markup/drawing
+  fields now mono 13.28px/21.9 tab 2 full ink in place, no box, editing hairline drawn;
+  Escape restores byte-exact innerHTML on every probed kind; paragraph height unchanged
+  open↔closed. Canonical-form probe covering all 13 kinds at
+  `…/a3a7ef55-*/scratchpad/harness/probe.dx` (note: markdown shorthand mixed with `::`
+  blocks parses to only the `::` blocks — a probe must be all one form).
+- Gates: cargo test 545/545; node 34/34 github + 20/20 vscode; helpers lint clean on the
+  changed files. Rust untouched (clippy/fmt not rerun — last green stands).
+- Installed everywhere and byte-verified (`cmp`): `editor/vscode/surface/`, installed VSIX
+  `~/.vscode/extensions/dx.dx-documents-1.0.0/surface/`, `/Applications/DX.app/Contents/
+  Resources/surface/` (rebuilt via `build-app.sh`, installed via the bundle's own `dx setup`).
+- CLAUDE.md editing bullet updated in the same edit (the one dress inheritance cannot supply).
+- Known wrinkle seen on the way, pre-existing and left alone: editing a folded listing sets
+  `open` on the `details`, and Escape restores content but not the fold state.
+
+**Next step**: unchanged from part 2 — click into blocks in VS Code or DX.app; if the feel
+is right, commit the accumulated surface diff as one unit (`/code-review` first), then strip
+the unused `draw` bridges from Editor.swift and vscode `preview.ts`.
+
+## This wave, part 2: the designed feel recovered from the TS editor
+
+"Still not super clean, it's not like it was purposely designed to be." The purposeful
+design is the deleted TypeScript editor (~5,000 lines, exhumed from `d2f0098^` and mapped by
+two readers; digests in this session's transcript). Its core matches the restored surface
+exactly — source-reveal in place, per-kind typography mirrored, caret at end on open, Enter
+never splits, no hover chrome — but three Pages-like behaviors were missing, all
+implementable with **zero host changes**:
+
+1. **Blank paper is writable** (`blankClick` in `edit.js`): a click on the sheet itself
+   (`event.target === .dx-doc`, margins excluded) inserts a paragraph after the last block
+   whose vertical midpoint is above the pointer, via `commit(anchor, sameText, 'insert')`,
+   and opens it. Two-step rule kept from the TS editor: a click that arrives with a field
+   open (`openAtPointerDown`, set on mousedown capture) only dismisses. The sheet carries
+   `cursor: text`.
+2. **An empty paragraph is removed on close, never saved** (TS `commitBlockSrc` rule):
+   `save()` routes a whitespace-only paragraph to `host.remove`; Return on an empty field
+   is a no-op (no chains of invisible blocks).
+3. **Spellcheck off everywhere** — source, not prose; no red underlines under `**strong**`.
+
+- **Validated live in DX.app with CGEvents** (screenshots `look/4–9` in session scratchpad;
+  window must be activated first — an activating click is consumed and drives nothing):
+  blank-click below the last block opened a paragraph with hairline + caret, typed text
+  saved on click-out (file adopted into store, 7→8 blocks), the click-out created nothing,
+  a second blank-click opened an empty paragraph, Return kept it single, clicking away
+  removed it (back to 8 blocks, `dx text` clean). 34/34 + 20/20 node suites; helpers lint
+  clean; VSIX + DX.app rebuilt, reinstalled, byte-verified.
+- CLAUDE.md editing bullet updated in the same change.
+- Not carried over from the TS editor, deliberately: `::`-tag autocomplete with ghost text
+  (current format has no `::` headers for prose kinds), Tab block-navigation + focus
+  outlines (chrome the paper doctrine dropped), status messages, appearance controls,
+  DX.app-side undo/redo (VS Code gets undo via `WorkspaceEdit`; a DX.app history is a real
+  gap but a separate feature, not feel).
+
+## This wave, part 1: the original editor restored — the field IS the block, nothing else appears
+
+"Editing is still not what it was supposed to be when it was originally built and perfected."
+The previous wave's hybrid (field in place + live preview beneath) was still not the original.
+Reconstructed the actual c11a64bc surface from that session's transcript (one Write + Edits
+replayed → 279-line edit.js, 92-line edit.css) and compared: the original replaced the
+block's rendered content with a field holding its source — **the field is the block's child,
+inheriting its type; no preview, no source note, no second copy of the block, for every
+kind**. The "always rendering even when editing" brief (a307f64d) had been read as
+"keep the block drawn and type beside it" — that arrangement is what the user rejected twice.
+
+- `editor/surface/edit.js|css` rewritten to the original interaction, keeping the later
+  plumbing that doesn't change the feel: no-reload commits (`{document, focus}`, one
+  `.dx-doc` swap), `settling` so a click can't overtake a save, refusal `resume`, the
+  extended `kindOf`/MULTILINE sets. Gone: `host.draw` calls, `stand`/`mirror`/`standsIn`,
+  TYPE/BOX copying, redraw debounce. The one new wrinkle: editing a folded listing leaves a
+  hidden stub `<summary>` (`.dx-fold-stub`, specificity beats `.dx-code-folded > summary`)
+  because a `details` without a summary invents a default marker.
+- Hosts untouched and byte-uncoupled (no `.dx-write`/`.dx-field` references in either).
+  Their `draw` bridges (Editor.swift, vscode preview.ts) are now unused by the surface —
+  contract says "a host may offer more"; remove them once the feel is blessed.
+  `edit::preview_block` stays: it is `dx render --block --body`.
+- CLAUDE.md editing sections rewritten to describe this (field-is-the-block, fold stub,
+  preview_block no longer tied to a typing loop).
+- **Validated live** in a Chrome harness driving the real `edit.js` over the real wasm engine
+  (session scratchpad `harness/`, MutationObserver/microtask waits because the tab is
+  hidden): all six kinds — field is the block's only child in the block's own computed type
+  (17px serif prose, 22.4px/600 heading, italic quote, mono 13.28px pre-wrap code), Escape
+  restores byte-exact innerHTML, typing adds nothing to the page, quote/code keep one rule
+  (`::before` display none), fold stub hidden. Save on blur re-renders in place (probe node
+  outside `.dx-doc` survived — no reload), Return inserts + focuses next paragraph, Backspace
+  on empty erases and lands in the block above, a *refused* save shows the error note and
+  resumes the field focused with the typed text, retry saves. helpers lint clean; 34/34
+  github + 20/20 vscode node tests; VSIX repackaged + installed (surface byte-verified);
+  DX.app rebuilt + installed via the bundle's own `dx setup` (surface byte-verified).
+- **Not committed** — awaiting the user's look at the restored feel.
+
+**Next step**: click into blocks in VS Code or DX.app; if the feel is right, commit, then
+strip the now-unused `draw` bridges from Editor.swift and the vscode webview.
+
+## Previous wave: every access point driven live, two stale installs refreshed
+
+Every surface was exercised end-to-end with screenshots (session scratchpad `img/`), after the
+full gates ran green first: **545 cargo tests, clippy `-D warnings` clean, fmt clean, 34/34
+github + 20/20 vscode node tests** (`editor/build.sh` rerun first).
+
+- **CLI**: every READ/WRITE/STORE/RUN verb driven in a scratch store — `new/append/insert/set/
+  remove/fmt` round-trip, `sync` adopt + restore-from-pack (index deleted, reads survive), a
+  dangling pointer errors with the `dx sync` sentence, `git-setup` + `git diff` shows document
+  text, `png --pages/--section/--theme` writes real images. Checklist note: the editable body
+  is `[x] item` lines — a Markdown `- [x]` prefix is treated as item text, by the format's rule.
+- **Run + sandbox, live**: python/node/bash blocks all `ok`; an attack block got
+  `network-blocked` and `write-confined` (`/tmp` write → `Operation not permitted`).
+- **`dx serve`**: `/health` ok; bad `Host` → 403 (rebinding), foreign-`Origin` simple POST →
+  403; `render_html`/`stylesheet` answer through the engine.
+- **MCP**: all nine `dx_*` tools round-tripped (write → edit → run → read-as-images).
+- **DX.app**: opened a store *pointer* via LaunchServices, typed on the page (CGEvents),
+  ⌘Return committed — content changed on disk through the bundled `dx`. **Found stale** (binary
+  predated today's HEAD): rebuilt `build-app.sh`, replaced `/Applications/DX.app`, re-verified.
+- **VS Code**: **installed extension carried a stale wasm + surface** — repackaged, reinstalled,
+  verified byte-current. Editing driven live: block redraws from the field while typing
+  (preview), field is a sibling showing raw source, Escape discards, repo left clean.
+- **github.com**: the extension is **not loaded in any Chrome profile** — the "Load unpacked"
+  grant is the user's reserved step (`dx browser` prints it). The per-user extension payload
+  wasm was also stale → `dx browser --from editor/github` refreshed chromium + firefox copies.
+  Pipeline still proven end-to-end headlessly: fetched the real `.doc/repo.dxcp` GitHub serves
+  for `RockyWearsAHat/dx-github-probe`, resolved `showcase.dx` by path through the shipped
+  wasm, **digest verified**, rendered to HTML/PNG. (`pack_document` keys by *path*; resolve.js
+  verifies the digest after.)
+
+**Next step**: load the unpacked extension in Chrome (chrome://extensions → Developer mode →
+Load unpacked → `~/Library/Application Support/dx/extension/chromium`), then re-check a blob
+page and the private-repo claim in docs/github.md.
+
+## Previous wave: full-history audit, five defects fixed, in-editor diff restored, everything committed
 
 The whole git history (60 commits) was audited against the working tree: every design promise
 (one engine, store resolution, sandbox, allow-list escaping, paper aesthetic, one install) was
