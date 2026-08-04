@@ -90,8 +90,17 @@ fn normalize_block(block: &Block, index: usize, registry: &mut IdRegistry) -> Bl
             };
         }
         "rule" => {}
-        "style" | "svg" | "html" | "graph" | "mermaid" => {
+        "svg" | "html" | "graph" | "mermaid" => {
             normalized.text = js_trim_end(&block.text).to_string();
+        }
+        "style" => {
+            normalized.text = js_trim_end(&block.text).to_string();
+            normalized.media = js_trim(&block.media).to_string();
+        }
+        // Board: the node lines verbatim, plus the one attribute the viewport carries.
+        "board" => {
+            normalized.text = js_trim_end(&block.text).to_string();
+            normalized.height = block.height;
         }
         "stylesheet" => {
             normalized.href = if !block.href.is_empty() {
@@ -110,6 +119,7 @@ fn normalize_block(block: &Block, index: usize, registry: &mut IdRegistry) -> Bl
         "code" => {
             normalized.text = js_trim(&block.text).to_string();
             normalized.language = js_trim(&block.language).to_string();
+            normalized.src = js_trim(&block.src).to_string();
             normalized.run = block.run;
             normalized.deps = js_trim(&block.deps).to_string();
             normalized.timeout = block.timeout;

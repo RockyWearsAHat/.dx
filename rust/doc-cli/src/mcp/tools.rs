@@ -17,6 +17,7 @@ use serde_json::{json, Value};
 #[cfg(test)]
 pub const TOOL_NAMES: &[&str] = &[
     "dx_read",
+    "dx_play",
     "dx_source",
     "dx_outline",
     "dx_list",
@@ -32,6 +33,7 @@ pub const TOOL_NAMES: &[&str] = &[
 pub fn catalogue() -> Value {
     json!([
         read_tool(),
+        play_tool(),
         source_tool(),
         outline_tool(),
         list_tool(),
@@ -86,10 +88,60 @@ fn read_tool() -> Value {
                 },
                 "width": {
                     "type": "number",
-                    "description": "Page width in pixels. Default: 1200."
+                    "description": "Page width in CSS pixels. Default: 860, the rendered \
+                                    content column plus margins. Pages are sized to stay \
+                                    under the vision-ingestion limits, so every captured \
+                                    pixel reaches the model unscaled."
                 }
             },
             "required": ["path"]
+        }
+    })
+}
+
+/// `dx_play` — watch the page react to input, frame by frame.
+fn play_tool() -> Value {
+    json!({
+        "name": "dx_play",
+        "description": "WATCH a .dx document react to input: loads the rendered page in a \
+                        headless browser, performs a scripted sequence of real input events, \
+                        and returns the frames as images — each stamped with its time and the \
+                        action it shows landing, so behaviour can be reviewed frame by frame. \
+                        Script statements are separated by ';': `wait 500ms`, `key Space`, \
+                        `click <target>`, `scroll 200`, `scroll <target> 200` (a node's own \
+                        overflow), `hover <target>`. A target is a block id from dx_outline \
+                        or an x,y pixel pair. Set `node` to clip every frame to one block's \
+                        box. Nothing in the document executes — this drives the same static \
+                        render dx_read photographs. Use dx_read for a plain look; use `dx play \
+                        --out` from a shell to keep every frame as files.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": path_property(),
+                "script": {
+                    "type": "string",
+                    "description": "The input sequence, e.g. \"wait 500ms; key Space; scroll 200\"."
+                },
+                "node": {
+                    "type": "string",
+                    "description": "Optional block id: clip every frame to this block's box."
+                },
+                "section": section_property(),
+                "theme": {
+                    "type": "string",
+                    "enum": ["auto", "light", "dark"],
+                    "description": "Palette to render with. Default: auto."
+                },
+                "fps": {
+                    "type": "number",
+                    "description": "Frames per second captured during waits, 1-30. Default: 10."
+                },
+                "width": {
+                    "type": "number",
+                    "description": "Viewport width in pixels. Default: 1200."
+                }
+            },
+            "required": ["path", "script"]
         }
     })
 }

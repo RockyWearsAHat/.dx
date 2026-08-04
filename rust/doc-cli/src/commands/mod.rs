@@ -14,6 +14,7 @@ pub mod browser;
 pub mod edit;
 pub mod exec;
 pub mod find;
+pub mod play;
 pub mod setup;
 pub mod store;
 pub mod view;
@@ -72,13 +73,13 @@ const COMMANDS: &[Command] = &[
         flags: &[
             "section",
             "theme",
-            "doc-css",
             "hidden",
             "fragment",
             "show-code",
             "title",
             "block",
             "body",
+            "field",
             "out",
         ],
         run: |args| view::run_render(args).map(Output::Document),
@@ -105,7 +106,7 @@ const COMMANDS: &[Command] = &[
     },
     Command {
         names: &["source"],
-        flags: &["block", "out"],
+        flags: &["block", "header", "out"],
         run: |args| edit::run_source(args).map(Output::Document),
     },
     Command {
@@ -130,19 +131,25 @@ const COMMANDS: &[Command] = &[
             "section",
             "theme",
             "width",
-            "doc-css",
             "pages",
             "page-height",
+            "scale",
             "out",
         ],
         run: |args| view::run_png(args).map(Output::Report),
+    },
+    Command {
+        names: &["play"],
+        flags: &[
+            "script", "node", "fps", "width", "height", "theme", "section", "out",
+        ],
+        run: |args| play::run(args).map(Output::Report),
     },
     Command {
         names: &["open"],
         flags: &[
             "section",
             "theme",
-            "doc-css",
             "hidden",
             "fragment",
             "show-code",
@@ -158,7 +165,7 @@ const COMMANDS: &[Command] = &[
     },
     Command {
         names: &["set"],
-        flags: &["text", "from"],
+        flags: &["text", "from", "header"],
         run: |args| edit::run_set(args).map(Output::Report),
     },
     Command {
@@ -177,6 +184,30 @@ const COMMANDS: &[Command] = &[
         names: &["remove", "rm"],
         flags: &["block"],
         run: |args| edit::run_remove(args).map(Output::Report),
+    },
+    Command {
+        names: &["check"],
+        flags: &["block", "item"],
+        run: |args| edit::run_check(args).map(Output::Report),
+    },
+    Command {
+        names: &["board"],
+        flags: &[
+            "place",
+            "add",
+            "arrange",
+            "detach",
+            "link",
+            "unlink",
+            "to",
+            "from-side",
+            "to-side",
+            "x",
+            "y",
+            "w",
+            "h",
+        ],
+        run: |args| edit::run_board(args).map(Output::Report),
     },
     Command {
         names: &["fmt", "format"],
@@ -331,16 +362,18 @@ mod tests {
                 vec![
                     "section",
                     "theme",
-                    "doc-css",
                     "hidden",
                     "show-code",
                     "block",
                     "body",
+                    "field",
                     "out",
                 ],
             ),
             ("png", vec!["section", "out", "pages"]),
             ("search", vec!["limit"]),
+            ("source", vec!["block", "header"]),
+            ("set", vec!["text", "from", "header"]),
             (
                 "insert",
                 vec![
@@ -351,6 +384,25 @@ mod tests {
                 "append",
                 vec!["type", "id", "level", "lang", "run", "deps", "text"],
             ),
+            (
+                "board",
+                vec![
+                    "place",
+                    "add",
+                    "arrange",
+                    "detach",
+                    "link",
+                    "unlink",
+                    "to",
+                    "from-side",
+                    "to-side",
+                    "x",
+                    "y",
+                    "w",
+                    "h",
+                ],
+            ),
+            ("check", vec!["block", "item"]),
             ("run", vec!["only", "force", "dry", "timeout"]),
             ("new", vec!["title", "force"]),
             ("fmt", vec!["check"]),

@@ -21,6 +21,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use doc_core::resolve::Nowhere;
 use doc_run::{run_document, RunOptions};
 
 /// A scratch document directory, its cache, and a clean slate each time.
@@ -40,7 +41,7 @@ fn scene(label: &str) -> (PathBuf, RunOptions) {
 /// Run one shell block and hand back what it printed.
 fn attack(code: &str, options: &RunOptions) -> String {
     let source = format!("::code id=payload lang=bash run\n{code}\n::end\n");
-    let report = run_document(&source, options);
+    let report = run_document(&source, options, &Nowhere);
     report
         .runs
         .first()
@@ -330,7 +331,7 @@ fn a_backgrounded_process_does_not_outlive_the_block_that_started_it() {
     let source = "::code id=payload lang=bash run timeout=2\n\
          (sleep 20; echo alive > \"$DX_SANDBOX/still-alive\") &\n\
          sleep 30\n::end\n";
-    let report = run_document(source, &options);
+    let report = run_document(source, &options, &Nowhere);
     assert_eq!(report.runs[0].status, "error");
     assert!(report.runs[0].output.contains("timed out"));
 

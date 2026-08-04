@@ -43,11 +43,12 @@ pub enum Outcome {
 /// States the surface in one place, names it back to a caller who got it wrong, and gives
 /// [`every_advertised_call_is_answered`](tests::every_advertised_call_is_answered) something
 /// to check the match arms against.
-pub const CALLS: [&str; 5] = [
+pub const CALLS: [&str; 6] = [
     "pack_document",
     "pack_paths",
     "sha256_hex",
     "render_html",
+    "references",
     "stylesheet",
 ];
 
@@ -92,17 +93,39 @@ pub fn call(packs: &mut Packs, name: &str, args: &[Value]) -> Result<Outcome, St
             let source = text(args, 0)?;
             let theme = text(args, 1)?;
             let fragment = flag(args, 2)?;
-            let document_css = flag(args, 3)?;
-            let document = doc_core::format::parse(source);
+            // Optional fourth argument: resources answering the document's references,
+            // in the same JSON shape `doc-wasm`'s `render_html` takes — the two doors
+            // must stay indistinguishable to the caller.
+            let resources = args.get(3).and_then(Value::as_str);
+            let mut document = doc_core::format::parse(source);
+            doc_core::resolve::hydrate(&mut document, &provided_from(resources));
             Ok(Outcome::Value(Value::String(doc_core::render::html(
                 &document,
                 &doc_core::render::HtmlOptions {
                     theme: doc_core::render::Theme::parse(theme),
                     fragment,
-                    document_css,
                     ..doc_core::render::HtmlOptions::default()
                 },
             ))))
+        }
+        "references" => {
+            let source = text(args, 0)?;
+            let document = doc_core::format::parse(source);
+            let rows: Vec<Value> = doc_core::resolve::references(&document)
+                .iter()
+                .map(|reference| match reference {
+                    doc_core::resolve::Reference::File(path) => {
+                        serde_json::json!({"kind": "file", "path": path})
+                    }
+                    doc_core::resolve::Reference::Document(path) => {
+                        serde_json::json!({"kind": "document", "path": path})
+                    }
+                })
+                .collect();
+            // A JSON *string*, as `doc-wasm` returns, because the caller parses it.
+            let encoded = serde_json::to_string(&rows)
+                .map_err(|error| format!("listing the document's references: {error}"))?;
+            Ok(Outcome::Value(Value::String(encoded)))
         }
         "stylesheet" => Ok(Outcome::Value(Value::String(
             doc_core::render::stylesheet().to_string(),
@@ -112,6 +135,34 @@ pub fn call(packs: &mut Packs, name: &str, args: &[Value]) -> Result<Outcome, St
             CALLS.join(", ")
         )),
     }
+}
+
+/// Build the resolver `render_html` hydrates against from its resources JSON, exactly
+/// as `doc-wasm`'s `provided_from` reads the same shape. Malformed JSON resolves
+/// nothing, so the mistake shows on the page as sentences rather than vanishing.
+fn provided_from(resources: Option<&str>) -> doc_core::resolve::Provided {
+    let mut provided = doc_core::resolve::Provided::new();
+    let Some(raw) = resources else {
+        return provided;
+    };
+    let Ok(value) = serde_json::from_str::<Value>(raw) else {
+        return provided;
+    };
+    if let Some(entries) = value.get("files").and_then(Value::as_object) {
+        for (path, text) in entries {
+            if let Some(text) = text.as_str() {
+                provided.add_file(path, text);
+            }
+        }
+    }
+    if let Some(entries) = value.get("documents").and_then(Value::as_object) {
+        for (path, source) in entries {
+            if let Some(source) = source.as_str() {
+                provided.add_document(path, source);
+            }
+        }
+    }
+    provided
 }
 
 /// The argument at `index` as a string.
@@ -259,7 +310,6 @@ mod tests {
             &doc_core::render::HtmlOptions {
                 theme: doc_core::render::Theme::parse("dark"),
                 fragment: true,
-                document_css: false,
                 ..doc_core::render::HtmlOptions::default()
             },
         );

@@ -74,8 +74,15 @@ fn marks_for(row: &doc_core::render::OutlineEntry) -> String {
 /// `--fragment` emits just the `.dx-doc` container, which is what a surface swaps in when a
 /// block changed and the page around it did not. `--block <id>` narrows that to one block,
 /// and `--body <text>` renders it with a body that has not been saved — the two together are
-/// how a page keeps rendering while a reader is still typing into it.
+/// how a page keeps rendering while a reader is still typing into it. `--field <text>`
+/// renders characters as the editing field decorates them — marks styled in place, every
+/// byte kept — and reads no file at all.
 pub fn run_render(args: &Args) -> Result<String, String> {
+    // A field render is a pure function of the characters: no file, no store, no options.
+    if let Some(text) = args.value("field") {
+        return Ok(doc_core::render::field_html(text));
+    }
+
     let Some(id) = args.value("block") else {
         let document = selected_document(args)?;
         return Ok(html(&document, &html_options(args)));
@@ -86,7 +93,11 @@ pub fn run_render(args: &Args) -> Result<String, String> {
     match args.value("body") {
         Some(body) => edit::preview_block(&source, id, body, &options),
         None => {
-            let document = parse(&source);
+            let mut document = parse(&source);
+            doc_core::resolve::hydrate(
+                &mut document,
+                &workspace::resolver_for(&document_path(args)?),
+            );
             // Asked for first, so a mistyped id is answered with the ids that do exist
             // rather than with nothing.
             edit::find(&document, id)?;
@@ -110,7 +121,7 @@ pub fn run_png(args: &Args) -> Result<String, String> {
         &ShotOptions {
             width: args.number("width").unwrap_or(doc_shot::DEFAULT_WIDTH),
             theme: theme_of(args),
-            document_css: args.present("doc-css"),
+            scale: export_scale(args),
             ..ShotOptions::default()
         },
     )?;
@@ -129,6 +140,15 @@ pub fn run_png(args: &Args) -> Result<String, String> {
     ))
 }
 
+/// The device scale a `dx png` export captures at: 2 unless `--scale` says otherwise.
+///
+/// An export exists to look like the document did on the author's screen, and the
+/// author's screen is almost certainly high-density. `--scale 1` remains available for
+/// anything that wants CSS-pixel images.
+fn export_scale(args: &Args) -> u32 {
+    args.number("scale").unwrap_or(2)
+}
+
 /// `dx png <file> --pages` — one image per page, numbered in reading order.
 ///
 /// The report names every file written and says which blocks are on each page, so the
@@ -141,10 +161,10 @@ fn run_png_pages(args: &Args) -> Result<String, String> {
         &ShotOptions {
             width: args.number("width").unwrap_or(doc_shot::DEFAULT_WIDTH),
             theme: theme_of(args),
-            document_css: args.present("doc-css"),
             page_height: args
                 .number("page-height")
                 .unwrap_or(doc_shot::DEFAULT_PAGE_HEIGHT),
+            scale: export_scale(args),
             ..ShotOptions::default()
         },
     )?;
@@ -226,8 +246,14 @@ fn open_in_browser(path: &Path) -> Result<(), String> {
 /// Load the document named by the first positional argument, sliced by `--section`.
 pub fn selected_document(args: &Args) -> Result<Document, String> {
     let path = document_path(args)?;
-    let loaded = workspace::load(&path)?;
-    slice(loaded.document, args.value("section"))
+    let mut document = workspace::load(&path)?.document;
+    // Fill in what the document references — sibling files behind `::code src=`, sibling
+    // documents behind board node lines — so every view shows current content instead of
+    // a copy. A reference that resolves to nothing is already a sentence in its block's
+    // place, which is the honest render. Hydration is view-only: nothing loaded here is
+    // ever saved.
+    doc_core::resolve::hydrate(&mut document, &workspace::resolver_for(&path));
+    slice(document, args.value("section"))
 }
 
 /// Apply a `--section` selector to a document, or return it whole.
@@ -252,8 +278,10 @@ pub fn document_path(args: &Args) -> Result<PathBuf, String> {
         .ok_or_else(|| "a .dx file is required".to_string())
 }
 
-/// Build HTML options from `--theme`, `--fragment`, `--doc-css`, `--hidden`, and
-/// `--show-code`.
+/// Build HTML options from `--theme`, `--fragment`, `--hidden`, and `--show-code`.
+///
+/// The document's own `::style` blocks are not among them: a document dresses itself on
+/// every surface, so there is no flag to forget.
 ///
 /// Code starts folded, because a page is read for what it says. `--show-code` is for the
 /// renders that are read without a pointer — a printed sheet, a page archived as a file —
@@ -263,7 +291,6 @@ fn html_options(args: &Args) -> HtmlOptions {
         theme: theme_of(args),
         fragment: args.present("fragment"),
         include_hidden: args.present("hidden"),
-        document_css: args.present("doc-css"),
         collapse_code: !args.present("show-code"),
         title: args.value("title").unwrap_or_default().to_string(),
     }
@@ -330,6 +357,15 @@ mod tests {
             run_render(&args(&[&file, "--block", "alpha", "--body=Still typing"])).expect("draw");
         assert!(drawn.contains("Still typing"), "{drawn}");
         assert_eq!(workspace::read(&path).expect("source"), SAMPLE);
+    }
+
+    /// `--field` is the editing surface's per-keystroke call on hosts that reach the engine
+    /// through this binary: pure characters in, decorated characters out, no file touched.
+    #[test]
+    fn a_field_is_decorated_without_reading_any_file() {
+        let out = run_render(&args(&["--field=**loud** words"])).expect("field");
+        assert!(out.contains("<strong>loud</strong>"), "{out}");
+        assert!(out.contains("dx-mark"), "{out}");
     }
 
     #[test]

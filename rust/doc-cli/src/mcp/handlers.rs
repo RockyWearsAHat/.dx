@@ -10,14 +10,19 @@ use doc_core::format::parse;
 use doc_core::model::Document;
 use doc_core::render::{html, outline, section, text, HtmlOptions, TextOptions, Theme};
 use doc_run::{run_document, RunOptions};
+use doc_shot::base64::encode as base64;
+use doc_shot::play::{PlayFrame, PlayOptions};
 use doc_shot::{capture_pages, ShotOptions};
 use serde_json::{json, Value};
 
-use super::encode::base64;
 use crate::workspace;
 
 /// Default number of search results returned.
 const DEFAULT_SEARCH_LIMIT: usize = 20;
+
+/// Most frames one `dx_play` answer carries. A play that captured more is thinned to
+/// this budget — action frames kept first — and the answer says so.
+const PLAY_FRAME_BUDGET: usize = 12;
 
 /// One tool call's outcome: the content items to return.
 pub type ToolResult = Result<Vec<Value>, String>;
@@ -26,6 +31,7 @@ pub type ToolResult = Result<Vec<Value>, String>;
 pub fn call(name: &str, args: &Value, root: &Path) -> ToolResult {
     match name {
         "dx_read" => read(args, root),
+        "dx_play" => play_frames(args, root),
         "dx_source" => source(args, root),
         "dx_outline" => outline_of(args, root),
         "dx_list" => list(args, root),
@@ -51,10 +57,12 @@ pub fn call(name: &str, args: &Value, root: &Path) -> ToolResult {
 fn read(args: &Value, root: &Path) -> ToolResult {
     let document = selected(args, root)?;
     let path = string(args, "path").unwrap_or("document");
+    // Pages sized for the reader this tool serves: a vision model. `for_reading` keeps
+    // every page under the limits past which ingestion would downscale it, so the image
+    // the model sees is the image the browser captured, pixel for pixel.
     let options = ShotOptions {
-        width: number(args, "width").unwrap_or(doc_shot::DEFAULT_WIDTH),
         theme: Theme::parse(string(args, "theme").unwrap_or("auto")),
-        ..ShotOptions::default()
+        ..ShotOptions::for_reading(number(args, "width"))
     };
 
     let pages = match capture_pages(&document, &options) {
@@ -110,6 +118,100 @@ fn fallback_text(document: &Document, reason: &str) -> String {
          omits how it is laid out:\n\n{}",
         text(document, &TextOptions::default())
     )
+}
+
+/// `dx_play` — drive the rendered page with scripted input and return the frames.
+///
+/// The same page `dx_read` photographs, alive: inputs are dispatched as real browser
+/// events, and every returned image is stamped with when it was taken and which action it
+/// shows landing. Nothing the document carries executes — the render is script-free — so
+/// this is a read that can also see behaviour: scrolling, hover, folds, a board panned.
+fn play_frames(args: &Value, root: &Path) -> ToolResult {
+    let document = selected(args, root)?;
+    let path = string(args, "path").unwrap_or("document");
+    let script = required(args, "script")?;
+    let options = PlayOptions {
+        width: number(args, "width").unwrap_or(doc_shot::DEFAULT_WIDTH),
+        theme: Theme::parse(string(args, "theme").unwrap_or("auto")),
+        fps: number(args, "fps").unwrap_or(doc_shot::play::DEFAULT_FPS),
+        node: string(args, "node").map(str::to_string),
+        ..PlayOptions::default()
+    };
+
+    let frames = doc_shot::play::play(&document, script, &options)?;
+    let chosen = frame_sample(&frames, PLAY_FRAME_BUDGET);
+
+    let elapsed = frames.last().map_or(0, |frame| frame.at_ms);
+    let mut opening = format!("{path} — {} frames over {elapsed}ms.", frames.len());
+    if chosen.len() < frames.len() {
+        opening.push_str(&format!(
+            " Showing {} — every action frame, waits thinned. Use dx play --out for all \
+             of them.",
+            chosen.len()
+        ));
+    }
+    let mut content = vec![text_content(&opening)];
+    for index in chosen {
+        let frame = &frames[index];
+        content.push(text_content(&format!(
+            "frame {}/{} — t={}ms{}",
+            index + 1,
+            frames.len(),
+            frame.at_ms,
+            frame
+                .note
+                .as_deref()
+                .map(|note| format!(" — {note}"))
+                .unwrap_or_default()
+        )));
+        content.push(json!({
+            "type": "image",
+            "data": base64(&frame.png),
+            "mimeType": "image/png"
+        }));
+    }
+    Ok(content)
+}
+
+/// Which frames to return when a play captured more than the budget.
+///
+/// Frames that show an action landing are the ones a reviewer cannot do without, so they
+/// are kept first (evenly thinned only if they alone exceed the budget); the remaining
+/// slots go to wait frames spread evenly across the whole run.
+fn frame_sample(frames: &[PlayFrame], budget: usize) -> Vec<usize> {
+    if frames.len() <= budget {
+        return (0..frames.len()).collect();
+    }
+
+    let noted: Vec<usize> = frames
+        .iter()
+        .enumerate()
+        .filter(|(_, frame)| frame.note.is_some())
+        .map(|(index, _)| index)
+        .collect();
+    let mut chosen: Vec<usize> = if noted.len() >= budget {
+        every_nth(&noted, budget)
+    } else {
+        let quiet: Vec<usize> = (0..frames.len())
+            .filter(|i| frames[*i].note.is_none())
+            .collect();
+        let mut kept = noted.clone();
+        kept.extend(every_nth(&quiet, budget - noted.len()));
+        kept
+    };
+    chosen.sort_unstable();
+    chosen.dedup();
+    chosen
+}
+
+/// At most `count` items of `indices`, spread evenly, first and last kept.
+fn every_nth(indices: &[usize], count: usize) -> Vec<usize> {
+    if indices.len() <= count || count == 0 {
+        return indices.to_vec();
+    }
+    (0..count)
+        .map(|slot| indices[slot * (indices.len() - 1) / (count - 1).max(1)])
+        .collect()
 }
 
 /// `dx_source` — the document's exact text, for quoting and editing.
@@ -244,6 +346,7 @@ fn run(args: &Value, root: &Path) -> ToolResult {
             only: string(args, "block").map(str::to_string),
             ..RunOptions::default()
         },
+        &workspace::resolver_for(&path),
     );
 
     if report.changed {
@@ -288,10 +391,17 @@ fn selected(args: &Value, root: &Path) -> Result<Document, String> {
     }
 }
 
-/// Load the whole document named by `path`.
+/// Load the whole document named by `path`, with its references filled in.
+///
+/// Every reading tool comes through here, so an agent looking at a document sees what a
+/// person sees: `::code src=` listings holding the file's current text, boards showing
+/// the blocks their nodes name — including blocks of sibling documents. `dx_source`
+/// does not: it hands over the exact stored characters, references included.
 fn document_at(args: &Value, root: &Path) -> Result<Document, String> {
     let path = resolve(required(args, "path")?, root);
-    Ok(parse(&workspace::read(&path)?))
+    let mut document = parse(&workspace::read(&path)?);
+    doc_core::resolve::hydrate(&mut document, &workspace::resolver_for(&path));
+    Ok(document)
 }
 
 /// A comma-separated list of a document's block ids, for error messages.
@@ -542,6 +652,84 @@ mod tests {
         assert!(std::fs::read_to_string(root.join("runnable.dx"))
             .expect("read")
             .contains("from-mcp"));
+    }
+
+    fn wait_frame(at_ms: u64, note: Option<&str>) -> PlayFrame {
+        PlayFrame {
+            png: Vec::new(),
+            at_ms,
+            note: note.map(str::to_string),
+            width: 1,
+            height: 1,
+        }
+    }
+
+    #[test]
+    fn a_short_play_returns_every_frame_in_order() {
+        let frames: Vec<PlayFrame> = (0..5).map(|n| wait_frame(n * 100, None)).collect();
+        assert_eq!(frame_sample(&frames, 12), vec![0, 1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn thinning_keeps_every_action_frame_and_the_run_endpoints() {
+        // 30 frames, actions at 0, 7, and 29: the frames a reviewer cannot do without.
+        let frames: Vec<PlayFrame> = (0..30)
+            .map(|n| wait_frame(n * 100, matches!(n, 0 | 7 | 29).then_some("acted")))
+            .collect();
+        let chosen = frame_sample(&frames, 12);
+        assert!(chosen.len() <= 12, "{chosen:?}");
+        for action in [0, 7, 29] {
+            assert!(chosen.contains(&action), "{chosen:?} misses {action}");
+        }
+        assert!(
+            chosen.windows(2).all(|pair| pair[0] < pair[1]),
+            "{chosen:?}"
+        );
+    }
+
+    #[test]
+    fn a_run_with_more_actions_than_budget_still_spans_first_to_last() {
+        let frames: Vec<PlayFrame> = (0..40).map(|n| wait_frame(n, Some("acted"))).collect();
+        let chosen = frame_sample(&frames, 12);
+        assert_eq!(chosen.len(), 12);
+        assert_eq!(chosen.first(), Some(&0));
+        assert_eq!(chosen.last(), Some(&39));
+    }
+
+    #[test]
+    fn play_requires_a_script_and_refuses_a_bad_one_by_name() {
+        let root = project("play-args");
+        assert!(call("dx_play", &json!({ "path": "guide.dx" }), &root)
+            .unwrap_err()
+            .contains("`script` is required"));
+        let error = call(
+            "dx_play",
+            &json!({ "path": "guide.dx", "script": "levitate" }),
+            &root,
+        )
+        .expect_err("should refuse");
+        assert!(error.contains("levitate"), "{error}");
+    }
+
+    #[test]
+    fn play_returns_annotated_frames_from_a_real_browser() {
+        if doc_shot::browser::find().is_none() {
+            return;
+        }
+        let root = project("play");
+        let items = call(
+            "dx_play",
+            &json!({ "path": "guide.dx", "script": "wait 150ms; key PageDown" }),
+            &root,
+        )
+        .expect("play");
+        let body = text_of(&items);
+        assert!(body.contains("frames over"), "{body}");
+        assert!(body.contains("key PageDown"), "{body}");
+        assert!(
+            items.iter().any(|item| item["type"] == "image"),
+            "a play must return pictures"
+        );
     }
 
     #[test]

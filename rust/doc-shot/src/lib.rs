@@ -18,7 +18,10 @@
 #![warn(missing_docs)]
 #![warn(clippy::all)]
 
+pub mod base64;
 pub mod browser;
+pub mod cdp;
+pub mod play;
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -40,6 +43,26 @@ pub const DEFAULT_PAGE_HEIGHT: u32 = 1550;
 /// wants a section, not a flip-book. [`capture_pages`] reports the pages it did not take
 /// rather than pretending the document ended.
 pub const MAX_PAGES: usize = 12;
+
+/// Most pixels one image may carry before a vision model's ingestion scales it down
+/// (~1.15 megapixels). [`ShotOptions::for_reading`] sizes pages under this, so every
+/// pixel captured is a pixel the model actually sees — capturing larger only produces
+/// an image something else shrinks in transit.
+pub const VISION_MAX_PIXELS: u32 = 1_150_000;
+
+/// Longest edge a vision model accepts without scaling, in pixels.
+pub const VISION_MAX_EDGE: u32 = 1568;
+
+/// Default capture width for a read by a vision model, in CSS pixels: the rendered
+/// content column (46rem at 17px ≈ 782px) plus its margins. Capturing wider spends the
+/// fixed pixel budget of [`VISION_MAX_PIXELS`] on empty margin instead of on glyphs.
+pub const READ_WIDTH: u32 = 860;
+
+/// Narrowest capture that still lays the page out as a page.
+const MIN_WIDTH: u32 = 320;
+
+/// Highest device scale factor a capture may ask for.
+const MAX_SCALE: u32 = 4;
 
 /// Window height used for the measuring pass, before the real height is known.
 const MEASURE_HEIGHT: u32 = 900;
@@ -65,14 +88,16 @@ pub struct ShotOptions {
     pub width: u32,
     /// Palette to render with.
     pub theme: Theme,
-    /// Apply the document's own `::style` blocks.
-    pub document_css: bool,
     /// Directory for the temporary HTML the browser loads.
     pub scratch_dir: PathBuf,
     /// Height of one page for [`capture_pages`], in CSS pixels.
     pub page_height: u32,
     /// Most pages [`capture_pages`] will take before it stops and says so.
     pub max_pages: usize,
+    /// Image pixels per CSS pixel, clamped to 1–4. 2 makes an export match a
+    /// high-density screen; 1 is right for a vision model, which would only scale the
+    /// extra pixels back out (see [`VISION_MAX_PIXELS`]).
+    pub scale: u32,
 }
 
 impl Default for ShotOptions {
@@ -80,10 +105,31 @@ impl Default for ShotOptions {
         Self {
             width: DEFAULT_WIDTH,
             theme: Theme::Auto,
-            document_css: false,
             scratch_dir: std::env::temp_dir(),
             page_height: DEFAULT_PAGE_HEIGHT,
             max_pages: MAX_PAGES,
+            scale: 1,
+        }
+    }
+}
+
+impl ShotOptions {
+    /// Options for a read by a vision model: pages that arrive exactly as captured.
+    ///
+    /// Each page stays within [`VISION_MAX_PIXELS`] and [`VISION_MAX_EDGE`], the two
+    /// limits past which ingestion downscales an image, so zero compaction happens
+    /// between the browser and the model. Pages still break between blocks — a narrower,
+    /// shorter page means more pages, never a sliced line. `width` overrides
+    /// [`READ_WIDTH`]; the page height is derived so the pixel budget holds.
+    pub fn for_reading(width: Option<u32>) -> Self {
+        let width = width
+            .unwrap_or(READ_WIDTH)
+            .clamp(MIN_WIDTH, VISION_MAX_EDGE);
+        Self {
+            width,
+            page_height: (VISION_MAX_PIXELS / width).min(VISION_MAX_EDGE),
+            scale: 1,
+            ..Self::default()
         }
     }
 }
@@ -135,18 +181,17 @@ struct BlockBox {
     height: u32,
 }
 
-/// The page every capture in this crate photographs.
+/// The page every capture in this crate photographs — and every [`play`] session drives.
 ///
 /// Code blocks are rendered **open**. On screen a block starts folded behind its label, which
 /// a reader opens when they want the recipe; a picture cannot be opened, so folding one here
 /// would photograph the label and throw the listing away — including in the images `dx_read`
 /// hands an agent, whose whole way of reading a document is to look at it.
-fn page_html(document: &Document, options: &ShotOptions) -> String {
+pub(crate) fn page_html(document: &Document, theme: Theme) -> String {
     html(
         document,
         &HtmlOptions {
-            theme: options.theme,
-            document_css: options.document_css,
+            theme,
             collapse_code: false,
             ..HtmlOptions::default()
         },
@@ -159,7 +204,7 @@ fn page_html(document: &Document, options: &ShotOptions) -> String {
 /// can fall back to text rather than failing outright.
 pub fn capture(document: &Document, options: &ShotOptions) -> Result<Shot, String> {
     let browser = browser::find().ok_or_else(browser::missing_message)?;
-    let page = page_html(document, options);
+    let page = page_html(document, options.theme);
 
     let workspace = scratch_workspace(&options.scratch_dir)?;
     let result = capture_page(&browser, &page, options, &workspace);
@@ -181,7 +226,7 @@ pub fn capture(document: &Document, options: &ShotOptions) -> Result<Shot, Strin
 /// Complexity: one browser launch to measure, then one per captured page.
 pub fn capture_pages(document: &Document, options: &ShotOptions) -> Result<Vec<Page>, String> {
     let browser = browser::find().ok_or_else(browser::missing_message)?;
-    let page = page_html(document, options);
+    let page = page_html(document, options.theme);
 
     let headings: Vec<String> = document
         .blocks
@@ -226,6 +271,7 @@ fn capture_all_pages(
             &workspace.join(format!("page-{index}.png")),
             options.width,
             range.height,
+            scale(options),
         )?;
         pages.push(Page {
             shot,
@@ -370,19 +416,31 @@ fn capture_page(
         &workspace.join("shot.png"),
         options.width,
         height,
+        scale(options),
     )
 }
 
+/// The device scale factor to capture at, never zero and never absurd.
+fn scale(options: &ShotOptions) -> u32 {
+    options.scale.clamp(1, MAX_SCALE)
+}
+
 /// Capture one window of `page_file` as a PNG, clamped to a sane height.
+///
+/// `--window-size` is CSS pixels and the image comes out `scale` times larger on each
+/// axis, so the layout is identical at every scale — only the pixel density changes.
+/// [`Shot`] reports the image's real pixel dimensions.
 fn screenshot(
     browser: &Path,
     page_file: &Path,
     image_file: &Path,
     width: u32,
     height: u32,
+    scale: u32,
 ) -> Result<Shot, String> {
     let height = height.clamp(MIN_HEIGHT, MAX_HEIGHT);
     let status = browser_command(browser)
+        .arg(format!("--force-device-scale-factor={scale}"))
         .arg(format!("--screenshot={}", image_file.display()))
         .arg(format!("--window-size={width},{height}"))
         .arg(file_url(page_file))
@@ -399,12 +457,20 @@ fn screenshot(
         )
     })?;
 
-    Ok(Shot { png, width, height })
+    Ok(Shot {
+        png,
+        width: width * scale,
+        height: height * scale,
+    })
 }
 
 /// Load the measuring copy and return the rendered DOM the browser dumped.
+///
+/// Measuring always runs at scale 1: block boxes and the page height are CSS pixels,
+/// and the capture pass applies its own density on top of them.
 fn dump_dom(browser: &Path, page_file: &Path, width: u32) -> Option<String> {
     let output = browser_command(browser)
+        .arg("--force-device-scale-factor=1")
         .arg("--dump-dom")
         .arg(format!("--window-size={width},{MEASURE_HEIGHT}"))
         .arg(file_url(page_file))
@@ -474,7 +540,6 @@ fn browser_command(browser: &Path) -> Command {
         "--hide-scrollbars",
         "--no-first-run",
         "--disable-extensions",
-        "--force-device-scale-factor=1",
         "--virtual-time-budget=4000",
     ]);
     command
@@ -502,8 +567,8 @@ fn with_measuring_script(page: &str) -> String {
     }
 }
 
-/// Create a unique scratch directory for one capture.
-fn scratch_workspace(root: &Path) -> Result<PathBuf, String> {
+/// Create a unique scratch directory for one capture or play session.
+pub(crate) fn scratch_workspace(root: &Path) -> Result<PathBuf, String> {
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|elapsed| elapsed.as_nanos())
@@ -515,13 +580,13 @@ fn scratch_workspace(root: &Path) -> Result<PathBuf, String> {
 }
 
 /// Write a file, reporting the path on failure.
-fn write(path: &Path, contents: &str) -> Result<(), String> {
+pub(crate) fn write(path: &Path, contents: &str) -> Result<(), String> {
     std::fs::write(path, contents)
         .map_err(|error| format!("could not write {}: {error}", path.display()))
 }
 
 /// A `file://` URL for a local path, which is what the browser needs to load it.
-fn file_url(path: &Path) -> String {
+pub(crate) fn file_url(path: &Path) -> String {
     let text = path.to_string_lossy().replace('\\', "/");
     if text.starts_with('/') {
         format!("file://{text}")
@@ -534,6 +599,45 @@ fn file_url(path: &Path) -> String {
 mod tests {
     use super::*;
     use doc_core::format::parse;
+
+    #[test]
+    fn reading_pages_fit_a_vision_model_without_downscaling() {
+        for width in [
+            None,
+            Some(320),
+            Some(860),
+            Some(1200),
+            Some(1568),
+            Some(9000),
+        ] {
+            let options = ShotOptions::for_reading(width);
+            assert!(
+                options.width * options.page_height <= VISION_MAX_PIXELS,
+                "a {}x{} page would be downscaled in transit",
+                options.width,
+                options.page_height
+            );
+            assert!(options.width.max(options.page_height) <= VISION_MAX_EDGE);
+            assert_eq!(
+                options.scale, 1,
+                "extra density would only be scaled back out"
+            );
+        }
+    }
+
+    #[test]
+    fn a_scaled_capture_reports_image_pixels_not_css_pixels() {
+        let options = ShotOptions {
+            scale: 2,
+            ..ShotOptions::default()
+        };
+        assert_eq!(scale(&options), 2);
+        let absurd = ShotOptions {
+            scale: 99,
+            ..ShotOptions::default()
+        };
+        assert_eq!(scale(&absurd), MAX_SCALE);
+    }
 
     #[test]
     fn the_measuring_script_goes_inside_the_body() {

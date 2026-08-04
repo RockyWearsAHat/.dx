@@ -97,19 +97,77 @@ pub fn join_chunks(texts_json: &str) -> Result<String, JsValue> {
 /// document shown in an editor webview is byte-identical to the one a person opens in a
 /// browser or an agent sees as an image. `theme` is `auto`, `light`, or `dark`; `fragment`
 /// emits just the document container (for embedding in an existing page) instead of a full
-/// document; `document_css` opts into the document's own `::style` blocks.
+/// document. The document's own `::style` blocks are applied either way.
+///
+/// `resources` answers the document's references ([`references`] lists them): JSON
+/// `{"files": {path: text}, "documents": {path: source}}`. A host with nothing to give
+/// omits it, and every reference renders as its honest sentence — the page never shows a
+/// referenced listing as silently empty. Malformed JSON is treated the same way, which
+/// keeps the mistake visible on the page instead of hidden behind a blank block.
 #[wasm_bindgen]
-pub fn render_html(text: &str, theme: &str, fragment: bool, document_css: bool) -> String {
-    let document = doc_core::format::parse(text);
+pub fn render_html(text: &str, theme: &str, fragment: bool, resources: Option<String>) -> String {
+    let mut document = doc_core::format::parse(text);
+    doc_core::resolve::hydrate(&mut document, &provided_from(resources.as_deref()));
     doc_core::render::html(
         &document,
         &doc_core::render::HtmlOptions {
             theme: doc_core::render::Theme::parse(theme),
             fragment,
-            document_css,
             ..doc_core::render::HtmlOptions::default()
         },
     )
+}
+
+/// Every reference `.dx` source makes past its own edge, as JSON
+/// `[{"kind": "file" | "document", "path": string}, …]`, deduplicated.
+///
+/// This is the prefetch list for [`render_html`]'s `resources`: a host gathers each
+/// path — sibling documents from the repository pack, files from the workspace — and
+/// hands the set back. A document with no references returns `[]`.
+#[wasm_bindgen]
+pub fn references(text: &str) -> String {
+    let document = doc_core::format::parse(text);
+    let rows: Vec<serde_json::Value> = doc_core::resolve::references(&document)
+        .iter()
+        .map(|reference| match reference {
+            doc_core::resolve::Reference::File(path) => {
+                serde_json::json!({"kind": "file", "path": path})
+            }
+            doc_core::resolve::Reference::Document(path) => {
+                serde_json::json!({"kind": "document", "path": path})
+            }
+        })
+        .collect();
+    serde_json::to_string(&rows).unwrap_or_else(|_| "[]".to_string())
+}
+
+/// Build the resolver [`render_html`] hydrates against from its `resources` JSON.
+fn provided_from(resources: Option<&str>) -> doc_core::resolve::Provided {
+    let mut provided = doc_core::resolve::Provided::new();
+    let Some(raw) = resources else {
+        return provided;
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(raw) else {
+        return provided;
+    };
+    if let Some(entries) = value.get("files").and_then(serde_json::Value::as_object) {
+        for (path, text) in entries {
+            if let Some(text) = text.as_str() {
+                provided.add_file(path, text);
+            }
+        }
+    }
+    if let Some(entries) = value
+        .get("documents")
+        .and_then(serde_json::Value::as_object)
+    {
+        for (path, source) in entries {
+            if let Some(source) = source.as_str() {
+                provided.add_document(path, source);
+            }
+        }
+    }
+    provided
 }
 
 /// Render `.dx` source to Markdown, the text view an agent or a diff reads.
@@ -291,6 +349,46 @@ pub fn set_block(text: &str, id: &str, body: &str) -> Result<String, JsValue> {
     doc_core::edit::set_block(text, id, body).map_err(js_err)
 }
 
+/// Tick or untick the box at position `item` of the checklist called `id`, counting from
+/// zero — the position the renderer writes on every mark as `data-check`.
+///
+/// The same [`doc_core::edit::toggle_check`] the `dx check` command runs, so a box clicked
+/// on the page and one ticked by an agent flip the identical marker. Every other item, and
+/// every other block, comes back byte-identical.
+///
+/// Returns an error when `id` names no block, names one that is not a checklist, or when the
+/// checklist has no item at `item`.
+#[wasm_bindgen]
+pub fn toggle_check(text: &str, id: &str, item: usize) -> Result<String, JsValue> {
+    let (source, _) = doc_core::edit::toggle_check(text, id, item).map_err(js_err)?;
+    Ok(source)
+}
+
+/// The canonical `::kind attrs` opening line of one block — the header an editing surface
+/// shows above the body, exactly as the writer puts it in the file.
+///
+/// Returns an error naming the ids that do exist when `id` names no block.
+#[wasm_bindgen]
+pub fn block_header(text: &str, id: &str) -> Result<String, JsValue> {
+    doc_core::edit::block_header(text, id).map_err(js_err)
+}
+
+/// Replace one block wholesale — header and body — so a reader retyping a header retypes
+/// the block. An empty `header` means the body is plain text, read the way the file itself
+/// would read it.
+///
+/// Returns JSON `{"source": "<canonical .dx>", "id": "<the replacement's id>"}` — the id is
+/// where the reader's cursor belongs afterwards, and it survives edits whose header named
+/// no id of its own.
+///
+/// Returns an error when `id` names no block, the header names an unknown kind or `output`,
+/// or it claims an id another block holds.
+#[wasm_bindgen]
+pub fn replace_block(text: &str, id: &str, header: &str, body: &str) -> Result<String, JsValue> {
+    let (source, id) = doc_core::edit::replace_block(text, id, header, body).map_err(js_err)?;
+    serde_json::to_string(&InsertedDto { source, id }).map_err(js_err)
+}
+
 /// Add a block of `kind` after the block called `after`, or at the top when `after` is empty.
 ///
 /// Returns JSON `{"source": "<canonical .dx>", "id": "<the new block's id>"}` — the id is
@@ -324,30 +422,109 @@ pub fn remove_block(text: &str, id: &str) -> Result<String, JsValue> {
 /// same [`doc_core::edit::preview_block`] DX.app reaches through `dx render --block`, so
 /// what a reader sees mid-sentence in an editor and on a Mac is the same markup.
 ///
-/// `theme` is `auto`, `light`, or `dark`; `document_css` opts into the document's own
-/// `::style` blocks, matching [`render_html`] so a previewed block is styled like the page
-/// it sits in.
+/// `theme` is `auto`, `light`, or `dark`. The block is drawn exactly as [`render_html`]
+/// draws it in the page, so a previewed block is dressed like the page it sits in.
 ///
 /// Returns an error naming the ids that do exist when `id` names no block.
 #[wasm_bindgen]
-pub fn preview_block(
-    text: &str,
-    id: &str,
-    body: &str,
-    theme: &str,
-    document_css: bool,
-) -> Result<String, JsValue> {
+pub fn preview_block(text: &str, id: &str, body: &str, theme: &str) -> Result<String, JsValue> {
     doc_core::edit::preview_block(
         text,
         id,
         body,
         &doc_core::render::HtmlOptions {
             theme: doc_core::render::Theme::parse(theme),
-            document_css,
             ..doc_core::render::HtmlOptions::default()
         },
     )
     .map_err(js_err)
+}
+
+/// Put a node at `x`,`y` on a board, sized `w` by `h` — moving its line, adding one, or
+/// (when `node` is empty) creating a fresh node with a hidden paragraph ready to be
+/// written. `w`/`h` are canvas pixels; `0` keeps what the line already says. The board
+/// settles afterwards, so the placed node keeps its spot and nothing is left covered.
+///
+/// The same [`doc_core::edit::board_place`] the `dx board` command runs, so a node dragged
+/// in an editor and one placed by an agent land as the identical line. An editing surface
+/// only ever states measured pixels, so this door speaks numbers; the `page`/`fit` rules
+/// are spelled in the node line itself and through `dx board`.
+///
+/// Returns JSON `{"source": "<canonical .dx>", "id": "<the node's id>"}`.
+///
+/// Returns an error when the board is missing or is not a `::board` block.
+#[wasm_bindgen]
+pub fn board_place(
+    text: &str,
+    board: &str,
+    node: &str,
+    x: i32,
+    y: i32,
+    w: u32,
+    h: u32,
+) -> Result<String, JsValue> {
+    let size = |pixels: u32| {
+        if pixels == 0 {
+            doc_core::edit::SizeSpec::Keep
+        } else {
+            doc_core::edit::SizeSpec::Px(pixels)
+        }
+    };
+    let (source, id) =
+        doc_core::edit::board_place(text, board, node, Some(x), Some(y), size(w), size(h))
+            .map_err(js_err)?;
+    serde_json::to_string(&InsertedDto { source, id }).map_err(js_err)
+}
+
+/// Take a node off a board: its line, every edge pointing at it, and — when the block it
+/// showed was hidden and no other board shows it — the block itself.
+///
+/// Returns an error when the board is missing or no line names `node`.
+#[wasm_bindgen]
+pub fn board_detach(text: &str, board: &str, node: &str) -> Result<String, JsValue> {
+    doc_core::edit::board_detach(text, board, node).map_err(js_err)
+}
+
+/// Draw (`linked` true) or erase (`linked` false) the edge from `from` to `to` on a board.
+///
+/// `from_side` and `to_side` are the edges of the two nodes the line joins — `left`,
+/// `right`, `top`, `bottom`, or their initials — and empty leaves that end to the renderer.
+///
+/// Returns an error when the board or either end is missing, or when the two ends are the
+/// same node.
+#[wasm_bindgen]
+pub fn board_link(
+    text: &str,
+    board: &str,
+    from: &str,
+    to: &str,
+    linked: bool,
+    from_side: &str,
+    to_side: &str,
+) -> Result<String, JsValue> {
+    doc_core::edit::board_link(text, board, from, to, linked, from_side, to_side).map_err(js_err)
+}
+
+/// Lay out several nodes at once: `spec` is `node,x,y[,width[,height]]` per node, separated
+/// by spaces — a whole board arranged in one edit, one undo step, one re-render.
+///
+/// Returns an error when the board is missing, is not a `::board` block, or `spec` holds an
+/// item that is not a placement.
+#[wasm_bindgen]
+pub fn board_arrange(text: &str, board: &str, spec: &str) -> Result<String, JsValue> {
+    let placements = doc_core::edit::placements(spec).map_err(js_err)?;
+    doc_core::edit::board_arrange(text, board, &placements).map_err(js_err)
+}
+
+/// One field's text as decorated HTML: the source with its marks styled in place.
+///
+/// What the editing surface shows *inside* the field — `**bold**` set in bold with the
+/// `**` still on the line. [`doc_core::render::field_html`] keeps every character of the
+/// input in the output's text, which is what lets the surface map caret offsets between
+/// the two. DX.app reaches the same renderer through `dx render --field`.
+#[wasm_bindgen]
+pub fn field_html(text: &str) -> String {
+    doc_core::render::field_html(text)
 }
 
 /// JSON shape returned by [`insert_block`].

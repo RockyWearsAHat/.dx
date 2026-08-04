@@ -33,6 +33,7 @@ pub fn run(args: &Args) -> Result<String, String> {
             only: args.value("only").map(str::to_string),
             ..RunOptions::default()
         },
+        &workspace::resolver_for(&path),
     );
 
     let mut output = summary(&report);
@@ -66,10 +67,13 @@ fn summary(report: &RunReport) -> String {
         .unwrap_or(2);
     let mut out = String::new();
     for entry in &report.runs {
+        // Only a skip means a cached result; a blocked block never ran at all.
         let timing = if entry.duration_ms > 0 {
             format!("{} ms", entry.duration_ms)
-        } else {
+        } else if entry.status == "skipped" {
             "cached".to_string()
+        } else {
+            "—".to_string()
         };
         out.push_str(&format!(
             "{:<width$}  {:<8} {:<10} {}\n",

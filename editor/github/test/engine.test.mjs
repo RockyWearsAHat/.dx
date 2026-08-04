@@ -58,7 +58,7 @@ for (const build of BUILD_NAMES) {
     }
 
     // The same call the content script makes: a fragment, in GitHub's own palette.
-    const rendered = engine.render_html(expected.source, 'light', true, false);
+    const rendered = engine.render_html(expected.source, 'light', true);
     assert.equal(
       rendered,
       expected.html,
@@ -181,10 +181,12 @@ test('the worker runs as a Firefox event page, not only a Chrome service worker'
   const reply = await ask(listener, {
     kind: 'dx-engine',
     call: 'render_html',
-    args: [source, 'light', true, false],
+    // The fourth argument is the optional resources JSON; `null` is how "nothing to
+    // give" crosses the wire (JSON has no `undefined`).
+    args: [source, 'light', true, null],
   });
   assert.equal(reply.error, undefined, reply.error);
-  assert.equal(reply.value, shipped.render_html(source, 'light', true, false));
+  assert.equal(reply.value, shipped.render_html(source, 'light', true));
 });
 
 test('a call the worker does not allow is refused by name', async (t) => {
@@ -276,7 +278,7 @@ test('concurrent calls share one search for the daemon', async (t) => {
   const listener = loadWorker(shipped, daemon.fetchImpl);
   await Promise.all([
     ask(listener, { kind: 'dx-engine', call: 'stylesheet', args: [] }),
-    ask(listener, { kind: 'dx-engine', call: 'render_html', args: ['x', 'auto', true, false] }),
+    ask(listener, { kind: 'dx-engine', call: 'render_html', args: ['x', 'auto', true] }),
     ask(listener, { kind: 'dx-engine', call: 'stylesheet', args: [] }),
   ]);
 

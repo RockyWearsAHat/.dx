@@ -113,7 +113,8 @@ class DxEditorProvider implements vscode.CustomTextEditorProvider {
         document.getText(),
         path.basename(document.fileName),
         makeNonce(),
-        this.surface
+        this.surface,
+        document.uri.scheme === 'file' ? path.dirname(document.uri.fsPath) : undefined
       );
     };
     refresh();
@@ -200,14 +201,47 @@ class DxTextProvider implements vscode.TextDocumentContentProvider {
 interface EditCall {
   /** Correlates this call with its reply. */
   readonly call: number;
-  /** `source`, `draw`, `commit`, or `remove`. */
+  /**
+   * `source`, `parts`, `draw`, `decorate`, `commit`, `replace`, `remove`, `run`, `check`, or
+   * `board`.
+   */
   readonly op: string;
   /** The block the call is about. */
   readonly id?: string;
-  /** The body being written, for `draw` and `commit`. */
+  /** The characters being written, for `draw`, `decorate`, and `commit`. */
   readonly text?: string;
+  /** The `::kind attrs` opening line being written, for `replace`. */
+  readonly header?: string;
+  /** The body being written, for `replace`. */
+  readonly body?: string;
   /** `insert` when Return should start the next paragraph after this one. */
   readonly then?: string;
+  /** For `check`, the box's position in its checklist, counting from zero. */
+  readonly item?: number;
+  /** A board call's verb: `place`, `add`, `arrange`, `detach`, `link`, or `unlink`. */
+  readonly action?: string;
+  /** A board call's details: which node, where, and which edge. */
+  readonly spec?: BoardSpec;
+}
+
+/** What one board operation needs to know. */
+interface BoardSpec {
+  /** The node a `place` or `detach` is about. */
+  readonly node?: string;
+  /** Canvas coordinates for `place` and `add`. */
+  readonly x?: number;
+  readonly y?: number;
+  /** A node's box for `place`; 0 or absent keeps what the line already says. */
+  readonly w?: number;
+  readonly h?: number;
+  /** Every node an `arrange` places, as `node,x,y,width,height` items separated by spaces. */
+  readonly arrangement?: string;
+  /** The ends of the edge a `link`/`unlink` draws or erases. */
+  readonly from?: string;
+  readonly to?: string;
+  /** The sides of those two nodes the edge meets; empty leaves the end to the renderer. */
+  readonly fromSide?: string;
+  readonly toSide?: string;
 }
 
 /** What an edit produced: an answer for the caller, or a failure to show on the page. */
@@ -219,7 +253,7 @@ interface EditOutcome {
    * with `{ document, focus }` — the re-rendered document for the page to swap in, and the
    * block to open once it is there.
    */
-  value?: string | { document: string; focus?: string };
+  value?: string | { document: string; focus?: string } | { header: string; body: string };
   /** A sentence the editor shows on the page. */
   error?: string;
 }
@@ -242,16 +276,58 @@ async function applyEdit(
 ): Promise<EditOutcome> {
   const source = document.getText();
   const id = call.id ?? '';
+  // The folder the document's references resolve against, so a re-rendered sheet shows
+  // `::code src=` listings and cross-document board nodes as their current content.
+  const dir = document.uri.scheme === 'file' ? path.dirname(document.uri.fsPath) : undefined;
 
   try {
     switch (call.op) {
       case 'source':
         return { value: engine().block_source(source, id) };
 
+      // The block split the way the editing surface shows it: the writer's own
+      // `::kind attrs` line above, the editable body beneath.
+      case 'parts':
+        return {
+          value: {
+            header: engine().block_header(source, id),
+            body: engine().block_source(source, id),
+          },
+        };
+
       // A read, and the only call that changes nothing: what the block would look like with
       // the characters currently in the field.
       case 'draw':
         return { value: blockHtml(source, id, call.text ?? '') };
+
+      // The characters currently in a prose field, decorated by the engine — marks styled
+      // in place, every byte kept. A pure function of the text; the document is not read.
+      case 'decorate':
+        return { value: engine().field_html(call.text ?? '') };
+
+      // Execute one `run` block through the CLI, which is the only thing that runs code.
+      // The file is saved first — `dx run` reads from disk — and the buffer is brought back
+      // in step with what the run wrote before the page is re-rendered from it.
+      case 'run': {
+        if (document.isDirty) {
+          await document.save();
+        }
+        const file = document.uri.fsPath;
+        const before = document.getText();
+        const result = await runCli(['run', file, '--only', id], path.dirname(file));
+        const disk = fs.readFileSync(file, 'utf8');
+        if (disk === before) {
+          // Nothing was written: the run never happened (a missing CLI, a refused
+          // sandbox). The sentence explaining why is the only thing there is to show.
+          return { error: result.output || `dx run wrote nothing for \`${id}\`` };
+        }
+        // A failed *block* also lands here, deliberately: the failure was written into
+        // the document as an output block, and the page showing it is the report.
+        wrote(disk);
+        await replaceAll(document, disk);
+        await document.save();
+        return { value: { document: sheetHtml(disk, dir) } };
+      }
 
       case 'commit': {
         let updated = engine().set_block(source, id, call.text ?? '');
@@ -265,14 +341,91 @@ async function applyEdit(
         }
         wrote(updated);
         await replaceAll(document, updated);
-        return { value: { document: sheetHtml(updated), focus } };
+        return { value: { document: sheetHtml(updated, dir), focus } };
+      }
+
+      // A retype: the reader rewrote the tag line over the block, so the whole block is
+      // replaced — kind, attributes, and body — through the same `doc-core` rule
+      // `dx set --header` is.
+      case 'replace': {
+        const replaced = JSON.parse(
+          engine().replace_block(source, id, call.header ?? '', call.body ?? '')
+        ) as { source: string; id: string };
+        let updated = replaced.source;
+        let focus: string | undefined;
+        if (call.then === 'insert') {
+          const inserted = JSON.parse(
+            engine().insert_block(updated, replaced.id, 'paragraph', '')
+          ) as { source: string; id: string };
+          updated = inserted.source;
+          focus = inserted.id;
+        }
+        wrote(updated);
+        await replaceAll(document, updated);
+        return { value: { document: sheetHtml(updated, dir), focus } };
       }
 
       case 'remove': {
         const updated = engine().remove_block(source, id);
         wrote(updated);
         await replaceAll(document, updated);
-        return { value: { document: sheetHtml(updated) } };
+        return { value: { document: sheetHtml(updated, dir) } };
+      }
+
+      // A box on a checklist, ticked by clicking it. The marker is the format's, so flipping
+      // it is `doc-core`'s — the same `dx check` an agent runs.
+      case 'check': {
+        const updated = engine().toggle_check(source, id, Math.max(0, Math.round(call.item ?? 0)));
+        wrote(updated);
+        await replaceAll(document, updated);
+        return { value: { document: sheetHtml(updated, dir) } };
+      }
+
+      // A board operation: dragging, linking, adding, or deleting a node on the canvas.
+      // The line rewriting is entirely `doc-core`'s — the same `dx board` an agent runs —
+      // so the surface never grows a copy of the node-line grammar.
+      case 'board': {
+        const spec = call.spec ?? {};
+        const action = call.action ?? '';
+        let updated: string;
+        let focus: string | undefined;
+        if (action === 'place' || action === 'add') {
+          const placed = JSON.parse(
+            engine().board_place(
+              source,
+              id,
+              action === 'add' ? '' : spec.node ?? '',
+              Math.round(spec.x ?? 0),
+              Math.round(spec.y ?? 0),
+              Math.max(0, Math.round(spec.w ?? 0)),
+              Math.max(0, Math.round(spec.h ?? 0))
+            )
+          ) as { source: string; id: string };
+          updated = placed.source;
+          // A fresh node is a block waiting for its first words: open it.
+          if (action === 'add') {
+            focus = placed.id;
+          }
+        } else if (action === 'arrange') {
+          updated = engine().board_arrange(source, id, spec.arrangement ?? '');
+        } else if (action === 'detach') {
+          updated = engine().board_detach(source, id, spec.node ?? '');
+        } else if (action === 'link' || action === 'unlink') {
+          updated = engine().board_link(
+            source,
+            id,
+            spec.from ?? '',
+            spec.to ?? '',
+            action === 'link',
+            spec.fromSide ?? '',
+            spec.toSide ?? ''
+          );
+        } else {
+          return { error: `unknown board action \`${action}\`` };
+        }
+        wrote(updated);
+        await replaceAll(document, updated);
+        return { value: { document: sheetHtml(updated, dir), focus } };
       }
 
       default:
@@ -388,7 +541,7 @@ async function exportHtml(uri?: vscode.Uri): Promise<void> {
     return;
   }
   const document = await vscode.workspace.openTextDocument(target);
-  const page = engine().render_html(document.getText(), 'auto', false, false);
+  const page = engine().render_html(document.getText(), 'auto', false);
   const output = target.with({ path: `${stripExtension(target.path)}.html` });
 
   await vscode.workspace.fs.writeFile(output, Buffer.from(page, 'utf8'));

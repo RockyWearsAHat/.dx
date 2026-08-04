@@ -5,6 +5,45 @@ let wasm_bindgen = (function(exports) {
     }
 
     /**
+     * The canonical `::kind attrs` opening line of one block — the header an editing surface
+     * shows above the body, exactly as the writer puts it in the file.
+     *
+     * Returns an error naming the ids that do exist when `id` names no block.
+     * @param {string} text
+     * @param {string} id
+     * @returns {string}
+     */
+    function block_header(text, id) {
+        let deferred4_0;
+        let deferred4_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(text, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passStringToWasm0(id, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len1 = WASM_VECTOR_LEN;
+            wasm.block_header(retptr, ptr0, len0, ptr1, len1);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
+            var ptr3 = r0;
+            var len3 = r1;
+            if (r3) {
+                ptr3 = 0; len3 = 0;
+                throw takeObject(r2);
+            }
+            deferred4_0 = ptr3;
+            deferred4_1 = len3;
+            return getStringFromWasm0(ptr3, len3);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export3(deferred4_0, deferred4_1, 1);
+        }
+    }
+    exports.block_header = block_header;
+
+    /**
      * The editable text of one block — what a surface puts in the field when a reader clicks it.
      *
      * The same [`doc_core::edit`] the `dx` command line calls, so a block edited in the VS Code
@@ -44,6 +83,201 @@ let wasm_bindgen = (function(exports) {
         }
     }
     exports.block_source = block_source;
+
+    /**
+     * Lay out several nodes at once: `spec` is `node,x,y[,width[,height]]` per node, separated
+     * by spaces — a whole board arranged in one edit, one undo step, one re-render.
+     *
+     * Returns an error when the board is missing, is not a `::board` block, or `spec` holds an
+     * item that is not a placement.
+     * @param {string} text
+     * @param {string} board
+     * @param {string} spec
+     * @returns {string}
+     */
+    function board_arrange(text, board, spec) {
+        let deferred5_0;
+        let deferred5_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(text, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passStringToWasm0(board, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len1 = WASM_VECTOR_LEN;
+            const ptr2 = passStringToWasm0(spec, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len2 = WASM_VECTOR_LEN;
+            wasm.board_arrange(retptr, ptr0, len0, ptr1, len1, ptr2, len2);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
+            var ptr4 = r0;
+            var len4 = r1;
+            if (r3) {
+                ptr4 = 0; len4 = 0;
+                throw takeObject(r2);
+            }
+            deferred5_0 = ptr4;
+            deferred5_1 = len4;
+            return getStringFromWasm0(ptr4, len4);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export3(deferred5_0, deferred5_1, 1);
+        }
+    }
+    exports.board_arrange = board_arrange;
+
+    /**
+     * Take a node off a board: its line, every edge pointing at it, and — when the block it
+     * showed was hidden and no other board shows it — the block itself.
+     *
+     * Returns an error when the board is missing or no line names `node`.
+     * @param {string} text
+     * @param {string} board
+     * @param {string} node
+     * @returns {string}
+     */
+    function board_detach(text, board, node) {
+        let deferred5_0;
+        let deferred5_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(text, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passStringToWasm0(board, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len1 = WASM_VECTOR_LEN;
+            const ptr2 = passStringToWasm0(node, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len2 = WASM_VECTOR_LEN;
+            wasm.board_detach(retptr, ptr0, len0, ptr1, len1, ptr2, len2);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
+            var ptr4 = r0;
+            var len4 = r1;
+            if (r3) {
+                ptr4 = 0; len4 = 0;
+                throw takeObject(r2);
+            }
+            deferred5_0 = ptr4;
+            deferred5_1 = len4;
+            return getStringFromWasm0(ptr4, len4);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export3(deferred5_0, deferred5_1, 1);
+        }
+    }
+    exports.board_detach = board_detach;
+
+    /**
+     * Draw (`linked` true) or erase (`linked` false) the edge from `from` to `to` on a board.
+     *
+     * `from_side` and `to_side` are the edges of the two nodes the line joins — `left`,
+     * `right`, `top`, `bottom`, or their initials — and empty leaves that end to the renderer.
+     *
+     * Returns an error when the board or either end is missing, or when the two ends are the
+     * same node.
+     * @param {string} text
+     * @param {string} board
+     * @param {string} from
+     * @param {string} to
+     * @param {boolean} linked
+     * @param {string} from_side
+     * @param {string} to_side
+     * @returns {string}
+     */
+    function board_link(text, board, from, to, linked, from_side, to_side) {
+        let deferred8_0;
+        let deferred8_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(text, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passStringToWasm0(board, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len1 = WASM_VECTOR_LEN;
+            const ptr2 = passStringToWasm0(from, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len2 = WASM_VECTOR_LEN;
+            const ptr3 = passStringToWasm0(to, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len3 = WASM_VECTOR_LEN;
+            const ptr4 = passStringToWasm0(from_side, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len4 = WASM_VECTOR_LEN;
+            const ptr5 = passStringToWasm0(to_side, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len5 = WASM_VECTOR_LEN;
+            wasm.board_link(retptr, ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, linked, ptr4, len4, ptr5, len5);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
+            var ptr7 = r0;
+            var len7 = r1;
+            if (r3) {
+                ptr7 = 0; len7 = 0;
+                throw takeObject(r2);
+            }
+            deferred8_0 = ptr7;
+            deferred8_1 = len7;
+            return getStringFromWasm0(ptr7, len7);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export3(deferred8_0, deferred8_1, 1);
+        }
+    }
+    exports.board_link = board_link;
+
+    /**
+     * Put a node at `x`,`y` on a board, sized `w` by `h` — moving its line, adding one, or
+     * (when `node` is empty) creating a fresh node with a hidden paragraph ready to be
+     * written. `w`/`h` are canvas pixels; `0` keeps what the line already says. The board
+     * settles afterwards, so the placed node keeps its spot and nothing is left covered.
+     *
+     * The same [`doc_core::edit::board_place`] the `dx board` command runs, so a node dragged
+     * in an editor and one placed by an agent land as the identical line. An editing surface
+     * only ever states measured pixels, so this door speaks numbers; the `page`/`fit` rules
+     * are spelled in the node line itself and through `dx board`.
+     *
+     * Returns JSON `{"source": "<canonical .dx>", "id": "<the node's id>"}`.
+     *
+     * Returns an error when the board is missing or is not a `::board` block.
+     * @param {string} text
+     * @param {string} board
+     * @param {string} node
+     * @param {number} x
+     * @param {number} y
+     * @param {number} w
+     * @param {number} h
+     * @returns {string}
+     */
+    function board_place(text, board, node, x, y, w, h) {
+        let deferred5_0;
+        let deferred5_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(text, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passStringToWasm0(board, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len1 = WASM_VECTOR_LEN;
+            const ptr2 = passStringToWasm0(node, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len2 = WASM_VECTOR_LEN;
+            wasm.board_place(retptr, ptr0, len0, ptr1, len1, ptr2, len2, x, y, w, h);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
+            var ptr4 = r0;
+            var len4 = r1;
+            if (r3) {
+                ptr4 = 0; len4 = 0;
+                throw takeObject(r2);
+            }
+            deferred5_0 = ptr4;
+            deferred5_1 = len4;
+            return getStringFromWasm0(ptr4, len4);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export3(deferred5_0, deferred5_1, 1);
+        }
+    }
+    exports.board_place = board_place;
 
     /**
      * Build a search index over a set of documents and run a query in one call.
@@ -142,6 +376,36 @@ let wasm_bindgen = (function(exports) {
         }
     }
     exports.decompress = decompress;
+
+    /**
+     * One field's text as decorated HTML: the source with its marks styled in place.
+     *
+     * What the editing surface shows *inside* the field — `**bold**` set in bold with the
+     * `**` still on the line. [`doc_core::render::field_html`] keeps every character of the
+     * input in the output's text, which is what lets the surface map caret offsets between
+     * the two. DX.app reaches the same renderer through `dx render --field`.
+     * @param {string} text
+     * @returns {string}
+     */
+    function field_html(text) {
+        let deferred2_0;
+        let deferred2_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(text, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.field_html(retptr, ptr0, len0);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred2_0 = r0;
+            deferred2_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export3(deferred2_0, deferred2_1, 1);
+        }
+    }
+    exports.field_html = field_html;
 
     /**
      * Add a block of `kind` after the block called `after`, or at the top when `after` is empty.
@@ -350,19 +614,17 @@ let wasm_bindgen = (function(exports) {
      * same [`doc_core::edit::preview_block`] DX.app reaches through `dx render --block`, so
      * what a reader sees mid-sentence in an editor and on a Mac is the same markup.
      *
-     * `theme` is `auto`, `light`, or `dark`; `document_css` opts into the document's own
-     * `::style` blocks, matching [`render_html`] so a previewed block is styled like the page
-     * it sits in.
+     * `theme` is `auto`, `light`, or `dark`. The block is drawn exactly as [`render_html`]
+     * draws it in the page, so a previewed block is dressed like the page it sits in.
      *
      * Returns an error naming the ids that do exist when `id` names no block.
      * @param {string} text
      * @param {string} id
      * @param {string} body
      * @param {string} theme
-     * @param {boolean} document_css
      * @returns {string}
      */
-    function preview_block(text, id, body, theme, document_css) {
+    function preview_block(text, id, body, theme) {
         let deferred6_0;
         let deferred6_1;
         try {
@@ -375,7 +637,7 @@ let wasm_bindgen = (function(exports) {
             const len2 = WASM_VECTOR_LEN;
             const ptr3 = passStringToWasm0(theme, wasm.__wbindgen_export, wasm.__wbindgen_export2);
             const len3 = WASM_VECTOR_LEN;
-            wasm.preview_block(retptr, ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, document_css);
+            wasm.preview_block(retptr, ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3);
             var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
             var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
             var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
@@ -395,6 +657,36 @@ let wasm_bindgen = (function(exports) {
         }
     }
     exports.preview_block = preview_block;
+
+    /**
+     * Every reference `.dx` source makes past its own edge, as JSON
+     * `[{"kind": "file" | "document", "path": string}, …]`, deduplicated.
+     *
+     * This is the prefetch list for [`render_html`]'s `resources`: a host gathers each
+     * path — sibling documents from the repository pack, files from the workspace — and
+     * hands the set back. A document with no references returns `[]`.
+     * @param {string} text
+     * @returns {string}
+     */
+    function references(text) {
+        let deferred2_0;
+        let deferred2_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(text, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.references(retptr, ptr0, len0);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred2_0 = r0;
+            deferred2_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export3(deferred2_0, deferred2_1, 1);
+        }
+    }
+    exports.references = references;
 
     /**
      * Take one block out, returning the document's canonical source without it.
@@ -441,31 +733,39 @@ let wasm_bindgen = (function(exports) {
      * document shown in an editor webview is byte-identical to the one a person opens in a
      * browser or an agent sees as an image. `theme` is `auto`, `light`, or `dark`; `fragment`
      * emits just the document container (for embedding in an existing page) instead of a full
-     * document; `document_css` opts into the document's own `::style` blocks.
+     * document. The document's own `::style` blocks are applied either way.
+     *
+     * `resources` answers the document's references ([`references`] lists them): JSON
+     * `{"files": {path: text}, "documents": {path: source}}`. A host with nothing to give
+     * omits it, and every reference renders as its honest sentence — the page never shows a
+     * referenced listing as silently empty. Malformed JSON is treated the same way, which
+     * keeps the mistake visible on the page instead of hidden behind a blank block.
      * @param {string} text
      * @param {string} theme
      * @param {boolean} fragment
-     * @param {boolean} document_css
+     * @param {string | null} [resources]
      * @returns {string}
      */
-    function render_html(text, theme, fragment, document_css) {
-        let deferred3_0;
-        let deferred3_1;
+    function render_html(text, theme, fragment, resources) {
+        let deferred4_0;
+        let deferred4_1;
         try {
             const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
             const ptr0 = passStringToWasm0(text, wasm.__wbindgen_export, wasm.__wbindgen_export2);
             const len0 = WASM_VECTOR_LEN;
             const ptr1 = passStringToWasm0(theme, wasm.__wbindgen_export, wasm.__wbindgen_export2);
             const len1 = WASM_VECTOR_LEN;
-            wasm.render_html(retptr, ptr0, len0, ptr1, len1, fragment, document_css);
+            var ptr2 = isLikeNone(resources) ? 0 : passStringToWasm0(resources, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            var len2 = WASM_VECTOR_LEN;
+            wasm.render_html(retptr, ptr0, len0, ptr1, len1, fragment, ptr2, len2);
             var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
             var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            deferred3_0 = r0;
-            deferred3_1 = r1;
+            deferred4_0 = r0;
+            deferred4_1 = r1;
             return getStringFromWasm0(r0, r1);
         } finally {
             wasm.__wbindgen_add_to_stack_pointer(16);
-            wasm.__wbindgen_export3(deferred3_0, deferred3_1, 1);
+            wasm.__wbindgen_export3(deferred4_0, deferred4_1, 1);
         }
     }
     exports.render_html = render_html;
@@ -556,6 +856,57 @@ let wasm_bindgen = (function(exports) {
         }
     }
     exports.render_text = render_text;
+
+    /**
+     * Replace one block wholesale — header and body — so a reader retyping a header retypes
+     * the block. An empty `header` means the body is plain text, read the way the file itself
+     * would read it.
+     *
+     * Returns JSON `{"source": "<canonical .dx>", "id": "<the replacement's id>"}` — the id is
+     * where the reader's cursor belongs afterwards, and it survives edits whose header named
+     * no id of its own.
+     *
+     * Returns an error when `id` names no block, the header names an unknown kind or `output`,
+     * or it claims an id another block holds.
+     * @param {string} text
+     * @param {string} id
+     * @param {string} header
+     * @param {string} body
+     * @returns {string}
+     */
+    function replace_block(text, id, header, body) {
+        let deferred6_0;
+        let deferred6_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(text, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passStringToWasm0(id, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len1 = WASM_VECTOR_LEN;
+            const ptr2 = passStringToWasm0(header, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len2 = WASM_VECTOR_LEN;
+            const ptr3 = passStringToWasm0(body, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len3 = WASM_VECTOR_LEN;
+            wasm.replace_block(retptr, ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
+            var ptr5 = r0;
+            var len5 = r1;
+            if (r3) {
+                ptr5 = 0; len5 = 0;
+                throw takeObject(r2);
+            }
+            deferred6_0 = ptr5;
+            deferred6_1 = len5;
+            return getStringFromWasm0(ptr5, len5);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export3(deferred6_0, deferred6_1, 1);
+        }
+    }
+    exports.replace_block = replace_block;
 
     /**
      * Replace one block's body, returning the whole document's canonical source.
@@ -750,6 +1101,51 @@ let wasm_bindgen = (function(exports) {
         }
     }
     exports.stylesheet = stylesheet;
+
+    /**
+     * Tick or untick the box at position `item` of the checklist called `id`, counting from
+     * zero — the position the renderer writes on every mark as `data-check`.
+     *
+     * The same [`doc_core::edit::toggle_check`] the `dx check` command runs, so a box clicked
+     * on the page and one ticked by an agent flip the identical marker. Every other item, and
+     * every other block, comes back byte-identical.
+     *
+     * Returns an error when `id` names no block, names one that is not a checklist, or when the
+     * checklist has no item at `item`.
+     * @param {string} text
+     * @param {string} id
+     * @param {number} item
+     * @returns {string}
+     */
+    function toggle_check(text, id, item) {
+        let deferred4_0;
+        let deferred4_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(text, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passStringToWasm0(id, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len1 = WASM_VECTOR_LEN;
+            wasm.toggle_check(retptr, ptr0, len0, ptr1, len1, item);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
+            var ptr3 = r0;
+            var len3 = r1;
+            if (r3) {
+                ptr3 = 0; len3 = 0;
+                throw takeObject(r2);
+            }
+            deferred4_0 = ptr3;
+            deferred4_1 = len3;
+            return getStringFromWasm0(ptr3, len3);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export3(deferred4_0, deferred4_1, 1);
+        }
+    }
+    exports.toggle_check = toggle_check;
     function __wbg_get_imports() {
         const import0 = {
             __proto__: null,
@@ -811,6 +1207,10 @@ let wasm_bindgen = (function(exports) {
     heap.push(undefined, null, true, false);
 
     let heap_next = heap.length;
+
+    function isLikeNone(x) {
+        return x === undefined || x === null;
+    }
 
     function passArray8ToWasm0(arg, malloc) {
         const ptr = malloc(arg.length * 1, 1) >>> 0;

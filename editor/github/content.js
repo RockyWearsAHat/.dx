@@ -112,6 +112,7 @@
     // keeps one argument grammar for both engines rather than a second base64 path.
     sha256_hex: (bytes) => call('sha256_hex', { text: new TextDecoder().decode(bytes) }),
     render_html: (...args) => call('render_html', ...args),
+    references: (source) => call('references', source),
     stylesheet: () => call('stylesheet'),
   };
 
@@ -213,8 +214,62 @@
     return null;
   }
 
+  /// Gather what `source` references into the resources JSON `render_html` takes, or
+  /// `undefined` when it references nothing or the page's context is unknown.
+  ///
+  /// The engine says *what* is referenced (`references`) and what becomes of the bytes;
+  /// this gathers them the only way a page on github.com can: sibling documents from the
+  /// repository's committed pack, sibling files from the repository's own raw route —
+  /// the same session-carrying fetch the pack itself uses, so a private repository's
+  /// files resolve exactly like its documents. A path that cannot be gathered is left
+  /// out, and the engine renders its honest sentence in that block's place.
+  async function resourcesFor(source, context) {
+    if (!context || !context.path) return undefined;
+    let refs;
+    try {
+      refs = JSON.parse(await engine.references(source));
+    } catch {
+      return undefined;
+    }
+    if (!Array.isArray(refs) || refs.length === 0) return undefined;
+
+    const slash = context.path.lastIndexOf('/');
+    const folder = slash < 0 ? '' : context.path.slice(0, slash);
+    const inRepo = (relative) => (folder ? `${folder}/${relative}` : relative);
+    const files = {};
+    const documents = {};
+    for (const ref of refs) {
+      if (typeof ref.path !== 'string') continue;
+      if (ref.kind === 'document') {
+        const handle = await packHandle(
+          globalThis.dxResolve.rawUrl(context.location, context.ref, globalThis.dxResolve.REPO_PACK),
+        );
+        if (!handle) continue;
+        try {
+          documents[ref.path] = await engine.pack_document(handle, inRepo(ref.path));
+        } catch {
+          // Not in the pack: the engine's sentence on the page says so.
+        }
+      } else if (ref.kind === 'file') {
+        try {
+          const response = await fetch(
+            globalThis.dxResolve.rawUrl(context.location, context.ref, inRepo(ref.path)),
+            { credentials: 'same-origin' },
+          );
+          if (response.ok) files[ref.path] = await response.text();
+        } catch {
+          // Unreachable: the engine's sentence on the page says so.
+        }
+      }
+    }
+    return JSON.stringify({ files, documents });
+  }
+
   /// Build the element that shows a resolved document: the rendered page, on a blank sheet.
-  async function documentElement(source) {
+  ///
+  /// `context` is `{ location, ref, path }` when the page knows where the document sits,
+  /// which is what lets its references resolve; without it they render as sentences.
+  async function documentElement(source, context) {
     const host = document.createElement('div');
     host.className = 'dx-github-doc';
     host.setAttribute(DONE, 'true');
@@ -222,7 +277,9 @@
     // Both come from the engine in the service worker, so both are awaited.
     const [css, html] = await Promise.all([
       engine.stylesheet(),
-      engine.render_html(source, theme(), true, false),
+      resourcesFor(source, context).then((resources) =>
+        engine.render_html(source, theme(), true, resources),
+      ),
     ]);
 
     // A shadow root keeps the document's stylesheet from touching GitHub's page and vice
@@ -260,11 +317,11 @@
   ///
   /// The replacement is built before the container is emptied, so a failure inside the engine
   /// leaves GitHub's own rendering in place rather than blanking the file.
-  async function show(container, outcome) {
+  async function show(container, outcome, context) {
     if (outcome.state === 'not-a-pointer') return;
     const replacement =
       outcome.state === 'document'
-        ? await documentElement(outcome.source)
+        ? await documentElement(outcome.source, context)
         : noticeElement(outcome.message);
     container.setAttribute(DONE, 'true');
     container.textContent = '';
@@ -332,7 +389,7 @@
     if (pointerText === null) return;
 
     const outcome = await resolveVerified(location, ref, path, pointerText);
-    await show(container, outcome);
+    await show(container, outcome, { location, ref, path });
   }
 
   /// Fetch a file as text, falling back to the text GitHub already rendered.

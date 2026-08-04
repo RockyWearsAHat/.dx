@@ -6,7 +6,7 @@ This document is the canonical behavior spec for .dx source in this repository.
 
 - Keep .dx deterministic and block-structured.
 - Prevent parser drift between extension/webview and backend/database ingestion.
-- Prevent in-document CSS from globally mutating rendered output.
+- Let a document dress itself identically on every surface, without letting its CSS fetch.
 - Guarantee malformed intermediate states do not become persisted canonical state.
 
 ## Canonical Source Shape
@@ -51,7 +51,9 @@ Every block accepts `id` and `class`; the attributes below are what each adds.
 - `bulleted-list` attrs: none
 - `numbered-list` attrs: none
 - `checklist` attrs: none — one `[x] text` / `[ ] text` line per item
-- `code` attrs: `lang` or `language`, `run`, `deps`, `timeout`, `format`
+- `code` attrs: `lang` or `language`, `src`, `run`, `deps`, `timeout`, `format` — `src`
+  names a sibling file whose **current text is the listing** (see References below); the
+  stored body stays as written and unset `src` serializes to nothing
 - `output` attrs: `for`, `status`, `exit`, `hash`, `format`
 - `image` attrs: `src`
 - `nav` attrs: `label`
@@ -59,9 +61,34 @@ Every block accepts `id` and `class`; the attributes below are what each adds.
 - `html` attrs: none — author markup, rendered through the allow-list in `render::escape`
 - `svg` attrs: none — a drawing, sanitized the same way
 - `graph` / `mermaid` attrs: none — kept verbatim and shown as its own source
+- `board` attrs: `height` (viewport CSS px; unset means the renderer's default) — the body
+  is one reference line per node, `- <block-id> x=N y=N w=N h=N to=a,b`, kept **verbatim**:
+  the line grammar belongs to the renderer (`render::board`), unknown keys survive a
+  round-trip, and each line names a block of the *same document* (usually one marked
+  `hidden`, so it appears on the board and not in the page flow) — or, as a
+  **cross-document reference**, one block of a *sibling document*: `- plan.dx#step-one
+  x=20 y=20` shows `step-one` of `plan.dx`, current at every render (see References
+  below). Saving a board body creates a hidden paragraph for any line naming a block the
+  document does not have — but never for a cross-document reference, whose block lives
+  in its own document.
+  - `x y w h` are the node's **whole box** in canvas pixels, and the node is drawn at exactly
+    that size. Nothing measures content to lay a board out, so a browser, a PNG, and `dx
+    board` all place the same rectangles; content longer than the box scrolls inside it.
+    `w`/`h` default to 280×180.
+  - A dimension may also state a **rule** instead of a number: `w=page` / `h=page` take the
+    page's own measures (the 680px column; the 480px default viewport), and `w=fit` / `h=fit`
+    size the node to the block it shows by the engine's own deterministic estimate — resolved
+    from nothing but the document, so every consumer still draws the identical box, and
+    re-resolved as the block is rewritten. The words survive every rewrite (`w=page` never
+    becomes `w=680`), and an edit that restates a rule's own resolved number keeps the rule;
+    only a differing number replaces it.
+  - A `to=` target may name the two sides the edge joins: `to=steps:b-t` leaves the bottom
+    and arrives at the top (`l`, `r`, `t`, `b`, or `.` for "unpinned"). A bare `to=steps` is
+    unpinned at both ends and takes whichever facing pair reads best, so every board written
+    before sides existed still draws.
 - `script` attrs: `type`, `src`, `module`
-- `style` attrs: `media` — applied only when the caller opts in with `--doc-css`
-- `stylesheet` attrs: `href`, `media` — same opt-in
+- `style` attrs: `media` — wraps the block's CSS in that media query
+- `stylesheet` attrs: `href`, `media` — imported ahead of every `::style` rule
 
 An unrecognized `::type` folds to `paragraph` and keeps its text, so a document written by a
 newer `dx` never loses content when an older one reads it.
@@ -121,6 +148,46 @@ Resolution is a pure function of the document it sits in: it never reads another
 cross-document entry is named from its target text alone. This is why the editor, the CLI, an
 agent, and the GitHub extension all show the same navigation — the renderer that compiles to
 wasm has no filesystem to consult, so there is nothing to disagree about.
+
+## References — one source of truth, shown current everywhere
+
+A document may name two things it does not itself carry, so content lives once and every
+page showing it stays current:
+
+- **A sibling file**: `::code id=listing src=src/lib.rs lang=rust` renders the file's
+  current text as its listing, and `run` executes that text. The file is the source of
+  truth; the document reviews it.
+- **One block of a sibling document**: a board node line `- plan.dx#step-one x= y=`
+  draws that block on this board, resolved fresh at every render.
+
+The rules (`doc_core::resolve` is the implementation, and there is exactly one):
+
+- **The path law (`resolve::confined`).** A reference is a relative path walking downward
+  from the document's own folder. Absolute paths, `~`, anything containing `:` or `\`,
+  and any `.` or `..` segment are refused before any resolver is asked — a document is
+  something you were handed, and rendering it must not read a file it has no claim to.
+- **Hydration is a read, and is never saved.** `resolve::hydrate` fills references into a
+  parsed, in-memory copy at view/run time. The stored document keeps the reference and an
+  empty body; unset `src` serializes to nothing, so the change is additive. Serializing a
+  hydrated document is a defect — it would turn references back into copies.
+- **The engine decides, hosts transport.** Every surface hands bytes to the same
+  hydration through a `Resolver`: the CLI and MCP read the document's folder (sibling
+  `.dx` through the store, so a pointer resolves to true content), VS Code reads the
+  workspace (pointers through `.doc/repo.dxcp`), the GitHub extension gathers what
+  `references` lists — documents from the committed pack, files from the repository's own
+  session-carrying raw route — and passes them into `render_html`. No host re-implements
+  the grammar.
+- **A reference that resolves to nothing is a sentence in the block's place** naming the
+  path — never silence, never an empty block. `dx run` refuses to execute such a listing:
+  the block is recorded `blocked`, because executing a sentence about a missing file
+  helps nobody.
+- **Fingerprints track the file.** A `src` listing's output hash is computed over the
+  file's current text, so editing the file makes the recorded output stale exactly as
+  editing an inline body would — the documentation is the test surface.
+- **A foreign block's own references stay its own.** A board node showing
+  `sub/plan.dx#listing` whose block says `src=main.rs` resolves that file as
+  `sub/main.rs` — relative to the document that owns the listing, re-checked against the
+  path law.
 
 ## Executable Code and Captured Output
 
@@ -189,27 +256,38 @@ odd case out.
 
 ## CSS Safety Contract
 
-In-document CSS code blocks are content by default.
+A document's own CSS **always applies**, on every surface: `dx render`, `dx png`, DX.app, the
+VS Code preview, the local daemon, and the github.com extension. There is no flag, because a
+`::style` block a reader has to know a switch for is a block that silently does nothing.
 
-- Embedded CSS is not globally injected during rendered capture.
-- Embedded CSS is not globally injected during normal read rendering.
-- CSS only becomes active in scoped editing mode when the user targets a selector explicitly (id/class click flow).
-- Closing the scoped CSS surface removes active scoped CSS from view state/rendering.
+Where it goes is part of the contract. The `<style data-dx-document-css>` element is emitted
+**inside `.dx-doc`**, ahead of the blocks, never in the page `<head>` — `.dx-doc` is the unit
+every editing host swaps on save, and a stylesheet stranded in a `<head>` the host never
+re-reads is a document that loses its dress the moment anyone touches it. Page and fragment
+renders therefore carry byte-identical CSS.
 
-## Persisted View State Contract
+What CSS may do is bounded, because a `.dx` is something you were handed:
 
-Persisted view state (`.doc/view-state.json`) may include:
+- **It may dress.** Selectors, properties, `@media`, and `url(data:image/…)` artwork the
+  document carries itself all pass through untouched.
+- **It may not fetch.** A `url(…)` naming a host is rewritten to an empty `url()`. A
+  `background: url(https://…)` fires on render, which turns reading a document into telling
+  its author you read it — and on github.com, telling a stranger your IP.
+- **It may not execute.** `@import`, `expression(`, `behavior:`, and `-moz-binding` are
+  neutralized in `::style` bodies, and `</style` can never close the element early.
 
-- `theme`, `resolvedTheme`
-- `appearance`
-- `viewport`
-- `effectiveCss` (scoped-only, ephemeral)
-- `sourceText`
+Neutralized, not deleted: a mangled property is a rule the browser ignores, so the
+surrounding stylesheet still parses and the author sees one thing not work rather than their
+whole dress falling off at the first bad line.
 
-Constraints:
+A `::stylesheet` block is the one deliberate exception to "may not fetch" — requesting a
+remote sheet is the block's entire stated purpose, so an author who writes one gets one. Its
+`href` is held to relative paths and `http(s)` only; `javascript:`, `data:`, and
+scheme-relative `//host` are refused, since an `@import` runs whatever it resolves to with
+the document's own privileges. Imports are emitted ahead of every rule, as CSS requires.
 
-- `effectiveCss` must be empty when no scoped selector session is active.
-- Rendered capture must not synthesize global CSS from `sourceText`.
+`render::escape::escape_style` is the authority for all of the above, and
+`document_css_may_dress_a_page_but_not_fetch_from_it` in `render::html` is its evidence.
 
 ## Non-Negotiable Invariants
 
@@ -225,15 +303,15 @@ Before shipping parser/render changes:
 1. Save and reopen `examples/welcome.dx`.
 2. Inspect viewer block list: command lines appear as their own blocks, and a
    `::paragraph id=paragraph-N` block round-trips unchanged.
-3. Capture rendered view: base style applies, in-doc CSS does not auto-apply globally.
-4. Open scoped CSS editor via id/class interaction and verify scoped CSS applies only while active.
+3. Capture rendered view: base style applies, and so does the document's own `::style`.
+4. Confirm a `::style` carrying `url(https://…)` renders with an empty `url()`.
 
 ## If Corruption Is Detected
 
-1. Restore canonical source through `saveDocumentSourceByRelativePath`.
-2. Re-open viewer and confirm typed blocks are reconstructed.
-3. Re-run capture and verify CSS safety contract.
-4. Do not hand-edit `.doc` transport artifacts directly.
+1. Run `dx sync` in the repository: it adopts plain-text `.dx` files, restores documents from
+   the packs when the index is missing, and reports what it cannot resolve.
+2. Re-open the document and confirm typed blocks are reconstructed.
+3. Do not hand-edit `.doc` pack artifacts directly.
 
 ## Storage
 
