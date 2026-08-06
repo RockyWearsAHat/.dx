@@ -268,10 +268,36 @@ pub fn save(path: &Path, document: &Document) -> Result<(), String> {
         .map_err(|error| error.to_string())
 }
 
+/// Save a document whose new content arrived as source text — a run's report, a format
+/// pass — keeping the storage form the file already has.
+///
+/// A pointer file's content goes to the store and the pointer stays a pointer; plain text
+/// is rewritten as plain text, and no store is brought into being for it. Whether a
+/// document lives in the store was decided by whoever adopted it (`dx sync`, `dx_write`,
+/// `dx_edit`), and refreshing its output is not that decision. Writing a stored document
+/// out as resolved text — which is what routing these saves through [`write_text`] did —
+/// left the store stale behind a working tree full of text git saw as a giant diff, and
+/// the next `dx sync` would have adopted that text *back*, silently rewinding anything
+/// saved to the store in between.
+///
+/// # Errors
+/// Returns a sentence when neither the store nor the file could take the save.
+pub fn save_source(path: &Path, source: &str) -> Result<(), String> {
+    let is_pointer = fs::read_to_string(path)
+        .ok()
+        .is_some_and(|text| stub::is_stub(&text));
+    if is_pointer {
+        save(path, &parse(source))
+    } else {
+        write_text(path, source)
+    }
+}
+
 /// Write raw text to `path`, creating parent directories as needed.
 ///
 /// This is the escape hatch for output that is *not* a document — a rendered HTML page, a
-/// screenshot, a report redirected by `--out`. Documents go through [`save`].
+/// screenshot, a report redirected by `--out`. Documents go through [`save`] (block edits)
+/// or [`save_source`] (whole-source rewrites that must keep the file's storage form).
 pub fn write_text(path: &Path, text: &str) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {

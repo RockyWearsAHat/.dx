@@ -29,9 +29,9 @@
 //! # Safety
 //! Running a document runs code someone else wrote, so it does not run with the reader's
 //! authority. Every block executes inside a kernel-imposed sandbox — read widely, write only
-//! its own directory, reach no network — described in full in [`confine`]. A machine that
-//! cannot impose that boundary does not run the block; it reports it as blocked and says
-//! why.
+//! its own directory plus what its reviewed `writes=` grant names, reach no network —
+//! described in full in [`confine`]. A machine that cannot impose that boundary does not
+//! run the block; it reports it as blocked and says why.
 //!
 //! Execution is also gated on review: a block whose fingerprint this machine has never
 //! approved is blocked pending review rather than run. Approval is local and only local —
@@ -74,7 +74,7 @@ pub(crate) fn env_lock() -> std::sync::MutexGuard<'static, ()> {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use doc_core::digest::sha256_hex;
@@ -107,8 +107,10 @@ pub const FORCED_NOTICE: &str =
 pub struct RunOptions {
     /// Directory the document lives in; blocks run here so relative paths resolve.
     ///
-    /// Readable, and — this is the point of the sandbox — not writable. A block opens the
-    /// spreadsheet next to the document; it does not get to replace it.
+    /// Readable, and — this is the point of the sandbox — not writable, except for the
+    /// folders a block's own `writes=` grant names, which review sees because the grant
+    /// is part of the fingerprint. A block opens the spreadsheet next to the document; it
+    /// does not get to replace it.
     pub document_dir: PathBuf,
     /// Root of the per-block working directories and the shared toolchain caches.
     pub cache_root: PathBuf,
@@ -298,7 +300,14 @@ pub fn run_document(
                 continue;
             }
         };
-        let fingerprint = fingerprint(runner, &block.text, &deps, &reads);
+        let writes = match declared_writes(block) {
+            Ok(writes) => writes,
+            Err(sentence) => {
+                refuse(block, &sentence, options, &mut runs, &mut outputs);
+                continue;
+            }
+        };
+        let fingerprint = fingerprint(runner, &block.text, &deps, &reads, &writes);
         let existing = existing_output(&document, index, &block.id);
 
         // Review mode: show what would run without executing — and without recording
@@ -309,7 +318,12 @@ pub fn run_document(
                 language: block.language.clone(),
                 status: "review".to_string(),
                 exit: 0,
-                output: review_text(&block.text, &fingerprint, ledger.is_approved(&fingerprint)),
+                output: review_text(
+                    &block.text,
+                    &fingerprint,
+                    ledger.is_approved(&fingerprint),
+                    &writes,
+                ),
                 duration_ms: 0,
             });
             continue;
@@ -366,7 +380,7 @@ pub fn run_document(
         // Reachable unapproved only through `--force`, which is the bypass that must say so.
         let bypassed = !approved;
         let started = Instant::now();
-        let mut capture = execute(runner, block, &deps, &fingerprint, options);
+        let mut capture = execute(runner, block, &deps, &writes, &fingerprint, options);
         if bypassed {
             capture.output = format!("{FORCED_NOTICE}\n{}", capture.output);
         }
@@ -489,13 +503,25 @@ fn declared_reads(block: &Block, resolver: &dyn Resolver) -> Result<Vec<(String,
     Ok(reads)
 }
 
-/// Fingerprint the inputs that decide a block's output: runner, code, dependencies, and
-/// the current text of every file the block declares it reads.
+/// Fingerprint the inputs that decide a block's output: runner, code, dependencies, the
+/// current text of every file the block declares it reads, and the write grant it asks for.
 ///
 /// The full digest, untruncated: this value is what the approval ledger trusts, and a
 /// truncated hash is one a hostile author could collide — a benign block the reader
 /// approves and a payload sharing its shortened fingerprint.
-fn fingerprint(runner: &str, code: &str, deps: &[String], reads: &[(String, String)]) -> String {
+///
+/// The grant is *prepended*, never appended: the material's tail is a `reads=` file's
+/// text, which the document's author controls, so a suffix could be forged into an
+/// ungranted block's material. No runner name starts with `writes=`, so a block with a
+/// grant and a block without one can never share material — approving one never approves
+/// the other.
+fn fingerprint(
+    runner: &str,
+    code: &str,
+    deps: &[String],
+    reads: &[(String, String)],
+    writes: &[String],
+) -> String {
     let mut material = format!("{runner}\u{1f}{}\u{1f}{code}", deps.join(","));
     for (path, text) in reads {
         material.push('\u{1f}');
@@ -503,20 +529,116 @@ fn fingerprint(runner: &str, code: &str, deps: &[String], reads: &[(String, Stri
         material.push('\u{1f}');
         material.push_str(text);
     }
+    if !writes.is_empty() {
+        material = format!("writes={}\u{1e}{material}", writes.join(","));
+    }
     sha256_hex(material.as_bytes())
 }
 
+/// The folders a block declares it may write (`writes=`), validated but not yet resolved.
+///
+/// Paths are comma-separated and obey the reference path law, with two more refusals the
+/// law does not cover: a control character (which could forge the fingerprint's grant
+/// section), and the `.doc` store — a block that could rewrite the packs could make the
+/// resolver hand back a different document, silently. The grant is part of the block's
+/// fingerprint, so review always sees the current grant and an edit to it re-opens review.
+fn declared_writes(block: &Block) -> Result<Vec<String>, String> {
+    let mut writes = Vec::new();
+    for path in block
+        .writes
+        .split(',')
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+    {
+        let Some(confined) = resolve::confined(path) else {
+            return Err(format!(
+                "{path} is not a path this block may be granted — a `writes=` folder stays \
+                 inside the document's own folder, relative and walking downward."
+            ));
+        };
+        if confined.chars().any(char::is_control) {
+            return Err(format!(
+                "a `writes=` path may not contain control characters: {path:?}"
+            ));
+        }
+        if confined == ".doc" || confined.starts_with(".doc/") {
+            return Err(
+                "the .doc store cannot be granted with `writes=` — a block that could \
+                 rewrite the packs could change what every document here says."
+                    .to_string(),
+            );
+        }
+        writes.push(confined.to_string());
+    }
+    Ok(writes)
+}
+
+/// Resolve a validated write grant against the document's folder, refusing escapes.
+///
+/// The path law already refused `..` and absolute paths; what it cannot see is a symlink
+/// inside the folder pointing out of it, so each granted path — after creating it if it
+/// does not exist yet — must canonicalize to somewhere under the folder's own canonical
+/// path. Creation checks the deepest existing ancestor *first*, so a symlinked parent
+/// cannot make `create_dir_all` build directories outside the folder either.
+fn granted_writes(writes: &[String], document_dir: &Path) -> Result<Vec<PathBuf>, String> {
+    let root = document_dir
+        .canonicalize()
+        .map_err(|error| format!("the document's folder could not be resolved: {error}"))?;
+    let mut granted = Vec::new();
+    for path in writes {
+        let stated = document_dir.join(path);
+        let mut existing = stated.clone();
+        while !existing.exists() {
+            match existing.parent() {
+                Some(parent) => existing = parent.to_path_buf(),
+                None => break,
+            }
+        }
+        let escape = format!(
+            "writes={path} resolves outside the document's folder — a symlink on the way \
+             takes the grant somewhere the review never saw, so the block was not run."
+        );
+        if !existing
+            .canonicalize()
+            .map_err(|error| format!("writes={path} could not be resolved: {error}"))?
+            .starts_with(&root)
+        {
+            return Err(escape);
+        }
+        if !stated.exists() {
+            std::fs::create_dir_all(&stated)
+                .map_err(|error| format!("writes={path} could not be created: {error}"))?;
+        }
+        let resolved = stated
+            .canonicalize()
+            .map_err(|error| format!("writes={path} could not be resolved: {error}"))?;
+        if !resolved.starts_with(&root) {
+            return Err(escape);
+        }
+        granted.push(resolved);
+    }
+    Ok(granted)
+}
+
 /// What review mode reports for one block: the exact code that would run (hydrated, so
-/// `src=` listings show the file's current text), its fingerprint, and where it stands
-/// with the approval gate.
-fn review_text(code: &str, fingerprint: &str, approved: bool) -> String {
+/// `src=` listings show the file's current text), its fingerprint, the write grant it
+/// asks for, and where it stands with the approval gate.
+fn review_text(code: &str, fingerprint: &str, approved: bool, writes: &[String]) -> String {
     let standing = if approved {
         "approved — a plain run executes this code"
     } else {
         "not approved — a run with approve records it and executes"
     };
+    let grant = if writes.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "writes {} — approving grants this code write access to these folders\n",
+            writes.join(", ")
+        )
+    };
     format!(
-        "fingerprint {fingerprint}\napproval {standing}\n--- code ---\n{code}\n--- end code ---"
+        "fingerprint {fingerprint}\napproval {standing}\n{grant}--- code ---\n{code}\n--- end code ---"
     )
 }
 
@@ -537,6 +659,7 @@ fn execute(
     runner: &str,
     block: &Block,
     deps: &[String],
+    writes: &[String],
     fingerprint: &str,
     options: &RunOptions,
 ) -> Capture {
@@ -560,14 +683,24 @@ fn execute(
     };
 
     // Installing declared libraries is the one phase that may reach the network, and it is
-    // confined in every other way — an `npm install` runs the package's own scripts.
+    // confined in every other way — an `npm install` runs the package's own scripts. The
+    // block's `writes=` grant is not part of it: an install with the network and the
+    // document's folders writable would be a fetch that can edit the project, and no
+    // install needs that.
     let writable = vec![dirs.block.clone(), dirs.toolchains.clone()];
     let installing = Grant::offline(writable.clone()).with_network();
     if let Err(message) = workdir::prepare(&dirs.block, &prepared, &installing, timeout) {
         return blocked(&message);
     }
 
-    // The block's own code: the same directories writable, and no network at all.
+    // The block's own code: the same directories writable — plus the folders its reviewed
+    // `writes=` grant names, resolved and escape-checked — and no network at all.
+    let granted = match granted_writes(writes, &options.document_dir) {
+        Ok(granted) => granted,
+        Err(message) => return blocked(&message),
+    };
+    let mut writable = writable;
+    writable.extend(granted);
     let command = match confine::confine(
         &home_in_block(&prepared.run, block, &dirs),
         &Grant::offline(writable),
@@ -622,7 +755,12 @@ fn sandbox_hint(output: &str) -> Option<&'static str> {
         return Some(
             "note: the dx sandbox lets a block write only its own directory — $DX_SANDBOX, \
              where $HOME and $TMPDIR already point. /tmp and the document's folder stay \
-             read-only.",
+             read-only. Grant the folders this code must write with `writes=` on the block \
+             (`writes=target,generated`): folders inside the document's own folder, created \
+             if missing, and the grant is part of the fingerprint, so it is reviewed exactly \
+             like the code. It grants folders, never loose files — a tool that rewrites one \
+             beside the document (cargo's Cargo.lock) needs the flag that tells it not to \
+             (`cargo test --locked`).",
         );
     }
     None
@@ -976,6 +1114,25 @@ mod tests {
     }
 
     #[test]
+    fn review_prints_the_write_grant_beside_the_code_it_widens() {
+        let mut options = gate_options("review-grant");
+        options.review_only = true;
+        let source = "::code id=build lang=bash run writes=target,gen\nmake\n::end\n\n\
+::code id=plain lang=bash run\necho hi\n::end\n";
+        let report = run_document(source, &options, &resolve::Nowhere).expect("acyclic run");
+        assert!(
+            report.runs[0].output.contains("writes target, gen"),
+            "the reviewer must see what approval grants: {}",
+            report.runs[0].output
+        );
+        assert!(
+            !report.runs[1].output.contains("writes "),
+            "an ungranted block claims no grant: {}",
+            report.runs[1].output
+        );
+    }
+
+    #[test]
     fn follow_edges_refuses_a_cycle_with_the_sentence() {
         let mut options = gate_options("follow-cycle");
         options.follow_board_edges = true;
@@ -1180,13 +1337,13 @@ mod tests {
 
     #[test]
     fn fingerprints_change_with_code_and_dependencies() {
-        let base = fingerprint("python", "print(1)", &[], &[]);
-        assert_ne!(base, fingerprint("python", "print(2)", &[], &[]));
+        let base = fingerprint("python", "print(1)", &[], &[], &[]);
+        assert_ne!(base, fingerprint("python", "print(2)", &[], &[], &[]));
         assert_ne!(
             base,
-            fingerprint("python", "print(1)", &["rich".into()], &[])
+            fingerprint("python", "print(1)", &["rich".into()], &[], &[])
         );
-        assert_ne!(base, fingerprint("node", "print(1)", &[], &[]));
+        assert_ne!(base, fingerprint("node", "print(1)", &[], &[], &[]));
         // The full digest: this value is the approval identity, and a truncated one is
         // a collision a hostile author could manufacture.
         assert_eq!(base.len(), 64);
@@ -1194,12 +1351,13 @@ mod tests {
 
     #[test]
     fn fingerprints_change_with_declared_reads() {
-        let base = fingerprint("python", "print(1)", &[], &[]);
+        let base = fingerprint("python", "print(1)", &[], &[], &[]);
         let read = fingerprint(
             "python",
             "print(1)",
             &[],
             &[("site.css".into(), "body{}".into())],
+            &[],
         );
         assert_ne!(base, read);
         // The same file with different content is a different fingerprint — that is the
@@ -1211,6 +1369,7 @@ mod tests {
                 "print(1)",
                 &[],
                 &[("site.css".into(), "body{color:red}".into())],
+                &[],
             )
         );
         // A renamed file is a different fingerprint even with identical content.
@@ -1221,8 +1380,93 @@ mod tests {
                 "print(1)",
                 &[],
                 &[("other.css".into(), "body{}".into())],
+                &[],
             )
         );
+    }
+
+    #[test]
+    fn fingerprints_change_with_the_write_grant_and_cannot_be_forged_onto_one() {
+        let bare = fingerprint("bash", "make", &[], &[], &[]);
+        let granted = fingerprint("bash", "make", &[], &[], &["target".into()]);
+        assert_ne!(bare, granted, "a grant is part of what review approves");
+        assert_ne!(
+            granted,
+            fingerprint("bash", "make", &[], &[], &["target".into(), "gen".into()]),
+            "a wider grant is a different approval"
+        );
+        // The forgery `reads=` could otherwise mount: a file whose *text* replays the
+        // grant section. Prepending the grant keeps the materials distinct, because no
+        // runner name begins with `writes=`.
+        let forged = fingerprint(
+            "bash",
+            "make",
+            &[],
+            &[("writes".into(), "target".into())],
+            &[],
+        );
+        assert_ne!(
+            granted, forged,
+            "an ungranted block can never share a granted print"
+        );
+    }
+
+    #[test]
+    fn a_write_grant_stays_inside_the_document_folder_and_never_names_the_store() {
+        let block = |writes: &str| Block {
+            kind: "code".into(),
+            id: "b".into(),
+            language: "bash".into(),
+            run: true,
+            writes: writes.into(),
+            text: "true".into(),
+            ..Block::default()
+        };
+        assert_eq!(
+            declared_writes(&block("target, generated/site")).expect("lawful grant"),
+            vec!["target".to_string(), "generated/site".to_string()]
+        );
+        assert!(declared_writes(&block("../escape")).is_err());
+        assert!(declared_writes(&block("/tmp")).is_err());
+        assert!(declared_writes(&block(".doc")).is_err());
+        assert!(declared_writes(&block(".doc/repo.dxcp")).is_err());
+        assert!(declared_writes(&block("a\u{1e}b")).is_err());
+    }
+
+    #[test]
+    fn a_symlink_cannot_carry_a_write_grant_out_of_the_folder() {
+        let scratch = std::env::temp_dir().join("dx-run-tests-writes-symlink");
+        let _ = std::fs::remove_dir_all(&scratch);
+        let outside = scratch.join("outside");
+        let folder = scratch.join("doc");
+        std::fs::create_dir_all(&outside).expect("outside");
+        std::fs::create_dir_all(&folder).expect("folder");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&outside, folder.join("out")).expect("symlink");
+        #[cfg(unix)]
+        {
+            let refused = granted_writes(&["out".into()], &folder)
+                .expect_err("a symlink out of the folder is refused");
+            assert!(
+                refused.contains("outside the document's folder"),
+                "{refused}"
+            );
+            // And a path *through* the symlink cannot make dx create outside either.
+            let through = granted_writes(&["out/deeper".into()], &folder)
+                .expect_err("a path through the symlink is refused");
+            assert!(
+                through.contains("outside the document's folder"),
+                "{through}"
+            );
+            assert!(
+                !outside.join("deeper").exists(),
+                "nothing was created outside"
+            );
+        }
+        let granted =
+            granted_writes(&["build/nested".into()], &folder).expect("a missing folder is created");
+        assert!(folder.join("build/nested").is_dir());
+        assert_eq!(granted.len(), 1);
     }
 
     #[test]
@@ -1259,12 +1503,15 @@ mod tests {
             ..Block::default()
         };
         let before = declared_reads(&block, &provided).expect("resolves");
-        let recorded = fingerprint("python", &block.text, &[], &before);
+        let recorded = fingerprint("python", &block.text, &[], &before, &[]);
 
         let mut edited = resolve::Provided::new();
         edited.add_file("site.css", "body{color:red}");
         let after = declared_reads(&block, &edited).expect("resolves");
-        assert_ne!(recorded, fingerprint("python", &block.text, &[], &after));
+        assert_ne!(
+            recorded,
+            fingerprint("python", &block.text, &[], &after, &[])
+        );
     }
 
     #[test]
@@ -1419,7 +1666,7 @@ mod tests {
     /// like, since the fingerprint is a pure function of content its author controls.
     fn document_with_a_matching_run_record(code: &str) -> String {
         let body = format!("echo {code}");
-        let hash = fingerprint("bash", &body, &[], &[]);
+        let hash = fingerprint("bash", &body, &[], &[], &[]);
         format!(
             "::code id=forged lang=bash run\n{body}\n::end\n\n\
 ::output id=forged-output for=forged status=ok exit=0 hash={hash}\n{code}\n::end\n"

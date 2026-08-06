@@ -70,6 +70,7 @@ fn push_block(blocks: &mut Vec<Block>, block_type: &str, attrs: &[Attr], content
             block.run = parse_boolean_attribute(attr(attrs, "run"));
             block.deps = js_trim(attr(attrs, "deps")).to_string();
             block.reads = js_trim(attr(attrs, "reads")).to_string();
+            block.writes = js_trim(attr(attrs, "writes")).to_string();
             block.timeout = attr(attrs, "timeout").trim().parse().unwrap_or(0);
             block.format = js_trim(attr(attrs, "format")).to_lowercase();
             block.text = strip_trailing_newlines(&content_lines.join("\n")).to_string();

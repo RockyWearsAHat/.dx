@@ -4,7 +4,72 @@ _Resume point after `/compact` or `/clear`. Update after every task or wave (see
 
 Last updated: 2026-08-06
 
-## This wave, part 35: the Self-Host field report answered
+## This wave, part 36: the write grant, and the save that was demoting pointers
+
+A second Self-Host session (log reviewed, rated dx 8/10) barely used dx and **reported work
+it had not done**. Both causes were real defects here, and both are fixed.
+
+- **`writes=` — the reviewed write grant** (the part-35 deferral, revisited because its two
+  stated preconditions are now met: a review gate to hang it on, and attacks coverage). A
+  block declares `writes=target,generated`; those folders of the *document's own folder*
+  become writable to that block's code, are created if missing, and nothing else changes —
+  the network is still gone, the rest of the folder is still read-only, and the install
+  phase never gets the grant (network + project writes at once is a fetch that can edit the
+  project). Refusals: the path law, control characters, `.doc` (a block that rewrites the
+  packs rewrites what every document *says*), and any path that canonicalizes outside the
+  folder — checked on the deepest existing ancestor first, so a symlinked parent cannot make
+  `create_dir_all` build outside either. **The grant is part of the fingerprint**, so
+  `--review` prints it, approval covers it, and widening it re-opens review exactly like
+  editing the code; it is *prepended* to the fingerprint material because the tail is
+  `reads=` file text an author controls, which would otherwise be a forgery channel. Wired
+  through model, parse/stringify/normalize, doc-wasm DTO, surface ATTRS, contract, README,
+  `dx help`, the `dx_run` schema, and the MCP handshake. Pinned: 4 doc-run unit tests
+  (round-trip, path law, symlink escape, fingerprint forgery, review printing) + **3 new
+  attack payloads** (grant opens its folder and nothing beside it; grant does not hand back
+  the network; a grant naming `.doc` is blocked before anything runs).
+- **The reported-but-not-done bug, found at the root.** `dx run`, MCP `dx_run`, `dx fmt`,
+  and the read-refresh all saved documents through `workspace::write_text` — the plain-text
+  escape hatch. On a *stored* document that overwrote the pointer with resolved text: the
+  store went stale behind it, git saw a whole-file explosion instead of a one-line diff, and
+  the next `dx sync` would adopt that stale text *back*, discarding anything saved to the
+  store in between. New `workspace::save_source` keeps the storage form the file already
+  has (pointer → store, plain text → text, no store conjured for it); all four call sites
+  use it. Pinned at both surfaces: `running_a_stored_document_keeps_its_pointer_and_freshens_the_store`,
+  `a_refresh_of_a_stored_document_keeps_its_pointer_and_freshens_the_store`.
+- **The evidence this was the field failure**, from Self-Host's own store: the last
+  `console-lab.dx` manifest predates the session, exactly one document was demoted to plain
+  text (the only one with a runnable block — so only the refresh path could have done it),
+  and the demoted text still carries all five `OPEN` ledger items the session reported as
+  rewritten. Repaired with the fixed binary: `dx sync .` re-adopted it (dot-directories are
+  skipped, so the ~80 untracked `.helpers/` files were not swept in), the pointer is back,
+  and git now shows a one-line document diff.
+- **Findings ledgers stop being hand-kept.** The `dx index` scaffold and the MCP handshake
+  now teach the mechanical form: a claim that can be checked is a `::code run` block that
+  checks it, declaring `reads=` for what it judges and `writes=` for its build directory —
+  so the verdict stales when the code changes and re-runs on the next read. Prose bullets
+  only for what no check can hold. A hand-kept ledger is exactly what lied in the field.
+
+Validated: `cargo test` all green (**807**: doc-core 328, doc-run 93 + 16 attacks, doc-cli
+272, doc-shot 43+49, store 5, +1), `clippy --all-targets -D warnings` clean, `fmt --check`
+clean, both wasm engines rebuilt (`./editor/build.sh` — doc-core changed), node suites
+34+34 green. Live smoke through the reinstalled release `dx`: `--review` prints
+`writes out — approving grants this code write access to these folders`; the granted write
+lands (`out/thing.txt`) while an ungranted one beside it is refused with the sandbox note;
+**a real `cargo test --offline --locked` ran inside the sandbox**, built into its granted
+`target/`, and folded `test result: ok` into the document — the capability the field session
+did not have; the same escape payload under `DX_UNCONFINED=1` succeeds and stamps the
+notice, so the boundary still *can* fail.
+
+Known and stated, not a defect: the grant names **folders, never loose files**, so a tool
+that rewrites one beside the document needs the flag that says not to (`cargo test
+--locked`). Granting `.` would hand a block the `.dx` and the store, which is the one thing
+the attacks suite exists to forbid. Said in the sandbox hint, README, `dx help`, and the
+`dx_run` schema.
+
+Next step: the part-35 item still stands — extend `Provided`/the daemon protocol so
+`dx serve` and the GitHub extension can carry image bytes.
+
+## Previous wave, part 35: the Self-Host field report answered
 
 Triage of `/Users/alexwaldmann/Desktop/Self-Host/DX-FEEDBACK.md` (five findings; helpfulness
 6/10, efficiency 4/10 that session). All five closed, test-first, sandbox law untouched:

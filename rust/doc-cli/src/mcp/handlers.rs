@@ -74,7 +74,7 @@ fn refresh_outputs(args: &Value, root: &Path, cache_root: &Path) -> Option<Strin
     };
 
     if report.changed {
-        if let Err(reason) = workspace::write_text(&path, &report.source) {
+        if let Err(reason) = workspace::save_source(&path, &report.source) {
             return Some(format!("Refreshed output could not be saved: {reason}"));
         }
     }
@@ -535,7 +535,7 @@ fn run_in(args: &Value, root: &Path, cache_root: PathBuf) -> ToolResult {
     // nothing must not be able to touch the file either.
     let saved = report.changed && !review_only;
     if saved {
-        workspace::write_text(&path, &report.source)?;
+        workspace::save_source(&path, &report.source)?;
     }
 
     let results: Vec<Value> = report
@@ -1062,6 +1062,44 @@ mod tests {
         let saved = workspace::read(&root.join("stale.dx")).expect("resolve");
         assert!(saved.contains("::output"), "{saved}");
         assert!(saved.contains("hmr-live"), "{saved}");
+    }
+
+    /// The refresh saves through the store when the document lives there. This is the
+    /// Self-Host field failure verbatim: a read of a stored document re-ran its approved
+    /// stale block and saved the result as plain text over the pointer — the store went
+    /// stale behind a working tree git saw as a giant diff.
+    #[test]
+    fn a_refresh_of_a_stored_document_keeps_its_pointer_and_freshens_the_store() {
+        let root = project("read-refresh-pointer");
+        let cache = root.join("cache");
+        let source = "::code id=hi lang=bash run\necho pointer-live\n::end\n";
+        workspace::write_text(&root.join("approved.dx"), source).expect("seed");
+        run_in(
+            &json!({ "path": "approved.dx", "approve": true }),
+            &root,
+            cache.clone(),
+        )
+        .expect("approve");
+
+        let path = root.join("stored.dx");
+        workspace::save(&path, &doc_core::format::parse(source)).expect("adopt");
+        assert!(
+            std::fs::read_to_string(&path)
+                .expect("read")
+                .starts_with("~ dx1 "),
+            "the fixture must start as a pointer"
+        );
+
+        let items = read_in(&json!({ "path": "stored.dx" }), &root, &cache).expect("read");
+        assert!(text_of(&items).contains("Refreshed stale output"));
+        let on_disk = std::fs::read_to_string(&path).expect("read");
+        assert!(
+            on_disk.starts_with("~ dx1 "),
+            "the refresh demoted the pointer to plain text: {on_disk}"
+        );
+        let resolved = workspace::read(&path).expect("resolve");
+        assert!(resolved.contains("pointer-live"), "{resolved}");
+        assert!(resolved.contains("::output"), "{resolved}");
     }
 
     /// The refresh is a plain run, so the approval gate holds: unreviewed code renders

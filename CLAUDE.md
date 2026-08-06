@@ -357,7 +357,7 @@ example is a deliberate two-file change.
   bubblewrap on Linux — and the shape of it is the whole security model:
 
   | Read | anything, minus a deny-list of credential stores |
-  | Write | its own block directory, nowhere else |
+  | Write | its own block directory, plus the folders a block's `writes=` grant names — inside the document's folder only, and the grant joins the fingerprint, so review shows it and widening it re-opens review |
   | Network | never, while the block's own code runs |
 
   The first is why the other two are absolute: read plus egress is exfiltration, and read
@@ -456,7 +456,7 @@ example is a deliberate two-file change.
 
 ```bash
 cd rust
-cargo test                                  # must be green (797 tests)
+cargo test                                  # must be green (807 tests)
 cargo clippy --all-targets -- -D warnings   # must be clean
 cargo fmt --check                           # must be clean
 ```

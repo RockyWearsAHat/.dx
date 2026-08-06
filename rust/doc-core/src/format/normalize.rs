@@ -131,6 +131,7 @@ fn normalize_block(block: &Block, index: usize, registry: &mut IdRegistry) -> Bl
             normalized.run = block.run;
             normalized.deps = js_trim(&block.deps).to_string();
             normalized.reads = js_trim(&block.reads).to_string();
+            normalized.writes = js_trim(&block.writes).to_string();
             normalized.timeout = block.timeout;
             normalized.format = js_trim(&block.format).to_string();
         }

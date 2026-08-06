@@ -75,7 +75,7 @@ fn run_in(args: &Args, cache_root: PathBuf) -> Result<String, String> {
     if args.present("dry") {
         output.push_str("\n--- not saved (--dry) ---\n");
     } else if report.changed {
-        workspace::write_text(&path, &report.source)?;
+        workspace::save_source(&path, &report.source)?;
         output.push_str(&format!("saved {}\n", path.display()));
     } else {
         output.push_str("no changes\n");
@@ -210,6 +210,43 @@ mod tests {
         let saved = std::fs::read_to_string(&path).expect("read");
         assert!(saved.contains("::output id=hello-output for=hello status=ok"));
         assert!(saved.contains("hi"));
+    }
+
+    #[test]
+    fn running_a_stored_document_keeps_its_pointer_and_freshens_the_store() {
+        // The Self-Host field failure: a run's save went through the plain-text escape
+        // hatch, so a stored document came back as resolved text — the store went stale
+        // behind it, git saw a giant diff, and the next sync would have adopted the stale
+        // text over anything saved in between. A save keeps the form the file has.
+        let root = std::env::temp_dir().join("dx-exec-tests-pointer");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("root");
+        let path = root.join("doc.dx");
+        let source = "::code id=hello lang=bash run\necho hi\n::end\n";
+        workspace::save(&path, &doc_core::format::parse(source)).expect("adopt");
+        assert!(
+            std::fs::read_to_string(&path)
+                .expect("read")
+                .starts_with("~ dx1 "),
+            "the fixture must start as a pointer"
+        );
+
+        run_in(
+            &args(&[&path.to_string_lossy(), "--approve"]),
+            cache("pointer"),
+        )
+        .expect("run");
+
+        let on_disk = std::fs::read_to_string(&path).expect("read");
+        assert!(
+            on_disk.starts_with("~ dx1 "),
+            "a run demoted the pointer to plain text: {on_disk}"
+        );
+        let resolved = workspace::read(&path).expect("resolve");
+        assert!(
+            resolved.contains("::output id=hello-output for=hello status=ok"),
+            "the store did not receive the fresh output: {resolved}"
+        );
     }
 
     #[test]

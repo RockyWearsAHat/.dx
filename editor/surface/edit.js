@@ -138,7 +138,7 @@
   /** The attributes each kind's header may carry, beyond the universal `id`/`class`/`hidden`. */
   const ATTRS = {
     heading: ['level'],
-    code: ['lang', 'src', 'run', 'deps', 'reads', 'timeout', 'format'],
+    code: ['lang', 'src', 'run', 'deps', 'reads', 'writes', 'timeout', 'format'],
     image: ['src'],
     stylesheet: ['href', 'media'],
     script: ['type', 'src', 'module'],
