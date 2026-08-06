@@ -4,7 +4,40 @@ _Resume point after `/compact` or `/clear`. Update after every task or wave (see
 
 Last updated: 2026-08-06
 
-## This wave, part 36: the write grant, and the save that was demoting pointers
+## This wave, part 37: the view fold, the named method, and the measured token economy
+
+A cold read of the docs graded them 9/10 with three concrete gaps; all three are closed.
+
+- **`::view` folds in text render.** `dx text` was inlining a view's hydrated page —
+  `GETTING_STARTED.dx` cost 29,877 bytes of which 25,371 (85%) was the framed site's HTML,
+  in the exact command the README hands a newcomer. A view's meaning is pixels, not words:
+  `render::text` now folds it to one line naming its `src` (or its size, when inline) and
+  pointing at the rendered routes. Pinned by `a_view_folds_to_one_line_naming_its_page` and
+  `an_inline_view_folds_to_its_size`; measured live, the guide's full text read fell to
+  ~5.5 KB. Both wasm engines rebuilt (`editor/build.sh`), JS suites 34/34 each.
+- **The method is named, everywhere an agent or person first reads.** The reusable-harness
+  doctrine — plan on a board, ship files as live references, prove with a verify block, then
+  *build → run → read the verdict → fix → repeat until every claim holds; complete means the
+  document proves it* — now stated in three places: the MCP handshake (`mcp/mod.rs`, test
+  asserts `harness` and `until every claim holds`), README's "For AI agents", and a new
+  "The method: the document is the harness" section in `GETTING_STARTED.dx` (blocks
+  `method`, `method-shape`, `method-loop`).
+- **The token-economy claim is mechanical.** New `examples/route-economics.dx`: a run block
+  drives `dx` itself against six real documents, prices route A (whole document) vs route B
+  (outline once + section reads) in bytes, prints the table, and fails if the cheap route
+  stops being cheap. Recorded verdict: one question 78% of route A, a ten-question session
+  42%, 3 of 3 claims hold — measured by the engine, stamped with its version. The block
+  declares its corpus with `reads=`, and this was proven live: editing `GETTING_STARTED.dx`
+  staled the verdict, the plain `dx run` blocked on the new fingerprint (the gate held), and
+  `--approve` re-recorded fresh numbers. README's agent section cites the document instead
+  of promising a number.
+
+Validated: `cargo test` 809/809 (was 807; +2 fold tests), clippy `-D warnings` clean,
+`fmt --check` clean, wasm rebuilt, both node suites 34/34, fixture drift guard green.
+Next step: none pending for this wave — the docs now hold their own claims; the next field
+report should be checked against `route-economics.dx`'s recorded verdict rather than memory.
+
+## Previous wave, part 36: the write grant, and the save that was demoting pointers
 
 A second Self-Host session (log reviewed, rated dx 8/10) barely used dx and **reported work
 it had not done**. Both causes were real defects here, and both are fixed.

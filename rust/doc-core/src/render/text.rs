@@ -103,6 +103,10 @@ fn block_text(block: &Block, document: &Document, values: &Values) -> String {
             .collect::<Vec<_>>()
             .join("\n"),
         "code" => fence(&code_language(block), &body),
+        // A view's meaning is the page it renders to — pixels, not words. Folding it to
+        // one line is what keeps a guide that frames a whole site from costing every text
+        // reader the site's source; the rendered routes (`dx png`, `dx_read`) show the page.
+        "view" => view_text(block),
         "output" => format!(
             "{}\n{}",
             output_caption(block),
@@ -115,6 +119,25 @@ fn block_text(block: &Block, document: &Document, values: &Values) -> String {
         "style" => fence("css", &body),
         "stylesheet" => format!("<!-- stylesheet: {} -->", block.href),
         _ => body,
+    }
+}
+
+/// The one-line stand-in for a framed page: what it shows and where to see it rendered.
+///
+/// A `src=` view names its page; an inline view states its size, which is the honest
+/// measure of what the fold is saving the reader.
+fn view_text(block: &Block) -> String {
+    if block.src.is_empty() {
+        format!(
+            "*View: an inline page ({} bytes), rendered in a sandboxed frame — read it \
+             rendered (`dx png`, `dx_read`).*",
+            block.text.len()
+        )
+    } else {
+        format!(
+            "*View: `{}` as the page it renders to — read it rendered (`dx png`, `dx_read`).*",
+            block.src
+        )
     }
 }
 
@@ -246,6 +269,23 @@ mod tests {
     fn fences_grow_to_contain_inner_backticks() {
         let out = render("::code id=c lang=md\n```js\nx\n```\n::end\n");
         assert!(out.contains("````md"));
+    }
+
+    #[test]
+    fn a_view_folds_to_one_line_naming_its_page() {
+        let mut document = parse("::view id=v src=site/index.html\n::end\n");
+        // What hydration would have filled in: the page's whole source.
+        document.blocks[0].text = "<!doctype html><html>a whole site</html>".to_string();
+        let out = text(&document, &TextOptions::default());
+        assert!(out.contains("`site/index.html`"), "names the page: {out}");
+        assert!(!out.contains("doctype"), "never inlines the source: {out}");
+    }
+
+    #[test]
+    fn an_inline_view_folds_to_its_size() {
+        let out = render("::view id=v\n<p>framed</p>\n::end\n");
+        assert!(out.contains("bytes"), "states what the fold saves: {out}");
+        assert!(!out.contains("<p>"), "never inlines the markup: {out}");
     }
 
     #[test]

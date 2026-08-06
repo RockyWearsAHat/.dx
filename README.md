@@ -127,6 +127,19 @@ and `dx_index` scaffolds `index.dx`, a precursor project map the agent improves 
 every later session consults for the price of one read. An assistant without MCP needs
 nothing: `dx` is a command, and `dx help` explains itself.
 
+**The method is a reusable harness.** A project shipped from a document keeps its spec as a
+verify block — `::code run` code that reads the shipped files back (`reads=`) and holds them
+to the spec, claim by claim — and the loop that finishes work is: build, run the verify
+block, read the verdict, fix, repeat, until every claim holds. Complete means the document
+proves it, not that the code looks done. The harness outlives the task: the shipped files'
+text joins the run's fingerprint, so any edit stales the verdict and the next read re-proves
+it, and a later session inherits the proof for the price of one section read instead of
+redoing the verification. [`examples/example_site_plan.dx`](examples/example_site_plan.dx) is
+the method end to end — brief, board, shipped site, and the verify block that holds it — and
+[`examples/route-economics.dx`](examples/route-economics.dx) turns the token economy itself
+into a measured claim: a run block prices every read route in bytes against this repository's
+own documents and fails if the cheap route ever stops being cheap.
+
 ## What executes, and what does not
 
 Rendering never executes and never writes: `dx render`, `dx text`, `dx serve`, the editor,

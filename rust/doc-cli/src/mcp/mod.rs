@@ -115,7 +115,12 @@ fn initialize() -> Value {
                          writes=target) and declaring what it judges with reads= — its \
                          recorded verdict then stales mechanically when the code changes \
                          and re-runs on your next read, so a claim recorded in a document \
-                         is never one you must re-verify by hand. If dx_list finds no \
+                         is never one you must re-verify by hand. That is the harness, and \
+                         the loop it drives: build, run the verify block, read the verdict, \
+                         fix, repeat — until every claim holds. A task is complete when its \
+                         document proves it, not when the code looks done; the harness \
+                         outlives the task, so the next session inherits the proof instead \
+                         of redoing the work. If dx_list finds no \
                          documents, offer dx_index: it scaffolds index.dx from the tree — \
                          read it whole and improve it before other work."
     })
@@ -233,6 +238,10 @@ mod tests {
         assert!(instructions.contains("dx_edit"));
         assert!(instructions.contains("::code src="));
         assert!(instructions.contains("dx_index"));
+        // And the guidance names the method: the verify-block harness, driven in a loop
+        // until every claim holds — completion is the document's proof, not an impression.
+        assert!(instructions.contains("harness"));
+        assert!(instructions.contains("until every claim holds"));
     }
 
     #[test]
