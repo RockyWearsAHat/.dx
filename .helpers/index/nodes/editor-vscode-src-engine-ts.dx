@@ -1,0 +1,73 @@
+---
+id: editor/vscode/src/engine.ts
+title: engine.ts
+kind: file-index
+lang: typescript
+rank: 0.005201
+links: [[rust/doc-core/src/edit.rs]] [[editor/vscode/test/editing.test.mjs]] [[editor/github/wasm/doc_wasm.js]] [[rust/doc-core/src/render/field.rs]] [[editor/github/content.js]] [[editor/github/test/engine.test.mjs]] [[editor/github/resolve.js]] [[editor/github/test/resolve.test.mjs]] [[rust/doc-core/src/format/stringify.rs]]
+generated_at: 2026-08-06T01:13:54.687Z
+---
+
+# editor/vscode/src/engine.ts  ·  typescript  ·  250 LOC
+
+## Symbols
+
+- `Engine` (interface) — L18
+- `render_html` (method) — L25
+- `references` (method) — L30
+- `file_references` (method) — L37
+- `pack_document` (method) — L39
+- `render_text` (method) — L41
+- `render_outline` (method) — L43
+- `block_source` (method) — L51
+- `block_header` (method) — L53
+- `set_block` (method) — L55
+- `replace_block` (method) — L57
+- `insert_block` (method) — L59
+- `remove_block` (method) — L61
+- `toggle_check` (method) — L66
+- `board_place` (method) — L73
+- `board_arrange` (method) — L86
+- `board_detach` (method) — L88
+- `board_link` (method) — L94
+- `preview_block` (method) — L104
+- `field_html` (method) — L109
+- `OutlineEntry` (interface) — L113
+
+## Graph
+
+```mermaid
+graph LR
+  c["engine.ts"]
+  x0["edit.rs"]
+  x0 --> c
+  x1["editing.test.mjs"]
+  x1 --> c
+  x2["doc_wasm.js"]
+  x2 --> c
+  x3["field.rs"]
+  x3 --> c
+  x4["content.js"]
+  x4 --> c
+  x5["engine.test.mjs"]
+  x5 --> c
+  x6["resolve.js"]
+  x6 --> c
+  x7["resolve.test.mjs"]
+  x7 --> c
+  x8["stringify.rs"]
+  x8 --> c
+```
+
+### Referenced by
+
+- [[rust/doc-core/src/edit.rs]] via `remove_block`, `block_header`, `board_place`, `preview_block`, `board_arrange`
+- [[editor/vscode/test/editing.test.mjs]] via `block_header`, `board_detach`, `replace_block`, `toggle_check`, `references`
+- [[editor/github/wasm/doc_wasm.js]] via `render_outline`, `insert_block`, `references`, `remove_block`, `board_arrange`
+- [[rust/doc-core/src/render/field.rs]] via `field_html`
+- [[editor/github/content.js]] via `references`, `render_html`, `file_references`, `pack_document`
+- [[editor/github/test/engine.test.mjs]] via `render_html`
+- [[editor/github/resolve.js]] via `pack_document`
+- [[editor/github/test/resolve.test.mjs]] via `pack_document`
+- [[rust/doc-core/src/format/stringify.rs]] via `block_header`
+

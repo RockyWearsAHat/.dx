@@ -1,0 +1,131 @@
+---
+id: editor/github/wasm/doc_wasm.js
+title: doc_wasm.js
+kind: file-index
+lang: javascript
+rank: 0.008743
+links: [[rust/doc-core/src/edit.rs]] [[editor/vscode/test/editing.test.mjs]] [[editor/github/wasm/doc_wasm.d.ts]] [[rust/doc-wasm/src/lib.rs]] [[editor/vscode/src/engine.ts]] [[editor/github/content.js]] [[rust/doc-core/src/render/theme.rs]] [[editor/github/test/resolve.test.mjs]] [[rust/doc-core/src/render/field.rs]] [[rust/doc-core/src/compress.rs]] [[rust/doc-shot/src/base64.rs]] [[editor/github/resolve.js]]
+generated_at: 2026-08-06T01:13:54.685Z
+---
+
+# editor/github/wasm/doc_wasm.js  ·  javascript  ·  1411 LOC
+
+## Symbols
+
+- `block_header` (function) — L16
+- `block_source` (function) — L57
+- `board_arrange` (function) — L98
+- `board_detach` (function) — L140
+- `board_link` (function) — L189
+- `board_place` (function) — L250
+- `build_index_and_search` (function) — L294
+- `compress` (function) — L333
+- `decompress` (function) — L358
+- `field_html` (function) — L390
+- `file_references` (function) — L421
+- `insert_block` (function) — L456
+- `join_chunks` (function) — L498
+- `pack_document` (function) — L540
+- `pack_paths` (function) — L578
+- `parse` (function) — L620
+- `preview_block` (function) — L660
+- `references` (function) — L704
+- `remove_block` (function) — L732
+- `render_html` (function) — L782
+- `render_outline` (function) — L814
+- `render_section` (function) — L843
+- `render_text` (function) — L873
+- `replace_block` (function) — L910
+- `set_block` (function) — L955
+- `sha1_hex` (function) — L992
+- `sha256_hex` (function) — L1017
+- `split_chunks` (function) — L1046
+- `stringify` (function) — L1084
+- `stylesheet` (function) — L1120
+- `toggle_check` (function) — L1153
+- `__wbg_get_imports` (function) — L1182
+- `__wbindgen_cast_0000000000000001` (function) — L1185
+- `addHeapObject` (function) — L1197
+- `dropObject` (function) — L1206
+- `getArrayU8FromWasm0` (function) — L1212
+- `getDataViewMemory0` (function) — L1218
+- `getStringFromWasm0` (function) — L1225
+- `getUint8ArrayMemory0` (function) — L1230
+- `getObject` (function) — L1237
+- `isLikeNone` (function) — L1244
+- `passArray8ToWasm0` (function) — L1248
+- `passStringToWasm0` (function) — L1255
+- `takeObject` (function) — L1292
+- `decodeText` (function) — L1300
+- `encodeInto` (function) — L1307
+- `__wbg_finalize_init` (function) — L1320
+- `__wbg_load` (function) — L1329
+- `expectedResponseType` (function) — L1356
+- `initSync` (function) — L1364
+- `__wbg_init` (function) — L1384
+
+## Graph
+
+```mermaid
+graph LR
+  c["doc_wasm.js"]
+  x0["edit.rs"]
+  c --> x0
+  x1["editing.test.mjs"]
+  x1 --> c
+  x2["doc_wasm.d.ts"]
+  c --> x2
+  x3["lib.rs"]
+  c --> x3
+  x4["engine.ts"]
+  c --> x4
+  x5["content.js"]
+  x5 --> c
+  x6["theme.rs"]
+  c --> x6
+  x7["resolve.test.mjs"]
+  x7 --> c
+  x8["field.rs"]
+  c --> x8
+  x9["compress.rs"]
+  c --> x9
+  x10["base64.rs"]
+  c --> x10
+  x11["resolve.js"]
+  x11 --> c
+  x12["engine.test.mjs"]
+  x12 --> c
+  x13["view.rs"]
+  c --> x13
+```
+
+### References
+
+- [[rust/doc-core/src/edit.rs]] via `remove_block`, `board_arrange`, `board_place`, `block_header`, `set_block`
+- [[editor/github/wasm/doc_wasm.d.ts]] via `render_outline`, `insert_block`, `decompress`, `join_chunks`, `references`
+- [[rust/doc-wasm/src/lib.rs]] via `render_outline`, `insert_block`, `decompress`, `join_chunks`, `references`
+- [[editor/vscode/src/engine.ts]] via `render_outline`, `insert_block`, `references`, `remove_block`, `board_arrange`
+- [[rust/doc-core/src/render/theme.rs]] via `stylesheet`
+- [[rust/doc-core/src/render/field.rs]] via `field_html`
+- [[rust/doc-core/src/compress.rs]] via `decompress`, `compress`
+- [[rust/doc-shot/src/base64.rs]] via `encode`, `decode`
+- [[rust/doc-cli/src/commands/view.rs]] via `slice`
+- [[rust/doc-core/src/digest.rs]] via `sha1_hex`, `sha256_hex`
+- [[rust/doc-core/src/format/stringify.rs]] via `block_header`
+- [[rust/doc-core/src/resolve.rs]] via `references`, `file_references`
+- [[rust/doc-core/src/lib.rs]] via `compress`
+
+### Referenced by
+
+- [[editor/vscode/test/editing.test.mjs]] via `block_header`, `board_detach`, `replace_block`, `toggle_check`, `references`
+- [[editor/github/content.js]] via `references`, `stylesheet`, `render_html`, `file_references`, `pack_document`
+- [[editor/github/test/resolve.test.mjs]] via `pack_paths`, `sha256_hex`, `pack_document`
+- [[editor/github/resolve.js]] via `pack_document`, `sha256_hex`, `pack_paths`
+- [[editor/github/test/engine.test.mjs]] via `render_html`, `stylesheet`
+- [[rust/doc-core/src/chunk.rs]] via `sha256_hex`, `decompress`, `compress`
+- [[rust/doc-store/src/store.rs]] via `decompress`, `compress`
+- [[packaging/build-icons.py]] via `compress`
+- [[rust/doc-core/tests/pipeline.rs]] via `compress`
+- [[rust/doc-run/src/lib.rs]] via `sha256_hex`
+- [[rust/doc-store/src/stub.rs]] via `sha256_hex`
+

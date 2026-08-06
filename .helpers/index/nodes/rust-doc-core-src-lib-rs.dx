@@ -1,0 +1,78 @@
+---
+id: rust/doc-core/src/lib.rs
+title: lib.rs
+kind: file-index
+lang: rust
+rank: 0.010734
+links: [[rust/doc-cli/src/mcp/handlers.rs]] [[packaging/build-icons.py]] [[rust/doc-core/src/render/text.rs]] [[editor/surface/edit.js]] [[rust/doc-cli/src/workspace.rs]] [[rust/doc-core/src/search.rs]] [[rust/doc-store/src/store.rs]] [[rust/doc-core/src/compress.rs]] [[editor/github/content.js]] [[editor/github/test/engine.test.mjs]] [[editor/github/wasm/doc_wasm.js]] [[rust/doc-core/examples/bench.rs]]
+generated_at: 2026-08-06T01:13:54.685Z
+---
+
+# rust/doc-core/src/lib.rs  ·  rust  ·  37 LOC
+
+## Symbols
+
+- `chunk` (module) — L29
+- `compress` (module) — L30
+- `digest` (module) — L31
+- `edit` (module) — L32
+- `format` (module) — L33
+- `model` (module) — L34
+- `render` (module) — L35
+- `resolve` (module) — L36
+- `search` (module) — L37
+
+## Graph
+
+```mermaid
+graph LR
+  c["lib.rs"]
+  x0["handlers.rs"]
+  x0 --> c
+  x1["build-icons.py"]
+  x1 --> c
+  x2["text.rs"]
+  x2 --> c
+  x3["edit.js"]
+  x3 --> c
+  x4["workspace.rs"]
+  x4 --> c
+  x5["search.rs"]
+  x5 --> c
+  x6["store.rs"]
+  x6 --> c
+  x7["compress.rs"]
+  x7 --> c
+  x8["content.js"]
+  x8 --> c
+  x9["engine.test.mjs"]
+  x9 --> c
+  x10["doc_wasm.js"]
+  x10 --> c
+  x11["bench.rs"]
+  x11 --> c
+  x12["chunk.rs"]
+  x12 --> c
+  x13["pipeline.rs"]
+  x13 --> c
+```
+
+### Referenced by
+
+- [[rust/doc-cli/src/mcp/handlers.rs]] via `render`, `search`, `edit`, `resolve`
+- [[packaging/build-icons.py]] via `render`, `compress`, `chunk`, `search`, `resolve`
+- [[rust/doc-core/src/render/text.rs]] via `render`
+- [[editor/surface/edit.js]] via `edit`, `resolve`
+- [[rust/doc-cli/src/workspace.rs]] via `search`
+- [[rust/doc-core/src/search.rs]] via `search`
+- [[rust/doc-store/src/store.rs]] via `search`, `compress`
+- [[rust/doc-core/src/compress.rs]] via `compress`
+- [[editor/github/content.js]] via `resolve`
+- [[editor/github/test/engine.test.mjs]] via `resolve`
+- [[editor/github/wasm/doc_wasm.js]] via `compress`
+- [[rust/doc-core/examples/bench.rs]] via `search`
+- [[rust/doc-core/src/chunk.rs]] via `compress`
+- [[rust/doc-core/tests/pipeline.rs]] via `compress`
+- [[rust/doc-store/src/stub.rs]] via `render`
+- [[rust/doc-wasm/src/lib.rs]] via `search`
+

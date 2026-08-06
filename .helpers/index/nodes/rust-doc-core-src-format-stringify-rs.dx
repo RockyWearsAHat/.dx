@@ -1,0 +1,63 @@
+---
+id: rust/doc-core/src/format/stringify.rs
+title: stringify.rs
+kind: file-index
+lang: rust
+rank: 0.003624
+links: [[editor/vscode/test/editing.test.mjs]] [[rust/doc-core/src/edit.rs]] [[editor/github/wasm/doc_wasm.js]] [[rust/doc-core/src/format/util.rs]] [[editor/github/wasm/doc_wasm.d.ts]] [[editor/vscode/src/engine.ts]] [[rust/doc-core/src/chunk.rs]] [[rust/doc-core/src/compress.rs]] [[rust/doc-core/src/format/normalize.rs]] [[rust/doc-wasm/src/lib.rs]]
+generated_at: 2026-08-06T01:13:54.688Z
+---
+
+# rust/doc-core/src/format/stringify.rs  ·  rust  ·  220 LOC
+
+## Symbols
+
+- `block_header` (function) — L12
+- `list_lines` (function) — L143
+- `block_body` (function) — L157
+- `stringify_blocks` (function) — L200
+- `stringify` (function) — L217
+
+## Graph
+
+```mermaid
+graph LR
+  c["stringify.rs"]
+  x0["editing.test.mjs"]
+  x0 --> c
+  x1["edit.rs"]
+  x1 --> c
+  x2["doc_wasm.js"]
+  x2 --> c
+  x3["util.rs"]
+  c --> x3
+  x4["doc_wasm.d.ts"]
+  c --> x4
+  x5["engine.ts"]
+  c --> x5
+  x6["chunk.rs"]
+  x6 --> c
+  x7["compress.rs"]
+  c --> x7
+  x8["normalize.rs"]
+  c --> x8
+  x9["lib.rs"]
+  c --> x9
+```
+
+### References
+
+- [[rust/doc-core/src/format/util.rs]] via `js_trim`, `normalize_class_name`
+- [[editor/github/wasm/doc_wasm.d.ts]] via `block_header`
+- [[editor/vscode/src/engine.ts]] via `block_header`
+- [[rust/doc-core/src/compress.rs]] via `insert`
+- [[rust/doc-core/src/format/normalize.rs]] via `normalize_blocks`
+- [[rust/doc-wasm/src/lib.rs]] via `block_header`
+
+### Referenced by
+
+- [[editor/vscode/test/editing.test.mjs]] via `block_header`
+- [[rust/doc-core/src/edit.rs]] via `list_lines`, `block_header`
+- [[editor/github/wasm/doc_wasm.js]] via `block_header`
+- [[rust/doc-core/src/chunk.rs]] via `stringify_blocks`
+

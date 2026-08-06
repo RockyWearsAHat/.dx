@@ -1,0 +1,78 @@
+---
+id: rust/doc-cli/src/args.rs
+title: args.rs
+kind: file-index
+lang: rust
+rank: 0.024479
+links: [[rust/doc-cli/src/commands/edit.rs]] [[rust/doc-cli/src/commands/view.rs]] [[rust/doc-cli/src/commands/play.rs]] [[rust/doc-cli/src/commands/browser.rs]] [[rust/doc-cli/src/commands/setup.rs]] [[rust/doc-cli/src/commands/exec.rs]] [[rust/doc-cli/src/mcp/handlers.rs]] [[rust/doc-cli/src/commands/find.rs]] [[rust/doc-cli/src/commands/store.rs]] [[rust/doc-cli/src/main.rs]] [[rust/doc-cli/src/commands/mod.rs]] [[rust/doc-core/src/edit.rs]]
+generated_at: 2026-08-06T01:13:54.682Z
+---
+
+# rust/doc-cli/src/args.rs  ·  rust  ·  168 LOC
+
+## Symbols
+
+- `Args` (class) — L9
+- `parse` (method) — L20
+- `positional` (method) — L61
+- `positionals` (method) — L67
+- `value` (method) — L73
+- `present` (method) — L82
+- `number` (method) — L88
+- `unknown_options` (method) — L98
+- `tests` (module) — L108
+- `parse` (method) — L111
+- `separates_positionals_from_options` (method) — L116
+- `accepts_equals_form_and_numbers` (method) — L125
+- `a_flag_before_another_flag_stays_boolean` (method) — L133
+- `a_lone_dash_is_a_value_meaning_stdin` (method) — L141
+- `double_dash_forces_the_rest_positional` (method) — L147
+- `collects_every_positional_for_multi_file_commands` (method) — L154
+- `names_the_options_a_command_does_not_take` (method) — L160
+
+## Graph
+
+```mermaid
+graph LR
+  c["args.rs"]
+  x0["edit.rs"]
+  x0 --> c
+  x1["view.rs"]
+  x1 --> c
+  x2["play.rs"]
+  x2 --> c
+  x3["browser.rs"]
+  x3 --> c
+  x4["setup.rs"]
+  x4 --> c
+  x5["exec.rs"]
+  x5 --> c
+  x6["handlers.rs"]
+  x6 --> c
+  x7["find.rs"]
+  x7 --> c
+  x8["store.rs"]
+  x8 --> c
+  x9["main.rs"]
+  x9 --> c
+  x10["mod.rs"]
+  x10 --> c
+  x11["edit.rs"]
+  x11 --> c
+```
+
+### Referenced by
+
+- [[rust/doc-cli/src/commands/edit.rs]] via `value`, `positionals`, `number`, `present`, `positional`
+- [[rust/doc-cli/src/commands/view.rs]] via `present`, `number`, `value`, `positional`
+- [[rust/doc-cli/src/commands/play.rs]] via `value`, `number`
+- [[rust/doc-cli/src/commands/browser.rs]] via `value`, `present`
+- [[rust/doc-cli/src/commands/setup.rs]] via `value`, `present`
+- [[rust/doc-cli/src/commands/exec.rs]] via `value`, `present`, `number`
+- [[rust/doc-cli/src/mcp/handlers.rs]] via `number`
+- [[rust/doc-cli/src/commands/find.rs]] via `number`, `positional`
+- [[rust/doc-cli/src/commands/store.rs]] via `value`, `positional`
+- [[rust/doc-cli/src/main.rs]] via `present`, `value`
+- [[rust/doc-cli/src/commands/mod.rs]] via `present`, `unknown_options`
+- [[rust/doc-core/src/edit.rs]] via `number`
+

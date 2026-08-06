@@ -1,0 +1,101 @@
+---
+id: rust/doc-cli/src/commands/edit.rs
+title: edit.rs
+kind: file-index
+lang: rust
+rank: 0.003745
+links: [[rust/doc-cli/src/args.rs]] [[rust/doc-store/src/store.rs]] [[rust/doc-cli/src/commands/store.rs]] [[rust/doc-cli/src/workspace.rs]] [[rust/doc-store/src/pack.rs]] [[rust/doc-cli/src/install.rs]] [[rust/doc-cli/src/policies.rs]] [[rust/doc-cli/src/commands/browser.rs]] [[rust/doc-cli/src/desktop.rs]] [[rust/doc-run/src/workdir.rs]] [[rust/doc-cli/src/state.rs]] [[rust/doc-cli/src/mcp/handlers.rs]]
+generated_at: 2026-08-06T01:13:54.688Z
+---
+
+# rust/doc-cli/src/commands/edit.rs  ·  rust  ·  865 LOC
+
+## Symbols
+
+- `run_new` (function) — L23
+- `default_title` (function) — L44
+- `run_fmt` (function) — L58
+- `run_set` (function) — L90
+- `run_append` (function) — L116
+- `run_source` (function) — L145
+- `run_insert` (function) — L168
+- `require_code_for_attributes` (function) — L192
+- `run_board` (function) — L227
+- `run_check` (function) — L345
+- `run_remove` (function) — L368
+- `body_argument` (function) — L381
+- `path_argument` (function) — L394
+- `tests` (module) — L401
+- `args` (method) — L404
+- `scratch` (method) — L408
+- `new_creates_a_resolvable_document_and_refuses_to_clobber` (method) — L416
+- `set_replaces_one_block_and_leaves_the_others_byte_identical` (method) — L435
+- `set_on_a_missing_block_lists_the_real_ids` (method) — L454
+- `append_adds_typed_blocks_including_runnable_code` (method) — L464
+- `insert_authors_a_runnable_code_block` (method) — L490
+- `insert_refuses_code_attributes_on_a_block_that_is_not_code` (method) — L512
+- `append_rejects_a_block_type_the_format_does_not_have` (method) — L527
+- `append_refuses_an_id_the_document_already_uses` (method) — L540
+- `insert_names_and_levels_a_block_exactly_as_append_does` (method) — L562
+- `a_differently_spelled_id_that_lands_on_a_taken_one_is_refused` (method) — L589
+- `a_valueless_code_flag_is_still_refused_on_prose` (method) — L611
+- `check_ticks_one_box_through_the_file` (method) — L628
+- `board_arranges_nodes_through_the_file` (method) — L653
+- `board_place_can_resize_without_repeating_position_and_move_without_repeating_size` (method) — L700
+- `board_place_takes_page_and_fit_as_sizes` (method) — L739
+- `board_links_between_sides_and_arranges_every_node_at_once` (method) — L769
+- `board_refuses_ambiguity_and_bad_numbers` (method) — L823
+- `fmt_canonicalizes_and_check_reports_without_writing` (method) — L844
+
+## Graph
+
+```mermaid
+graph LR
+  c["edit.rs"]
+  x0["args.rs"]
+  c --> x0
+  x1["store.rs"]
+  c --> x1
+  x2["store.rs"]
+  c --> x2
+  x3["workspace.rs"]
+  c --> x3
+  x4["pack.rs"]
+  c --> x4
+  x5["install.rs"]
+  c --> x5
+  x6["policies.rs"]
+  c --> x6
+  x7["browser.rs"]
+  x7 --> c
+  x8["desktop.rs"]
+  c --> x8
+  x9["workdir.rs"]
+  c --> x9
+  x10["state.rs"]
+  c --> x10
+  x11["handlers.rs"]
+  c --> x11
+  x12["layout.rs"]
+  c --> x12
+```
+
+### References
+
+- [[rust/doc-cli/src/args.rs]] via `value`, `positionals`, `number`, `present`, `positional`
+- [[rust/doc-store/src/store.rs]] via `scratch`
+- [[rust/doc-cli/src/commands/store.rs]] via `scratch`
+- [[rust/doc-cli/src/workspace.rs]] via `scratch`
+- [[rust/doc-store/src/pack.rs]] via `scratch`
+- [[rust/doc-cli/src/install.rs]] via `scratch`
+- [[rust/doc-cli/src/policies.rs]] via `scratch`
+- [[rust/doc-cli/src/desktop.rs]] via `scratch`
+- [[rust/doc-run/src/workdir.rs]] via `scratch`
+- [[rust/doc-cli/src/state.rs]] via `scratch`
+- [[rust/doc-cli/src/mcp/handlers.rs]] via `number`
+- [[rust/doc-core/src/format/layout.rs]] via `size`
+
+### Referenced by
+
+- [[rust/doc-cli/src/commands/browser.rs]] via `scratch`
+

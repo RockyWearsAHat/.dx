@@ -1,0 +1,44 @@
+---
+id: rust/doc-wasm/src/dto.rs
+title: dto.rs
+kind: file-index
+lang: rust
+rank: 0.004022
+links: [[editor/github/test/resolve.test.mjs]] [[editor/github/engine.js]] [[editor/github/resolve.js]]
+generated_at: 2026-08-06T01:13:54.687Z
+---
+
+# rust/doc-wasm/src/dto.rs  ·  rust  ·  260 LOC
+
+## Symbols
+
+- `ChunkDto` (class) — L16
+- `ItemDto` (class) — L26
+- `BlockDto` (class) — L44
+- `DocumentDto` (class) — L134
+- `from` (method) — L153
+- `from` (method) — L163
+- `from` (method) — L173
+- `from` (method) — L206
+- `from` (method) — L239
+- `from` (method) — L251
+
+## Graph
+
+```mermaid
+graph LR
+  c["dto.rs"]
+  x0["resolve.test.mjs"]
+  x0 --> c
+  x1["engine.js"]
+  x1 --> c
+  x2["resolve.js"]
+  x2 --> c
+```
+
+### Referenced by
+
+- [[editor/github/test/resolve.test.mjs]] via `from`
+- [[editor/github/engine.js]] via `from`
+- [[editor/github/resolve.js]] via `from`
+

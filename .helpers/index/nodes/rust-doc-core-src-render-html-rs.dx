@@ -1,0 +1,124 @@
+---
+id: rust/doc-core/src/render/html.rs
+title: html.rs
+kind: file-index
+lang: rust
+rank: 0.014842
+links: [[editor/surface/edit.js]] [[rust/doc-core/src/render/mod.rs]] [[rust/doc-core/src/render/board.rs]] [[rust/doc-core/src/render/escape.rs]] [[rust/doc-core/src/model.rs]] [[packaging/build-icons.py]] [[rust/doc-shot/src/lib.rs]] [[rust/doc-cli/src/commands/view.rs]] [[rust/doc-core/src/render/inline.rs]] [[rust/doc-core/src/format/source.rs]] [[rust/doc-core/src/render/theme.rs]] [[rust/doc-run/src/lib.rs]]
+generated_at: 2026-08-06T01:13:54.683Z
+---
+
+# rust/doc-core/src/render/html.rs  ·  rust  ·  1480 LOC
+
+## Symbols
+
+- `HtmlOptions` (class) — L30
+- `default` (method) — L53
+- `html` (function) — L66
+- `page_shell` (function) — L81
+- `PageBounds` (class) — L98
+- `BlockPage` (class) — L109
+- `block_page` (function) — L134
+- `block` (function) — L190
+- `blocks_html` (function) — L205
+- `pick_title` (function) — L223
+- `document_css` (function) — L245
+- `safe_import` (function) — L289
+- `block_html` (function) — L309
+- `paragraph_body` (function) — L371
+- `list_html` (function) — L379
+- `items_html` (function) — L388
+- `nav_html` (function) — L409
+- `nav_list_html` (function) — L424
+- `checklist_html` (function) — L471
+- `code_html` (function) — L502
+- `output_html` (function) — L554
+- `hanging_lines` (function) — L589
+- `rendered_output_html` (function) — L602
+- `image_html` (function) — L625
+- `view_html` (function) — L662
+- `round` (function) — L711
+- `trim_number` (function) — L716
+- `attributes` (function) — L727
+- `tests` (module) — L753
+- `fragment` (method) — L757
+- `one_block_renders_exactly_as_the_page_carries_it` (method) — L771
+- `a_view_is_a_sandboxed_frame_scaled_into_the_column` (method) — L790
+- `a_narrow_view_keeps_its_natural_size_in_the_flow` (method) — L817
+- `an_unresolved_view_is_a_sentence_never_an_empty_frame` (method) — L836
+- `a_views_page_is_not_template_interpolated` (method) — L844
+- `a_view_node_fills_its_stated_box_edge_to_edge` (method) — L863
+- `fragment_of` (method) — L883
+- `an_unknown_block_is_none_and_an_invisible_one_is_empty` (method) — L895
+- `a_block_is_rendered_with_the_documents_placeholder_values` (method) — L907
+- `standalone_page_is_self_contained` (method) — L917
+- `forced_theme_sets_the_root_attribute` (method) — L932
+- `blocks_carry_their_ids_for_addressing` (method) — L944
+- `nav_is_a_list_of_links_and_nothing_else` (method) — L950
+- `a_nested_nav_entry_renders_inside_its_parent_item` (method) — L962
+- `a_nav_with_nothing_to_point_at_renders_nothing` (method) — L972
+- `hidden_blocks_stay_hidden_unless_requested` (method) — L981
+- `runnable_code_is_classed_for_the_editing_surface` (method) — L996
+- `a_board_renders_its_nodes_from_the_documents_own_blocks` (method) — L1008
+- `a_custom_sized_node_is_drawn_at_exactly_its_stated_box` (method) — L1041
+- `wide_bounds` (method) — L1062
+- `a_board_page_is_the_canvas_at_scale_one` (method) — L1074
+- `a_board_page_shrinks_to_the_stated_bounds_and_never_grows` (method) — L1093
+- `a_block_page_holds_one_block_even_a_hidden_one` (method) — L1120
+- `a_node_renders_html_with_its_classes_and_the_documents_css_dresses_it` (method) — L1139
+- `a_hidden_node_block_stays_out_of_the_page_flow` (method) — L1153
+- `a_board_is_fitted_on_both_axes_so_all_of_it_shows` (method) — L1170
+- `a_dangling_node_says_so_and_a_board_cannot_hold_a_board` (method) — L1199
+- `a_board_alone_renders_exactly_as_the_page_carries_it` (method) — L1208
+- `a_document_dresses_itself_with_no_flag_to_forget` (method) — L1218
+- `a_fragment_carries_the_document_css_a_page_carries` (method) — L1226
+
+## Graph
+
+```mermaid
+graph LR
+  c["html.rs"]
+  x0["edit.js"]
+  x0 --> c
+  x1["mod.rs"]
+  c --> x1
+  x2["board.rs"]
+  x2 --> c
+  x3["escape.rs"]
+  c --> x3
+  x4["model.rs"]
+  c --> x4
+  x5["build-icons.py"]
+  x5 --> c
+  x6["lib.rs"]
+  x6 --> c
+  x7["view.rs"]
+  x7 --> c
+  x8["inline.rs"]
+  c --> x8
+  x9["source.rs"]
+  c --> x9
+  x10["theme.rs"]
+  c --> x10
+  x11["lib.rs"]
+  c --> x11
+```
+
+### References
+
+- [[rust/doc-core/src/render/mod.rs]] via `html`
+- [[rust/doc-core/src/render/escape.rs]] via `escape_style`, `sanitize_markup`, `escape_html`, `extract_svg`
+- [[rust/doc-core/src/model.rs]] via `block_index`, `first_heading_text`
+- [[rust/doc-core/src/render/inline.rs]] via `inline_html`
+- [[rust/doc-core/src/format/source.rs]] via `first_heading_text`
+- [[rust/doc-core/src/render/theme.rs]] via `attribute`
+- [[rust/doc-run/src/lib.rs]] via `truncate`
+
+### Referenced by
+
+- [[editor/surface/edit.js]] via `round`
+- [[rust/doc-core/src/render/board.rs]] via `round`, `block_html`
+- [[packaging/build-icons.py]] via `round`
+- [[rust/doc-shot/src/lib.rs]] via `block_page`, `html`
+- [[rust/doc-cli/src/commands/view.rs]] via `html`
+

@@ -1,0 +1,112 @@
+---
+id: rust/doc-core/src/resolve.rs
+title: resolve.rs
+kind: file-index
+lang: rust
+rank: 0.020505
+links: [[rust/doc-run/tests/attacks.rs]] [[rust/doc-cli/src/workspace.rs]] [[rust/doc-run/src/lib.rs]] [[rust/doc-core/tests/pipeline.rs]] [[rust/doc-core/src/model.rs]] [[rust/doc-store/src/store.rs]] [[rust/doc-cli/src/daemon/engine.rs]] [[rust/doc-store/src/pack.rs]] [[editor/github/content.js]] [[editor/github/wasm/doc_wasm.js]] [[rust/doc-wasm/src/lib.rs]] [[editor/vscode/test/editing.test.mjs]]
+generated_at: 2026-08-06T01:13:54.682Z
+---
+
+# rust/doc-core/src/resolve.rs  ·  rust  ·  811 LOC
+
+## Symbols
+
+- `Resolver` (interface) — L41
+- `Nowhere` (class) — L53
+- `file` (method) — L56
+- `document` (method) — L59
+- `Provided` (class) — L71
+- `new` (method) — L81
+- `add_file` (method) — L86
+- `add_document` (method) — L91
+- `file` (method) — L97
+- `document` (method) — L104
+- `Unresolved` (class) — L118
+- `Reference` (class) — L132
+- `confined` (function) — L148
+- `view_fragment` (function) — L170
+- `opened_at` (function) — L188
+- `document_ref` (function) — L200
+- `folder` (function) — L209
+- `joined` (function) — L214
+- `references` (function) — L227
+- `hydrate` (function) — L268
+- `file_references` (function) — L370
+- `stylesheet_links` (function) — L388
+- `tag_attribute` (function) — L417
+- `inline_stylesheets` (function) — L448
+- `foreign_nodes` (function) — L496
+- `foreign_block` (function) — L516
+- `tests` (module) — L524
+- `map` (method) — L527
+- `the_path_law_keeps_references_inside_the_folder` (method) — L539
+- `a_code_listing_is_the_files_current_text` (method) — L559
+- `a_missing_file_is_a_sentence_in_the_blocks_place_never_silence` (method) — L570
+- `an_unconfined_src_never_reaches_the_resolver` (method) — L580
+- `Panics` (class) — L581
+- `file` (method) — L583
+- `document` (method) — L586
+- `a_view_is_the_pages_current_markup_with_its_stylesheet_inlined` (method) — L596
+- `a_fragment_view_reads_the_file_and_shows_its_element` (method) — L620
+- `a_fragment_strips_from_the_prefetch_list_but_not_from_an_unsafe_name` (method) — L650
+- `a_fragment_never_reaches_a_selector_unvetted` (method) — L666
+- `a_missing_view_is_reported_and_its_body_stays_empty` (method) — L678
+- `a_views_missing_stylesheet_keeps_the_tag_and_says_so` (method) — L689
+- `a_pages_absolute_stylesheets_are_the_frames_own_to_fetch` (method) — L709
+- `file_references_lists_a_pages_relative_stylesheets_against_its_own_folder` (method) — L724
+- `a_board_node_naming_a_sibling_document_gains_its_block` (method) — L734
+- `a_foreign_listings_path_is_rooted_in_its_own_document` (method) — L759
+- `a_dangling_document_reference_is_reported_and_the_board_still_renders` (method) — L778
+- `plain_node_ids_are_not_references` (method) — L788
+- `references_lists_each_path_once_for_prefetching_hosts` (method) — L797
+
+## Graph
+
+```mermaid
+graph LR
+  c["resolve.rs"]
+  x0["attacks.rs"]
+  c --> x0
+  x1["workspace.rs"]
+  x1 --> c
+  x2["lib.rs"]
+  c --> x2
+  x3["pipeline.rs"]
+  c --> x3
+  x4["model.rs"]
+  c --> x4
+  x5["store.rs"]
+  c --> x5
+  x6["engine.rs"]
+  x6 --> c
+  x7["pack.rs"]
+  x7 --> c
+  x8["content.js"]
+  x8 --> c
+  x9["doc_wasm.js"]
+  x9 --> c
+  x10["lib.rs"]
+  x10 --> c
+  x11["editing.test.mjs"]
+  x11 --> c
+```
+
+### References
+
+- [[rust/doc-run/tests/attacks.rs]] via `confined`
+- [[rust/doc-run/src/lib.rs]] via `document`, `file`, `Resolver`, `add_file`
+- [[rust/doc-core/tests/pipeline.rs]] via `document`
+- [[rust/doc-core/src/model.rs]] via `block_index`
+- [[rust/doc-store/src/store.rs]] via `document`
+
+### Referenced by
+
+- [[rust/doc-cli/src/workspace.rs]] via `document`, `Resolver`, `file`
+- [[rust/doc-cli/src/daemon/engine.rs]] via `add_file`, `add_document`, `bytes`
+- [[rust/doc-store/src/pack.rs]] via `document`
+- [[editor/github/content.js]] via `references`, `file_references`
+- [[editor/github/wasm/doc_wasm.js]] via `references`, `file_references`
+- [[rust/doc-wasm/src/lib.rs]] via `add_document`, `add_file`
+- [[editor/vscode/test/editing.test.mjs]] via `references`
+

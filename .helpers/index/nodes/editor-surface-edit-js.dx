@@ -1,0 +1,143 @@
+---
+id: editor/surface/edit.js
+title: edit.js
+kind: file-index
+lang: javascript
+rank: 0.011227
+links: [[rust/doc-store/src/store.rs]] [[rust/doc-cli/src/commands/view.rs]] [[rust/doc-cli/src/policies.rs]] [[rust/doc-core/src/render/board.rs]] [[rust/doc-core/src/render/html.rs]] [[rust/doc-shot/src/play.rs]] [[rust/doc-cli/src/mcp/handlers.rs]] [[rust/doc-cli/src/workspace.rs]] [[rust/doc-core/src/format/layout.rs]] [[rust/doc-store/src/schema.rs]] [[rust/doc-core/src/render/mod.rs]] [[rust/doc-core/src/lib.rs]]
+generated_at: 2026-08-06T01:13:54.684Z
+---
+
+# editor/surface/edit.js  ·  javascript  ·  2657 LOC
+
+## Symbols
+
+- `attach` (function) — L250
+- `blockAt` (function) — L263
+- `kindOf` (function) — L278
+- `effectiveKind` (function) — L305
+- `onClick` (function) — L312
+- `blankClick` (function) — L353
+- `enter` (function) — L380
+- `edit` (function) — L399
+- `isRich` (function) — L527
+- `fieldText` (function) — L532
+- `walk` (function) — L535
+- `setFieldText` (function) — L547
+- `spliceField` (function) — L558
+- `selection` (function) — L564
+- `setSelection` (function) — L578
+- `offsetAt` (function) — L594
+- `walk` (function) — L597
+- `measure` (function) — L609
+- `positionAt` (function) — L620
+- `walk` (function) — L623
+- `decorate` (function) — L655
+- `formatKey` (function) — L692
+- `snapshot` (function) — L738
+- `timeTravel` (function) — L746
+- `dress` (function) — L767
+- `promote` (function) — L782
+- `grow` (function) — L809
+- `close` (function) — L817
+- `effectiveHeader` (function) — L831
+- `leave` (function) — L843
+- `save` (function) — L858
+- `autoRun` (function) — L910
+- `resume` (function) — L926
+- `apply` (function) — L939
+- `element` (function) — L955
+- `shuttle` (function) — L962
+- `onKeyDown` (function) — L977
+- `headerKey` (function) — L1133
+- `erase` (function) — L1179
+- `dressRunnables` (function) — L1210
+- `dressChecks` (function) — L1239
+- `toggleCheck` (function) — L1256
+- `runBlock` (function) — L1275
+- `dressBoards` (function) — L1309
+- `wireBoard` (function) — L1318
+- `refit` (function) — L1355
+- `dressNode` (function) — L1374
+- `boxOf` (function) — L1402
+- `centreOf` (function) — L1412
+- `reachOf` (function) — L1417
+- `spansAcross` (function) — L1425
+- `anchorOn` (function) — L1430
+- `autoSides` (function) — L1446
+- `sideNearest` (function) — L1456
+- `boxHolds` (function) — L1472
+- `segmentHits` (function) — L1482
+- `crossingSine` (function) — L1497
+- `midpointOn` (function) — L1512
+- `clearestSides` (function) — L1523
+- `controlsFor` (function) — L1562
+
+## Graph
+
+```mermaid
+graph LR
+  c["edit.js"]
+  x0["store.rs"]
+  c --> x0
+  x1["view.rs"]
+  c --> x1
+  x2["policies.rs"]
+  c --> x2
+  x3["board.rs"]
+  c --> x3
+  x4["html.rs"]
+  c --> x4
+  x5["play.rs"]
+  c --> x5
+  x6["handlers.rs"]
+  c --> x6
+  x7["workspace.rs"]
+  c --> x7
+  x8["layout.rs"]
+  c --> x8
+  x9["schema.rs"]
+  c --> x9
+  x10["mod.rs"]
+  c --> x10
+  x11["lib.rs"]
+  c --> x11
+  x12["content.js"]
+  x12 --> c
+  x13["desktop.rs"]
+  c --> x13
+```
+
+### References
+
+- [[rust/doc-store/src/store.rs]] via `save`, `walk`, `source`, `commit`
+- [[rust/doc-cli/src/commands/view.rs]] via `slice`
+- [[rust/doc-cli/src/policies.rs]] via `remove`
+- [[rust/doc-core/src/render/board.rs]] via `round`, `capped`
+- [[rust/doc-core/src/render/html.rs]] via `round`
+- [[rust/doc-shot/src/play.rs]] via `field`
+- [[rust/doc-cli/src/mcp/handlers.rs]] via `edit`, `call`, `run`, `resolve`, `source`
+- [[rust/doc-cli/src/workspace.rs]] via `save`
+- [[rust/doc-core/src/format/layout.rs]] via `place`, `arrange`
+- [[rust/doc-store/src/schema.rs]] via `apply`
+- [[rust/doc-core/src/render/mod.rs]] via `board`, `field`, `escape`
+- [[rust/doc-core/src/lib.rs]] via `edit`, `resolve`
+- [[rust/doc-cli/src/desktop.rs]] via `place`
+- [[rust/doc-cli/src/service.rs]] via `run`, `accept`
+- [[rust/doc-core/src/chunk.rs]] via `source`
+- [[rust/doc-core/src/format/mod.rs]] via `source`
+- [[rust/doc-store/src/pack.rs]] via `source`
+- [[editor/github/resolve.js]] via `collapse`
+- [[rust/doc-cli/src/commands/browser.rs]] via `run`
+- [[rust/doc-cli/src/commands/exec.rs]] via `run`
+- [[rust/doc-cli/src/commands/mod.rs]] via `edit`
+- [[rust/doc-cli/src/commands/play.rs]] via `run`
+- [[rust/doc-cli/src/daemon/engine.rs]] via `call`
+- [[rust/doc-core/src/render/nav.rs]] via `entries`
+- [[rust/doc-run/src/process.rs]] via `run`
+
+### Referenced by
+
+- [[editor/github/content.js]] via `apply`, `call`, `run`
+- [[rust/doc-core/src/edit.rs]] via `apply`
+

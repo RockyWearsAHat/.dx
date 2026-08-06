@@ -1,0 +1,91 @@
+---
+id: rust/doc-run/src/process.rs
+title: process.rs
+kind: file-index
+lang: rust
+rank: 0.011454
+links: [[rust/doc-cli/src/commands/browser.rs]] [[rust/doc-cli/src/commands/exec.rs]] [[rust/doc-cli/src/service.rs]] [[editor/github/content.js]] [[rust/doc-cli/src/commands/play.rs]] [[rust/doc-run/src/lib.rs]] [[rust/doc-run/src/plan.rs]] [[rust/doc-cli/src/mcp/handlers.rs]] [[editor/surface/edit.js]] [[packaging/build-icons.py]] [[rust/doc-cli/src/extension.rs]] [[rust/doc-cli/src/install.rs]]
+generated_at: 2026-08-06T01:13:54.684Z
+---
+
+# rust/doc-run/src/process.rs  ·  rust  ·  361 LOC
+
+## Symbols
+
+- `CommandSpec` (class) — L32
+- `new` (method) — L43
+- `with_env` (method) — L53
+- `display` (method) — L60
+- `Capture` (class) — L69
+- `succeeded` (method) — L81
+- `launch_failed` (method) — L86
+- `run` (function) — L103
+- `child_environment` (function) — L183
+- `kill_tree` (function) — L216
+- `signal_all` (function) — L240
+- `descendants_of` (function) — L253
+- `drain_stream` (function) — L282
+- `collect_stream` (function) — L293
+- `merge_streams` (function) — L298
+- `tests` (module) — L316
+- `captures_stdout_from_a_successful_command` (method) — L321
+- `reports_stderr_and_the_exit_code_on_failure` (method) — L329
+- `kills_a_process_that_overruns_its_deadline` (method) — L338
+- `a_missing_program_is_a_result_not_a_crash` (method) — L347
+- `environment_overrides_reach_the_child` (method) — L355
+
+## Graph
+
+```mermaid
+graph LR
+  c["process.rs"]
+  x0["browser.rs"]
+  x0 --> c
+  x1["exec.rs"]
+  x1 --> c
+  x2["service.rs"]
+  x2 --> c
+  x3["content.js"]
+  x3 --> c
+  x4["play.rs"]
+  x4 --> c
+  x5["lib.rs"]
+  x5 --> c
+  x6["plan.rs"]
+  x6 --> c
+  x7["handlers.rs"]
+  x7 --> c
+  x8["edit.js"]
+  x8 --> c
+  x9["build-icons.py"]
+  x9 --> c
+  x10["extension.rs"]
+  x10 --> c
+  x11["install.rs"]
+  x11 --> c
+  x12["mod.rs"]
+  c --> x12
+  x13["workdir.rs"]
+  x13 --> c
+```
+
+### References
+
+- [[rust/doc-cli/src/mcp/mod.rs]] via `code`
+
+### Referenced by
+
+- [[rust/doc-cli/src/commands/browser.rs]] via `display`, `run`
+- [[rust/doc-cli/src/commands/exec.rs]] via `run`
+- [[rust/doc-cli/src/service.rs]] via `run`
+- [[editor/github/content.js]] via `run`, `send`
+- [[rust/doc-cli/src/commands/play.rs]] via `run`
+- [[rust/doc-run/src/lib.rs]] via `succeeded`, `with_env`
+- [[rust/doc-run/src/plan.rs]] via `with_env`
+- [[rust/doc-cli/src/mcp/handlers.rs]] via `run`
+- [[editor/surface/edit.js]] via `run`
+- [[packaging/build-icons.py]] via `run`
+- [[rust/doc-cli/src/extension.rs]] via `display`
+- [[rust/doc-cli/src/install.rs]] via `display`
+- [[rust/doc-run/src/workdir.rs]] via `succeeded`
+

@@ -1,0 +1,64 @@
+---
+id: rust/doc-core/src/render/theme.rs
+title: theme.rs
+kind: file-index
+lang: rust
+rank: 0.003526
+links: [[editor/github/content.js]] [[editor/github/wasm/doc_wasm.js]] [[editor/github/wasm/doc_wasm.d.ts]] [[rust/doc-wasm/src/lib.rs]] [[editor/github/test/engine.test.mjs]] [[rust/doc-core/src/render/html.rs]]
+generated_at: 2026-08-06T01:13:54.688Z
+---
+
+# rust/doc-core/src/render/theme.rs  ·  rust  ·  685 LOC
+
+## Symbols
+
+- `Theme` (class) — L26
+- `attribute` (method) — L40
+- `parse` (method) — L50
+- `stylesheet` (function) — L61
+- `tests` (module) — L511
+- `parses_theme_names_and_falls_back_to_auto` (method) — L515
+- `auto_theme_sets_no_attribute` (method) — L522
+- `stylesheet_defines_both_palettes` (method) — L528
+- `code_and_output_wrap_so_a_screenshot_never_truncates_them` (method) — L536
+- `a_wrapped_line_is_indented_so_it_cannot_be_read_as_a_new_one` (method) — L543
+- `wide_author_markup_scrolls_in_its_own_box_rather_than_the_page` (method) — L567
+- `the_page_carries_no_interface_chrome` (method) — L583
+- `there_is_exactly_one_paper_tone_and_nothing_is_filled` (method) — L609
+- `blocks_are_set_in_from_a_margin_rule_rather_than_boxed` (method) — L635
+- `a_code_block_labels_itself_in_the_margin_instead_of_a_header_bar` (method) — L653
+- `only_a_failed_run_is_called_out` (method) — L663
+- `prose_is_set_in_a_serif_and_code_in_a_monospace` (method) — L670
+- `printing_drops_the_screen_washes_and_marginal_notes` (method) — L678
+
+## Graph
+
+```mermaid
+graph LR
+  c["theme.rs"]
+  x0["content.js"]
+  x0 --> c
+  x1["doc_wasm.js"]
+  x1 --> c
+  x2["doc_wasm.d.ts"]
+  c --> x2
+  x3["lib.rs"]
+  c --> x3
+  x4["engine.test.mjs"]
+  x4 --> c
+  x5["html.rs"]
+  x5 --> c
+```
+
+### References
+
+- [[editor/github/wasm/doc_wasm.d.ts]] via `stylesheet`
+- [[rust/doc-wasm/src/lib.rs]] via `stylesheet`
+
+### Referenced by
+
+- [[editor/github/content.js]] via `stylesheet`
+- [[editor/github/wasm/doc_wasm.js]] via `stylesheet`
+- [[editor/github/test/engine.test.mjs]] via `stylesheet`
+- [[rust/doc-core/src/render/html.rs]] via `attribute`
+

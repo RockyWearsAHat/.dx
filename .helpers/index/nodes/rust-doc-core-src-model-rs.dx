@@ -1,0 +1,55 @@
+---
+id: rust/doc-core/src/model.rs
+title: model.rs
+kind: file-index
+lang: rust
+rank: 0.01646
+links: [[rust/doc-core/src/edit.rs]] [[rust/doc-core/src/render/html.rs]] [[rust/doc-core/src/resolve.rs]] [[rust/doc-core/src/render/board.rs]] [[rust/doc-cli/src/workspace.rs]] [[rust/doc-core/src/format/source.rs]] [[rust/doc-run/src/lib.rs]] [[rust/doc-store/src/store.rs]]
+generated_at: 2026-08-06T01:13:54.683Z
+---
+
+# rust/doc-core/src/model.rs  ·  rust  ·  153 LOC
+
+## Symbols
+
+- `Item` (class) — L10
+- `Block` (class) — L21
+- `runner_for_language` (function) — L99
+- `Document` (class) — L115
+- `block_index` (method) — L137
+- `first_heading_text` (method) — L145
+
+## Graph
+
+```mermaid
+graph LR
+  c["model.rs"]
+  x0["edit.rs"]
+  x0 --> c
+  x1["html.rs"]
+  x1 --> c
+  x2["resolve.rs"]
+  x2 --> c
+  x3["board.rs"]
+  x3 --> c
+  x4["workspace.rs"]
+  x4 --> c
+  x5["source.rs"]
+  x5 --> c
+  x6["lib.rs"]
+  x6 --> c
+  x7["store.rs"]
+  x7 --> c
+```
+
+### Referenced by
+
+- [[rust/doc-core/src/edit.rs]] via `block_index`
+- [[rust/doc-core/src/render/html.rs]] via `block_index`, `first_heading_text`
+- [[rust/doc-core/src/resolve.rs]] via `block_index`
+- [[rust/doc-core/src/render/board.rs]] via `block_index`
+- [[rust/doc-cli/src/workspace.rs]] via `first_heading_text`
+- [[rust/doc-core/src/format/source.rs]] via `first_heading_text`
+- [[rust/doc-run/src/lib.rs]] via `runner_for_language`
+- [[rust/doc-store/src/store.rs]] via `first_heading_text`
+

@@ -1,0 +1,98 @@
+---
+id: rust/doc-core/src/compress.rs
+title: compress.rs
+kind: file-index
+lang: rust
+rank: 0.028778
+links: [[rust/doc-core/src/format/mod.rs]] [[editor/github/wasm/doc_wasm.js]] [[rust/doc-cli/src/daemon/mod.rs]] [[rust/doc-cli/src/main.rs]] [[rust/doc-core/src/digest.rs]] [[editor/github/wasm/doc_wasm.d.ts]] [[rust/doc-cli/src/extension.rs]] [[rust/doc-core/src/chunk.rs]] [[rust/doc-core/src/edit.rs]] [[rust/doc-core/src/lib.rs]] [[rust/doc-store/src/store.rs]] [[rust/doc-wasm/src/lib.rs]]
+generated_at: 2026-08-06T01:13:54.682Z
+---
+
+# rust/doc-core/src/compress.rs  ·  rust  ·  484 LOC
+
+## Symbols
+
+- `hash_at` (function) — L69
+- `compress` (function) — L84
+- `frame` (function) — L93
+- `lzss_compress` (function) — L111
+- `emit` (function) — L189
+- `insert` (function) — L209
+- `DecompressError` (class) — L219
+- `fmt` (method) — L231
+- `read_u32_be` (function) — L246
+- `decompress` (function) — L262
+- `lzss_decompress` (function) — L303
+- `tests` (module) — L351
+- `round_trip` (method) — L354
+- `round_trips_edge_sizes` (method) — L376
+- `round_trips_repetitive_and_text` (method) — L388
+- `round_trips_overlap_heavy_small_alphabet` (method) — L398
+- `a_frame_cannot_claim_a_length_it_does_not_carry` (method) — L414
+- `a_deflate_payload_cannot_expand_past_what_the_frame_declared` (method) — L429
+- `frames_written_before_deflate_still_decode` (method) — L442
+- `hex` (function) — L446
+- `unhex` (function) — L449
+- `rejects_bad_magic` (method) — L474
+
+## Graph
+
+```mermaid
+graph LR
+  c["compress.rs"]
+  x0["mod.rs"]
+  c --> x0
+  x1["doc_wasm.js"]
+  x1 --> c
+  x2["mod.rs"]
+  x2 --> c
+  x3["main.rs"]
+  x3 --> c
+  x4["digest.rs"]
+  c --> x4
+  x5["doc_wasm.d.ts"]
+  c --> x5
+  x6["extension.rs"]
+  x6 --> c
+  x7["chunk.rs"]
+  x7 --> c
+  x8["edit.rs"]
+  x8 --> c
+  x9["lib.rs"]
+  c --> x9
+  x10["store.rs"]
+  x10 --> c
+  x11["lib.rs"]
+  c --> x11
+  x12["build-icons.py"]
+  x12 --> c
+  x13["http.rs"]
+  x13 --> c
+```
+
+### References
+
+- [[rust/doc-core/src/format/mod.rs]] via `round_trip`
+- [[rust/doc-core/src/digest.rs]] via `read_u32_be`
+- [[editor/github/wasm/doc_wasm.d.ts]] via `compress`
+- [[rust/doc-core/src/lib.rs]] via `compress`
+- [[rust/doc-wasm/src/lib.rs]] via `compress`
+
+### Referenced by
+
+- [[editor/github/wasm/doc_wasm.js]] via `decompress`, `compress`
+- [[rust/doc-cli/src/daemon/mod.rs]] via `insert`
+- [[rust/doc-cli/src/main.rs]] via `emit`
+- [[rust/doc-cli/src/extension.rs]] via `insert`
+- [[rust/doc-core/src/chunk.rs]] via `decompress`, `compress`
+- [[rust/doc-core/src/edit.rs]] via `insert`
+- [[rust/doc-store/src/store.rs]] via `decompress`, `compress`
+- [[packaging/build-icons.py]] via `compress`
+- [[rust/doc-cli/src/daemon/http.rs]] via `insert`
+- [[rust/doc-cli/src/daemon/packs.rs]] via `insert`
+- [[rust/doc-cli/src/install.rs]] via `insert`
+- [[rust/doc-cli/src/policies.rs]] via `insert`
+- [[rust/doc-core/src/format/stringify.rs]] via `insert`
+- [[rust/doc-core/tests/pipeline.rs]] via `compress`
+- [[rust/doc-store/src/pack.rs]] via `insert`
+

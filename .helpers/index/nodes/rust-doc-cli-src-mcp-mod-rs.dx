@@ -1,0 +1,94 @@
+---
+id: rust/doc-cli/src/mcp/mod.rs
+title: mod.rs
+kind: file-index
+lang: rust
+rank: 0.012498
+links: [[rust/doc-cli/src/mcp/handlers.rs]] [[editor/github/test/engine.test.mjs]] [[rust/doc-cli/src/daemon/http.rs]] [[rust/doc-cli/src/daemon/mod.rs]] [[rust/doc-cli/src/commands/find.rs]] [[rust/doc-cli/src/desktop.rs]] [[rust/doc-store/src/git.rs]] [[editor/github/content.js]] [[rust/doc-cli/src/commands/browser.rs]] [[rust/doc-cli/src/commands/store.rs]] [[rust/doc-cli/src/service.rs]] [[rust/doc-core/src/render/board.rs]]
+generated_at: 2026-08-06T01:13:54.684Z
+---
+
+# rust/doc-cli/src/mcp/mod.rs  ·  rust  ·  337 LOC
+
+## Symbols
+
+- `handlers` (module) — L11
+- `tools` (module) — L12
+- `code` (module) — L32
+- `serve` (function) — L46
+- `handle` (function) — L69
+- `initialize` (function) — L91
+- `tool_call` (function) — L107
+- `resources` (function) — L127
+- `resource_read` (function) — L143
+- `success` (function) — L166
+- `error` (function) — L171
+- `tests` (module) — L180
+- `project` (method) — L184
+- `request` (method) — L195
+- `the_handshake_advertises_tools_resources_and_guidance` (method) — L200
+- `tools_list_returns_the_catalogue` (method) — L212
+- `a_tool_call_returns_content` (method) — L220
+- `a_tool_failure_is_reported_in_the_result_so_the_agent_can_retry` (method) — L239
+- `documents_are_listed_and_readable_as_resources` (method) — L259
+- `notifications_get_no_reply` (method) — L277
+- `an_unknown_method_is_a_protocol_error` (method) — L284
+- `a_bad_envelope_is_rejected_without_crashing` (method) — L291
+- `the_stdio_loop_answers_requests_line_by_line` (method) — L299
+- `unparseable_input_gets_a_parse_error_and_the_loop_continues` (method) — L320
+
+## Graph
+
+```mermaid
+graph LR
+  c["mod.rs"]
+  x0["handlers.rs"]
+  x0 --> c
+  x1["engine.test.mjs"]
+  c --> x1
+  x2["http.rs"]
+  c --> x2
+  x3["mod.rs"]
+  x3 --> c
+  x4["find.rs"]
+  x4 --> c
+  x5["desktop.rs"]
+  x5 --> c
+  x6["git.rs"]
+  x6 --> c
+  x7["content.js"]
+  x7 --> c
+  x8["browser.rs"]
+  x8 --> c
+  x9["store.rs"]
+  x9 --> c
+  x10["service.rs"]
+  x10 --> c
+  x11["board.rs"]
+  c --> x11
+  x12["process.rs"]
+  x12 --> c
+  x13["pack.rs"]
+  x13 --> c
+```
+
+### References
+
+- [[editor/github/test/engine.test.mjs]] via `json`
+- [[rust/doc-cli/src/daemon/http.rs]] via `json`
+- [[rust/doc-core/src/render/board.rs]] via `flush`
+
+### Referenced by
+
+- [[rust/doc-cli/src/mcp/handlers.rs]] via `project`
+- [[rust/doc-cli/src/daemon/mod.rs]] via `request`, `serve`
+- [[rust/doc-cli/src/commands/find.rs]] via `project`
+- [[rust/doc-cli/src/desktop.rs]] via `success`
+- [[rust/doc-store/src/git.rs]] via `success`
+- [[editor/github/content.js]] via `error`
+- [[rust/doc-cli/src/commands/browser.rs]] via `success`
+- [[rust/doc-cli/src/commands/store.rs]] via `success`
+- [[rust/doc-cli/src/service.rs]] via `success`
+- [[rust/doc-run/src/process.rs]] via `code`
+- [[rust/doc-store/src/pack.rs]] via `success`
+
