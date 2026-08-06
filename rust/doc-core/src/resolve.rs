@@ -1,6 +1,6 @@
 //! References a document makes past its own edge, and how they are filled in.
 //!
-//! A document may name three things it does not itself carry:
+//! A document may name four things it does not itself carry:
 //!
 //! - **A sibling file**, on a `::code src=path` block. The file is the source of truth —
 //!   the listing a reader sees, the text `dx run` executes — and the document shows it as
@@ -15,8 +15,13 @@
 //! - **One block of a sibling document**, on a board node line (`- plan.dx#step x= y=`).
 //!   The block lives once, in its own document, and every board that names it shows the
 //!   current content instead of a copy.
+//! - **A sibling picture**, on an `::image src=path` block. The file's current bytes are
+//!   embedded as a `data:` URI, so the rendered page carries its own artwork wherever it
+//!   is shown — a capture made from a scratch directory, an editor webview, a PNG export.
+//!   Raster formats only (SVG is a document that can script), and a remote or `data:` src
+//!   travels as written.
 //!
-//! All three are filled in by [`hydrate`], which asks an injected [`Resolver`] for bytes and
+//! All of them are filled in by [`hydrate`], which asks an injected [`Resolver`] for bytes and
 //! nothing else. The resolver is the host's — the filesystem in the CLI, workspace files
 //! in an editor, the repository origin in a browser — and it is transport only: the path
 //! law ([`confined`]), the reference grammar, and what happens to the fetched bytes all
@@ -44,6 +49,14 @@ pub trait Resolver {
     /// The DOCSRC source of the sibling document at `path` (a `.dx` path, resolved
     /// through the store when the file on disk is a pointer).
     fn document(&self, path: &str) -> Option<String>;
+    /// The raw bytes of the file at `path` — how an `::image src=` is embedded.
+    ///
+    /// Defaulted to `None` so text-only hosts keep working unchanged; a host that can
+    /// read bytes (the CLI's folder resolver) overrides it, and where it stays `None`
+    /// an image resolves to its missing-file sentence like any other reference.
+    fn binary(&self, _path: &str) -> Option<Vec<u8>> {
+        None
+    }
 }
 
 /// A resolver that holds nothing, for surfaces that render without a workspace.
@@ -73,6 +86,8 @@ pub struct Provided {
     files: Vec<(String, String)>,
     /// `(path, source)` pairs answering [`Resolver::document`].
     documents: Vec<(String, String)>,
+    /// `(path, bytes)` pairs answering [`Resolver::binary`].
+    binaries: Vec<(String, Vec<u8>)>,
 }
 
 impl Provided {
@@ -91,6 +106,11 @@ impl Provided {
     pub fn add_document(&mut self, path: &str, source: &str) {
         self.documents.push((path.to_string(), source.to_string()));
     }
+
+    /// Supply the raw bytes of the file at `path` — what an `::image src=` embeds.
+    pub fn add_binary(&mut self, path: &str, bytes: &[u8]) {
+        self.binaries.push((path.to_string(), bytes.to_vec()));
+    }
 }
 
 impl Resolver for Provided {
@@ -106,6 +126,13 @@ impl Resolver for Provided {
             .iter()
             .find(|(held, _)| held == path)
             .map(|(_, source)| source.clone())
+    }
+
+    fn binary(&self, path: &str) -> Option<Vec<u8>> {
+        self.binaries
+            .iter()
+            .find(|(held, _)| held == path)
+            .map(|(_, bytes)| bytes.clone())
     }
 }
 
@@ -258,10 +285,11 @@ pub fn references(document: &Document) -> Vec<Reference> {
 /// copy of the named block under exactly that id, so the board draws it like any sibling
 /// block. Then every `::code src=` body — including one a foreign block just brought in,
 /// whose path is re-rooted in *its* document's folder — is replaced with the file's
-/// current text. A reference that cannot be resolved becomes a sentence in the block's
-/// body naming the path, and an [`Unresolved`] is returned for it, so a caller that
-/// must not proceed on a partial document (running it, say) can tell which blocks are
-/// affected.
+/// current text, and every `::image src=` naming a sibling raster file is embedded as a
+/// `data:` URI of its current bytes. A reference that cannot be resolved becomes a
+/// sentence in the block's place naming the path — a listing's body, an image's alt —
+/// and an [`Unresolved`] is returned for it, so a caller that must not proceed on a
+/// partial document (running it, say) can tell which blocks are affected.
 ///
 /// The result is for viewing and running, never for saving: nothing here is canonical
 /// text, and serializing a hydrated document would turn references back into copies.
@@ -276,6 +304,11 @@ pub fn hydrate(document: &mut Document, resolver: &dyn Resolver) -> Vec<Unresolv
             Some(mut block) => {
                 if matches!(block.kind.as_str(), "code" | "view") && !block.src.is_empty() {
                     // The reference's path is relative to the document that owns it.
+                    block.src = joined(folder(path), &block.src).unwrap_or_default();
+                }
+                // An image's folder reference re-roots the same way; a remote or `data:`
+                // src is not a folder reference and travels as written.
+                if block.kind == "image" && confined(&block.src).is_some() {
                     block.src = joined(folder(path), &block.src).unwrap_or_default();
                 }
                 block.id = reference.clone();
@@ -356,7 +389,58 @@ pub fn hydrate(document: &mut Document, resolver: &dyn Resolver) -> Vec<Unresolv
         }
     }
 
+    for block in &mut document.blocks {
+        if block.kind != "image" {
+            continue;
+        }
+        // Only a confined folder path is a reference to fill; a remote URL, a `data:` URI
+        // already carrying its bytes, and an empty src all travel exactly as written.
+        let Some(path) = confined(&block.src).map(str::to_string) else {
+            continue;
+        };
+        // SVG is a document that can script, so it is never inlined; a file outside the
+        // media allow-list keeps its reference too, rather than being embedded as a type
+        // a page must not carry.
+        let Some(media) = image_media_type(&path) else {
+            continue;
+        };
+        match resolver.binary(&path) {
+            Some(bytes) => {
+                block.src = format!("data:{media};base64,{}", crate::base64::encode(&bytes));
+            }
+            None => {
+                let sentence = format!(
+                    "{path} could not be read here — the image is the file's current \
+                     bytes, and the file was not found inside this document's folder."
+                );
+                // The page says what happened where the picture would have been.
+                block.alt = sentence.clone();
+                unresolved.push(Unresolved {
+                    block: block.id.clone(),
+                    reference: path,
+                    sentence,
+                });
+            }
+        }
+    }
+
     unresolved
+}
+
+/// The media type an `::image` may embed, judged by the file's extension.
+///
+/// The same allow-list as [`crate::render::escape`]'s `data:` images — raster formats a
+/// page can show and cannot execute. SVG is deliberately absent: it is a document that
+/// can script, not a picture.
+fn image_media_type(path: &str) -> Option<&'static str> {
+    let extension = path.rsplit_once('.')?.1.to_ascii_lowercase();
+    match extension.as_str() {
+        "png" => Some("image/png"),
+        "jpg" | "jpeg" => Some("image/jpeg"),
+        "gif" => Some("image/gif"),
+        "webp" => Some("image/webp"),
+        _ => None,
+    }
 }
 
 /// The sibling files a fetched file names in turn — a view's page naming its stylesheets.
@@ -564,6 +648,50 @@ mod tests {
         );
         assert!(notes.is_empty());
         assert_eq!(document.blocks[0].text, "pub fn answer() -> u32 { 42 }");
+    }
+
+    /// The field-report gap: a page judged by its pictures could not carry them. An
+    /// `::image src=` is a reference like any other, and hydration fills it with the
+    /// file's current bytes — as a `data:` URI, so the render is self-contained wherever
+    /// it is shown: a capture from a scratch directory, an editor webview, a PNG export.
+    #[test]
+    fn an_image_src_is_filled_into_a_data_uri() {
+        let mut document = parse("::image id=shot src=shots/frame.png\nthe frame\n::end\n");
+        let mut provided = Provided::new();
+        provided.add_binary("shots/frame.png", &[0x89, b'P', b'N', b'G']);
+        let notes = hydrate(&mut document, &provided);
+        assert!(notes.is_empty(), "{notes:?}");
+        assert_eq!(document.blocks[0].src, "data:image/png;base64,iVBORw==");
+        assert_eq!(document.blocks[0].alt, "the frame");
+    }
+
+    #[test]
+    fn a_missing_image_is_reported_and_the_page_says_so() {
+        let mut document = parse("::image id=shot src=shots/gone.png\n::end\n");
+        let notes = hydrate(&mut document, &Nowhere);
+        assert_eq!(notes.len(), 1);
+        assert_eq!(notes[0].block, "shot");
+        assert!(notes[0].sentence.contains("shots/gone.png"));
+        // The page says what happened where the picture would have been.
+        assert!(document.blocks[0].alt.contains("shots/gone.png"));
+    }
+
+    /// SVG is a document that can script, so it is never inlined — the reference stays
+    /// exactly as written, like any src the path law or the media allow-list refuses.
+    #[test]
+    fn an_svg_image_is_never_inlined_and_a_remote_src_is_left_untouched() {
+        let mut document = parse(
+            "::image id=vector src=art/logo.svg\n::end\n\n\
+             ::image id=remote src=https://example.com/x.png\n::end\n\n\
+             ::image id=carried src=\"data:image/png;base64,AAAA\"\n::end\n",
+        );
+        let mut provided = Provided::new();
+        provided.add_binary("art/logo.svg", b"<svg/>");
+        let notes = hydrate(&mut document, &provided);
+        assert!(notes.is_empty(), "{notes:?}");
+        assert_eq!(document.blocks[0].src, "art/logo.svg");
+        assert_eq!(document.blocks[1].src, "https://example.com/x.png");
+        assert_eq!(document.blocks[2].src, "data:image/png;base64,AAAA");
     }
 
     #[test]

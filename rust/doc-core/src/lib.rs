@@ -26,6 +26,7 @@
 #![warn(missing_docs)]
 #![warn(clippy::all)]
 
+pub mod base64;
 pub mod chunk;
 pub mod compress;
 pub mod digest;

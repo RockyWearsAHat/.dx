@@ -136,7 +136,14 @@ and the extension only show what is stored. Code runs in exactly three places �
 block it just rewrote, the agent's version of the surface rule that an edited field runs
 when it closes. `DX_NO_EXEC=1` turns execution off. Code that does run is confined by the kernel — Seatbelt on
 macOS, bubblewrap on Linux — with no network, and runs only after its exact code has been
-reviewed and approved on this machine. Author markup is sanitized against an allow-list, and
+reviewed and approved on this machine. Inside the sandbox a block may read anything except
+credential stores, and write only its own scratch directory — `$HOME`, `$TMPDIR`, and
+`$DX_SANDBOX` all point there, so state keyed off a real home (`~/.cargo`, `~/.gitconfig`)
+is deliberately out of reach, and `/tmp` and the workspace stay read-only. Libraries fetch
+during setup, declared with `deps=`; a failure shaped like the boundary (a denied write, an
+unreachable network) says so in the block's own output. Building the host repository belongs
+to your shell, not a block — a block is self-contained computation.
+Author markup is sanitized against an allow-list, and
 `dx serve` answers loopback only. The claims are tested by attacking them:
 [`rust/doc-run/tests/attacks.rs`](rust/doc-run/tests/attacks.rs) is a file of real payloads,
 each asserted to fail.

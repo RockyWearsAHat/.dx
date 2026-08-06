@@ -240,6 +240,10 @@ impl Resolver for FolderResolver {
     fn document(&self, path: &str) -> Option<String> {
         read(&self.folder.join(path)).ok()
     }
+
+    fn binary(&self, path: &str) -> Option<Vec<u8>> {
+        fs::read(self.folder.join(path)).ok()
+    }
 }
 
 /// Read and resolve the document at `path`.

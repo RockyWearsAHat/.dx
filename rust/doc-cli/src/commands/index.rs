@@ -106,6 +106,13 @@ fn scaffold_source(root: &Path) -> (String, usize, usize) {
          TODO with what the area does and how it connects to the rest, and add \
          `::code src=` blocks for the load-bearing files — they render as the file's \
          current text, never a stale copy. Keep this document true as the code changes.\n\
+         ::end\n\n\
+         ::heading level=2 id=findings\nFindings\n::end\n\n\
+         ::paragraph id=findings-notes\n\
+         A hand-maintained ledger of open defects and sharp edges, one bullet each: \
+         what breaks, where, and what was tried. Add findings as you hit them and \
+         delete them when fixed — a later session reads this list first and skips \
+         re-discovering every one.\n\
          ::end\n"
     );
 
