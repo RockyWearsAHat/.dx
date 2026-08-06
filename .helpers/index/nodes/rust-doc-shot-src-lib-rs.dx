@@ -1,0 +1,133 @@
+---
+id: rust/doc-shot/src/lib.rs
+title: lib.rs
+kind: file-index
+lang: rust
+rank: 0.007839
+links: [[rust/doc-cli/src/policies.rs]] [[packaging/build-icons.py]] [[rust/doc-cli/src/daemon/http.rs]] [[rust/doc-cli/src/extension.rs]] [[rust/doc-cli/src/install.rs]] [[rust/doc-cli/src/mcp/handlers.rs]] [[rust/doc-shot/src/play.rs]] [[rust/doc-shot/src/cdp.rs]] [[rust/doc-store/src/lib.rs]] [[rust/doc-core/src/render/html.rs]] [[editor/github/content.js]] [[rust/doc-core/src/format/layout.rs]]
+generated_at: 2026-08-06T01:13:54.685Z
+---
+
+# rust/doc-shot/src/lib.rs  ·  rust  ·  1216 LOC
+
+## Symbols
+
+- `base64` (module) — L21
+- `browser` (module) — L22
+- `cdp` (module) — L23
+- `play` (module) — L24
+- `ShotOptions` (class) — L93
+- `default` (method) — L118
+- `for_reading` (method) — L140
+- `page_bounds` (method) — L155
+- `Shot` (class) — L166
+- `Page` (class) — L177
+- `PageRange` (class) — L191
+- `BlockBox` (class) — L202
+- `page_html` (function) — L217
+- `capture` (function) — L232
+- `capture_pages` (function) — L260
+- `capture_block` (function) — L284
+- `capture_block_page` (function) — L304
+- `block_html_options` (function) — L336
+- `PlannedPage` (class) — L345
+- `capture_all_pages` (function) — L358
+- `plan_pages` (function) — L432
+- `page_height` (function) — L493
+- `page_ranges` (function) — L514
+- `packed_ranges` (function) — L526
+- `fixed_ranges` (function) — L594
+- `capture_page` (function) — L616
+- `scale` (function) — L642
+- `screenshot` (function) — L651
+- `dump_dom` (function) — L689
+- `shifted_to` (function) — L706
+- `read_height_attribute` (function) — L719
+- `read_block_boxes` (function) — L727
+- `read_attribute` (function) — L744
+- `browser_command` (function) — L752
+- `with_measuring_script` (function) — L778
+- `scratch_workspace` (function) — L798
+- `write` (function) — L810
+- `file_url` (function) — L816
+- `tests` (module) — L826
+- `reading_pages_fit_a_vision_model_without_downscaling` (method) — L831
+- `a_scaled_capture_reports_image_pixels_not_css_pixels` (method) — L856
+- `the_measuring_script_goes_inside_the_body` (method) — L870
+- `boxes` (method) — L878
+- `a_document_shorter_than_a_page_is_one_page` (method) — L890
+- `a_page_break_falls_between_blocks_never_through_one` (method) — L898
+- `a_block_taller_than_a_page_is_split_and_still_named_on_each_piece` (method) — L923
+- `a_heading_is_never_stranded_at_the_foot_of_a_page` (method) — L935
+- `a_heading_alone_on_a_page_still_gets_printed` (method) — L955
+- `an_unmeasured_document_still_paginates_by_height` (method) — L970
+- `a_board_gets_its_own_natural_page_and_the_flow_resumes_below_it` (method) — L985
+- `a_trailing_board_leaves_no_blank_page_after_it` (method) — L1022
+- `a_reading_boards_page_fits_the_vision_budget` (method) — L1044
+- `the_measuring_script_skips_the_copies_inside_a_board` (method) — L1064
+- `a_zero_height_page_cannot_produce_infinite_pages` (method) — L1071
+- `block_boxes_survive_an_id_containing_a_colon` (method) — L1080
+- `a_malformed_box_entry_is_skipped_not_fatal` (method) — L1089
+- `the_shift_style_lands_in_the_head_and_only_when_needed` (method) — L1095
+- `a_real_browser_captures_one_page_per_screenful` (method) — L1104
+- `a_real_browser_captures_a_board_independently_and_one_block_alone` (method) — L1137
+- `heights_are_read_back_out_of_a_dumped_dom` (method) — L1175
+
+## Graph
+
+```mermaid
+graph LR
+  c["lib.rs"]
+  x0["policies.rs"]
+  x0 --> c
+  x1["build-icons.py"]
+  x1 --> c
+  x2["http.rs"]
+  x2 --> c
+  x3["extension.rs"]
+  x3 --> c
+  x4["install.rs"]
+  x4 --> c
+  x5["handlers.rs"]
+  x5 --> c
+  x6["play.rs"]
+  c --> x6
+  x7["cdp.rs"]
+  c --> x7
+  x8["lib.rs"]
+  x8 --> c
+  x9["html.rs"]
+  c --> x9
+  x10["content.js"]
+  x10 --> c
+  x11["layout.rs"]
+  c --> x11
+  x12["play.rs"]
+  x12 --> c
+  x13["setup.rs"]
+  x13 --> c
+```
+
+### References
+
+- [[rust/doc-shot/src/play.rs]] via `capture`, `screenshot`, `play`
+- [[rust/doc-shot/src/cdp.rs]] via `screenshot`
+- [[rust/doc-core/src/render/html.rs]] via `block_page`, `html`
+- [[rust/doc-core/src/format/layout.rs]] via `ids`
+- [[rust/doc-core/src/render/mod.rs]] via `html`
+
+### Referenced by
+
+- [[rust/doc-cli/src/policies.rs]] via `file_url`, `write`
+- [[packaging/build-icons.py]] via `write`
+- [[rust/doc-cli/src/daemon/http.rs]] via `write`
+- [[rust/doc-cli/src/extension.rs]] via `write`
+- [[rust/doc-cli/src/install.rs]] via `write`
+- [[rust/doc-cli/src/mcp/handlers.rs]] via `capture_pages`, `write`
+- [[rust/doc-store/src/lib.rs]] via `write`
+- [[editor/github/content.js]] via `base64`
+- [[rust/doc-cli/src/commands/play.rs]] via `play`
+- [[rust/doc-cli/src/commands/setup.rs]] via `write`
+- [[rust/doc-cli/src/commands/view.rs]] via `capture`
+- [[rust/doc-core/src/chunk.rs]] via `write`
+

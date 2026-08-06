@@ -1,0 +1,91 @@
+---
+id: rust/doc-shot/src/cdp.rs
+title: cdp.rs
+kind: file-index
+lang: rust
+rank: 0.009705
+links: [[rust/doc-cli/src/daemon/http.rs]] [[editor/github/test/engine.test.mjs]] [[rust/doc-cli/src/commands/mod.rs]] [[rust/doc-shot/src/play.rs]] [[rust/doc-shot/src/lib.rs]] [[rust/doc-cli/src/policies.rs]] [[rust/doc-cli/src/state.rs]] [[rust/doc-cli/src/mcp/handlers.rs]] [[rust/doc-cli/src/workspace.rs]] [[rust/doc-core/src/format/mermaid.rs]] [[editor/github/content.js]] [[rust/doc-cli/src/daemon/mod.rs]]
+generated_at: 2026-08-06T01:13:54.685Z
+---
+
+# rust/doc-shot/src/cdp.rs  ·  rust  ·  568 LOC
+
+## Symbols
+
+- `Clip` (class) — L43
+- `Cdp` (class) — L57
+- `drop` (method) — L68
+- `launch` (method) — L83
+- `open` (method) — L147
+- `command` (method) — L174
+- `evaluate` (method) — L183
+- `screenshot` (method) — L203
+- `dispatch` (method) — L222
+- `raw_command` (method) — L257
+- `wait_for_event` (method) — L266
+- `take_event` (method) — L286
+- `hold_event` (method) — L301
+- `send_text` (method) — L309
+- `receive_message` (method) — L317
+- `read_frame` (method) — L347
+- `read_exact_by` (method) — L387
+- `encode_frame` (function) — L414
+- `devtools_url` (function) — L438
+- `ws_address` (function) — L458
+- `connect` (function) — L469
+- `tests` (module) — L518
+- `a_short_frame_is_masked_and_carries_its_length_inline` (method) — L522
+- `a_medium_frame_uses_the_two_byte_length_form` (method) — L538
+- `a_large_frame_uses_the_eight_byte_length_form` (method) — L546
+- `the_announced_url_splits_into_address_and_path` (method) — L556
+- `a_non_websocket_url_is_refused_with_the_url_named` (method) — L564
+
+## Graph
+
+```mermaid
+graph LR
+  c["cdp.rs"]
+  x0["http.rs"]
+  c --> x0
+  x1["engine.test.mjs"]
+  c --> x1
+  x2["mod.rs"]
+  x2 --> c
+  x3["play.rs"]
+  x3 --> c
+  x4["lib.rs"]
+  x4 --> c
+  x5["policies.rs"]
+  c --> x5
+  x6["state.rs"]
+  c --> x6
+  x7["handlers.rs"]
+  c --> x7
+  x8["workspace.rs"]
+  c --> x8
+  x9["mermaid.rs"]
+  c --> x9
+  x10["content.js"]
+  c --> x10
+  x11["mod.rs"]
+  x11 --> c
+```
+
+### References
+
+- [[rust/doc-cli/src/daemon/http.rs]] via `read`, `json`
+- [[editor/github/test/engine.test.mjs]] via `json`
+- [[rust/doc-cli/src/policies.rs]] via `read`, `remove`
+- [[rust/doc-cli/src/state.rs]] via `write_all`
+- [[rust/doc-cli/src/mcp/handlers.rs]] via `read`
+- [[rust/doc-cli/src/workspace.rs]] via `read`
+- [[rust/doc-core/src/format/mermaid.rs]] via `read`
+- [[editor/github/content.js]] via `send`
+
+### Referenced by
+
+- [[rust/doc-cli/src/commands/mod.rs]] via `dispatch`
+- [[rust/doc-shot/src/play.rs]] via `open`, `screenshot`, `command`, `evaluate`
+- [[rust/doc-shot/src/lib.rs]] via `screenshot`
+- [[rust/doc-cli/src/daemon/mod.rs]] via `drop`
+

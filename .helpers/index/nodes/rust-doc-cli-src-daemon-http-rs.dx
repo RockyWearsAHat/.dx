@@ -1,0 +1,112 @@
+---
+id: rust/doc-cli/src/daemon/http.rs
+title: http.rs
+kind: file-index
+lang: rust
+rank: 0.020199
+links: [[rust/doc-cli/src/mcp/handlers.rs]] [[rust/doc-cli/src/mcp/mod.rs]] [[rust/doc-cli/src/policies.rs]] [[rust/doc-cli/src/mcp/tools.rs]] [[rust/doc-shot/src/cdp.rs]] [[rust/doc-shot/src/lib.rs]] [[rust/doc-cli/src/workspace.rs]] [[rust/doc-cli/src/daemon/engine.rs]] [[rust/doc-cli/src/extension.rs]] [[rust/doc-shot/src/play.rs]] [[rust/doc-cli/src/install.rs]] [[packaging/build-icons.py]]
+generated_at: 2026-08-06T01:13:54.683Z
+---
+
+# rust/doc-cli/src/daemon/http.rs  ·  rust  ·  473 LOC
+
+## Symbols
+
+- `Request` (class) — L32
+- `header` (method) — L46
+- `Response` (class) — L53
+- `json` (method) — L65
+- `text` (method) — L75
+- `reason` (function) — L85
+- `read` (function) — L111
+- `read_line_bounded` (function) — L196
+- `is_loopback_host` (function) — L231
+- `is_allowed_origin` (function) — L252
+- `is_header_safe` (function) — L268
+- `write` (function) — L293
+- `tests` (module) — L330
+- `parse` (method) — L334
+- `a_request_line_and_headers_are_parsed_with_the_query_dropped` (method) — L342
+- `header_names_are_matched_however_the_client_capitalized_them` (method) — L352
+- `a_body_is_read_to_exactly_its_declared_length` (method) — L359
+- `a_body_longer_than_the_limit_is_refused_rather_than_allocated` (method) — L366
+- `a_head_longer_than_the_limit_is_refused_rather_than_accumulated` (method) — L376
+- `a_truncated_request_is_an_error_and_not_an_empty_one` (method) — L384
+- `head_for` (method) — L390
+- `the_extension_is_granted_the_response_and_the_private_network` (method) — L398
+- `no_other_origin_is_ever_granted_permission_to_read_the_answer` (method) — L413
+- `a_refused_response_carries_no_grant_a_foreign_page_could_use` (method) — L428
+- `a_caller_cannot_append_headers_by_way_of_its_origin` (method) — L444
+- `a_head_that_never_ends_is_refused_before_it_is_accumulated` (method) — L450
+- `a_body_shorter_than_it_claimed_is_an_error_rather_than_a_silent_truncation` (method) — L459
+- `a_request_that_outruns_its_budget_is_dropped` (method) — L466
+
+## Graph
+
+```mermaid
+graph LR
+  c["http.rs"]
+  x0["handlers.rs"]
+  c --> x0
+  x1["mod.rs"]
+  x1 --> c
+  x2["policies.rs"]
+  c --> x2
+  x3["tools.rs"]
+  x3 --> c
+  x4["cdp.rs"]
+  x4 --> c
+  x5["lib.rs"]
+  c --> x5
+  x6["workspace.rs"]
+  c --> x6
+  x7["engine.rs"]
+  x7 --> c
+  x8["extension.rs"]
+  c --> x8
+  x9["play.rs"]
+  x9 --> c
+  x10["install.rs"]
+  c --> x10
+  x11["build-icons.py"]
+  x11 --> c
+  x12["mod.rs"]
+  x12 --> c
+  x13["mermaid.rs"]
+  c --> x13
+```
+
+### References
+
+- [[rust/doc-cli/src/mcp/handlers.rs]] via `write`, `read`, `json`
+- [[rust/doc-cli/src/policies.rs]] via `write`, `read`, `json`
+- [[rust/doc-shot/src/lib.rs]] via `write`
+- [[rust/doc-cli/src/workspace.rs]] via `read`
+- [[rust/doc-cli/src/extension.rs]] via `write`, `json`
+- [[rust/doc-cli/src/install.rs]] via `write`, `json`
+- [[rust/doc-core/src/format/mermaid.rs]] via `read`
+- [[rust/doc-cli/src/state.rs]] via `write_all`
+- [[rust/doc-core/src/compress.rs]] via `insert`
+- [[rust/doc-core/src/render/board.rs]] via `flush`
+
+### Referenced by
+
+- [[rust/doc-cli/src/mcp/mod.rs]] via `json`
+- [[rust/doc-cli/src/mcp/tools.rs]] via `json`
+- [[rust/doc-shot/src/cdp.rs]] via `read`, `json`
+- [[rust/doc-cli/src/daemon/engine.rs]] via `text`
+- [[rust/doc-shot/src/play.rs]] via `json`
+- [[packaging/build-icons.py]] via `write`
+- [[rust/doc-cli/src/daemon/mod.rs]] via `header`
+- [[rust/doc-store/src/lib.rs]] via `write`
+- [[editor/github/content.js]] via `text`
+- [[editor/github/engine.js]] via `json`
+- [[rust/doc-core/src/render/text.rs]] via `text`
+- [[rust/doc-cli/src/commands/setup.rs]] via `write`
+- [[rust/doc-cli/src/commands/view.rs]] via `text`
+- [[rust/doc-cli/src/main.rs]] via `text`
+- [[rust/doc-cli/src/service.rs]] via `read`
+- [[rust/doc-core/src/chunk.rs]] via `write`
+- [[rust/doc-core/src/format/layout.rs]] via `read`
+- [[rust/doc-core/src/render/mod.rs]] via `text`
+

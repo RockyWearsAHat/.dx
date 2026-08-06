@@ -1,0 +1,110 @@
+---
+id: rust/doc-core/src/chunk.rs
+title: chunk.rs
+kind: file-index
+lang: rust
+rank: 0.007504
+links: [[rust/doc-cli/src/mcp/handlers.rs]] [[rust/doc-core/tests/pipeline.rs]] [[rust/doc-run/src/plan.rs]] [[rust/doc-store/src/store.rs]] [[rust/doc-store/src/pack.rs]] [[rust/doc-wasm/src/lib.rs]] [[editor/github/wasm/doc_wasm.d.ts]] [[editor/github/wasm/doc_wasm.js]] [[editor/surface/edit.js]] [[rust/doc-core/src/compress.rs]] [[editor/github/content.js]] [[editor/github/test/resolve.test.mjs]]
+generated_at: 2026-08-06T01:13:54.685Z
+---
+
+# rust/doc-core/src/chunk.rs  ·  rust  ·  475 LOC
+
+## Symbols
+
+- `Chunk` (class) — L35
+- `new` (method) — L45
+- `len` (method) — L52
+- `is_empty` (method) — L58
+- `split` (function) — L71
+- `join` (function) — L83
+- `PackEntry` (class) — L96
+- `Pack` (class) — L105
+- `build` (method) — L117
+- `source` (method) — L144
+- `PackError` (class) — L157
+- `fmt` (method) — L171
+- `put_varint` (function) — L185
+- `put_string` (function) — L198
+- `Reader` (class) — L204
+- `varint` (method) — L210
+- `string` (method) — L227
+- `encode_pack` (function) — L255
+- `decode_pack` (function) — L289
+- `tests` (module) — L333
+- `joining_split_chunks_reproduces_canonical_source_exactly` (method) — L358
+- `a_chunk_is_addressed_by_the_hash_of_its_own_bytes` (method) — L372
+- `identical_blocks_share_one_chunk_body` (method) — L379
+- `a_pack_round_trips_every_real_document_byte_for_byte` (method) — L393
+- `a_pack_is_smaller_than_the_sources_it_holds` (method) — L414
+- `a_missing_document_or_chunk_is_reported_not_guessed` (method) — L431
+- `garbage_is_rejected_with_a_reason_not_a_panic` (method) — L441
+- `an_empty_pack_round_trips` (method) — L460
+- `non_ascii_prose_survives_the_pack` (method) — L466
+
+## Graph
+
+```mermaid
+graph LR
+  c["chunk.rs"]
+  x0["handlers.rs"]
+  x0 --> c
+  x1["pipeline.rs"]
+  x1 --> c
+  x2["plan.rs"]
+  x2 --> c
+  x3["store.rs"]
+  x3 --> c
+  x4["pack.rs"]
+  x4 --> c
+  x5["lib.rs"]
+  c --> x5
+  x6["doc_wasm.d.ts"]
+  c --> x6
+  x7["doc_wasm.js"]
+  c --> x7
+  x8["edit.js"]
+  x8 --> c
+  x9["compress.rs"]
+  c --> x9
+  x10["content.js"]
+  c --> x10
+  x11["resolve.test.mjs"]
+  c --> x11
+  x12["build-icons.py"]
+  c --> x12
+  x13["browser.rs"]
+  x13 --> c
+```
+
+### References
+
+- [[rust/doc-wasm/src/lib.rs]] via `sha256_hex`, `decompress`, `compress`, `source`
+- [[editor/github/wasm/doc_wasm.d.ts]] via `sha256_hex`, `decompress`, `compress`
+- [[editor/github/wasm/doc_wasm.js]] via `sha256_hex`, `decompress`, `compress`
+- [[rust/doc-core/src/compress.rs]] via `decompress`, `compress`
+- [[editor/github/content.js]] via `sha256_hex`
+- [[editor/github/test/resolve.test.mjs]] via `sha256_hex`
+- [[packaging/build-icons.py]] via `write`
+- [[rust/doc-cli/src/daemon/http.rs]] via `write`
+- [[rust/doc-cli/src/extension.rs]] via `write`
+- [[rust/doc-cli/src/install.rs]] via `write`
+- [[rust/doc-cli/src/policies.rs]] via `write`
+- [[rust/doc-core/src/digest.rs]] via `sha256_hex`
+- [[rust/doc-core/src/format/stringify.rs]] via `stringify_blocks`
+- [[rust/doc-core/src/lib.rs]] via `compress`
+- [[rust/doc-shot/src/lib.rs]] via `write`
+
+### Referenced by
+
+- [[rust/doc-cli/src/mcp/handlers.rs]] via `string`, `source`, `write`
+- [[rust/doc-core/tests/pipeline.rs]] via `encode_pack`, `decode_pack`, `source`
+- [[rust/doc-run/src/plan.rs]] via `build`
+- [[rust/doc-store/src/store.rs]] via `source`
+- [[rust/doc-store/src/pack.rs]] via `decode_pack`, `source`, `encode_pack`
+- [[editor/surface/edit.js]] via `source`
+- [[rust/doc-cli/src/commands/browser.rs]] via `build`
+- [[rust/doc-cli/src/daemon/engine.rs]] via `source`
+- [[rust/doc-cli/src/daemon/packs.rs]] via `source`
+- [[rust/doc-cli/src/workspace.rs]] via `source`
+

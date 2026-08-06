@@ -1,0 +1,69 @@
+---
+id: editor/github/engine.js
+title: engine.js
+kind: file-index
+lang: javascript
+rank: 0.003596
+links: [[rust/doc-cli/src/daemon/packs.rs]] [[rust/doc-wasm/src/dto.rs]] [[editor/github/test/engine.test.mjs]] [[rust/doc-cli/src/daemon/http.rs]] [[rust/doc-store/src/store.rs]] [[editor/github/wasm/doc_wasm.d.ts]] [[rust/doc-cli/src/daemon/engine.rs]] [[rust/doc-cli/src/daemon/mod.rs]] [[rust/doc-shot/src/base64.rs]] [[rust/doc-shot/src/play.rs]]
+generated_at: 2026-08-06T01:13:54.688Z
+---
+
+# editor/github/engine.js  ·  javascript  ·  275 LOC
+
+## Symbols
+
+- `unbase64` (function) — L78
+- `findDaemon` (function) — L100
+- `forgetDaemon` (function) — L123
+- `daemonCall` (function) — L131
+- `daemonStore` (function) — L153
+- `hold` (function) — L181
+- `heldPack` (function) — L190
+- `wasmEngine` (function) — L197
+- `wasmCall` (function) — L207
+- `perform` (function) — L232
+- `store` (function) — L249
+
+## Graph
+
+```mermaid
+graph LR
+  c["engine.js"]
+  x0["packs.rs"]
+  x0 --> c
+  x1["dto.rs"]
+  c --> x1
+  x2["engine.test.mjs"]
+  c --> x2
+  x3["http.rs"]
+  c --> x3
+  x4["store.rs"]
+  c --> x4
+  x5["doc_wasm.d.ts"]
+  c --> x5
+  x6["engine.rs"]
+  x6 --> c
+  x7["mod.rs"]
+  x7 --> c
+  x8["base64.rs"]
+  c --> x8
+  x9["play.rs"]
+  x9 --> c
+```
+
+### References
+
+- [[rust/doc-wasm/src/dto.rs]] via `from`
+- [[editor/github/test/engine.test.mjs]] via `addListener`, `json`, `getURL`
+- [[rust/doc-cli/src/daemon/http.rs]] via `json`
+- [[rust/doc-store/src/store.rs]] via `delete`
+- [[editor/github/wasm/doc_wasm.d.ts]] via `wasm_bindgen`
+- [[rust/doc-shot/src/base64.rs]] via `encode`
+
+### Referenced by
+
+- [[rust/doc-cli/src/daemon/packs.rs]] via `store`
+- [[rust/doc-cli/src/daemon/engine.rs]] via `store`
+- [[rust/doc-cli/src/daemon/mod.rs]] via `store`
+- [[rust/doc-shot/src/play.rs]] via `perform`
+

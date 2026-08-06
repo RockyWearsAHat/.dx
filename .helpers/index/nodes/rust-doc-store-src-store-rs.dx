@@ -1,0 +1,151 @@
+---
+id: rust/doc-store/src/store.rs
+title: store.rs
+kind: file-index
+lang: rust
+rank: 0.016468
+links: [[rust/doc-cli/src/workspace.rs]] [[rust/doc-store/src/pack.rs]] [[rust/doc-cli/src/commands/edit.rs]] [[rust/doc-cli/src/commands/store.rs]] [[rust/doc-run/src/workdir.rs]] [[rust/doc-cli/src/install.rs]] [[rust/doc-cli/src/policies.rs]] [[rust/doc-cli/src/commands/browser.rs]] [[rust/doc-cli/src/desktop.rs]] [[rust/doc-cli/src/state.rs]] [[editor/surface/edit.js]] [[rust/doc-cli/src/mcp/handlers.rs]]
+generated_at: 2026-08-06T01:13:54.683Z
+---
+
+# rust/doc-store/src/store.rs  ·  rust  ·  1224 LOC
+
+## Symbols
+
+- `Summary` (class) — L47
+- `Saved` (class) — L64
+- `Stats` (class) — L81
+- `compaction_percent` (method) — L98
+- `SyncReport` (class) — L108
+- `is_clean` (method) — L124
+- `Store` (class) — L134
+- `open` (method) — L144
+- `open_in_memory` (method) — L157
+- `root` (method) — L168
+- `stub_path` (method) — L174
+- `require_path` (method) — L179
+- `document_id` (method) — L184
+- `contains` (method) — L196
+- `source` (method) — L207
+- `source_of_version` (method) — L236
+- `chunk_texts_of` (method) — L253
+- `document` (method) — L291
+- `save` (method) — L299
+- `write_document` (method) — L312
+- `write_stub` (method) — L416
+- `ingest` (method) — L437
+- `delete` (method) — L444
+- `list` (method) — L464
+- `search` (method) — L495
+- `stats` (method) — L536
+- `collect_garbage` (method) — L564
+- `export_packs` (method) — L576
+- `sync` (method) — L591
+- `relative_of` (method) — L646
+- `encode_chunk` (function) — L656
+- `display_title` (function) — L667
+- `write_read_models` (function) — L683
+- `timestamp` (function) — L734
+- `civil_from_days` (function) — L754
+- `discover` (function) — L774
+- `walk` (function) — L782
+- `tests` (module) — L802
+- `scratch` (method) — L806
+- `a_saved_document_leaves_a_stub_on_disk_and_reads_back_whole` (method) — L816
+- `every_authored_attribute_survives_a_store_round_trip` (method) — L833
+- `identical_blocks_across_documents_are_stored_once` (method) — L842
+- `editing_one_block_leaves_the_others_shared` (method) — L858
+- `storage_is_smaller_than_the_source_it_holds` (method) — L879
+- `a_missing_document_says_so_instead_of_returning_nothing` (method) — L896
+- `a_path_escaping_the_workspace_is_refused` (method) — L905
+- `deleting_a_document_removes_its_stub_and_stops_resolving_the_path` (method) — L919
+- `an_earlier_version_stays_addressable_by_its_digest` (method) — L941
+- `keeping_history_costs_only_the_blocks_that_changed` (method) — L964
+- `an_unknown_version_is_absent_rather_than_an_error` (method) — L986
+- `deleting_one_document_keeps_chunks_another_still_shares` (method) — L996
+- `listing_and_search_find_documents_through_the_database` (method) — L1010
+- `sync_adopts_plain_text_written_by_anything_else` (method) — L1038
+- `sync_restores_documents_from_the_pack_when_the_database_is_gone` (method) — L1053
+- `sync_reports_a_stub_it_cannot_resolve_instead_of_serving_nothing` (method) — L1074
+- `a_clean_workspace_syncs_to_no_changes` (method) — L1088
+- `saving_the_same_content_twice_does_not_touch_the_stub_file` (method) — L1099
+- `non_ascii_prose_survives_the_store` (method) — L1117
+- `empty_input_is_stored_as_the_canonical_empty_document` (method) — L1126
+- `a_document_in_a_subdirectory_round_trips` (method) — L1141
+
+## Graph
+
+```mermaid
+graph LR
+  c["store.rs"]
+  x0["workspace.rs"]
+  x0 --> c
+  x1["pack.rs"]
+  x1 --> c
+  x2["edit.rs"]
+  x2 --> c
+  x3["store.rs"]
+  x3 --> c
+  x4["workdir.rs"]
+  x4 --> c
+  x5["install.rs"]
+  x5 --> c
+  x6["policies.rs"]
+  x6 --> c
+  x7["browser.rs"]
+  x7 --> c
+  x8["desktop.rs"]
+  x8 --> c
+  x9["state.rs"]
+  x9 --> c
+  x10["edit.js"]
+  x10 --> c
+  x11["handlers.rs"]
+  x11 --> c
+  x12["lib.rs"]
+  c --> x12
+  x13["search.rs"]
+  x13 --> c
+```
+
+### References
+
+- [[rust/doc-run/src/lib.rs]] via `execute`, `document`
+- [[rust/doc-core/src/chunk.rs]] via `source`
+- [[rust/doc-core/src/format/mod.rs]] via `source`
+- [[rust/doc-wasm/src/lib.rs]] via `decompress`, `compress`, `search`, `source`
+- [[rust/doc-core/src/lib.rs]] via `search`, `compress`
+- [[editor/github/wasm/doc_wasm.d.ts]] via `decompress`, `compress`
+- [[editor/github/wasm/doc_wasm.js]] via `decompress`, `compress`
+- [[rust/doc-core/src/compress.rs]] via `decompress`, `compress`
+- [[rust/doc-cli/src/main.rs]] via `extension`
+- [[rust/doc-core/src/format/source.rs]] via `first_heading_text`
+- [[rust/doc-core/src/model.rs]] via `first_heading_text`
+- [[rust/doc-core/src/render/mod.rs]] via `outline`
+- [[rust/doc-core/src/render/outline.rs]] via `outline`
+
+### Referenced by
+
+- [[rust/doc-cli/src/workspace.rs]] via `source`, `sync`, `relative_of`, `source_of_version`, `discover`
+- [[rust/doc-store/src/pack.rs]] via `scratch`, `delete`, `list`, `ingest`, `document`
+- [[rust/doc-cli/src/commands/edit.rs]] via `scratch`
+- [[rust/doc-cli/src/commands/store.rs]] via `compaction_percent`, `is_clean`, `scratch`
+- [[rust/doc-run/src/workdir.rs]] via `scratch`, `prepare`
+- [[rust/doc-cli/src/install.rs]] via `scratch`
+- [[rust/doc-cli/src/policies.rs]] via `scratch`
+- [[rust/doc-cli/src/commands/browser.rs]] via `scratch`
+- [[rust/doc-cli/src/desktop.rs]] via `scratch`
+- [[rust/doc-cli/src/state.rs]] via `scratch`
+- [[editor/surface/edit.js]] via `save`, `walk`, `source`, `commit`
+- [[rust/doc-cli/src/mcp/handlers.rs]] via `search`, `list`, `source`
+- [[rust/doc-core/src/search.rs]] via `search`, `build_index`, `distinct_tokens`, `document_tokens`
+- [[rust/doc-core/src/resolve.rs]] via `document`
+- [[rust/doc-core/tests/pipeline.rs]] via `source`, `document`
+- [[editor/github/engine.js]] via `delete`
+- [[editor/github/content.js]] via `delete`
+- [[packaging/build-icons.py]] via `search`
+- [[rust/doc-cli/src/daemon/engine.rs]] via `source`
+- [[rust/doc-cli/src/daemon/packs.rs]] via `source`
+- [[rust/doc-core/examples/bench.rs]] via `search`
+- [[rust/doc-shot/src/play.rs]] via `open`
+

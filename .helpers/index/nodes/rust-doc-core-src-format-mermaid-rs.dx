@@ -1,0 +1,89 @@
+---
+id: rust/doc-core/src/format/mermaid.rs
+title: mermaid.rs
+kind: file-index
+lang: rust
+rank: 0.011088
+links: [[rust/doc-cli/src/policies.rs]] [[rust/doc-cli/src/workspace.rs]] [[rust/doc-core/src/format/layout.rs]] [[rust/doc-cli/src/daemon/http.rs]] [[rust/doc-cli/src/mcp/handlers.rs]] [[rust/doc-core/src/render/nav.rs]] [[rust/doc-shot/src/cdp.rs]] [[rust/doc-cli/src/service.rs]]
+generated_at: 2026-08-06T01:13:54.685Z
+---
+
+# rust/doc-core/src/format/mermaid.rs  ·  rust  ·  527 LOC
+
+## Symbols
+
+- `Direction` (class) — L29
+- `parse` (method) — L43
+- `is_horizontal` (method) — L53
+- `is_forward` (method) — L58
+- `sides` (method) — L63
+- `GraphNode` (class) — L75
+- `GraphEdge` (class) — L84
+- `Graph` (class) — L95
+- `convert` (function) — L113
+- `node_ids` (function) — L154
+- `read` (function) — L174
+- `read_statement` (function) — L204
+- `is_directive` (function) — L226
+- `left_of` (function) — L239
+- `intern` (function) — L247
+- `split_link` (function) — L264
+- `finish_link` (function) — L306
+- `strip_pipe_label` (function) — L323
+- `is_link_byte` (function) — L337
+- `run_len` (function) — L345
+- `run_end` (function) — L354
+- `read_endpoint` (function) — L364
+- `is_key_char` (function) — L387
+- `unquote` (function) — L392
+- `tests` (module) — L403
+- `graph` (method) — L406
+- `a_header_names_the_direction_and_only_flowcharts_convert` (method) — L411
+- `every_shape_keeps_the_text_inside_it` (method) — L422
+- `both_spellings_of_an_edge_label_survive` (method) — L435
+- `an_open_link_joins_its_two_nodes_and_carries_no_label` (method) — L447
+- `a_label_containing_dashes_is_not_read_as_a_link` (method) — L455
+- `a_node_named_bare_and_described_later_keeps_the_description` (method) — L464
+- `an_arrowhead_letter_is_not_eaten_from_the_next_word` (method) — L470
+- `directives_and_comments_are_skipped_rather_than_guessed_at` (method) — L477
+- `a_self_link_is_dropped_rather_than_drawn_as_a_loop` (method) — L492
+- `a_source_with_nothing_to_draw_converts_to_nothing` (method) — L499
+- `a_converted_board_keeps_the_blocks_id_and_hides_its_nodes` (method) — L510
+
+## Graph
+
+```mermaid
+graph LR
+  c["mermaid.rs"]
+  x0["policies.rs"]
+  x0 --> c
+  x1["workspace.rs"]
+  x1 --> c
+  x2["layout.rs"]
+  x2 --> c
+  x3["http.rs"]
+  x3 --> c
+  x4["handlers.rs"]
+  x4 --> c
+  x5["nav.rs"]
+  c --> x5
+  x6["cdp.rs"]
+  x6 --> c
+  x7["service.rs"]
+  x7 --> c
+```
+
+### References
+
+- [[rust/doc-core/src/render/nav.rs]] via `split_link`
+
+### Referenced by
+
+- [[rust/doc-cli/src/policies.rs]] via `read`
+- [[rust/doc-cli/src/workspace.rs]] via `read`
+- [[rust/doc-core/src/format/layout.rs]] via `is_horizontal`, `sides`, `is_forward`, `read`
+- [[rust/doc-cli/src/daemon/http.rs]] via `read`
+- [[rust/doc-cli/src/mcp/handlers.rs]] via `read`
+- [[rust/doc-shot/src/cdp.rs]] via `read`
+- [[rust/doc-cli/src/service.rs]] via `read`
+

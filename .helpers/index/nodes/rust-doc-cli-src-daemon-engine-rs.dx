@@ -1,0 +1,102 @@
+---
+id: rust/doc-cli/src/daemon/engine.rs
+title: engine.rs
+kind: file-index
+lang: rust
+rank: 0.030787
+links: [[rust/doc-cli/src/mcp/handlers.rs]] [[editor/github/content.js]] [[rust/doc-core/src/render/text.rs]] [[rust/doc-cli/src/daemon/packs.rs]] [[rust/doc-cli/src/commands/mod.rs]] [[rust/doc-core/src/render/mod.rs]] [[rust/doc-cli/src/daemon/http.rs]] [[rust/doc-store/src/lib.rs]] [[packaging/build-icons.py]] [[rust/doc-cli/src/daemon/mod.rs]] [[rust/doc-core/src/resolve.rs]] [[rust/doc-core/src/format/util.rs]]
+generated_at: 2026-08-06T01:13:54.682Z
+---
+
+# rust/doc-cli/src/daemon/engine.rs  ·  rust  ·  373 LOC
+
+## Symbols
+
+- `Outcome` (class) — L32
+- `call` (function) — L63
+- `provided_from` (function) — L165
+- `text` (function) — L191
+- `flag` (function) — L198
+- `pack_key` (function) — L208
+- `bytes` (function) — L219
+- `tests` (module) — L228
+- `pack_bytes` (method) — L233
+- `loaded` (method) — L240
+- `pack` (method) — L252
+- `a_held_pack_answers_with_the_document_source` (method) — L257
+- `a_pack_the_daemon_does_not_hold_asks_for_it_rather_than_failing` (method) — L271
+- `a_path_the_pack_does_not_hold_says_so` (method) — L282
+- `pack_paths_returns_a_json_string_the_caller_parses` (method) — L293
+- `sha256_matches_the_reference_the_pointer_carries` (method) — L303
+- `render_html_is_the_same_rendering_the_cli_produces` (method) — L317
+- `an_unknown_call_is_refused_by_name` (method) — L342
+- `every_advertised_call_is_answered` (method) — L348
+- `a_wrongly_shaped_argument_says_what_it_should_have_been` (method) — L361
+
+## Graph
+
+```mermaid
+graph LR
+  c["engine.rs"]
+  x0["handlers.rs"]
+  c --> x0
+  x1["content.js"]
+  x1 --> c
+  x2["text.rs"]
+  c --> x2
+  x3["packs.rs"]
+  c --> x3
+  x4["mod.rs"]
+  c --> x4
+  x5["mod.rs"]
+  c --> x5
+  x6["http.rs"]
+  c --> x6
+  x7["lib.rs"]
+  c --> x7
+  x8["build-icons.py"]
+  x8 --> c
+  x9["mod.rs"]
+  c --> x9
+  x10["resolve.rs"]
+  c --> x10
+  x11["util.rs"]
+  x11 --> c
+  x12["lib.rs"]
+  c --> x12
+  x13["engine.js"]
+  c --> x13
+```
+
+### References
+
+- [[rust/doc-cli/src/mcp/handlers.rs]] via `call`, `source`
+- [[rust/doc-core/src/render/text.rs]] via `text`
+- [[rust/doc-cli/src/daemon/packs.rs]] via `pack_bytes`, `store`
+- [[rust/doc-cli/src/commands/mod.rs]] via `text`, `store`
+- [[rust/doc-core/src/render/mod.rs]] via `text`
+- [[rust/doc-cli/src/daemon/http.rs]] via `text`
+- [[rust/doc-store/src/lib.rs]] via `pack`, `store`
+- [[rust/doc-cli/src/daemon/mod.rs]] via `pack_bytes`
+- [[rust/doc-core/src/resolve.rs]] via `add_file`, `add_document`, `bytes`
+- [[rust/doc-wasm/src/lib.rs]] via `provided_from`
+- [[editor/github/engine.js]] via `store`
+- [[rust/doc-core/src/chunk.rs]] via `source`
+- [[rust/doc-core/src/format/mod.rs]] via `source`
+- [[rust/doc-store/src/pack.rs]] via `source`
+- [[rust/doc-store/src/store.rs]] via `source`
+
+### Referenced by
+
+- [[editor/github/content.js]] via `text`, `call`
+- [[packaging/build-icons.py]] via `pack`, `bytes`
+- [[rust/doc-core/src/format/util.rs]] via `bytes`
+- [[editor/surface/edit.js]] via `call`
+- [[rust/doc-cli/src/commands/view.rs]] via `text`
+- [[rust/doc-cli/src/desktop.rs]] via `Outcome`
+- [[rust/doc-cli/src/main.rs]] via `text`
+- [[rust/doc-cli/src/policies.rs]] via `bytes`
+- [[rust/doc-core/src/format/legacy.rs]] via `bytes`
+- [[rust/doc-shot/src/base64.rs]] via `bytes`
+- [[rust/doc-store/src/stub.rs]] via `bytes`
+

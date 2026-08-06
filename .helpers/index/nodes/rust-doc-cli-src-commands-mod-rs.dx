@@ -1,0 +1,98 @@
+---
+id: rust/doc-cli/src/commands/mod.rs
+title: mod.rs
+kind: file-index
+lang: rust
+rank: 0.011269
+links: [[rust/doc-shot/src/cdp.rs]] [[rust/doc-cli/src/daemon/packs.rs]] [[rust/doc-cli/src/daemon/engine.rs]] [[editor/github/content.js]] [[rust/doc-core/src/render/text.rs]] [[rust/doc-shot/src/play.rs]] [[editor/github/test/engine.test.mjs]] [[rust/doc-cli/src/args.rs]] [[editor/github/resolve.js]] [[editor/github/test/resolve.test.mjs]] [[editor/surface/edit.js]] [[rust/doc-cli/src/commands/play.rs]]
+generated_at: 2026-08-06T01:13:54.684Z
+---
+
+# rust/doc-cli/src/commands/mod.rs  ·  rust  ·  476 LOC
+
+## Symbols
+
+- `browser` (module) — L13
+- `edit` (module) — L14
+- `exec` (module) — L15
+- `find` (module) — L16
+- `play` (module) — L17
+- `setup` (module) — L18
+- `store` (module) — L19
+- `view` (module) — L20
+- `Output` (class) — L31
+- `text` (method) — L41
+- `Command` (class) — L49
+- `dispatch` (function) — L258
+- `refuse_unknown_flags` (function) — L279
+- `tests` (module) — L304
+- `args` (method) — L307
+- `an_unknown_command_answers_with_the_command_list` (method) — L312
+- `version_reports_the_build_version` (method) — L319
+- `familiar_aliases_reach_the_same_command` (method) — L325
+- `help_on_any_command_answers_without_running_it` (method) — L337
+- `a_flag_a_command_does_not_take_is_refused_by_name` (method) — L346
+- `the_documented_flags_are_all_accepted` (method) — L358
+- `search_accepts_the_limit_it_reads` (method) — L428
+- `commands_that_write_files_report_instead_of_producing_redirectable_content` (method) — L438
+- `the_servers_refuse_unknown_flags_through_the_same_formatter` (method) — L450
+- `output_text_is_readable_for_either_kind` (method) — L472
+
+## Graph
+
+```mermaid
+graph LR
+  c["mod.rs"]
+  x0["cdp.rs"]
+  c --> x0
+  x1["packs.rs"]
+  x1 --> c
+  x2["engine.rs"]
+  x2 --> c
+  x3["content.js"]
+  x3 --> c
+  x4["text.rs"]
+  x4 --> c
+  x5["play.rs"]
+  x5 --> c
+  x6["engine.test.mjs"]
+  x6 --> c
+  x7["args.rs"]
+  c --> x7
+  x8["resolve.js"]
+  x8 --> c
+  x9["resolve.test.mjs"]
+  x9 --> c
+  x10["edit.js"]
+  x10 --> c
+  x11["play.rs"]
+  x11 --> c
+  x12["view.rs"]
+  x12 --> c
+  x13["mod.rs"]
+  x13 --> c
+```
+
+### References
+
+- [[rust/doc-shot/src/cdp.rs]] via `dispatch`
+- [[rust/doc-cli/src/args.rs]] via `present`, `unknown_options`
+
+### Referenced by
+
+- [[rust/doc-cli/src/daemon/packs.rs]] via `store`
+- [[rust/doc-cli/src/daemon/engine.rs]] via `text`, `store`
+- [[editor/github/content.js]] via `text`, `exec`
+- [[rust/doc-core/src/render/text.rs]] via `text`
+- [[rust/doc-shot/src/play.rs]] via `play`
+- [[editor/github/test/engine.test.mjs]] via `exec`
+- [[editor/github/resolve.js]] via `exec`
+- [[editor/github/test/resolve.test.mjs]] via `exec`
+- [[editor/surface/edit.js]] via `edit`
+- [[rust/doc-cli/src/commands/play.rs]] via `play`
+- [[rust/doc-cli/src/commands/view.rs]] via `text`
+- [[rust/doc-cli/src/daemon/mod.rs]] via `store`
+- [[rust/doc-cli/src/main.rs]] via `text`
+- [[rust/doc-cli/src/mcp/handlers.rs]] via `edit`
+- [[rust/doc-core/src/render/mod.rs]] via `text`
+

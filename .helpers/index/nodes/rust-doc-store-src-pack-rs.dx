@@ -1,0 +1,95 @@
+---
+id: rust/doc-store/src/pack.rs
+title: pack.rs
+kind: file-index
+lang: rust
+rank: 0.005701
+links: [[rust/doc-store/src/store.rs]] [[rust/doc-cli/src/workspace.rs]] [[rust/doc-cli/src/commands/edit.rs]] [[rust/doc-cli/src/commands/store.rs]] [[rust/doc-cli/src/policies.rs]] [[rust/doc-cli/src/install.rs]] [[rust/doc-cli/src/commands/browser.rs]] [[rust/doc-cli/src/desktop.rs]] [[rust/doc-run/src/workdir.rs]] [[rust/doc-cli/src/state.rs]] [[rust/doc-core/src/chunk.rs]] [[rust/doc-cli/src/mcp/handlers.rs]]
+generated_at: 2026-08-06T01:13:54.686Z
+---
+
+# rust/doc-store/src/pack.rs  ·  rust  ·  286 LOC
+
+## Symbols
+
+- `paths` (function) — L35
+- `export` (function) — L43
+- `write_pack` (function) — L63
+- `load_all` (function) — L94
+- `read_pack` (function) — L106
+- `source` (function) — L142
+- `gitignore_lines` (function) — L151
+- `tests` (module) — L162
+- `scratch` (method) — L166
+- `saving_a_document_writes_a_pack_that_round_trips` (method) — L176
+- `a_document_in_a_git_repository_lands_in_the_committed_pack` (method) — L186
+- `an_empty_store_leaves_no_pack_behind` (method) — L214
+- `a_damaged_pack_is_reported_rather_than_treated_as_absent` (method) — L227
+- `a_missing_pack_is_simply_empty` (method) — L237
+- `the_gitignore_advice_keeps_the_index_out_and_the_content_in` (method) — L243
+- `many_documents_share_chunk_bodies_inside_one_pack` (method) — L254
+- `parse_is_reachable_for_pack_sources` (method) — L275
+
+## Graph
+
+```mermaid
+graph LR
+  c["pack.rs"]
+  x0["store.rs"]
+  c --> x0
+  x1["workspace.rs"]
+  x1 --> c
+  x2["edit.rs"]
+  x2 --> c
+  x3["store.rs"]
+  x3 --> c
+  x4["policies.rs"]
+  x4 --> c
+  x5["install.rs"]
+  x5 --> c
+  x6["browser.rs"]
+  x6 --> c
+  x7["desktop.rs"]
+  x7 --> c
+  x8["workdir.rs"]
+  x8 --> c
+  x9["state.rs"]
+  x9 --> c
+  x10["chunk.rs"]
+  c --> x10
+  x11["handlers.rs"]
+  x11 --> c
+  x12["resolve.rs"]
+  c --> x12
+  x13["edit.js"]
+  x13 --> c
+```
+
+### References
+
+- [[rust/doc-store/src/store.rs]] via `scratch`, `delete`, `list`, `ingest`, `document`
+- [[rust/doc-core/src/chunk.rs]] via `decode_pack`, `source`, `encode_pack`
+- [[rust/doc-core/src/resolve.rs]] via `document`
+- [[rust/doc-cli/src/mcp/mod.rs]] via `success`
+- [[rust/doc-core/src/compress.rs]] via `insert`
+- [[rust/doc-core/src/format/mod.rs]] via `source`
+- [[rust/doc-run/src/lib.rs]] via `document`
+
+### Referenced by
+
+- [[rust/doc-cli/src/workspace.rs]] via `load_all`, `source`, `scratch`, `document`
+- [[rust/doc-cli/src/commands/edit.rs]] via `scratch`
+- [[rust/doc-cli/src/commands/store.rs]] via `scratch`
+- [[rust/doc-cli/src/policies.rs]] via `scratch`, `remove`
+- [[rust/doc-cli/src/install.rs]] via `scratch`
+- [[rust/doc-cli/src/commands/browser.rs]] via `scratch`
+- [[rust/doc-cli/src/desktop.rs]] via `scratch`
+- [[rust/doc-run/src/workdir.rs]] via `scratch`
+- [[rust/doc-cli/src/state.rs]] via `scratch`
+- [[rust/doc-cli/src/mcp/handlers.rs]] via `source`, `list`
+- [[editor/surface/edit.js]] via `source`
+- [[rust/doc-core/tests/pipeline.rs]] via `source`, `document`
+- [[rust/doc-cli/src/daemon/engine.rs]] via `source`
+- [[rust/doc-cli/src/daemon/packs.rs]] via `source`
+- [[rust/doc-wasm/src/lib.rs]] via `source`
+

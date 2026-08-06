@@ -1,0 +1,56 @@
+---
+id: rust/doc-core/src/render/nav.rs
+title: nav.rs
+kind: file-index
+lang: rust
+rank: 0.006848
+links: [[rust/doc-cli/src/extension.rs]] [[rust/doc-core/src/format/mermaid.rs]] [[editor/surface/edit.js]]
+generated_at: 2026-08-06T01:13:54.686Z
+---
+
+# rust/doc-core/src/render/nav.rs  ·  rust  ·  324 LOC
+
+## Symbols
+
+- `NavEntry` (class) — L36
+- `entries` (function) — L54
+- `flatten_to_top` (function) — L76
+- `push_items` (function) — L86
+- `contents_of` (function) — L118
+- `split_link` (function) — L146
+- `expand` (function) — L162
+- `split_target` (function) — L191
+- `name_of` (function) — L203
+- `tests` (module) — L219
+- `nav_of` (method) — L223
+- `a_named_entry_keeps_the_name_the_author_wrote` (method) — L234
+- `a_bare_target_is_named_by_the_default_template` (method) — L241
+- `a_fragment_in_this_document_is_named_by_its_heading` (method) — L248
+- `the_label_template_customizes_every_borrowed_name` (method) — L257
+- `an_unknown_token_is_shown_rather_than_dropped` (method) — L264
+- `a_named_entry_ignores_the_template` (method) — L270
+- `an_indented_entry_nests` (method) — L276
+- `an_empty_nav_is_the_documents_own_contents` (method) — L282
+- `contents_of_a_document_with_no_headings_is_empty_not_invented` (method) — L307
+- `prose_around_a_link_is_treated_as_a_target_not_guessed_at` (method) — L313
+- `a_non_ascii_name_survives_untouched` (method) — L320
+
+## Graph
+
+```mermaid
+graph LR
+  c["nav.rs"]
+  x0["extension.rs"]
+  x0 --> c
+  x1["mermaid.rs"]
+  x1 --> c
+  x2["edit.js"]
+  x2 --> c
+```
+
+### Referenced by
+
+- [[rust/doc-cli/src/extension.rs]] via `expand`
+- [[rust/doc-core/src/format/mermaid.rs]] via `split_link`
+- [[editor/surface/edit.js]] via `entries`
+

@@ -1,0 +1,75 @@
+---
+id: rust/doc-run/src/plan.rs
+title: plan.rs
+kind: file-index
+lang: rust
+rank: 0.003876
+links: [[rust/doc-run/src/toolchain.rs]] [[rust/doc-cli/src/commands/browser.rs]] [[editor/build.sh]] [[rust/doc-core/src/chunk.rs]] [[rust/doc-run/src/process.rs]] [[rust/doc-run/src/lib.rs]]
+generated_at: 2026-08-06T01:13:54.687Z
+---
+
+# rust/doc-run/src/plan.rs  ·  rust  ·  510 LOC
+
+## Symbols
+
+- `Dirs` (class) — L37
+- `block_path` (method) — L50
+- `cache` (method) — L55
+- `Plan` (class) — L62
+- `build` (function) — L79
+- `parse_deps` (function) — L97
+- `python` (function) — L110
+- `venv_relative_python` (function) — L159
+- `with_cache` (function) — L168
+- `node` (function) — L174
+- `deno` (function) — L216
+- `bash` (function) — L250
+- `rust` (function) — L266
+- `exe_suffix` (function) — L285
+- `cargo_manifest` (function) — L296
+- `go` (function) — L312
+- `go_env` (function) — L342
+- `ruby` (function) — L349
+- `tests` (module) — L372
+- `dirs` (method) — L375
+- `deps_split_on_commas_and_whitespace` (method) — L383
+- `python_plans_write_the_script_and_run_it` (method) — L390
+- `every_language_fetches_in_setup_and_never_in_the_run` (method) — L402
+- `python_dependencies_are_installed_into_a_venv_the_run_then_uses` (method) — L423
+- `cargo_manifest_pins_versions_when_asked` (method) — L440
+- `compiled_languages_run_the_binary_they_built` (method) — L449
+- `toolchain_caches_are_pointed_away_from_the_readers_home` (method) — L471
+- `deno_no_longer_runs_with_every_permission_granted` (method) — L497
+- `an_unknown_runner_is_an_error_not_a_panic` (method) — L507
+
+## Graph
+
+```mermaid
+graph LR
+  c["plan.rs"]
+  x0["toolchain.rs"]
+  c --> x0
+  x1["browser.rs"]
+  x1 --> c
+  x2["build.sh"]
+  c --> x2
+  x3["chunk.rs"]
+  c --> x3
+  x4["process.rs"]
+  c --> x4
+  x5["lib.rs"]
+  x5 --> c
+```
+
+### References
+
+- [[rust/doc-run/src/toolchain.rs]] via `missing_toolchain_message`, `first_available`, `have`
+- [[editor/build.sh]] via `build`
+- [[rust/doc-core/src/chunk.rs]] via `build`
+- [[rust/doc-run/src/process.rs]] via `with_env`
+
+### Referenced by
+
+- [[rust/doc-cli/src/commands/browser.rs]] via `build`
+- [[rust/doc-run/src/lib.rs]] via `parse_deps`
+

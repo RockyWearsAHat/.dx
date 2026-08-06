@@ -1,0 +1,105 @@
+---
+id: rust/doc-cli/src/commands/view.rs
+title: view.rs
+kind: file-index
+lang: rust
+rank: 0.007262
+links: [[rust/doc-cli/src/args.rs]] [[editor/surface/edit.js]] [[editor/github/test/resolve.test.mjs]] [[rust/doc-cli/src/mcp/handlers.rs]] [[rust/doc-core/src/render/mod.rs]] [[editor/github/content.js]] [[editor/github/resolve.js]] [[editor/github/wasm/doc_wasm.js]] [[rust/doc-core/src/render/outline.rs]] [[rust/doc-core/src/render/html.rs]] [[rust/doc-cli/src/commands/exec.rs]] [[rust/doc-cli/src/commands/mod.rs]]
+generated_at: 2026-08-06T01:13:54.686Z
+---
+
+# rust/doc-cli/src/commands/view.rs  ·  rust  ·  481 LOC
+
+## Symbols
+
+- `run_text` (function) — L19
+- `run_outline` (function) — L32
+- `marks_for` (function) — L61
+- `run_render` (function) — L80
+- `run_png` (function) — L117
+- `run_png_block` (function) — L152
+- `png_block_name` (function) — L182
+- `export_scale` (function) — L195
+- `run_png_pages` (function) — L203
+- `page_stem` (function) — L248
+- `page_target` (function) — L254
+- `run_open` (function) — L259
+- `open_in_browser` (function) — L276
+- `selected_document` (function) — L294
+- `slice` (function) — L307
+- `document_path` (function) — L322
+- `html_options` (function) — L336
+- `theme_of` (function) — L347
+- `tests` (module) — L352
+- `args` (method) — L361
+- `fixture` (method) — L365
+- `text_renders_the_whole_document_by_default` (method) — L373
+- `one_block_renders_as_the_page_carries_it` (method) — L383
+- `a_body_is_drawn_without_being_written` (method) — L399
+- `a_field_is_decorated_without_reading_any_file` (method) — L412
+- `an_unknown_block_names_the_ones_that_exist` (method) — L419
+- `a_section_narrows_every_view_the_same_way` (method) — L427
+- `an_unknown_section_lists_what_is_available` (method) — L441
+- `outline_marks_runnable_blocks` (method) — L450
+- `render_honors_the_requested_theme` (method) — L459
+- `a_missing_file_argument_is_a_clear_error` (method) — L467
+- `a_page_number_goes_before_the_extension_not_after_the_whole_name` (method) — L472
+
+## Graph
+
+```mermaid
+graph LR
+  c["view.rs"]
+  x0["args.rs"]
+  c --> x0
+  x1["edit.js"]
+  x1 --> c
+  x2["resolve.test.mjs"]
+  x2 --> c
+  x3["handlers.rs"]
+  c --> x3
+  x4["mod.rs"]
+  c --> x4
+  x5["content.js"]
+  x5 --> c
+  x6["resolve.js"]
+  x6 --> c
+  x7["doc_wasm.js"]
+  x7 --> c
+  x8["outline.rs"]
+  c --> x8
+  x9["html.rs"]
+  c --> x9
+  x10["exec.rs"]
+  x10 --> c
+  x11["mod.rs"]
+  c --> x11
+  x12["engine.rs"]
+  c --> x12
+  x13["http.rs"]
+  c --> x13
+```
+
+### References
+
+- [[rust/doc-cli/src/args.rs]] via `present`, `number`, `value`, `positional`
+- [[rust/doc-cli/src/mcp/handlers.rs]] via `number`
+- [[rust/doc-core/src/render/mod.rs]] via `html`, `text`, `outline`
+- [[rust/doc-core/src/render/outline.rs]] via `section`, `outline`
+- [[rust/doc-core/src/render/html.rs]] via `html`
+- [[rust/doc-cli/src/commands/mod.rs]] via `text`
+- [[rust/doc-cli/src/daemon/engine.rs]] via `text`
+- [[rust/doc-cli/src/daemon/http.rs]] via `text`
+- [[rust/doc-core/src/render/text.rs]] via `text`
+- [[rust/doc-shot/src/lib.rs]] via `capture`
+- [[rust/doc-shot/src/play.rs]] via `capture`
+
+### Referenced by
+
+- [[editor/surface/edit.js]] via `slice`
+- [[editor/github/test/resolve.test.mjs]] via `fixture`
+- [[editor/github/content.js]] via `slice`
+- [[editor/github/resolve.js]] via `slice`
+- [[editor/github/wasm/doc_wasm.js]] via `slice`
+- [[rust/doc-cli/src/commands/exec.rs]] via `document_path`
+

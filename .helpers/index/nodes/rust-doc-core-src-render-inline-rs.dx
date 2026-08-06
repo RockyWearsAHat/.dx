@@ -1,0 +1,56 @@
+---
+id: rust/doc-core/src/render/inline.rs
+title: inline.rs
+kind: file-index
+lang: rust
+rank: 0.004761
+links: [[rust/doc-core/src/render/field.rs]] [[rust/doc-core/src/render/html.rs]] [[rust/doc-core/src/render/escape.rs]]
+generated_at: 2026-08-06T01:13:54.687Z
+---
+
+# rust/doc-core/src/render/inline.rs  ·  rust  ·  251 LOC
+
+## Symbols
+
+- `inline_html` (function) — L22
+- `Span` (class) — L45
+- `split_code_spans` (function) — L56
+- `apply_links` (function) — L79
+- `Link` (class) — L99
+- `parse_link` (function) — L109
+- `apply_emphasis` (function) — L128
+- `wrap_delimited` (function) — L135
+- `find_outside_tags` (function) — L163
+- `tests` (module) — L178
+- `escapes_before_marking_up` (method) — L182
+- `renders_the_four_marks` (method) — L187
+- `code_spans_are_not_re_scanned` (method) — L198
+- `an_unmatched_backtick_stays_literal` (method) — L207
+- `leaves_arithmetic_and_stray_brackets_alone` (method) — L212
+- `bold_wins_over_italic_for_double_markers` (method) — L219
+- `link_targets_stay_escaped_exactly_once` (method) — L227
+- `prose_with_non_ascii_characters_renders_instead_of_panicking` (method) — L232
+- `markup_cannot_be_injected_through_a_link` (method) — L246
+
+## Graph
+
+```mermaid
+graph LR
+  c["inline.rs"]
+  x0["field.rs"]
+  x0 --> c
+  x1["html.rs"]
+  x1 --> c
+  x2["escape.rs"]
+  c --> x2
+```
+
+### References
+
+- [[rust/doc-core/src/render/escape.rs]] via `escape_html`
+
+### Referenced by
+
+- [[rust/doc-core/src/render/field.rs]] via `split_code_spans`, `parse_link`
+- [[rust/doc-core/src/render/html.rs]] via `inline_html`
+

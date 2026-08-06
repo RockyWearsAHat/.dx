@@ -4,7 +4,17 @@ _Resume point after `/compact` or `/clear`. Update after every task or wave (see
 
 Last updated: 2026-08-05
 
-## This wave, part 26: the run record fingerprints what it reads, and the map names what it points at
+## This wave, part 27: bug-fix phase — identify and fix quality issues
+
+**Status: Parts 8–26 committed.** All quality gates pass (713 Rust tests, clippy clean, fmt clean, wasm engines current, node suites green). Now hunting specific bugs.
+
+Work committed as `3cede3d`: board editor, run execution, fragment views, playback, all rendering refinements through 26 parts of work.
+
+**Immediate task**: Identify and fix the actual bugs causing the "6-8.5/10 quality" report. Board elements specifically noted as unpolished.
+
+Next step: specific bug reports to target.
+
+## Previous wave, part 26: the run record fingerprints what it reads, and the map names what it points at
 
 **"Read handoff and fix; rank dx-for-agents honestly first; fix unintended flaws; make the
 site plan beautiful."** The part-25 fingerprint gap is closed at the engine, plus one map

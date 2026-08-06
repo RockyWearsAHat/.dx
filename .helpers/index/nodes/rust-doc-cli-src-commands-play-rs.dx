@@ -1,0 +1,71 @@
+---
+id: rust/doc-cli/src/commands/play.rs
+title: play.rs
+kind: file-index
+lang: rust
+rank: 0.00338
+links: [[rust/doc-cli/src/commands/exec.rs]] [[rust/doc-cli/src/commands/browser.rs]] [[rust/doc-cli/src/args.rs]] [[rust/doc-run/src/process.rs]] [[rust/doc-cli/src/mcp/handlers.rs]] [[rust/doc-cli/src/service.rs]] [[editor/github/content.js]] [[editor/surface/edit.js]] [[packaging/build-icons.py]] [[rust/doc-cli/src/commands/mod.rs]] [[rust/doc-shot/src/lib.rs]] [[rust/doc-shot/src/play.rs]]
+generated_at: 2026-08-06T01:13:54.688Z
+---
+
+# rust/doc-cli/src/commands/play.rs  ·  rust  ·  130 LOC
+
+## Symbols
+
+- `run` (function) — L18
+- `frames_directory` (function) — L68
+- `tests` (module) — L77
+- `args` (method) — L80
+- `a_missing_script_is_refused_with_an_example` (method) — L85
+- `frames_land_beside_the_document_by_default` (method) — L92
+- `a_played_document_writes_its_frames_and_reports_each_one` (method) — L101
+
+## Graph
+
+```mermaid
+graph LR
+  c["play.rs"]
+  x0["exec.rs"]
+  x0 --> c
+  x1["browser.rs"]
+  x1 --> c
+  x2["args.rs"]
+  c --> x2
+  x3["process.rs"]
+  c --> x3
+  x4["handlers.rs"]
+  c --> x4
+  x5["service.rs"]
+  c --> x5
+  x6["content.js"]
+  x6 --> c
+  x7["edit.js"]
+  x7 --> c
+  x8["build-icons.py"]
+  x8 --> c
+  x9["mod.rs"]
+  c --> x9
+  x10["lib.rs"]
+  c --> x10
+  x11["play.rs"]
+  c --> x11
+```
+
+### References
+
+- [[rust/doc-cli/src/args.rs]] via `value`, `number`
+- [[rust/doc-run/src/process.rs]] via `run`
+- [[rust/doc-cli/src/mcp/handlers.rs]] via `run`, `number`
+- [[rust/doc-cli/src/service.rs]] via `run`
+- [[rust/doc-cli/src/commands/mod.rs]] via `play`
+- [[rust/doc-shot/src/lib.rs]] via `play`
+- [[rust/doc-shot/src/play.rs]] via `play`
+
+### Referenced by
+
+- [[rust/doc-cli/src/commands/exec.rs]] via `run`
+- [[rust/doc-cli/src/commands/browser.rs]] via `run`
+- [[editor/github/content.js]] via `run`
+- [[editor/surface/edit.js]] via `run`
+- [[packaging/build-icons.py]] via `run`
+

@@ -1,0 +1,29 @@
+---
+id: editor/vscode/src/preview.ts
+title: preview.ts
+kind: file-index
+lang: typescript
+rank: 0.004022
+links: [[editor/vscode/src/extension.ts]]
+generated_at: 2026-08-06T01:13:54.687Z
+---
+
+# editor/vscode/src/preview.ts  ·  typescript  ·  239 LOC
+
+## Symbols
+
+- `Surface` (interface) — L21
+
+## Graph
+
+```mermaid
+graph LR
+  c["preview.ts"]
+  x0["extension.ts"]
+  x0 --> c
+```
+
+### Referenced by
+
+- [[editor/vscode/src/extension.ts]] via `Surface`
+

@@ -1,0 +1,90 @@
+---
+id: rust/doc-cli/src/main.rs
+title: main.rs
+kind: file-index
+lang: rust
+rank: 0.013033
+links: [[rust/doc-cli/src/workspace.rs]] [[rust/doc-cli/src/args.rs]] [[rust/doc-core/src/compress.rs]] [[packaging/build-icons.py]] [[rust/doc-cli/src/commands/mod.rs]] [[rust/doc-cli/src/daemon/engine.rs]] [[rust/doc-cli/src/daemon/http.rs]] [[rust/doc-cli/src/desktop.rs]] [[rust/doc-cli/src/extension.rs]] [[rust/doc-cli/src/home.rs]] [[rust/doc-cli/src/service.rs]] [[rust/doc-core/src/render/board.rs]]
+generated_at: 2026-08-06T01:13:54.684Z
+---
+
+# rust/doc-cli/src/main.rs  ·  rust  ·  179 LOC
+
+## Symbols
+
+- `args` (module) — L16
+- `commands` (module) — L17
+- `daemon` (module) — L18
+- `desktop` (module) — L19
+- `extension` (module) — L20
+- `home` (module) — L21
+- `install` (module) — L22
+- `mcp` (module) — L23
+- `policies` (module) — L24
+- `service` (module) — L25
+- `state` (module) — L26
+- `workspace` (module) — L27
+- `main` (function) — L40
+- `emit` (function) — L83
+- `serve_mcp` (function) — L111
+- `serve_documents` (function) — L134
+- `workspace_root` (function) — L157
+- `tests` (module) — L165
+- `the_workspace_root_prefers_the_override_and_otherwise_exists` (method) — L172
+
+## Graph
+
+```mermaid
+graph LR
+  c["main.rs"]
+  x0["workspace.rs"]
+  c --> x0
+  x1["args.rs"]
+  c --> x1
+  x2["compress.rs"]
+  c --> x2
+  x3["build-icons.py"]
+  x3 --> c
+  x4["mod.rs"]
+  c --> x4
+  x5["engine.rs"]
+  c --> x5
+  x6["http.rs"]
+  c --> x6
+  x7["desktop.rs"]
+  x7 --> c
+  x8["extension.rs"]
+  x8 --> c
+  x9["home.rs"]
+  x9 --> c
+  x10["service.rs"]
+  x10 --> c
+  x11["board.rs"]
+  c --> x11
+  x12["mod.rs"]
+  c --> x12
+  x13["text.rs"]
+  c --> x13
+```
+
+### References
+
+- [[rust/doc-cli/src/workspace.rs]] via `workspace_root`
+- [[rust/doc-cli/src/args.rs]] via `present`, `value`
+- [[rust/doc-core/src/compress.rs]] via `emit`
+- [[rust/doc-cli/src/commands/mod.rs]] via `text`
+- [[rust/doc-cli/src/daemon/engine.rs]] via `text`
+- [[rust/doc-cli/src/daemon/http.rs]] via `text`
+- [[rust/doc-core/src/render/board.rs]] via `flush`
+- [[rust/doc-core/src/render/mod.rs]] via `text`
+- [[rust/doc-core/src/render/text.rs]] via `text`
+
+### Referenced by
+
+- [[packaging/build-icons.py]] via `main`
+- [[rust/doc-cli/src/desktop.rs]] via `extension`
+- [[rust/doc-cli/src/extension.rs]] via `extension`
+- [[rust/doc-cli/src/home.rs]] via `home`
+- [[rust/doc-cli/src/service.rs]] via `state`
+- [[rust/doc-store/src/store.rs]] via `extension`
+

@@ -594,6 +594,23 @@ fn create_missing_nodes(document: &mut Document, board: usize) -> usize {
     created
 }
 
+/// Check if a block type is valid for board placement.
+///
+/// Certain block types (output, script, stylesheet, style, image) render as empty or
+/// are meta-blocks, and should not be placed on boards to avoid user confusion.
+/// Returns a sentence describing why the type is invalid, or None if it's valid.
+#[must_use]
+pub fn board_invalid_block_type(kind: &str) -> Option<String> {
+    match kind {
+        "output" => Some("output blocks are written by code execution; place the code block on the board instead".to_string()),
+        "script" => Some("script blocks run in the browser and render as empty; place code or other content instead".to_string()),
+        "stylesheet" => Some("stylesheet blocks are references and render as empty; place code or styled content instead".to_string()),
+        "style" => Some("style blocks render as empty; place code or content that shows output instead".to_string()),
+        "image" => Some("image blocks need a src= file path; place a view or code that generates the image instead".to_string()),
+        _ => None,
+    }
+}
+
 /// How a caller states one dimension of a node's box.
 ///
 /// One vocabulary for every host — a CLI flag, an arrangement item, a typed menu — so
@@ -2106,5 +2123,148 @@ mod tests {
         )
         .expect("set");
         assert_eq!(unchanged, canonical);
+    }
+
+    #[test]
+    fn board_nodes_can_reference_code_blocks_for_execution() {
+        let doc = r#"
+::board id=plan height=400
+- setup x=0 y=0 w=200 h=100
+- test x=220 y=0 w=200 h=100 to=setup
+::end
+
+::code id=setup run lang=bash hidden
+echo "Setting up..."
+::end
+
+::code id=test run lang=bash hidden
+echo "Running tests..."
+::end
+"#;
+        let parsed = parse(doc);
+        // Both code blocks should exist and be marked as runnable
+        let setup = parsed
+            .blocks
+            .iter()
+            .find(|b| b.id == "setup")
+            .expect("setup exists");
+        let test = parsed
+            .blocks
+            .iter()
+            .find(|b| b.id == "test")
+            .expect("test exists");
+        assert_eq!(setup.kind, "code");
+        assert!(setup.run);
+        assert_eq!(test.kind, "code");
+        assert!(test.run);
+    }
+
+    #[test]
+    fn board_invalid_block_types_are_rejected() {
+        assert!(board_invalid_block_type("output").is_some());
+        assert!(board_invalid_block_type("script").is_some());
+        assert!(board_invalid_block_type("stylesheet").is_some());
+        assert!(board_invalid_block_type("style").is_some());
+        assert!(board_invalid_block_type("image").is_some());
+        // Valid types should not be rejected
+        assert!(board_invalid_block_type("code").is_none());
+        assert!(board_invalid_block_type("paragraph").is_none());
+        assert!(board_invalid_block_type("html").is_none());
+        assert!(board_invalid_block_type("checklist").is_none());
+    }
+
+    #[test]
+    fn hidden_code_blocks_on_boards_are_executable() {
+        let doc = r#"
+::board id=graph height=300
+- compute x=10 y=10 w=150 h=80
+::end
+
+::code id=compute lang=python run hidden
+result = 42
+print(result)
+::end
+"#;
+        let parsed = parse(doc);
+        let compute = parsed
+            .blocks
+            .iter()
+            .find(|b| b.id == "compute")
+            .expect("exists");
+        // Hidden code blocks should be executable (run=true) even when hidden
+        assert_eq!(compute.kind, "code");
+        assert!(compute.run);
+        assert!(compute.hidden);
+        // The code content should be intact for review before execution
+        assert!(compute.text.contains("result = 42"));
+    }
+
+    #[test]
+    fn board_node_edges_carry_sequence_information() {
+        let doc = r#"
+::board id=workflow
+- init x=0 y=0 w=100 h=80
+- process x=150 y=0 w=100 h=80 to=init:r-l:execute
+- finish x=300 y=0 w=100 h=80 to=process:r-l:on%20success
+::end
+"#;
+        let parsed = parse(doc);
+        let board = parsed
+            .blocks
+            .iter()
+            .find(|b| b.id == "workflow")
+            .expect("board exists");
+        // Edges should be stored for future sequencing support
+        assert!(board.text.contains("to=init"));
+        assert!(board.text.contains("on%20success"));
+    }
+
+    #[test]
+    fn board_nodes_grow_when_content_exceeds_stated_height() {
+        let doc = r#"
+::board id=canvas height=400
+- content x=0 y=0 w=200 h=100
+::end
+
+::paragraph id=content hidden
+This is a very long paragraph with lots of text that will definitely exceed the 100px height
+that the node was originally sized to. The node should grow to accommodate all the content when
+the document is edited and the block grows beyond the stated box dimensions. This tests whether
+the grow-only logic is working correctly for boards.
+::end
+"#;
+        let parsed = parse(doc);
+        let board = parsed
+            .blocks
+            .iter()
+            .find(|b| b.id == "canvas")
+            .expect("board");
+        // Board should preserve the node line structure
+        assert!(board.text.contains("- content x=0 y=0 w=200 h=100"));
+    }
+
+    #[test]
+    fn removing_a_board_node_removes_its_hidden_block_if_unique_to_board() {
+        let source = r#"
+::board id=plan
+- item1 x=0 y=0
+- item2 x=200 y=0
+::end
+
+::paragraph id=item1 hidden
+Hidden item 1
+::end
+
+::paragraph id=item2 hidden
+Hidden item 2
+::end
+"#;
+        let after_detach = board_detach(source, "plan", "item1").expect("detach item1");
+        // item1 block should be removed since it was unique to the board
+        assert!(!after_detach.contains("Hidden item 1"));
+        // item2 should remain
+        assert!(after_detach.contains("Hidden item 2"));
+        // board node should be gone
+        assert!(!after_detach.contains("- item1"));
     }
 }

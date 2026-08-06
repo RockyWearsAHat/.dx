@@ -1,0 +1,106 @@
+---
+id: rust/doc-cli/src/desktop.rs
+title: desktop.rs
+kind: file-index
+lang: rust
+rank: 0.004497
+links: [[rust/doc-store/src/store.rs]] [[rust/doc-cli/src/commands/edit.rs]] [[rust/doc-cli/src/commands/store.rs]] [[rust/doc-cli/src/workspace.rs]] [[rust/doc-cli/src/commands/browser.rs]] [[rust/doc-store/src/pack.rs]] [[rust/doc-cli/src/install.rs]] [[rust/doc-cli/src/policies.rs]] [[rust/doc-run/src/workdir.rs]] [[rust/doc-cli/src/state.rs]] [[editor/surface/edit.js]] [[rust/doc-cli/src/mcp/mod.rs]]
+generated_at: 2026-08-06T01:13:54.687Z
+---
+
+# rust/doc-cli/src/desktop.rs  ·  rust  ·  609 LOC
+
+## Symbols
+
+- `Outcome` (class) — L42
+- `line` (method) — L62
+- `install` (function) — L86
+- `status_lines` (function) — L112
+- `carries_other_engine` (function) — L131
+- `same_link` (function) — L148
+- `link_uuids` (function) — L158
+- `fat_uuids` (function) — L182
+- `thin_uuid` (function) — L202
+- `read_array` (function) — L228
+- `bundle` (function) — L237
+- `running_from` (function) — L242
+- `installed` (function) — L248
+- `candidates` (function) — L253
+- `is_bundle` (function) — L265
+- `Placed` (class) — L271
+- `place` (function) — L280
+- `in_applications` (function) — L316
+- `writable_applications_dir` (function) — L327
+- `is_writable` (function) — L348
+- `copy_bundle` (function) — L360
+- `register` (function) — L382
+- `tests` (module) — L402
+- `scratch` (method) — L406
+- `a_bundle_is_recognized_by_its_info_plist_and_not_by_its_name` (method) — L417
+- `an_application_already_where_applications_live_is_left_alone` (method) — L435
+- `every_outcome_reports_something_true` (method) — L448
+- `mach_o` (method) — L471
+- `the_same_link_is_recognized_through_a_signature_that_changed_the_bytes` (method) — L493
+- `a_different_link_is_reported_as_a_different_engine` (method) — L509
+- `an_unreadable_or_unparseable_file_declines_to_guess` (method) — L521
+- `a_universal_binary_is_compared_slice_by_slice` (method) — L553
+- `doctor_says_either_where_the_application_is_or_that_there_is_none` (method) — L599
+
+## Graph
+
+```mermaid
+graph LR
+  c["desktop.rs"]
+  x0["store.rs"]
+  c --> x0
+  x1["edit.rs"]
+  x1 --> c
+  x2["store.rs"]
+  x2 --> c
+  x3["workspace.rs"]
+  c --> x3
+  x4["browser.rs"]
+  x4 --> c
+  x5["pack.rs"]
+  c --> x5
+  x6["install.rs"]
+  c --> x6
+  x7["policies.rs"]
+  c --> x7
+  x8["workdir.rs"]
+  c --> x8
+  x9["state.rs"]
+  c --> x9
+  x10["edit.js"]
+  x10 --> c
+  x11["mod.rs"]
+  c --> x11
+  x12["layout.rs"]
+  c --> x12
+  x13["engine.rs"]
+  c --> x13
+```
+
+### References
+
+- [[rust/doc-store/src/store.rs]] via `scratch`
+- [[rust/doc-cli/src/workspace.rs]] via `scratch`
+- [[rust/doc-store/src/pack.rs]] via `scratch`
+- [[rust/doc-cli/src/install.rs]] via `scratch`
+- [[rust/doc-cli/src/policies.rs]] via `scratch`
+- [[rust/doc-run/src/workdir.rs]] via `scratch`
+- [[rust/doc-cli/src/state.rs]] via `scratch`
+- [[rust/doc-cli/src/mcp/mod.rs]] via `success`
+- [[rust/doc-core/src/format/layout.rs]] via `place`
+- [[rust/doc-cli/src/daemon/engine.rs]] via `Outcome`
+- [[rust/doc-cli/src/main.rs]] via `extension`
+- [[rust/doc-cli/src/service.rs]] via `status_lines`
+- [[rust/doc-run/src/lib.rs]] via `truncate`
+
+### Referenced by
+
+- [[rust/doc-cli/src/commands/edit.rs]] via `scratch`
+- [[rust/doc-cli/src/commands/store.rs]] via `scratch`
+- [[rust/doc-cli/src/commands/browser.rs]] via `scratch`, `status_lines`, `installed`
+- [[editor/surface/edit.js]] via `place`
+

@@ -1,0 +1,58 @@
+---
+id: rust/doc-core/src/render/outline.rs
+title: outline.rs
+kind: file-index
+lang: rust
+rank: 0.012174
+links: [[rust/doc-core/src/render/mod.rs]] [[rust/doc-cli/src/commands/view.rs]] [[rust/doc-cli/src/mcp/handlers.rs]] [[rust/doc-store/src/store.rs]]
+generated_at: 2026-08-06T01:13:54.684Z
+---
+
+# rust/doc-core/src/render/outline.rs  ·  rust  ·  329 LOC
+
+## Symbols
+
+- `OutlineEntry` (class) — L12
+- `outline` (function) — L34
+- `section` (function) — L62
+- `carry_presentation` (function) — L105
+- `board_references` (function) — L130
+- `find_block` (function) — L140
+- `is_runnable` (function) — L152
+- `preview_content` (function) — L166
+- `block_content` (function) — L179
+- `preview_of` (function) — L197
+- `tests` (module) — L207
+- `outline_reports_ids_levels_and_runnability` (method) — L221
+- `a_reference_block_previews_the_path_it_points_at` (method) — L232
+- `outline_previews_are_single_line_and_bounded` (method) — L248
+- `heading_section_stops_at_the_next_same_level_heading` (method) — L256
+- `top_level_heading_section_covers_the_whole_document` (method) — L267
+- `code_section_brings_its_output_along` (method) — L273
+- `selectors_accept_a_leading_hash_and_any_case` (method) — L280
+- `a_board_section_carries_the_blocks_its_nodes_reference` (method) — L291
+- `a_heading_section_holding_a_board_resolves_nodes_outside_the_slice` (method) — L310
+- `sections_carry_template_and_style_blocks_from_outside_the_slice` (method) — L322
+
+## Graph
+
+```mermaid
+graph LR
+  c["outline.rs"]
+  x0["mod.rs"]
+  x0 --> c
+  x1["view.rs"]
+  x1 --> c
+  x2["handlers.rs"]
+  x2 --> c
+  x3["store.rs"]
+  x3 --> c
+```
+
+### Referenced by
+
+- [[rust/doc-core/src/render/mod.rs]] via `section`, `outline`
+- [[rust/doc-cli/src/commands/view.rs]] via `section`, `outline`
+- [[rust/doc-cli/src/mcp/handlers.rs]] via `outline`, `section`
+- [[rust/doc-store/src/store.rs]] via `outline`
+
