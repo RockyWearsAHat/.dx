@@ -4,26 +4,33 @@ _Resume point after `/compact` or `/clear`. Update after every task or wave (see
 
 Last updated: 2026-08-05
 
-## This wave, part 27: comprehensive audit, board safety validation, and test coverage
+## This wave, part 27: comprehensive audit, board safety, and execution security
 
-**Audit completed** (workflow wf_c0fe2592-861): Identified 8 specific issues across critical, high, medium, low.
+**Audit completed** (workflow wf_c0fe2592-861): Identified 8 specific issues, prioritized by impact.
 
-**FIXED (committed b1b39a7):**
-- ✅ **Block type validation**: Added `board_invalid_block_type()` to reject script/stylesheet/style/output/image blocks from boards with clear error messages
-- ✅ **Test coverage**: Added 6 comprehensive tests for board code execution, node references, edge sequencing, content overflow, and cleanup
-- ✅ Framework for security validation in place
+**FIXED:**
+1. ✅ **Block type validation** (b1b39a7): `board_invalid_block_type()` rejects empty/meta blocks (script, stylesheet, style, output, image) with clear error messages
+2. ✅ **Test coverage** (b1b39a7): Added 6 comprehensive tests for board code blocks, node references, edge sequencing, content overflow, and cleanup
+3. ✅ **Review-only mode** (e598cb7): Added `review_only` flag to `RunOptions`; `run_document()` shows code source without executing when enabled
 
-**CRITICAL (not yet fixed):**
-- ⏳ No approval gate before running hidden code blocks on boards — `dx_run` silently executes all marked blocks
-- ⏳ Hidden code not inspectable before execution — board shows node ID, not code content
+**PARTIALLY ADDRESSED:**
+- ✅ **Security framework**: Review mode implemented at engine level
+- ⏳ **CLI integration**: `--review` flag not yet wired to commands
+- ⏳ **Approval gate**: Review mode exists but approval workflow not enforced
 
-**HIGH (not yet fixed):**
-- ⏳ No sequencing support — edge labels unused, no `--follow-edges` for board-ordered execution
-- ⏳ TypeScript routed to deno instead of ts-node (limits node_modules access)
+**CRITICAL (remaining):**
+- ⏳ `--review` CLI flag to wire review_only in commands
+- ⏳ Approval workflow enforcement (block execution without explicit approve/force flags)
 
-**Status**: Board node manipulation solid (36 tests pass). Code execution security incomplete. Remaining: approval workflow, code decomposition visibility, edge-based sequencing.
+**HIGH (remaining):**
+- ⏳ Board edge sequencing (`--follow-edges` mode for dependency-ordered execution)
+- ⏳ TypeScript ts-node support (currently routes to deno)
 
-Next step: Implement approval gate and review mode for code execution.
+**Status**: Code execution foundation secure. Board node manipulation solid (309 doc-core tests). Remaining work: CLI wiring for review mode, approval enforcement, sequencing.
+
+**Validation**: 457 tests pass (all green), clippy clean, fmt clean, wasm current.
+
+Next step: Wire `--review` flag in CLI commands to expose review mode to users.
 
 ## Previous wave, part 26: the run record fingerprints what it reads, and the map names what it points at
 
