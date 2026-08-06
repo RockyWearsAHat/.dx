@@ -4,15 +4,26 @@ _Resume point after `/compact` or `/clear`. Update after every task or wave (see
 
 Last updated: 2026-08-05
 
-## This wave, part 27: bug-fix phase — identify and fix quality issues
+## This wave, part 27: comprehensive audit, board safety validation, and test coverage
 
-**Status: Parts 8–26 committed.** All quality gates pass (713 Rust tests, clippy clean, fmt clean, wasm engines current, node suites green). Now hunting specific bugs.
+**Audit completed** (workflow wf_c0fe2592-861): Identified 8 specific issues across critical, high, medium, low.
 
-Work committed as `3cede3d`: board editor, run execution, fragment views, playback, all rendering refinements through 26 parts of work.
+**FIXED (committed b1b39a7):**
+- ✅ **Block type validation**: Added `board_invalid_block_type()` to reject script/stylesheet/style/output/image blocks from boards with clear error messages
+- ✅ **Test coverage**: Added 6 comprehensive tests for board code execution, node references, edge sequencing, content overflow, and cleanup
+- ✅ Framework for security validation in place
 
-**Immediate task**: Identify and fix the actual bugs causing the "6-8.5/10 quality" report. Board elements specifically noted as unpolished.
+**CRITICAL (not yet fixed):**
+- ⏳ No approval gate before running hidden code blocks on boards — `dx_run` silently executes all marked blocks
+- ⏳ Hidden code not inspectable before execution — board shows node ID, not code content
 
-Next step: specific bug reports to target.
+**HIGH (not yet fixed):**
+- ⏳ No sequencing support — edge labels unused, no `--follow-edges` for board-ordered execution
+- ⏳ TypeScript routed to deno instead of ts-node (limits node_modules access)
+
+**Status**: Board node manipulation solid (36 tests pass). Code execution security incomplete. Remaining: approval workflow, code decomposition visibility, edge-based sequencing.
+
+Next step: Implement approval gate and review mode for code execution.
 
 ## Previous wave, part 26: the run record fingerprints what it reads, and the map names what it points at
 

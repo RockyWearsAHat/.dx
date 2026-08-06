@@ -98,6 +98,9 @@ pub struct RunOptions {
     pub force: bool,
     /// Run only the block with this id, when set.
     pub only: Option<String>,
+    /// If true, show which blocks would run and their source without executing.
+    /// Used for code review before approval.
+    pub review_only: bool,
 }
 
 impl Default for RunOptions {
@@ -108,6 +111,7 @@ impl Default for RunOptions {
             default_timeout: Duration::from_secs(DEFAULT_TIMEOUT_SECONDS),
             force: false,
             only: None,
+            review_only: false,
         }
     }
 }
@@ -234,6 +238,19 @@ pub fn run_document(source: &str, options: &RunOptions, resolver: &dyn Resolver)
         };
         let fingerprint = fingerprint(runner, &block.text, &deps, &reads);
         let existing = existing_output(&document, index, &block.id);
+
+        // Review mode: show what would run without executing
+        if options.review_only {
+            runs.push(BlockRun {
+                id: block.id.clone(),
+                language: block.language.clone(),
+                status: "review".to_string(),
+                exit: 0,
+                output: format!("--- Code to review ---\n{}\n--- End code ---", block.text),
+                duration_ms: 0,
+            });
+            continue;
+        }
 
         if !options.force && existing.is_some_and(|output| output.hash == fingerprint) {
             runs.push(BlockRun {
