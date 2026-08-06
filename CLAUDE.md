@@ -101,11 +101,16 @@ happens when a reader clicks a paragraph, and two rules are the whole of it:
   removed invents a default one, so editing leaves a hidden stub summary in its place
   (`.dx-fold-stub`). A code block marked `run` (the renderer classes it `dx-runnable`)
   carries one more word in its label line: a `run` control, drawn only when the host
-  offers `run(id)`, which executes that one block (`dx run --only`) and answers with the
+  offers `run(id)`, which executes that one block (`dx run --only … --approve`) and answers
+  with the
   re-rendered document — a failed block arrives as content (its output block on the page),
   and only a run that changed nothing is reported as a sentence. A runnable block that was
   *edited* runs by itself the moment its field closes — the code on the page is new, so the
   output under it is stale, and showing what the changed code does is why it was changed.
+  The click *is* the review the approval gate asks for: the reader is looking at that
+  block's code and pressed the control beside it, and `--only` keeps the approval to that
+  one block. Without it every freshly typed block would be refused (editing changes the
+  fingerprint) and the surface's own run control would send people to a terminal.
   A code block is also the one kind that opens **without** its tag line: a person editing
   code wants the code, and the listing's own label already names it. ArrowUp at the very
   start reveals the `::code …` line when the block needs retyping.
@@ -273,14 +278,22 @@ silently destroying content (see the format note below). The only JavaScript lef
 browser has to run — `editor/github/*.js` and `editor/vscode/` — and both call `doc-core`
 through `doc-wasm` rather than reimplementing it.
 
-### The examples stay readable, and the fixtures are hermetic
+### The repository is a dx workspace, and the fixtures are hermetic
 
-`examples/` and `documents/` are kept as **plain text** so someone browsing the repository can
-read them. `doc-core`'s round-trip assertions therefore read `tests/fixtures/*.input.dx`
-copies, not those files — otherwise a `dx sync` at the repository root would convert them and
-the suite would start testing pointers instead of documents. `tests/fixtures.rs` fails if a
-copy drifts from the document it mirrors, so refreshing an example is a deliberate two-file
-change.
+**This repository stores its own documents the way the product stores everything.**
+`examples/*.dx` and `documents/*.dx` are one-line pointers; their content is in the committed
+pack at `.doc/repo.dxcp`, and every read resolves them — `dx text`, `dx_read`, git after
+`dx git-setup`. Edit them through `dx` (`dx set`, `dx_edit`, `dx sync` after a plain-text
+write), never by writing pointer files by hand.
+
+The round-trip test corpus must never become pointers, because `doc-core` compiles it in with
+`include_str!` — a suite that compiled pointers would stop testing documents. So the store's
+walker never adopts a `fixture`/`fixtures` directory (`doc-store::store::SKIPPED_DIRECTORIES`),
+which keeps `rust/doc-core/tests/fixtures/` and `editor/github/test/fixture/` plain text.
+The drift guard lives in `doc-cli` (`workspace::tests::
+every_fixture_input_still_matches_the_document_it_mirrors`), the crate that can resolve a
+pointer: it fails if a fixture drifts from the stored document it mirrors, so refreshing an
+example is a deliberate two-file change.
 
 ## Non-negotiables
 
@@ -321,6 +334,10 @@ change.
   `edit::preview_block` (`dx render --block --body`) applies a body to a *parsed copy* and
   throws it away, so asking what a block would look like changes no file — and a reader who
   types on the page and presses Escape has changed nothing at all.
+  `dx run --review` (`dx_run` with `review`) is a read too: it reports what would run —
+  including the blocks it would have to refuse — and folds no `::output` into the document
+  and writes no file, because a review that left a record behind would be a read with a
+  side effect.
   Only `dx run` and the `dx_run` tool execute code. This is why a `nav` block is resolved from
   the document it sits in and never by reading another file, and why `dx serve` reads no file,
   writes none, and runs nothing. The one sanctioned outward read is `resolve::hydrate` — a
@@ -346,6 +363,18 @@ change.
   payloads asserted to fail, and it is the evidence for every sentence above — if you change
   this area, run it, and check it still *can* fail by running the same payload with
   `DX_UNCONFINED=1`.
+
+  **And unreviewed code does not run at all.** `doc-run::approvals` is a ledger of
+  fingerprints *this machine* approved (`<cache_root>/approvals`, never in a repository);
+  a block whose fingerprint is not in it is `blocked` pending review, with the sentence
+  naming `--review`, `--approve`, and `--force`. Only that ledger approves. A document's
+  own `::output` record cannot: `hash=` is computed from the code above it, so the hand
+  that writes the block writes the record too — treating it as approval let a handed-over
+  document mark itself reviewed and, under `--force`, run with the bypass notice
+  suppressed. For the same reason the gate is checked **before** the unchanged-fingerprint
+  skip: a cached skip that trusted the document's record would hide unreviewed code behind
+  it. `--force` is the one way past, and — like `DX_UNCONFINED=1` — it stamps
+  `FORCED_NOTICE` into the output it produces, so a bypass is never silent.
 - **Untrusted input is everything a document carries.** A `.dx` rendered on github.com was
   written by whoever wrote that repository, and the page it lands in belongs to github.com —
   so author markup goes through `render::escape`, which is an **allow-list** of elements,
@@ -412,7 +441,7 @@ change.
 
 ```bash
 cd rust
-cargo test                                  # must be green (627 tests)
+cargo test                                  # must be green (764 tests)
 cargo clippy --all-targets -- -D warnings   # must be clean
 cargo fmt --check                           # must be clean
 ```
@@ -440,12 +469,13 @@ cd rust && cargo build --release -p doc-cli   # → rust/target/release/dx
 ./target/release/dx run ../examples/showcase.dx
 ```
 
-Do **not** run `dx sync` at the repository root: it would convert `examples/` and `documents/`
-into pointers. Try the store in a scratch directory instead:
+The repository root is a live dx workspace — `dx sync .` here is normal and is how a
+plain-text edit to an example is adopted back into `.doc/repo.dxcp` (the fixture directories
+are never adopted; see above). To try the store from nothing:
 
 ```bash
 mkdir /tmp/pad && cd /tmp/pad && git init -q .
-cp ~/Desktop/DOC/examples/welcome.dx .
+dx textconv ~/Desktop/DOC/examples/welcome.dx > welcome.dx
 dx sync .          # adopt it: the file becomes a pointer, content goes to .doc/
 dx git-setup .     # make git diff, git show, and git log -p render documents
 cat welcome.dx     # a pointer

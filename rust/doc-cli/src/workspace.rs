@@ -551,6 +551,47 @@ mod tests {
         assert_eq!(document_dir(Path::new("c.dx")), PathBuf::from("."));
     }
 
+    /// Each `doc-core` fixture input and the repository document it mirrors.
+    ///
+    /// The round-trip corpus in `doc-core/tests/fixtures` is hermetic plain text (the
+    /// store's walker never adopts a `fixtures` directory), while the documents it mirrors
+    /// live in this repository's store as pointers. This crate is the one that can resolve
+    /// them, so the drift guard lives here: refreshing an example is a deliberate
+    /// two-file change, never a silent divergence.
+    const FIXTURE_MIRRORS: &[(&str, &str)] = &[
+        ("welcome.input.dx", "examples/welcome.dx"),
+        ("tutorial.input.dx", "examples/tutorial.dx"),
+        ("showcase.input.dx", "examples/showcase.dx"),
+        ("block-reference.input.dx", "examples/block-reference.dx"),
+        (
+            "compactness-comparison.input.dx",
+            "examples/compactness-comparison.dx",
+        ),
+        ("footprint-pair.input.dx", "examples/footprint-pair.dx"),
+        ("compact-proof.input.dx", "documents/compact-proof.dx"),
+    ];
+
+    #[test]
+    fn every_fixture_input_still_matches_the_document_it_mirrors() {
+        let repository = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .expect("the crate sits two levels below the repository root");
+        let fixtures = repository.join("rust/doc-core/tests/fixtures");
+
+        for (fixture, source) in FIXTURE_MIRRORS {
+            let resolved = read(&repository.join(source))
+                .unwrap_or_else(|error| panic!("could not resolve {source}: {error}"));
+            let copy = fs::read_to_string(fixtures.join(fixture))
+                .unwrap_or_else(|error| panic!("fixture {fixture} is missing: {error}"));
+            assert_eq!(
+                copy, resolved,
+                "rust/doc-core/tests/fixtures/{fixture} has drifted from {source}; copy the \
+                 document over it and re-check the .expected.dx output"
+            );
+        }
+    }
+
     #[test]
     fn write_text_is_for_output_that_is_not_a_document() {
         let root = scratch("raw-write");
