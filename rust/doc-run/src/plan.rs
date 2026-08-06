@@ -80,11 +80,16 @@ pub fn build(runner: &str, code: &str, deps: &[String], dirs: &Dirs) -> Result<P
     match runner {
         "python" => python(code, deps, dirs),
         "node" => node(code, deps, dirs),
+        "typescript" => typescript(code, deps, dirs),
         "deno" => deno(code, dirs),
         "bash" => bash(code, dirs),
         "rust" => rust(code, deps, dirs),
         "go" => go(code, deps, dirs),
         "ruby" => ruby(code, deps, dirs),
+        "c" => c_family(code, deps, dirs, CFamily::C),
+        "cpp" => c_family(code, deps, dirs, CFamily::Cpp),
+        "java" => java(code, deps, dirs),
+        "swift" => swift(code, deps, dirs),
         other => Err(format!("no runner for `{other}`")),
     }
 }
@@ -204,6 +209,66 @@ fn node(code: &str, deps: &[String], dirs: &Dirs) -> Result<Plan, String> {
         files,
         setup,
         run: CommandSpec::new("node", &[&script]).with_env("NODE_PATH", modules),
+    })
+}
+
+/// TypeScript via the machine's own Node toolchain: setup installs `typescript`, `tsx`,
+/// and the block's declared packages into the block directory with npm; the run is
+/// `node --import tsx block.ts`, offline, against what setup already fetched.
+///
+/// `tsx` over `ts-node` is deliberate: it runs both ESM and CJS TypeScript with zero
+/// configuration (its esbuild transform needs no `tsconfig.json`, no `--esm` flag, and no
+/// loader-hook incantations that shift between Node versions), which is what a code block
+/// pasted into a document needs. `typescript` itself is installed alongside so `tsc` and
+/// its APIs are present for blocks that want them. Types are stripped, not checked — the
+/// block runs the way `node --import tsx script.ts` would in a terminal.
+///
+/// Loader mode rather than the `tsx` CLI, on evidence: the CLI wraps the script in a
+/// process manager that listens on a unix socket under `$TMPDIR`, and the sandbox points
+/// `$TMPDIR` at the block directory — a path long enough to overflow the kernel's socket
+/// path limit. The one-line `boot.mjs` exists because `--import`'s bare `tsx` specifier
+/// resolves from the *importing file*, and boot sits beside the block's own
+/// `node_modules`; the script does too, so every installed package resolves for ESM and
+/// CJS alike, with `NODE_PATH` set as well, matching the JavaScript runner.
+fn typescript(code: &str, deps: &[String], dirs: &Dirs) -> Result<Plan, String> {
+    // Both are required; the sentence names the first one actually absent — telling a
+    // machine that already has node to install node sends its owner nowhere.
+    for tool in ["node", "npm"] {
+        if !have(tool) {
+            return Err(missing_toolchain_message("typescript", &[tool]));
+        }
+    }
+    let script = dirs.block_path("block.ts");
+    let boot = dirs.block_path("boot.mjs");
+    let modules = dirs.block_path("node_modules");
+    let files = vec![
+        ("block.ts".to_string(), code.to_string()),
+        ("boot.mjs".to_string(), "import \"tsx\";\n".to_string()),
+        (
+            "package.json".to_string(),
+            "{\n  \"name\": \"dx-block\",\n  \"private\": true,\n  \"type\": \"module\"\n}\n"
+                .to_string(),
+        ),
+    ];
+
+    let mut install = CommandSpec::new(
+        "npm",
+        &[
+            "install",
+            "--silent",
+            "--no-audit",
+            "--no-fund",
+            "--save",
+            "typescript",
+            "tsx",
+        ],
+    );
+    install.args.extend(deps.iter().cloned());
+
+    Ok(Plan {
+        files,
+        setup: vec![with_cache(install, "npm_config_cache", dirs.cache("npm"))],
+        run: CommandSpec::new("node", &["--import", &boot, &script]).with_env("NODE_PATH", modules),
     })
 }
 
@@ -368,6 +433,197 @@ fn ruby(code: &str, deps: &[String], dirs: &Dirs) -> Result<Plan, String> {
     })
 }
 
+/// Which of the two C-family languages a block speaks; decides compiler, file name, and
+/// language standard.
+#[derive(Debug, Clone, Copy)]
+enum CFamily {
+    /// C, compiled by the first of `cc`, `clang`, `gcc`.
+    C,
+    /// C++, compiled by the first of `c++`, `clang++`, `g++`.
+    Cpp,
+}
+
+impl CFamily {
+    /// Compiler candidates, in preference order — the platform alias first, so the block
+    /// uses whatever the machine considers its C compiler.
+    fn compilers(self) -> &'static [&'static str] {
+        match self {
+            CFamily::C => &["cc", "clang", "gcc"],
+            CFamily::Cpp => &["c++", "clang++", "g++"],
+        }
+    }
+
+    /// Name the language is known by, for messages.
+    fn name(self) -> &'static str {
+        match self {
+            CFamily::C => "c",
+            CFamily::Cpp => "c++",
+        }
+    }
+
+    /// Source file the code is written to.
+    fn source_file(self) -> &'static str {
+        match self {
+            CFamily::C => "block.c",
+            CFamily::Cpp => "block.cpp",
+        }
+    }
+}
+
+/// C and C++: the system compiler builds the block in setup, and the run is the binary.
+///
+/// The compiler links against what the machine already provides (`-lm` and friends via the
+/// standard library); there is no package fetch, so `deps=` is refused with a sentence
+/// rather than half-supported — a C library cannot be installed in a way that keeps the
+/// run offline and the reader's system untouched.
+fn c_family(code: &str, deps: &[String], dirs: &Dirs, family: CFamily) -> Result<Plan, String> {
+    if !deps.is_empty() {
+        return Err(deps_unsupported(family.name()));
+    }
+    let compiler = first_available(family.compilers())
+        .ok_or_else(|| missing_toolchain_message(family.name(), family.compilers()))?;
+    let source = dirs.block_path(family.source_file());
+    let binary = dirs.block_path(&format!("dx-block{}", exe_suffix()));
+    Ok(Plan {
+        files: vec![(family.source_file().to_string(), code.to_string())],
+        setup: vec![compile_env(
+            CommandSpec::new(compiler, &["-O2", "-o", &binary, &source]),
+            dirs,
+        )],
+        run: CommandSpec::new(binary, &[]),
+    })
+}
+
+/// Point a compiler's scratch space into the block directory.
+///
+/// A compile step runs inside the same sandbox as everything else in setup, and system
+/// compilers write intermediates (and, on macOS, an `xcrun` cache) into `$TMPDIR` — which
+/// still names the reader's real temp directory during setup, where the sandbox refuses
+/// writes. The block directory is the one place a compile is allowed to scribble.
+fn compile_env(spec: CommandSpec, dirs: &Dirs) -> CommandSpec {
+    let block = dirs.block.to_string_lossy().into_owned();
+    spec.with_env("TMPDIR", block.clone())
+        .with_env("TEMP", block.clone())
+        .with_env("HOME", block)
+}
+
+/// The sentence refusing `deps=` for a language whose libraries cannot be fetched into an
+/// offline run.
+fn deps_unsupported(language: &str) -> String {
+    format!(
+        "`deps=` is not supported for {language} blocks — this runner compiles against \
+         what the system toolchain already provides. Remove the deps attribute, or use a \
+         language with a package manager (python, node, typescript, rust, go, ruby)."
+    )
+}
+
+/// Java: `javac` compiles the block in setup, and `java` runs the classes offline.
+///
+/// The block's entry point must be a class named `Main` with a `public static void main`
+/// — the source is written as `Main.java`, which is also what the Java language requires
+/// of a public class. `deps=` is refused: fetching jars would need a build tool this
+/// runner does not impose.
+fn java(code: &str, deps: &[String], dirs: &Dirs) -> Result<Plan, String> {
+    if !deps.is_empty() {
+        return Err(deps_unsupported("java"));
+    }
+    let jdk = locate_jdk().ok_or_else(|| missing_toolchain_message("java", &["javac"]))?;
+    let source = dirs.block_path("Main.java");
+    let classes = dirs.block_path("classes");
+    Ok(Plan {
+        files: vec![("Main.java".to_string(), code.to_string())],
+        setup: vec![compile_env(
+            CommandSpec::new(jdk.javac, &["-d", &classes, &source]),
+            dirs,
+        )],
+        run: CommandSpec::new(jdk.java, &["-cp", &classes, "Main"]),
+    })
+}
+
+/// The `javac`/`java` pair a block will actually run.
+struct Jdk {
+    /// Compiler invoked in setup.
+    javac: String,
+    /// Runtime invoked offline in the run.
+    java: String,
+}
+
+/// Find a working JDK, seeing through macOS's forwarding stubs.
+///
+/// A bare path probe is not enough on macOS: every machine ships stub `javac`/`java`
+/// binaries in `/usr/bin` that forward to an installed JDK through a framework lookup the
+/// sandbox denies — and fail with a "visit java.com" message when no JDK exists at all.
+/// So when the probe lands on the stub, the real JDK is resolved here, outside the
+/// sandbox, by the same `/usr/libexec/java_home` the stub consults, and the plan names
+/// that JDK's own binaries. This runs a resolver process, which is fine where it is
+/// called: building a plan is already part of executing a block, never of reading one.
+fn locate_jdk() -> Option<Jdk> {
+    let javac = crate::toolchain::locate("javac")?;
+    if !have("java") {
+        return None;
+    }
+    if !(cfg!(target_os = "macos") && javac == std::path::Path::new("/usr/bin/javac")) {
+        return Some(Jdk {
+            javac: "javac".to_string(),
+            java: "java".to_string(),
+        });
+    }
+    let resolved = std::process::Command::new("/usr/libexec/java_home")
+        .output()
+        .ok()
+        .filter(|output| output.status.success())?;
+    let home = PathBuf::from(String::from_utf8_lossy(&resolved.stdout).trim());
+    let javac = home.join("bin/javac");
+    let java = home.join("bin/java");
+    (javac.is_file() && java.is_file()).then(|| Jdk {
+        javac: javac.to_string_lossy().into_owned(),
+        java: java.to_string_lossy().into_owned(),
+    })
+}
+
+/// Whether a working JDK is installed — the guard toolchain-dependent tests share.
+#[cfg(test)]
+pub(crate) fn java_toolchain_present() -> bool {
+    locate_jdk().is_some()
+}
+
+/// Swift: `swiftc` builds the block in setup, and the run is the binary it produced.
+///
+/// Present wherever Xcode's command line tools are (and on Linux Swift installs). `deps=`
+/// is refused: Swift packages resolve through SwiftPM projects, which is more machinery
+/// than a code block should carry.
+fn swift(code: &str, deps: &[String], dirs: &Dirs) -> Result<Plan, String> {
+    if !deps.is_empty() {
+        return Err(deps_unsupported("swift"));
+    }
+    if !have("swiftc") {
+        return Err(missing_toolchain_message("swift", &["swiftc"]));
+    }
+    let source = dirs.block_path("block.swift");
+    let binary = dirs.block_path(&format!("dx-block{}", exe_suffix()));
+    // The module cache is pointed into the block directory: its default is under the
+    // reader's home, which the sandbox keeps read-only even during setup.
+    let module_cache = dirs.block_path("module-cache");
+    Ok(Plan {
+        files: vec![("block.swift".to_string(), code.to_string())],
+        setup: vec![compile_env(
+            CommandSpec::new(
+                "swiftc",
+                &[
+                    "-O",
+                    "-module-cache-path",
+                    &module_cache,
+                    "-o",
+                    &binary,
+                    &source,
+                ],
+            ),
+            dirs,
+        )],
+        run: CommandSpec::new(binary, &[]),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -405,16 +661,34 @@ mod tests {
         let fetching = [
             "install", "get", "add", "cache", "fetch", "download", "sync",
         ];
-        for runner in ["python", "node", "deno", "bash", "rust", "go", "ruby"] {
-            let Ok(plan) = build(runner, "x", &["some-dep".into()], &dirs()) else {
-                continue; // Toolchain absent on this machine; nothing to check.
-            };
-            for argument in &plan.run.args {
-                assert!(
-                    !fetching.contains(&argument.as_str()),
-                    "{runner} would fetch during its run: {}",
-                    plan.run.display()
-                );
+        for runner in [
+            "python",
+            "node",
+            "typescript",
+            "deno",
+            "bash",
+            "rust",
+            "go",
+            "ruby",
+            "c",
+            "cpp",
+            "java",
+            "swift",
+        ] {
+            // Both shapes: with dependencies, and without. A runner that refuses `deps`
+            // (the compiled ones do) would otherwise skip this check entirely — leaving the
+            // one test that enforces the offline run silent about exactly those languages.
+            for deps in [vec!["some-dep".to_string()], Vec::new()] {
+                let Ok(plan) = build(runner, "x", &deps, &dirs()) else {
+                    continue; // Toolchain absent (or deps refused) on this machine.
+                };
+                for argument in &plan.run.args {
+                    assert!(
+                        !fetching.contains(&argument.as_str()),
+                        "{runner} would fetch during its run: {}",
+                        plan.run.display()
+                    );
+                }
             }
         }
     }
@@ -472,6 +746,7 @@ mod tests {
         for (runner, variable) in [
             ("python", "UV_CACHE_DIR"),
             ("node", "npm_config_cache"),
+            ("typescript", "npm_config_cache"),
             ("rust", "CARGO_HOME"),
             ("go", "GOMODCACHE"),
         ] {
@@ -506,5 +781,93 @@ mod tests {
     #[test]
     fn an_unknown_runner_is_an_error_not_a_panic() {
         assert!(build("cobol", "x", &[], &dirs()).is_err());
+    }
+
+    /// `lang=ts` runs on the machine's own Node toolchain now — setup installs `tsx` (and
+    /// `typescript`) with npm, and the run is the installed launcher, never deno.
+    #[test]
+    fn typescript_installs_tsx_in_setup_and_runs_it_offline() {
+        if !(have("node") && have("npm")) {
+            eprintln!("skipping: node/npm not installed");
+            return;
+        }
+        let plan = build("typescript", "console.log(1)", &[], &dirs()).expect("typescript plan");
+        let install = plan.setup[0].display();
+        assert!(install.contains("npm"), "{install}");
+        assert!(install.contains("tsx"), "{install}");
+        assert!(install.contains("typescript"), "{install}");
+        assert_eq!(plan.run.program, "node");
+        assert!(plan.run.display().contains("--import"));
+        assert!(plan.run.display().contains("block.ts"));
+        assert!(!plan.run.display().contains("deno"));
+    }
+
+    /// Declared packages ride the same npm install as the runner itself.
+    #[test]
+    fn typescript_dependencies_join_the_npm_install() {
+        if !(have("node") && have("npm")) {
+            eprintln!("skipping: node/npm not installed");
+            return;
+        }
+        let plan = build("typescript", "import 'chalk'", &["chalk".into()], &dirs())
+            .expect("typescript plan with deps");
+        assert!(plan.setup[0].display().contains("chalk"));
+        assert!(plan.run.args.iter().all(|argument| argument != "chalk"));
+    }
+
+    /// Each direct-toolchain language compiles in setup and runs its artifact — the run
+    /// names neither a compiler nor a fetch.
+    #[test]
+    fn direct_toolchain_languages_compile_in_setup_and_run_the_artifact() {
+        for (runner, compilers) in [
+            ("c", &["cc", "clang", "gcc"][..]),
+            ("cpp", &["c++", "clang++", "g++"][..]),
+            ("java", &["javac"][..]),
+            ("swift", &["swiftc"][..]),
+        ] {
+            let available = if runner == "java" {
+                java_toolchain_present()
+            } else {
+                first_available(compilers).is_some()
+            };
+            if !available {
+                eprintln!("skipping {runner}: no toolchain installed");
+                continue;
+            }
+            let plan = build(runner, "x", &[], &dirs()).expect(runner);
+            assert_eq!(plan.setup.len(), 1, "{runner} compiles once in setup");
+            for compiler in compilers {
+                assert!(
+                    !plan.run.display().contains(compiler),
+                    "{runner} runs its compiler: {}",
+                    plan.run.display()
+                );
+            }
+        }
+    }
+
+    /// A language whose libraries cannot be fetched into an offline run refuses `deps=`
+    /// with a sentence, instead of half-supporting them.
+    #[test]
+    fn compiled_system_languages_refuse_deps_with_a_sentence() {
+        for runner in ["c", "cpp", "java", "swift"] {
+            let refusal =
+                build(runner, "x", &["somelib".into()], &dirs()).expect_err("deps must be refused");
+            assert!(refusal.contains("deps="), "{runner}: {refusal}");
+            assert!(refusal.contains("not supported"), "{runner}: {refusal}");
+        }
+    }
+
+    /// A missing toolchain is a sentence naming what to install, never a panic.
+    #[test]
+    fn a_missing_direct_toolchain_is_named_in_the_error() {
+        // swift is the likeliest to be absent; when present, the message path is still
+        // covered by the unknown-runner and deps-refusal tests above.
+        if have("swiftc") {
+            return;
+        }
+        let message = build("swift", "print(1)", &[], &dirs()).expect_err("no swiftc");
+        assert!(message.contains("swiftc"));
+        assert!(message.contains("PATH"));
     }
 }

@@ -92,6 +92,7 @@ pub fn run_set(args: &Args) -> Result<String, String> {
     let id = args
         .positional(1)
         .ok_or_else(|| "a block id is required — see `dx outline <file>`".to_string())?;
+    refuse_extra_positionals(args, 2)?;
     let body = body_argument(args)?;
 
     if args.present("header") {
@@ -115,6 +116,7 @@ pub fn run_set(args: &Args) -> Result<String, String> {
 /// `--id` some block already answers to is refused with a sentence, never silently renamed.
 pub fn run_append(args: &Args) -> Result<String, String> {
     let path = path_argument(args, 0, "a .dx file is required")?;
+    refuse_extra_positionals(args, 1)?;
     let kind = args.value("type").unwrap_or("paragraph");
     require_code_for_attributes(kind, args)?;
     let body = body_argument(args)?;
@@ -167,6 +169,7 @@ pub fn run_source(args: &Args) -> Result<String, String> {
 /// two spellings of the same edit, and nothing an author could explain.
 pub fn run_insert(args: &Args) -> Result<String, String> {
     let path = path_argument(args, 0, "a .dx file is required")?;
+    refuse_extra_positionals(args, 1)?;
     let kind = args.value("type").unwrap_or("paragraph");
     require_code_for_attributes(kind, args)?;
     let insertion = edit::Insertion {
@@ -378,6 +381,22 @@ pub fn run_remove(args: &Args) -> Result<String, String> {
 }
 
 /// Read the new block body from `--text`, `--from <file>`, or standard input.
+/// Refuse positional words past the ones a command takes.
+///
+/// A body passed bare — `dx set doc.dx block print(1)` — used to be silently ignored:
+/// with no `--text` the command fell back to stdin, read nothing, and replaced the
+/// block's body with the empty string it got. A stray word is a caller who believes
+/// they said something, so it is an error naming the way the something is actually said.
+fn refuse_extra_positionals(args: &Args, expected: usize) -> Result<(), String> {
+    match args.positionals().get(expected) {
+        Some(stray) => Err(format!(
+            "unexpected argument `{stray}` — a block's body is passed with --text \
+             (multi-line is fine), --from <file>, or piped on stdin"
+        )),
+        None => Ok(()),
+    }
+}
+
 fn body_argument(args: &Args) -> Result<String, String> {
     if let Some(text) = args.value("text") {
         if text != "-" {
@@ -448,6 +467,19 @@ mod tests {
         assert!(!raw.contains("Old text"));
         assert!(raw.contains("::paragraph id=tail\nKeep me\n::end"));
         assert!(raw.contains("::heading level=1 id=h\nTitle\n::end"));
+    }
+
+    #[test]
+    fn a_bare_body_word_is_refused_not_silently_dropped() {
+        // `dx set doc.dx block print(1)` once ignored the body word, fell back to an
+        // empty stdin, and wiped the block to nothing — content destroyed by a typo.
+        let path = scratch("set-bare").join("doc.dx");
+        let file = path.to_string_lossy().into_owned();
+        workspace::write_text(&path, "::paragraph id=p\nkeep me\n::end\n").expect("seed");
+        let error = run_set(&args(&[&file, "p", "new body"])).expect_err("should refuse");
+        assert!(error.contains("--text"), "{error}");
+        let raw = workspace::read(&path).expect("resolve");
+        assert!(raw.contains("keep me"), "body was touched: {raw}");
     }
 
     #[test]

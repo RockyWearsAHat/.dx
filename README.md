@@ -115,17 +115,26 @@ line — which is why this README carries pictures.
 
 ## For AI agents
 
-`dx setup` registers the MCP server (`dx mcp`). An agent reads a document by looking at it:
-`dx_read` returns the rendered pages as images — tables, boards, and the output the code
-produced, exactly as a person sees them — with `dx_source` for exact text, `dx_edit` and
-`dx_run` for changing and executing, and `dx_play` to drive the rendered page with scripted
-input and watch it react. An assistant without MCP needs nothing: `dx` is a command, and
-`dx help` explains itself.
+`dx setup` registers the MCP server (`dx mcp`). An agent reads by the cheapest route that
+carries the meaning: `dx_outline` maps a document, `dx_source` reads prose and code as text
+for a fraction of what images cost, and `dx_read` spends its page images on what text
+cannot carry — boards, diagrams, charts, rendered views. Both reads are live: recorded
+output of already-approved code is re-run when it goes stale, so what the agent reads is
+what the code does now, with no `dx_run` in between; unreviewed code still never runs on a
+read. `dx_edit` changes one block — and runs a runnable one it just rewrote, since the edit
+is the review — `dx_run` executes, `dx_play` drives the rendered page with scripted input,
+and `dx_index` scaffolds `index.dx`, a precursor project map the agent improves once and
+every later session consults for the price of one read. An assistant without MCP needs
+nothing: `dx` is a command, and `dx help` explains itself.
 
 ## What executes, and what does not
 
-Reading never executes and never writes; only `dx run` (or the `dx_run` tool) executes code,
-and `DX_NO_EXEC=1` turns that off. Code that does run is confined by the kernel — Seatbelt on
+Rendering never executes and never writes: `dx render`, `dx text`, `dx serve`, the editor,
+and the extension only show what is stored. Code runs in exactly three places — `dx run`
+(or the `dx_run` tool); the agent read tools' refresh, which re-runs only code this machine
+*already approved* when its recorded output goes stale; and `dx_edit` running the runnable
+block it just rewrote, the agent's version of the surface rule that an edited field runs
+when it closes. `DX_NO_EXEC=1` turns execution off. Code that does run is confined by the kernel — Seatbelt on
 macOS, bubblewrap on Linux — with no network, and runs only after its exact code has been
 reviewed and approved on this machine. Author markup is sanitized against an allow-list, and
 `dx serve` answers loopback only. The claims are tested by attacking them:

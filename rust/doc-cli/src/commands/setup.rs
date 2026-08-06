@@ -72,15 +72,25 @@ pub fn run_doctor(_args: &Args) -> Result<String, String> {
     // The first line of this section is the one that matters: it says what stands between a
     // document someone sent you and the rest of your machine.
     out.push_str(&format!("  sandbox   {}\n", sandbox_status()));
-    for (language, programs) in install::RUNTIME_PROBES {
-        let found = programs
-            .iter()
-            .filter_map(|program| locate(program).map(|_| (*program).to_string()))
-            .collect::<Vec<_>>();
-        let status = if found.is_empty() {
-            format!("missing — install {}", programs.join(" or "))
-        } else {
+    // A language is ready when every requirement group has a program installed; the
+    // missing sentence names only the groups that are actually absent.
+    for (language, groups) in install::RUNTIME_PROBES {
+        let mut found: Vec<&str> = Vec::new();
+        let mut missing: Vec<String> = Vec::new();
+        for group in *groups {
+            match group
+                .iter()
+                .copied()
+                .find(|program| locate(program).is_some())
+            {
+                Some(program) => found.push(program),
+                None => missing.push(group.join(" or ")),
+            }
+        }
+        let status = if missing.is_empty() {
             found.join(", ")
+        } else {
+            format!("missing — install {}", missing.join(" and "))
         };
         out.push_str(&format!("  {language:<9} {status}\n"));
     }
@@ -470,6 +480,10 @@ READ
 
 WRITE
   dx new      <file> [--title T]                create a document
+  dx index    [dir] [--force]                   scaffold index.dx — a project map
+                                                from the tree, one section per
+                                                area, meant to be read whole and
+                                                improved by its reader
   dx source   <file> [--block ID] [--header]    the exact characters, to edit
               --header prints the block's `::kind attrs` opening line
   dx set      <file> <block-id> --text T        replace one block's body
@@ -502,8 +516,24 @@ STORE
 
 RUN
   dx run      <file> [--only ID] [--force] [--dry] [--timeout S]
+              [--review] [--approve] [--follow-edges]
               Executes code blocks marked `run` and stores their output in the
-              document. Nothing else in dx ever executes code.
+              document. Nothing else in dx ever executes code. New or edited
+              code is blocked until reviewed: --review prints each block's exact
+              code and fingerprint without executing; --approve approves the
+              current code and runs it (--review with --approve is refused —
+              review records nothing); --force runs it this once and says so in
+              the output. Editing a block changes its fingerprint, so approval
+              expires with the edit. Only this machine's approvals count: a
+              result already recorded in the document approves nothing, so a
+              document you were handed is reviewed rather than skipped as
+              cached. --follow-edges runs blocks in the order the
+              document's board edges state — an edge means this-then-that, even
+              through non-runnable nodes — instead of document order. The
+              earliest ready block always runs next, so an edge that defers a
+              block lets later blocks (on a board or not) run before it; only
+              stated edges order side effects. A cycle among runnable blocks is
+              refused with a sentence naming it.
 
 PLATFORM
   dx serve    [--port N]                        the local rendering service

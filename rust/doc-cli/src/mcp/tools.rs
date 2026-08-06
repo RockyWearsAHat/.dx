@@ -4,11 +4,12 @@
 //! for that reader: each one says what it returns, when to reach for it, and which tool to
 //! use instead when this is the wrong one.
 //!
-//! The ordering is deliberate. `dx_read` — which returns the *pages* of the rendered
-//! document as images — comes first, because that is what reading a `.dx` document means:
-//! a document renders to a page, and a reader who sees the page reasons about the real
-//! result instead of imagining one from source. `dx_source` is the second-choice tool, for
-//! when the exact characters matter.
+//! The ordering is deliberate, and it is the reading economy: *find* (`dx_list`,
+//! `dx_search`), *map* (`dx_outline`), *read the text* (`dx_source` — prose and code cost
+//! a fraction as text of what a page image costs), and only then *look* (`dx_read`), for
+//! the pages that carry what text cannot: boards, diagrams, charts, rendered views. Both
+//! reads are live: recorded output of already-approved code is refreshed before it is
+//! handed over, so what the reader sees is what the code does now.
 
 use serde_json::{json, Value};
 
@@ -16,13 +17,14 @@ use serde_json::{json, Value};
 /// keep [`catalogue`] and this list in step.
 #[cfg(test)]
 pub const TOOL_NAMES: &[&str] = &[
-    "dx_read",
-    "dx_play",
-    "dx_source",
-    "dx_outline",
     "dx_list",
     "dx_search",
+    "dx_outline",
+    "dx_source",
+    "dx_read",
+    "dx_play",
     "dx_render",
+    "dx_index",
     "dx_write",
     "dx_edit",
     "dx_run",
@@ -32,13 +34,14 @@ pub const TOOL_NAMES: &[&str] = &[
 #[must_use]
 pub fn catalogue() -> Value {
     json!([
-        read_tool(),
-        play_tool(),
-        source_tool(),
-        outline_tool(),
         list_tool(),
         search_tool(),
+        outline_tool(),
+        source_tool(),
+        read_tool(),
+        play_tool(),
         render_tool(),
+        index_tool(),
         write_tool(),
         edit_tool(),
         run_tool(),
@@ -67,18 +70,18 @@ fn section_property() -> Value {
 fn read_tool() -> Value {
     json!({
         "name": "dx_read",
-        "description": "READ a .dx document: returns the rendered page as images, one per \
-                        page, in order. This is the normal way to read a document — you see \
-                        it as it actually renders, including tables, diagrams, charts, and \
-                        the output its code produced, instead of inferring the result from \
-                        source. Each page is labelled with the block ids on it. For a long \
-                        document, call dx_outline first and then pass `section` to read just \
-                        the part you need. Falls back to Markdown text automatically if this \
-                        machine has no browser installed. Use dx_source when you need the \
-                        exact characters (to quote or edit them). Pass `block` to photograph \
-                        one block alone — a ::board arrives at its natural canvas size, every \
-                        node at the box its line states, which is the sharp way to inspect a \
-                        board or a single node.",
+        "description": "LOOK at a .dx document: returns the rendered pages as images. A \
+                        page image costs many times what its text costs, so spend this on \
+                        what text cannot carry — boards, diagrams, charts, images, rendered \
+                        ::view frames, layout — and read prose and code with dx_source. The \
+                        read is live: approved runnable code whose recorded output went \
+                        stale is re-run first and the fresh output rendered (unreviewed \
+                        code never runs on a read; the reply says what awaits review). \
+                        Each page is labelled with the block ids on it. On a long document \
+                        call dx_outline first and pass `section`. Pass `block` to photograph \
+                        one block alone — a ::board arrives at its natural canvas size, \
+                        which is the sharp way to inspect a board or a node. Falls back to \
+                        Markdown text when this machine has no browser.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -91,6 +94,7 @@ fn read_tool() -> Value {
                                     into the page column; a hidden block (a board node) \
                                     renders too. Get ids from dx_outline."
                 },
+                "refresh": refresh_property(),
                 "theme": {
                     "type": "string",
                     "enum": ["auto", "light", "dark"],
@@ -156,21 +160,36 @@ fn play_tool() -> Value {
     })
 }
 
+/// The `refresh` property shared by the live reading tools.
+fn refresh_property() -> Value {
+    json!({
+        "type": "boolean",
+        "description": "Re-run approved code whose recorded output is stale before \
+                        reading, so the document shows live output. Unreviewed code \
+                        never runs on a read. Default: true; false reads exactly what \
+                        is stored."
+    })
+}
+
 /// `dx_source` — the exact words, as Markdown.
 fn source_tool() -> Value {
     json!({
         "name": "dx_source",
-        "description": "Get a .dx document's exact text as Markdown, with headings, lists, \
-                        code fences, and captured output preserved. Use this when the \
-                        characters matter — quoting a line, checking wording, or preparing a \
-                        dx_edit. To read the document as it renders, use dx_read. Set `ids` \
-                        to true to get each block's id, which you need for dx_edit and for \
-                        section selection.",
+        "description": "READ a .dx document as text: exact Markdown with headings, lists, \
+                        code fences, and captured run output preserved. This is the cheap \
+                        way to read prose and code — a fraction of the tokens of dx_read's \
+                        page images — and the exact characters, for quoting or preparing a \
+                        dx_edit. Pass `section` (any block id) to read one part instead of \
+                        the whole document; set `ids` to true for the block ids dx_edit and \
+                        section selection need. The read is live: stale output of approved \
+                        code is refreshed first. Reach for dx_read only when the page \
+                        carries what text cannot: boards, diagrams, charts, layout.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "path": path_property(),
                 "section": section_property(),
+                "refresh": refresh_property(),
                 "ids": {
                     "type": "boolean",
                     "description": "Prefix each block with its id. Default: false."
@@ -202,7 +221,9 @@ fn list_tool() -> Value {
     json!({
         "name": "dx_list",
         "description": "List every .dx document in a project, with its title and block count. \
-                        Use this to find out what documentation exists before guessing paths.",
+                        Use this to find out what documentation exists before guessing paths. \
+                        A project with no documents yet is a project worth indexing: offer to \
+                        run dx_index, which scaffolds index.dx for you to improve.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -285,19 +306,62 @@ fn write_tool() -> Value {
     })
 }
 
+/// `dx_index` — scaffold the project map.
+fn index_tool() -> Value {
+    json!({
+        "name": "dx_index",
+        "description": "Scaffold index.dx — a precursor project index built from the file \
+                        tree alone: one section per top-level area with its immediate \
+                        contents and a TODO paragraph. Run this when dx_list finds no \
+                        documentation in a project, then READ THE WHOLE SCAFFOLD and \
+                        improve it before other work: replace each TODO with what the area \
+                        actually does, and add ::code src= blocks for the load-bearing \
+                        files — they render as the file's current text, never a stale \
+                        copy — so every later session orients for the price of one read. \
+                        Refuses to overwrite an existing index.dx unless force=true, \
+                        because an existing index is presumed improved.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "directory": {
+                    "type": "string",
+                    "description": "Directory to map. Default: the workspace root."
+                },
+                "force": {
+                    "type": "boolean",
+                    "description": "Rewrite the scaffold over an existing index.dx. \
+                                    Default: false."
+                }
+            },
+            "required": []
+        }
+    })
+}
+
 /// `dx_edit` — change one block.
 fn edit_tool() -> Value {
     json!({
         "name": "dx_edit",
         "description": "Replace the body of one block, leaving every other block byte-for-byte \
                         unchanged. This is the safe way to edit a long document. Get block ids \
-                        from dx_outline or from dx_source with ids=true.",
+                        from dx_outline or from dx_source with ids=true. Editing a runnable \
+                        code block RUNS IT immediately, approving the code you just wrote — \
+                        the edit is the review, exactly as the editing surface runs a field \
+                        the moment it closes — and the fresh output is folded into the \
+                        document, so a read after an edit is never stale. Pass run=false to \
+                        edit without executing.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "path": path_property(),
                 "block": { "type": "string", "description": "Id of the block to replace." },
-                "text": { "type": "string", "description": "New body text for the block." }
+                "text": { "type": "string", "description": "New body text for the block." },
+                "run": {
+                    "type": "boolean",
+                    "description": "Run a runnable block after the edit, approving the new \
+                                    code. Default: true; only code blocks marked `run` \
+                                    execute either way."
+                }
             },
             "required": ["path", "block", "text"]
         }
@@ -312,7 +376,13 @@ fn run_tool() -> Value {
                         using the machine's own toolchains, installs any libraries the blocks \
                         declare with deps=\"…\", and stores each result in the document as an \
                         ::output block. Nothing else in this server executes anything. \
-                        Unchanged blocks are skipped, so re-running is cheap. After running, \
+                        Unchanged blocks are skipped, so re-running is cheap. New or edited \
+                        code is blocked until reviewed: pass review=true to see each block's \
+                        exact code and fingerprint without executing (review writes nothing \
+                        at all), then approve=true to approve the current code and run it. \
+                        Only this machine's own approvals count — a result already recorded \
+                        in the document approves nothing — and editing a block changes its \
+                        fingerprint, so approval expires with the edit. After running, \
                         call dx_read to see the results rendered.",
         "inputSchema": {
             "type": "object",
@@ -324,7 +394,42 @@ fn run_tool() -> Value {
                 },
                 "force": {
                     "type": "boolean",
-                    "description": "Re-run blocks whose code has not changed. Default: false."
+                    "description": "Re-run blocks whose code has not changed, and run \
+                                    unapproved code once — the bypass is announced in the \
+                                    block's own output. Default: false."
+                },
+                "review": {
+                    "type": "boolean",
+                    "description": "Execute nothing: report each runnable block's exact \
+                                    code, fingerprint, and approval status. Refused when \
+                                    combined with approve — review records nothing. \
+                                    Default: false."
+                },
+                // Deliberately agent-reachable: an agent asked to run a document must be
+                // able to, and the block still runs confined — no network, no writes outside
+                // its own directory. What `approve` buys past the sandbox is a durable
+                // machine-wide record, so an agent that has not read the code should call
+                // `review` first and say what it found. See README, "What executes".
+                "approve": {
+                    "type": "boolean",
+                    "description": "Approve each runnable block's current fingerprint on \
+                                    this machine, then execute. Read the code first — \
+                                    review=true shows it — and say what it does; the \
+                                    approval outlives this call and covers any document \
+                                    carrying the same code. Default: false."
+                },
+                "follow_edges": {
+                    "type": "boolean",
+                    "description": "Run blocks in the order the document's board edges \
+                                    state (an edge means this-then-that, conducted through \
+                                    non-runnable nodes too) instead of document order. At \
+                                    every step the earliest ready block by document \
+                                    position runs next, so an edge that defers a block \
+                                    lets later blocks — on a board or not — run before \
+                                    it; ties break by document order. Only stated edges \
+                                    order side effects — state an edge if you need an \
+                                    order. A cycle among runnable blocks is an error \
+                                    naming it. Default: false — document order."
                 }
             },
             "required": ["path"]
@@ -347,31 +452,95 @@ mod tests {
         }
     }
 
+    /// The catalogue order is the reading economy: find, map, read the text, then look.
+    /// Text costs a fraction of a page image, so `dx_source` stands ahead of `dx_read`,
+    /// and `dx_read` spends its images on what text cannot carry.
     #[test]
-    fn reading_a_document_means_looking_at_it() {
-        // The first tool an agent sees is the one that returns the rendered pages, and it
-        // says so in the first clause — a text-first reader misses what the page shows.
+    fn the_catalogue_orders_the_reading_economy() {
         let tools = catalogue();
-        let first = &tools.as_array().expect("array")[0];
-        assert_eq!(first["name"], "dx_read");
-        let description = first["description"].as_str().expect("description");
-        assert!(description.starts_with("READ"));
-        assert!(description.contains("images"));
-        assert!(description.contains("section"));
-    }
-
-    #[test]
-    fn the_exact_text_is_still_one_call_away() {
-        let tools = catalogue();
-        let source = tools
+        let names: Vec<&str> = tools
             .as_array()
             .expect("array")
             .iter()
-            .find(|tool| tool["name"] == "dx_source")
-            .expect("dx_source");
+            .map(|tool| tool["name"].as_str().expect("name"))
+            .collect();
+        let position = |name: &str| {
+            names
+                .iter()
+                .position(|n| *n == name)
+                .unwrap_or_else(|| panic!("{name} missing"))
+        };
+        assert!(position("dx_outline") < position("dx_source"));
+        assert!(position("dx_source") < position("dx_read"));
+
+        let source = &tools.as_array().expect("array")[position("dx_source")];
         let description = source["description"].as_str().expect("description");
+        assert!(description.starts_with("READ"));
         assert!(description.contains("exact"));
         assert!(description.contains("dx_edit"));
+
+        let read = &tools.as_array().expect("array")[position("dx_read")];
+        let description = read["description"].as_str().expect("description");
+        assert!(description.contains("images"));
+        assert!(description.contains("section"));
+        assert!(description.contains("boards"));
+    }
+
+    /// Both reading tools carry the live-output switch, on by default: a read shows what
+    /// approved code does now, and only unreviewed code waits.
+    #[test]
+    fn the_reads_are_live_and_the_refresh_is_declinable() {
+        let tools = catalogue();
+        for name in ["dx_read", "dx_source"] {
+            let tool = tools
+                .as_array()
+                .expect("array")
+                .iter()
+                .find(|tool| tool["name"] == name)
+                .expect(name);
+            assert_eq!(
+                tool["inputSchema"]["properties"]["refresh"]["type"], "boolean",
+                "{name} is missing `refresh`"
+            );
+            assert!(tool["description"]
+                .as_str()
+                .expect("description")
+                .contains("live"));
+        }
+    }
+
+    /// The edit is the review: the edit tool says it runs what it writes, and offers the
+    /// way to decline.
+    #[test]
+    fn the_edit_tool_declares_its_immediate_run() {
+        let tools = catalogue();
+        let edit = tools
+            .as_array()
+            .expect("array")
+            .iter()
+            .find(|tool| tool["name"] == "dx_edit")
+            .expect("dx_edit");
+        assert!(edit["description"]
+            .as_str()
+            .expect("description")
+            .contains("RUNS IT"));
+        assert_eq!(edit["inputSchema"]["properties"]["run"]["type"], "boolean");
+    }
+
+    /// The scaffold tool tells its reader the scaffold is a beginning, not a deliverable.
+    #[test]
+    fn the_index_tool_demands_improvement() {
+        let tools = catalogue();
+        let index = tools
+            .as_array()
+            .expect("array")
+            .iter()
+            .find(|tool| tool["name"] == "dx_index")
+            .expect("dx_index");
+        let description = index["description"].as_str().expect("description");
+        assert!(description.contains("index.dx"));
+        assert!(description.contains("improve"));
+        assert!(description.contains("::code src="));
     }
 
     #[test]
@@ -409,6 +578,26 @@ mod tests {
             .as_str()
             .expect("description")
             .starts_with("RUNS CODE."));
+    }
+
+    /// The approval gate is reachable over MCP: an agent can review, approve, and force
+    /// exactly as the CLI can, or the gate would depend on which surface asked.
+    #[test]
+    fn the_run_tool_exposes_the_review_gate() {
+        let tools = catalogue();
+        let run = tools
+            .as_array()
+            .expect("array")
+            .iter()
+            .find(|tool| tool["name"] == "dx_run")
+            .expect("dx_run")
+            .clone();
+        for param in ["review", "approve", "force", "follow_edges"] {
+            assert_eq!(
+                run["inputSchema"]["properties"][param]["type"], "boolean",
+                "dx_run is missing the `{param}` parameter"
+            );
+        }
     }
 
     #[test]

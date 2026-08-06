@@ -308,13 +308,22 @@ async function applyEdit(
       // Execute one `run` block through the CLI, which is the only thing that runs code.
       // The file is saved first — `dx run` reads from disk — and the buffer is brought back
       // in step with what the run wrote before the page is re-rendered from it.
+      //
+      // `--approve` is the reader's click: they are looking at this block's code in their
+      // own editor and pressed `run` on it, which is the review the approval gate asks for,
+      // and `--only` keeps the approval to that one block. Without it a block they just
+      // typed would always be refused — editing changes the fingerprint — and the surface
+      // would send them to a terminal to run what the page already offers.
       case 'run': {
         if (document.isDirty) {
           await document.save();
         }
         const file = document.uri.fsPath;
         const before = document.getText();
-        const result = await runCli(['run', file, '--only', id], path.dirname(file));
+        const result = await runCli(
+          ['run', file, '--only', id, '--approve'],
+          path.dirname(file)
+        );
         const disk = fs.readFileSync(file, 'utf8');
         if (disk === before) {
           // Nothing was written: the run never happened (a missing CLI, a refused

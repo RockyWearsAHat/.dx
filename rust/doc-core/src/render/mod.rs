@@ -27,6 +27,7 @@ mod template;
 mod text;
 mod theme;
 
+pub use board::board_edges;
 pub use escape::{escape_html, sanitize_markup};
 pub use field::field_html;
 pub use html::{block, block_page, html, BlockPage, HtmlOptions, PageBounds};

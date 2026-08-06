@@ -18,15 +18,26 @@ use crate::state;
 /// Name the server is registered under, in every assistant.
 pub const SERVER_KEY: &str = "dx";
 
-/// Language runtimes `dx doctor` probes for, with the programs that satisfy each.
-pub const RUNTIME_PROBES: &[(&str, &[&str])] = &[
-    ("python", &["uv", "python3", "python"]),
-    ("node", &["node"]),
-    ("typescript", &["deno"]),
-    ("bash", &["bash", "sh"]),
-    ("rust", &["cargo"]),
-    ("go", &["go"]),
-    ("ruby", &["ruby"]),
+/// Language runtimes `dx doctor` probes for, as requirement groups: a language is ready
+/// when every group has at least one of its programs installed.
+///
+/// Most languages are a single group of alternatives (`python3` *or* `python`);
+/// typescript is two groups because `plan::typescript` requires `node` *and* `npm` — a
+/// probe that checked only `node` once reported typescript ready on a machine whose runs
+/// it would refuse.
+pub const RUNTIME_PROBES: &[(&str, &[&[&str]])] = &[
+    ("python", &[&["uv", "python3", "python"]]),
+    ("node", &[&["node"]]),
+    ("typescript", &[&["node"], &["npm"]]),
+    ("bash", &[&["bash", "sh"]]),
+    ("rust", &[&["cargo"]]),
+    ("go", &[&["go"]]),
+    ("ruby", &[&["ruby"]]),
+    ("deno", &[&["deno"]]),
+    ("c", &[&["cc", "clang", "gcc"]]),
+    ("c++", &[&["c++", "clang++", "g++"]]),
+    ("java", &[&["javac"]]),
+    ("swift", &[&["swiftc"]]),
 ];
 
 /// How an assistant stores MCP servers in its config file.
@@ -271,6 +282,18 @@ mod tests {
             marker: root.to_path_buf(),
             shape,
         }
+    }
+
+    #[test]
+    fn the_typescript_probe_requires_npm_as_well_as_node() {
+        // `plan::typescript` needs both; a probe of node alone reported typescript ready
+        // on a machine whose runs it would refuse.
+        let (_, groups) = RUNTIME_PROBES
+            .iter()
+            .find(|(language, _)| *language == "typescript")
+            .expect("typescript is probed");
+        assert!(groups.contains(&&["node"][..]), "node group");
+        assert!(groups.contains(&&["npm"][..]), "npm group");
     }
 
     #[test]

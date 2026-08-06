@@ -14,6 +14,7 @@ pub mod browser;
 pub mod edit;
 pub mod exec;
 pub mod find;
+pub mod index;
 pub mod play;
 pub mod setup;
 pub mod store;
@@ -165,6 +166,11 @@ const COMMANDS: &[Command] = &[
         run: |args| edit::run_new(args).map(Output::Report),
     },
     Command {
+        names: &["index"],
+        flags: &["force"],
+        run: |args| index::run(args).map(Output::Report),
+    },
+    Command {
         names: &["set"],
         flags: &["text", "from", "header"],
         run: |args| edit::run_set(args).map(Output::Report),
@@ -218,7 +224,15 @@ const COMMANDS: &[Command] = &[
     // Running.
     Command {
         names: &["run"],
-        flags: &["only", "force", "dry", "timeout"],
+        flags: &[
+            "only",
+            "force",
+            "dry",
+            "timeout",
+            "review",
+            "approve",
+            "follow-edges",
+        ],
         run: |args| exec::run(args).map(Output::Report),
     },
     // The store.
@@ -404,8 +418,20 @@ mod tests {
                 ],
             ),
             ("check", vec!["block", "item"]),
-            ("run", vec!["only", "force", "dry", "timeout"]),
+            (
+                "run",
+                vec![
+                    "only",
+                    "force",
+                    "dry",
+                    "timeout",
+                    "review",
+                    "approve",
+                    "follow-edges",
+                ],
+            ),
             ("new", vec!["title", "force"]),
+            ("index", vec!["force"]),
             ("fmt", vec!["check"]),
             ("setup", vec!["all", "bin-dir", "uninstall"]),
         ] {

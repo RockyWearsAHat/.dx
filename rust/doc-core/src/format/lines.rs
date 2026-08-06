@@ -166,7 +166,12 @@ pub(crate) fn strip_bullet_marker(text: &str) -> Option<&str> {
 
 /// Match a checklist line `[x]`/`[ ]` + text (after trimming). Returns `(checked, text)`.
 /// Port of `/^\s*\[(x| )\]\s*(.*)$/i` applied to the trimmed line.
+///
+/// A leading bullet is accepted and shed — `- [ ] item` is how Markdown spells a task,
+/// and treating it as item *text* turned every pasted task list into `[ ] - [ ] item`.
+/// Canonical output stays bullet-free; the tolerance is read-side only.
 pub(crate) fn parse_checklist_line(trimmed: &str) -> Option<(bool, String)> {
+    let trimmed = strip_bullet_marker(trimmed).unwrap_or(trimmed);
     let rest = trimmed.strip_prefix('[')?;
     let token = rest.chars().next()?;
     let checked = match token {

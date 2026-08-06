@@ -33,6 +33,17 @@
 //! cannot impose that boundary does not run the block; it reports it as blocked and says
 //! why.
 //!
+//! Execution is also gated on review: a block whose fingerprint this machine has never
+//! approved is blocked pending review rather than run. Approval is local and only local —
+//! an `::output` block carried by the document proves nothing, because the hand that wrote
+//! the code wrote that record too. The gate is checked before the fingerprint cache, so a
+//! document that arrives with a matching run record is reviewed like any other.
+//! [`RunOptions::review_only`] shows what would run without running it,
+//! [`RunOptions::approve`] records the current fingerprints into the [`approvals::Ledger`]
+//! and runs, and [`RunOptions::force`] runs past the gate once, stamping [`FORCED_NOTICE`]
+//! into the output it produces. Editing a block changes its fingerprint, so approval
+//! expires with the edit.
+//!
 //! Execution is never implicit either: it happens only through `dx run` or the `dx_run`
 //! tool, never while reading or rendering. `DX_NO_EXEC=1` disables it entirely.
 
@@ -40,11 +51,13 @@
 #![warn(missing_docs)]
 #![warn(clippy::all)]
 
+pub mod approvals;
 pub mod confine;
 pub mod plan;
 pub mod process;
 pub mod toolchain;
 
+mod order;
 mod workdir;
 
 /// Serializes tests that touch process environment variables (`HOME`, `DX_UNCONFINED`,
@@ -82,6 +95,13 @@ const MAX_OUTPUT_CHARS: usize = 20_000;
 /// Exit code recorded when execution is disabled or no toolchain exists.
 const BLOCKED_EXIT: i32 = 126;
 
+/// The line stamped into a block's output when `--force` ran it past the approval gate.
+///
+/// Mirrors [`confine::UNCONFINED_NOTICE`]: a bypass announces itself in the record it
+/// produces, so a document never carries output from unreviewed code without saying so.
+pub const FORCED_NOTICE: &str =
+    "--- ran without approval: --force bypassed the review gate for this block ---";
+
 /// How to run a document.
 #[derive(Debug, Clone)]
 pub struct RunOptions {
@@ -94,13 +114,29 @@ pub struct RunOptions {
     pub cache_root: PathBuf,
     /// Timeout for blocks that do not set their own.
     pub default_timeout: Duration,
-    /// Re-run every block even when its fingerprint is unchanged.
+    /// Re-run every block even when its fingerprint is unchanged, and run past the
+    /// approval gate — a block forced past it carries [`FORCED_NOTICE`] in its output.
     pub force: bool,
     /// Run only the block with this id, when set.
     pub only: Option<String>,
     /// If true, show which blocks would run and their source without executing.
     /// Used for code review before approval.
     pub review_only: bool,
+    /// Record each runnable block's current fingerprint as approved, then execute.
+    pub approve: bool,
+    /// Order execution by the document's board edges instead of document order.
+    ///
+    /// An edge on a board says *this, then that*, and this flag takes it at its word: a
+    /// runnable block waits for every runnable block with an edge path into it, through
+    /// non-runnable nodes too (`setup -> note -> test` still runs `setup` before `test`).
+    /// At every step the earliest ready block by document position runs next, so an edge
+    /// that defers a block lets later blocks — on a board or not — run before it; ties
+    /// always break by document order, which keeps the result deterministic. Document-order
+    /// side-effect dependencies between blocks the boards leave unrelated are not
+    /// preserved — state an edge if you need an order. A cycle among runnable blocks is an
+    /// error naming its blocks. Default `false`: document order, exactly as before the
+    /// flag existed.
+    pub follow_board_edges: bool,
 }
 
 impl Default for RunOptions {
@@ -112,6 +148,8 @@ impl Default for RunOptions {
             force: false,
             only: None,
             review_only: false,
+            approve: false,
+            follow_board_edges: false,
         }
     }
 }
@@ -123,7 +161,7 @@ pub struct BlockRun {
     pub id: String,
     /// Language as the author wrote it.
     pub language: String,
-    /// `ok`, `error`, `skipped`, or `blocked`.
+    /// `ok`, `error`, `skipped`, `blocked`, or `review`.
     pub status: String,
     /// Process exit code (`0` for skipped blocks).
     pub exit: i32,
@@ -134,10 +172,12 @@ pub struct BlockRun {
 }
 
 impl BlockRun {
-    /// Whether this block ran and succeeded.
+    /// Whether nothing went wrong: the block ran and succeeded, its cached result still
+    /// stands, or it was inspected in review mode — which executes nothing and fails
+    /// nothing.
     #[must_use]
     pub fn succeeded(&self) -> bool {
-        self.status == "ok" || self.status == "skipped"
+        self.status == "ok" || self.status == "skipped" || self.status == "review"
     }
 }
 
@@ -146,7 +186,8 @@ impl BlockRun {
 pub struct RunReport {
     /// The document source with `::output` blocks refreshed.
     pub source: String,
-    /// One entry per runnable block, in document order.
+    /// One entry per runnable block, in the order they ran — document order, unless
+    /// [`RunOptions::follow_board_edges`] reordered them.
     pub runs: Vec<BlockRun>,
     /// Whether `source` differs from the input.
     pub changed: bool,
@@ -159,12 +200,13 @@ impl RunReport {
         self.runs.iter().all(BlockRun::succeeded)
     }
 
-    /// Number of blocks that actually executed (not skipped).
+    /// Number of blocks that actually executed — a skip, a refusal, and a review all
+    /// launched nothing.
     #[must_use]
     pub fn executed(&self) -> usize {
         self.runs
             .iter()
-            .filter(|run| run.status != "skipped")
+            .filter(|run| run.status == "ok" || run.status == "error")
             .count()
     }
 }
@@ -172,6 +214,13 @@ impl RunReport {
 /// Run every runnable code block in `source` and return the updated document.
 ///
 /// Blocks execute in document order, so a later block sees files an earlier one wrote.
+/// [`RunOptions::follow_board_edges`] orders them by the document's board edges instead —
+/// there an edge that defers a block lets later blocks (on a board or not) run before it,
+/// so only the stated edges order side effects, not document position. The order is still
+/// deterministic, and it is the only way this function fails: a cycle among the selected
+/// runnable blocks is `Err` with a sentence naming the cycle, because a cycle states no
+/// order. [`RunOptions::only`] narrows the graph before the order is computed, so a cycle
+/// among blocks it does not select cannot refuse the one it does.
 /// A block that fails does not stop the rest — the failure is recorded in its `::output`
 /// and the document keeps going, which is what makes the result readable as a report.
 ///
@@ -183,37 +232,61 @@ impl RunReport {
 /// listing whose file cannot be resolved is `blocked`, not run: the body standing in its
 /// place is a sentence about the missing file, and executing a sentence helps nobody.
 /// Callers with no folder to resolve against pass [`resolve::Nowhere`].
-#[must_use]
-pub fn run_document(source: &str, options: &RunOptions, resolver: &dyn Resolver) -> RunReport {
+///
+/// A block whose fingerprint is not approved in the [`approvals::Ledger`] is `blocked`
+/// pending review — reported with the way forward, never silently skipped, its stale output
+/// untouched. Only that local ledger approves: a document's own `::output` record is
+/// content its author controls, so it can neither approve code nor suppress the gate.
+/// See [`RunOptions`] for `review_only`, `approve`, and `force`.
+pub fn run_document(
+    source: &str,
+    options: &RunOptions,
+    resolver: &dyn Resolver,
+) -> Result<RunReport, String> {
+    // Review executes nothing and records nothing, so it cannot also approve or force —
+    // accepting the pair and dropping half would be an option silently swallowed, and the
+    // rule lives here so every surface refuses it identically.
+    if options.review_only && options.approve {
+        return Err("review shows code without executing and records nothing; \
+             run approve separately, without review, to approve and execute it"
+            .to_string());
+    }
+    if options.review_only && options.force {
+        return Err("review shows code without executing and records nothing; \
+             force executes — ask for one or the other"
+            .to_string());
+    }
     let document = parse(source);
     let mut hydrated = document.clone();
     let unresolved = resolve::hydrate(&mut hydrated, resolver);
+    let ledger = approvals::Ledger::at(&options.cache_root);
     let mut runs: Vec<BlockRun> = Vec::new();
     let mut outputs: Vec<(String, Block)> = Vec::new();
 
-    for (index, block) in document.blocks.iter().enumerate() {
-        let Some(runner) = runnable_runner(block) else {
+    // `only` narrows the set here, ahead of the edge sort, so a cycle among blocks the
+    // caller did not select cannot veto the one they did.
+    let runnable: Vec<usize> = document
+        .blocks
+        .iter()
+        .enumerate()
+        .filter(|(_, block)| runnable_runner(block).is_some() && selected(block, options))
+        .map(|(index, _)| index)
+        .collect();
+    let ordered = if options.follow_board_edges {
+        order::edge_order(&document, &runnable)?
+    } else {
+        runnable
+    };
+
+    for index in ordered {
+        let Some(runner) = runnable_runner(&document.blocks[index]) else {
             continue;
         };
-        if !selected(block, options) {
-            continue;
-        }
 
         // Hydration edits blocks in place and only ever appends, so the indices agree.
         let block = &hydrated.blocks[index];
         if let Some(problem) = unresolved.iter().find(|entry| entry.block == block.id) {
-            runs.push(BlockRun {
-                id: block.id.clone(),
-                language: block.language.clone(),
-                status: "blocked".to_string(),
-                exit: BLOCKED_EXIT,
-                output: problem.sentence.clone(),
-                duration_ms: 0,
-            });
-            outputs.push((
-                block.id.clone(),
-                output_block(block, "blocked", BLOCKED_EXIT, "", &problem.sentence),
-            ));
+            refuse(block, &problem.sentence, options, &mut runs, &mut outputs);
             continue;
         }
 
@@ -221,32 +294,56 @@ pub fn run_document(source: &str, options: &RunOptions, resolver: &dyn Resolver)
         let reads = match declared_reads(block, resolver) {
             Ok(reads) => reads,
             Err(sentence) => {
-                runs.push(BlockRun {
-                    id: block.id.clone(),
-                    language: block.language.clone(),
-                    status: "blocked".to_string(),
-                    exit: BLOCKED_EXIT,
-                    output: sentence.clone(),
-                    duration_ms: 0,
-                });
-                outputs.push((
-                    block.id.clone(),
-                    output_block(block, "blocked", BLOCKED_EXIT, "", &sentence),
-                ));
+                refuse(block, &sentence, options, &mut runs, &mut outputs);
                 continue;
             }
         };
         let fingerprint = fingerprint(runner, &block.text, &deps, &reads);
         let existing = existing_output(&document, index, &block.id);
 
-        // Review mode: show what would run without executing
+        // Review mode: show what would run without executing — and without recording
+        // anything, because reading never writes.
         if options.review_only {
             runs.push(BlockRun {
                 id: block.id.clone(),
                 language: block.language.clone(),
                 status: "review".to_string(),
                 exit: 0,
-                output: format!("--- Code to review ---\n{}\n--- End code ---", block.text),
+                output: review_text(&block.text, &fingerprint, ledger.is_approved(&fingerprint)),
+                duration_ms: 0,
+            });
+            continue;
+        }
+
+        if options.approve {
+            if let Err(sentence) = ledger.approve(&fingerprint) {
+                runs.push(BlockRun {
+                    id: block.id.clone(),
+                    language: block.language.clone(),
+                    status: "blocked".to_string(),
+                    exit: BLOCKED_EXIT,
+                    output: sentence,
+                    duration_ms: 0,
+                });
+                continue;
+            }
+        }
+
+        // Approval is this machine's own record and nothing else. The document's `::output`
+        // block cannot vouch for the code above it: it is content the same hand wrote, and
+        // its `hash=` is computable by whoever authored the block.
+        let approved = ledger.is_approved(&fingerprint);
+
+        // The gate stands ahead of the cache, so a document that arrives carrying a matching
+        // run record is still reviewed rather than quietly accepted as already proven. The
+        // refusal names its way forward, and the block's stale output is left as it was.
+        if !approved && !options.force {
+            runs.push(BlockRun {
+                id: block.id.clone(),
+                language: block.language.clone(),
+                status: "blocked".to_string(),
+                exit: BLOCKED_EXIT,
+                output: pending_review(&fingerprint),
                 duration_ms: 0,
             });
             continue;
@@ -266,8 +363,13 @@ pub fn run_document(source: &str, options: &RunOptions, resolver: &dyn Resolver)
             continue;
         }
 
+        // Reachable unapproved only through `--force`, which is the bypass that must say so.
+        let bypassed = !approved;
         let started = Instant::now();
-        let capture = execute(runner, block, &deps, &fingerprint, options);
+        let mut capture = execute(runner, block, &deps, &fingerprint, options);
+        if bypassed {
+            capture.output = format!("{FORCED_NOTICE}\n{}", capture.output);
+        }
         let elapsed = started.elapsed().as_millis() as u64;
         let output = truncate(&capture.output);
         let status = status_of(&capture);
@@ -288,11 +390,11 @@ pub fn run_document(source: &str, options: &RunOptions, resolver: &dyn Resolver)
 
     let updated = fold_outputs(&document, &runs, &outputs);
     let rendered = stringify(&updated);
-    RunReport {
+    Ok(RunReport {
         changed: rendered != stringify(&document),
         source: rendered,
         runs,
-    }
+    })
 }
 
 /// The runner for a block, when the block is executable code in a supported language.
@@ -310,6 +412,40 @@ fn selected(block: &Block, options: &RunOptions) -> bool {
             .id
             .eq_ignore_ascii_case(wanted.trim().trim_start_matches('#')),
         None => true,
+    }
+}
+
+/// Record a refusal decided before anything could run: an unresolved `src=` listing, or a
+/// `reads=` file the document may not have.
+///
+/// The sentence is always reported to the caller. It is folded into the document as the
+/// block's `::output` only outside review mode — a review executes nothing, so it also
+/// writes nothing, and it fails nothing: what it found is reported as `review`.
+fn refuse(
+    block: &Block,
+    sentence: &str,
+    options: &RunOptions,
+    runs: &mut Vec<BlockRun>,
+    outputs: &mut Vec<(String, Block)>,
+) {
+    let (status, exit) = if options.review_only {
+        ("review", 0)
+    } else {
+        ("blocked", BLOCKED_EXIT)
+    };
+    runs.push(BlockRun {
+        id: block.id.clone(),
+        language: block.language.clone(),
+        status: status.to_string(),
+        exit,
+        output: sentence.to_string(),
+        duration_ms: 0,
+    });
+    if !options.review_only {
+        outputs.push((
+            block.id.clone(),
+            output_block(block, "blocked", BLOCKED_EXIT, "", sentence),
+        ));
     }
 }
 
@@ -355,6 +491,10 @@ fn declared_reads(block: &Block, resolver: &dyn Resolver) -> Result<Vec<(String,
 
 /// Fingerprint the inputs that decide a block's output: runner, code, dependencies, and
 /// the current text of every file the block declares it reads.
+///
+/// The full digest, untruncated: this value is what the approval ledger trusts, and a
+/// truncated hash is one a hostile author could collide — a benign block the reader
+/// approves and a payload sharing its shortened fingerprint.
 fn fingerprint(runner: &str, code: &str, deps: &[String], reads: &[(String, String)]) -> String {
     let mut material = format!("{runner}\u{1f}{}\u{1f}{code}", deps.join(","));
     for (path, text) in reads {
@@ -363,7 +503,33 @@ fn fingerprint(runner: &str, code: &str, deps: &[String], reads: &[(String, Stri
         material.push('\u{1f}');
         material.push_str(text);
     }
-    sha256_hex(material.as_bytes())[..16].to_string()
+    sha256_hex(material.as_bytes())
+}
+
+/// What review mode reports for one block: the exact code that would run (hydrated, so
+/// `src=` listings show the file's current text), its fingerprint, and where it stands
+/// with the approval gate.
+fn review_text(code: &str, fingerprint: &str, approved: bool) -> String {
+    let standing = if approved {
+        "approved — a plain run executes this code"
+    } else {
+        "not approved — a run with approve records it and executes"
+    };
+    format!(
+        "fingerprint {fingerprint}\napproval {standing}\n--- code ---\n{code}\n--- end code ---"
+    )
+}
+
+/// The sentence refusing an unapproved block, naming the way forward.
+///
+/// The options are named bare — `review`, `approve`, `force` — because the same words are
+/// a CLI flag and an MCP parameter, and this sentence reaches both readers unchanged.
+fn pending_review(fingerprint: &str) -> String {
+    format!(
+        "blocked pending review: this code (fingerprint {fingerprint}) has not been \
+         approved on this machine. Ask for `review` to inspect it, then `approve` to \
+         approve and run it; `force` runs it this once, and says so in the output."
+    )
 }
 
 /// Execute one block, returning a capture even when nothing could be started.
@@ -528,6 +694,9 @@ mod tests {
     use super::*;
 
     /// Run `source` in a scratch directory, isolated from any real cache.
+    ///
+    /// Approves what it runs: these tests exercise execution itself, and the approval
+    /// gate has its own tests below.
     fn run_isolated(source: &str, label: &str) -> RunReport {
         let root = std::env::temp_dir().join(format!("dx-run-tests-{label}"));
         let _ = std::fs::create_dir_all(&root);
@@ -537,10 +706,25 @@ mod tests {
                 document_dir: root.clone(),
                 cache_root: root.join("cache"),
                 default_timeout: Duration::from_secs(60),
+                approve: true,
                 ..RunOptions::default()
             },
             &resolve::Nowhere,
         )
+        .expect("document order never cycles")
+    }
+
+    /// Options over a fresh scratch cache with nothing approved.
+    fn gate_options(label: &str) -> RunOptions {
+        let root = std::env::temp_dir().join(format!("dx-gate-tests-{label}"));
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::create_dir_all(&root);
+        RunOptions {
+            document_dir: root.clone(),
+            cache_root: root.join("cache"),
+            default_timeout: Duration::from_secs(60),
+            ..RunOptions::default()
+        }
     }
 
     #[test]
@@ -622,10 +806,12 @@ mod tests {
             &RunOptions {
                 document_dir: root.clone(),
                 cache_root: root.join("cache"),
+                approve: true,
                 ..RunOptions::default()
             },
             &Folder(root.clone()),
-        );
+        )
+        .expect("acyclic run");
         assert_eq!(report.runs[0].status, "ok");
         assert_eq!(report.runs[0].output, "from the file");
         // The reference survives the save with its body empty: a reference, not a copy.
@@ -677,12 +863,178 @@ mod tests {
                 document_dir: root.clone(),
                 cache_root: root.join("cache"),
                 only: Some("b".to_string()),
+                approve: true,
                 ..RunOptions::default()
             },
             &resolve::Nowhere,
-        );
+        )
+        .expect("acyclic run");
         assert_eq!(report.runs.len(), 1);
         assert_eq!(report.runs[0].id, "b");
+    }
+
+    /// A document written backwards on purpose: `second` first, and a board stating
+    /// `first -> second`.
+    const EDGE_ORDERED: &str = "::code id=second lang=bash run hidden\necho ran-second\n::end\n\n\
+::code id=first lang=bash run hidden\necho ran-first\n::end\n\n\
+::board id=plan\n- first x=0 y=0 to=second\n- second x=0 y=200\n::end\n";
+
+    #[test]
+    fn follow_edges_runs_the_boards_order_not_the_documents() {
+        let root = std::env::temp_dir().join("dx-run-tests-follow");
+        let _ = std::fs::create_dir_all(&root);
+        let report = run_document(
+            EDGE_ORDERED,
+            &RunOptions {
+                document_dir: root.clone(),
+                cache_root: root.join("cache"),
+                approve: true,
+                follow_board_edges: true,
+                ..RunOptions::default()
+            },
+            &resolve::Nowhere,
+        )
+        .expect("acyclic run");
+        let ids: Vec<&str> = report.runs.iter().map(|run| run.id.as_str()).collect();
+        assert_eq!(ids, vec!["first", "second"]);
+        assert!(report.all_succeeded());
+    }
+
+    #[test]
+    fn without_follow_edges_a_board_changes_nothing_about_the_order() {
+        let report = run_isolated(EDGE_ORDERED, "no-follow");
+        let ids: Vec<&str> = report.runs.iter().map(|run| run.id.as_str()).collect();
+        assert_eq!(ids, vec!["second", "first"], "default stays document order");
+    }
+
+    #[test]
+    fn follow_edges_review_lists_blocks_in_the_order_they_would_run() {
+        let mut options = gate_options("follow-review");
+        options.review_only = true;
+        options.follow_board_edges = true;
+        let report = run_document(EDGE_ORDERED, &options, &resolve::Nowhere).expect("acyclic run");
+        let ids: Vec<&str> = report.runs.iter().map(|run| run.id.as_str()).collect();
+        assert_eq!(ids, vec!["first", "second"]);
+        assert!(!report.changed, "review changed the document");
+    }
+
+    #[test]
+    fn follow_edges_refuses_a_cycle_with_the_sentence() {
+        let mut options = gate_options("follow-cycle");
+        options.follow_board_edges = true;
+        let sentence = run_document(
+            "::code id=a lang=bash run hidden\necho a\n::end\n\n\
+::code id=b lang=bash run hidden\necho b\n::end\n\n\
+::board id=plan\n- a x=0 y=0 to=b\n- b x=0 y=200 to=a\n::end\n",
+            &options,
+            &resolve::Nowhere,
+        )
+        .expect_err("a cycle has no order");
+        assert_eq!(
+            sentence,
+            "blocks a -> b -> a form a cycle; --follow-edges needs an order"
+        );
+    }
+
+    #[test]
+    fn only_with_follow_edges_is_not_refused_by_a_cycle_it_did_not_select() {
+        // a and b form a cycle on the board; c is unrelated. `--only c` narrows the graph
+        // before the order is computed, so the cycle cannot veto the selected block.
+        let mut options = gate_options("only-follow-cycle");
+        options.follow_board_edges = true;
+        options.only = Some("c".to_string());
+        options.approve = true;
+        let report = run_document(
+            "::code id=a lang=bash run hidden\necho a\n::end\n\n\
+::code id=b lang=bash run hidden\necho b\n::end\n\n\
+::code id=c lang=bash run hidden\necho c\n::end\n\n\
+::board id=plan\n- a x=0 y=0 to=b\n- b x=0 y=200 to=a\n- c x=0 y=400\n::end\n",
+            &options,
+            &resolve::Nowhere,
+        )
+        .expect("an unselected cycle cannot veto --only");
+        assert_eq!(report.runs.len(), 1);
+        assert_eq!(report.runs[0].id, "c");
+        assert_eq!(report.runs[0].status, "ok");
+    }
+
+    /// The real thing, end to end: a `lang=ts` block executes on the machine's own Node
+    /// toolchain — npm installs `tsx` in setup, the annotated code runs offline, and the
+    /// output folds into the document.
+    #[test]
+    fn a_typescript_block_executes_under_node() {
+        if !(toolchain::have("node") && toolchain::have("npm")) {
+            eprintln!("skipping: node/npm not installed");
+            return;
+        }
+        let source =
+            "::code id=t lang=ts run timeout=300\nconst n: number = 6 * 7;\nconsole.log(n);\n::end\n";
+        let report = run_isolated(source, "typescript");
+        assert_eq!(report.runs[0].status, "ok", "{}", report.runs[0].output);
+        assert_eq!(report.runs[0].output, "42");
+        assert!(report.source.contains("status=ok"));
+    }
+
+    /// One round trip per direct-toolchain language: compile in setup, run the artifact,
+    /// capture the output. Each is guarded by its own toolchain's presence.
+    #[test]
+    fn compiled_language_blocks_round_trip_when_the_toolchain_exists() {
+        let cases = [
+            (
+                "c",
+                &["cc", "clang", "gcc"][..],
+                "#include <stdio.h>\nint main(void) { printf(\"hello from c\"); return 0; }",
+                "hello from c",
+            ),
+            (
+                "cpp",
+                &["c++", "clang++", "g++"][..],
+                "#include <iostream>\nint main() { std::cout << \"hello from c++\"; }",
+                "hello from c++",
+            ),
+            (
+                "java",
+                &["javac"][..],
+                "public class Main {\n  public static void main(String[] args) {\n    System.out.println(\"hello from java\");\n  }\n}",
+                "hello from java",
+            ),
+            (
+                "swift",
+                &["swiftc"][..],
+                "print(\"hello from swift\")",
+                "hello from swift",
+            ),
+        ];
+        for (language, compilers, code, expected) in cases {
+            let available = if language == "java" {
+                plan::java_toolchain_present()
+            } else {
+                toolchain::first_available(compilers).is_some()
+            };
+            if !available {
+                eprintln!("skipping {language}: no toolchain installed");
+                continue;
+            }
+            let source =
+                format!("::code id=hello lang={language} run timeout=300\n{code}\n::end\n");
+            let report = run_isolated(&source, &format!("compiled-{language}"));
+            assert_eq!(
+                report.runs[0].status, "ok",
+                "{language}: {}",
+                report.runs[0].output
+            );
+            assert_eq!(report.runs[0].output, expected, "{language}");
+        }
+    }
+
+    /// `deps=` on a language that cannot fetch libraries blocks with the sentence, and
+    /// executes nothing.
+    #[test]
+    fn a_compiled_block_declaring_deps_is_blocked_with_the_sentence() {
+        let source = "::code id=nope lang=c run deps=\"libcurl\"\nint main(){}\n::end\n";
+        let report = run_isolated(source, "deps-refused");
+        assert_eq!(report.runs[0].status, "blocked");
+        assert!(report.runs[0].output.contains("deps="));
     }
 
     #[test]
@@ -703,10 +1055,12 @@ mod tests {
             &RunOptions {
                 document_dir: root.clone(),
                 cache_root: root.join("cache"),
+                approve: true,
                 ..RunOptions::default()
             },
             &resolve::Nowhere,
-        );
+        )
+        .expect("acyclic run");
         assert_eq!(report.runs[0].output, "found me");
     }
 
@@ -732,7 +1086,9 @@ mod tests {
             fingerprint("python", "print(1)", &["rich".into()], &[])
         );
         assert_ne!(base, fingerprint("node", "print(1)", &[], &[]));
-        assert_eq!(base.len(), 16);
+        // The full digest: this value is the approval identity, and a truncated one is
+        // a collision a hostile author could manufacture.
+        assert_eq!(base.len(), 64);
     }
 
     #[test]
@@ -771,7 +1127,8 @@ mod tests {
     #[test]
     fn a_missing_declared_read_blocks_the_run() {
         let source = "::code id=check lang=python run reads=site/site.css\nprint(1)\n::end\n";
-        let report = run_document(source, &RunOptions::default(), &resolve::Nowhere);
+        let report =
+            run_document(source, &RunOptions::default(), &resolve::Nowhere).expect("acyclic run");
         assert_eq!(report.runs.len(), 1);
         assert_eq!(report.runs[0].status, "blocked");
         assert!(report.runs[0].output.contains("site/site.css"));
@@ -780,7 +1137,8 @@ mod tests {
     #[test]
     fn a_read_outside_the_folder_blocks_the_run() {
         let source = "::code id=check lang=python run reads=../secrets\nprint(1)\n::end\n";
-        let report = run_document(source, &RunOptions::default(), &resolve::Nowhere);
+        let report =
+            run_document(source, &RunOptions::default(), &resolve::Nowhere).expect("acyclic run");
         assert_eq!(report.runs.len(), 1);
         assert_eq!(report.runs[0].status, "blocked");
         assert!(report.runs[0].output.contains("../secrets"));
@@ -806,5 +1164,227 @@ mod tests {
         edited.add_file("site.css", "body{color:red}");
         let after = declared_reads(&block, &edited).expect("resolves");
         assert_ne!(recorded, fingerprint("python", &block.text, &[], &after));
+    }
+
+    #[test]
+    fn an_unapproved_block_is_blocked_pending_review_with_the_way_forward() {
+        let options = gate_options("plain");
+        let report = run_document(
+            "::code id=new lang=bash run\necho unreviewed\n::end\n",
+            &options,
+            &resolve::Nowhere,
+        )
+        .expect("acyclic run");
+        assert_eq!(report.runs[0].status, "blocked");
+        assert_eq!(report.runs[0].exit, BLOCKED_EXIT);
+        assert!(report.runs[0].output.contains("blocked pending review"));
+        assert!(report.runs[0].output.contains("`review`"));
+        assert!(report.runs[0].output.contains("`approve`"));
+        // Nothing ran and nothing was folded in: the document is exactly as it was.
+        assert!(!report.changed);
+        assert!(!report.source.contains("::output"));
+    }
+
+    #[test]
+    fn only_plus_an_unapproved_block_is_blocked_with_the_sentence() {
+        let mut options = gate_options("only");
+        options.only = Some("b".to_string());
+        let report = run_document(
+            "::code id=a lang=bash run\necho a\n::end\n\n\
+::code id=b lang=bash run\necho b\n::end\n",
+            &options,
+            &resolve::Nowhere,
+        )
+        .expect("acyclic run");
+        assert_eq!(report.runs.len(), 1);
+        assert_eq!(report.runs[0].id, "b");
+        assert_eq!(report.runs[0].status, "blocked");
+        assert!(report.runs[0].output.contains("blocked pending review"));
+    }
+
+    #[test]
+    fn a_blocked_block_keeps_its_stale_output_untouched() {
+        let options = gate_options("stale");
+        let approved = run_document(
+            "::code id=v lang=bash run\necho before\n::end\n",
+            &RunOptions {
+                approve: true,
+                ..options.clone()
+            },
+            &resolve::Nowhere,
+        )
+        .expect("acyclic run");
+        assert_eq!(approved.runs[0].status, "ok");
+
+        // Editing the code invalidates the approval: the fingerprint changed.
+        let edited = approved.source.replace("echo before", "echo after");
+        let second = run_document(&edited, &options, &resolve::Nowhere).expect("acyclic run");
+        assert_eq!(second.runs[0].status, "blocked");
+        assert!(!second.changed);
+        assert!(second.source.contains("before"), "stale output was touched");
+        assert!(!second
+            .source
+            .contains("::output id=v-output for=v status=blocked"));
+    }
+
+    #[test]
+    fn review_executes_nothing_records_nothing_and_shows_the_code() {
+        let options = gate_options("review");
+        let review = run_document(
+            "::code id=peek lang=bash run\necho would-run\n::end\n",
+            &RunOptions {
+                review_only: true,
+                ..options.clone()
+            },
+            &resolve::Nowhere,
+        )
+        .expect("acyclic run");
+        assert_eq!(review.runs[0].status, "review");
+        assert!(review.runs[0].output.contains("fingerprint "));
+        assert!(review.runs[0].output.contains("not approved"));
+        assert!(review.runs[0].output.contains("echo would-run"));
+        assert!(!review.changed, "review changed the document");
+
+        // Reading never writes: the review approved nothing, so a plain run still refuses.
+        let after = run_document(
+            "::code id=peek lang=bash run\necho would-run\n::end\n",
+            &options,
+            &resolve::Nowhere,
+        )
+        .expect("acyclic run");
+        assert_eq!(after.runs[0].status, "blocked");
+    }
+
+    #[test]
+    fn review_with_approve_or_force_is_refused_by_the_engine_itself() {
+        // The rule lives here, not in the surfaces: any caller combining review with an
+        // option review cannot honour gets the refusal, not a flag silently swallowed.
+        let source = "::code id=x lang=bash run\necho conflict\n::end\n";
+        for other in ["approve", "force"] {
+            let mut options = gate_options(&format!("review-{other}"));
+            options.review_only = true;
+            match other {
+                "approve" => options.approve = true,
+                _ => options.force = true,
+            }
+            let sentence =
+                run_document(source, &options, &resolve::Nowhere).expect_err("conflicting options");
+            assert!(sentence.contains("records nothing"), "{sentence}");
+        }
+    }
+
+    #[test]
+    fn force_runs_unapproved_code_and_announces_the_bypass() {
+        let options = gate_options("force");
+        let report = run_document(
+            "::code id=pushed lang=bash run\necho anyway\n::end\n",
+            &RunOptions {
+                force: true,
+                ..options
+            },
+            &resolve::Nowhere,
+        )
+        .expect("acyclic run");
+        assert_eq!(report.runs[0].status, "ok");
+        assert!(report.runs[0].output.starts_with(FORCED_NOTICE));
+        assert!(report.runs[0].output.contains("anyway"));
+        // The notice is in the document's own record, not just the terminal report.
+        assert!(report.source.contains(FORCED_NOTICE));
+    }
+
+    #[test]
+    fn an_approval_survives_across_runs() {
+        let options = gate_options("survive");
+        let approved = run_document(
+            "::code id=keep lang=bash run\necho kept\n::end\n",
+            &RunOptions {
+                approve: true,
+                ..options.clone()
+            },
+            &resolve::Nowhere,
+        )
+        .expect("acyclic run");
+        assert_eq!(approved.runs[0].status, "ok");
+
+        // Strip the run record so the ledger alone must answer, then run plain.
+        let source = "::code id=keep lang=bash run\necho kept\n::end\n";
+        let again = run_document(source, &options, &resolve::Nowhere).expect("acyclic run");
+        assert_eq!(again.runs[0].status, "ok");
+        assert!(!again.runs[0].output.contains(FORCED_NOTICE));
+    }
+
+    /// A document carrying its own successful run record, hash and all — which is what
+    /// every committed `.dx` looks like, and what a hostile one is trivially made to look
+    /// like, since the fingerprint is a pure function of content its author controls.
+    fn document_with_a_matching_run_record(code: &str) -> String {
+        let body = format!("echo {code}");
+        let hash = fingerprint("bash", &body, &[], &[]);
+        format!(
+            "::code id=forged lang=bash run\n{body}\n::end\n\n\
+::output id=forged-output for=forged status=ok exit=0 hash={hash}\n{code}\n::end\n"
+        )
+    }
+
+    #[test]
+    fn a_run_record_in_the_document_does_not_approve_its_own_code() {
+        let options = gate_options("forged-record");
+        let report = run_document(
+            &document_with_a_matching_run_record("forged-approval"),
+            &options,
+            &resolve::Nowhere,
+        )
+        .expect("acyclic run");
+        // Not "skipped": the cached skip would hide unreviewed code behind its own record.
+        assert_eq!(report.runs[0].status, "blocked");
+        assert!(report.runs[0].output.contains("blocked pending review"));
+        assert_eq!(report.executed(), 0);
+        assert!(!report.changed);
+    }
+
+    #[test]
+    fn force_over_a_document_supplied_run_record_still_announces_the_bypass() {
+        let options = gate_options("forged-force");
+        let report = run_document(
+            &document_with_a_matching_run_record("forged-force"),
+            &RunOptions {
+                force: true,
+                ..options
+            },
+            &resolve::Nowhere,
+        )
+        .expect("acyclic run");
+        assert_eq!(report.runs[0].status, "ok");
+        assert!(
+            report.runs[0].output.starts_with(FORCED_NOTICE),
+            "a bypass must announce itself: {}",
+            report.runs[0].output
+        );
+        assert!(report.source.contains(FORCED_NOTICE));
+    }
+
+    #[test]
+    fn review_records_nothing_even_for_a_block_it_must_refuse() {
+        let mut options = gate_options("review-refusal");
+        options.review_only = true;
+        let source = "::code id=needy lang=bash run reads=missing.txt\necho hi\n::end\n";
+        let report = run_document(source, &options, &resolve::Nowhere).expect("acyclic run");
+        assert_eq!(report.runs.len(), 1);
+        assert_eq!(report.runs[0].status, "review");
+        assert!(report.runs[0].output.contains("missing.txt"));
+        // Reading never writes: no ::output was folded in, so the document is unchanged.
+        assert!(!report.changed, "review changed the document");
+        assert!(!report.source.contains("::output"));
+        assert_eq!(report.source, source);
+    }
+
+    #[test]
+    fn an_unresolved_listing_is_refused_without_an_output_in_review() {
+        let mut options = gate_options("review-unresolved");
+        options.review_only = true;
+        let source = "::code id=ref lang=bash run src=gone.sh\n::end\n";
+        let report = run_document(source, &options, &resolve::Nowhere).expect("acyclic run");
+        assert_eq!(report.runs[0].status, "review");
+        assert!(!report.changed);
+        assert!(!report.source.contains("::output"));
     }
 }

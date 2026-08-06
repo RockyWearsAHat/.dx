@@ -79,8 +79,15 @@ enum Engine {
     /// for that one block by name. A failed block is still *written* — the failure lands in
     /// the document as an output block — so the caller decides what a thrown failure means
     /// by looking at whether the file changed.
+    ///
+    /// `--approve` is the click itself: the reader is looking at this block's code, on this
+    /// page, and pressed `run` on it — that *is* the review the gate asks for, and it
+    /// approves nothing else, because `--only` narrows the run to the block they pointed
+    /// at. Without it every freshly typed block would be refused, since editing a block
+    /// changes its fingerprint and a terminal is the last place a person writing on a page
+    /// wants to be sent.
     static func execute(_ block: String, in url: URL) throws {
-        try run(["run", url.path, "--only", block])
+        try run(["run", url.path, "--only", block, "--approve"])
     }
 
     /// Replace one block's body, leaving every other block in the file byte-identical.

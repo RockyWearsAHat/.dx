@@ -36,12 +36,78 @@ pub fn call(name: &str, args: &Value, root: &Path) -> ToolResult {
         "dx_outline" => outline_of(args, root),
         "dx_list" => list(args, root),
         "dx_search" => search(args, root),
+        "dx_index" => index(args, root),
         "dx_render" => render(args, root),
         "dx_write" => write(args, root),
         "dx_edit" => edit(args, root),
         "dx_run" => run(args, root),
         other => Err(format!("unknown tool: {other}")),
     }
+}
+
+/// Refresh a document's recorded output before a read, so the page shows live results.
+///
+/// This is the agent read's HMR: a plain run — no approval, no force — executes exactly
+/// the blocks whose code this machine already approved but whose recorded output went
+/// stale (editing code, or a file it declares with `reads=`, changes the fingerprint),
+/// folds the fresh output in, and skips everything current. Unreviewed code still never
+/// runs on a read — it stays blocked, and the returned note says so instead of the page
+/// silently showing old output. A refresh that cannot run degrades to a note; it never
+/// fails the read.
+///
+/// Returns the note to show the reader, or `None` when there was nothing to say.
+fn refresh_outputs(args: &Value, root: &Path, cache_root: &Path) -> Option<String> {
+    let path = resolve(string(args, "path")?, root);
+    let source = workspace::read(&path).ok()?;
+
+    let report = match run_document(
+        &source,
+        &RunOptions {
+            document_dir: workspace::document_dir(&path),
+            cache_root: cache_root.to_path_buf(),
+            ..RunOptions::default()
+        },
+        &workspace::resolver_for(&path),
+    ) {
+        Ok(report) => report,
+        Err(reason) => return Some(format!("Output not refreshed: {reason}")),
+    };
+
+    if report.changed {
+        if let Err(reason) = workspace::write_text(&path, &report.source) {
+            return Some(format!("Refreshed output could not be saved: {reason}"));
+        }
+    }
+
+    let refreshed: Vec<&str> = report
+        .runs
+        .iter()
+        .filter(|run| run.status == "ok" || run.status == "error")
+        .map(|run| run.id.as_str())
+        .collect();
+    let blocked = report
+        .runs
+        .iter()
+        .filter(|run| run.status == "blocked")
+        .count();
+
+    let mut note = String::new();
+    if !refreshed.is_empty() {
+        note.push_str(&format!(
+            "Refreshed stale output of approved block(s): {}.",
+            refreshed.join(", ")
+        ));
+    }
+    if blocked > 0 {
+        if !note.is_empty() {
+            note.push(' ');
+        }
+        note.push_str(&format!(
+            "{blocked} runnable block(s) changed since approval and await review — their \
+             recorded output is stale. Call dx_run with review=true, then approve=true."
+        ));
+    }
+    (!note.is_empty()).then_some(note)
 }
 
 /// `dx_read` — the document as the pages of its rendered page, in order.
@@ -55,6 +121,17 @@ pub fn call(name: &str, args: &Value, root: &Path) -> ToolResult {
 /// A machine with no browser still gets the document, as Markdown. That is a degraded
 /// read, not a failure, and it says so.
 fn read(args: &Value, root: &Path) -> ToolResult {
+    read_in(args, root, &RunOptions::default().cache_root)
+}
+
+/// The body of [`read`], with the run cache — the approval ledger included — stated
+/// rather than defaulted, so the suite's refreshes never touch the developer's real one.
+fn read_in(args: &Value, root: &Path, cache_root: &Path) -> ToolResult {
+    let note = if boolean_or(args, "refresh", true) {
+        refresh_outputs(args, root, cache_root)
+    } else {
+        None
+    };
     let document = selected(args, root)?;
     let path = string(args, "path").unwrap_or("document");
     // Pages sized for the reader this tool serves: a vision model. `for_reading` keeps
@@ -65,24 +142,28 @@ fn read(args: &Value, root: &Path) -> ToolResult {
         ..ShotOptions::for_reading(number(args, "width"))
     };
 
+    let mut content: Vec<Value> = note.as_deref().map(text_content).into_iter().collect();
+
     if let Some(id) = string(args, "block") {
-        return read_block(&document, id, path, &options);
+        content.extend(read_block(&document, id, path, &options)?);
+        return Ok(content);
     }
 
     let pages = match capture_pages(&document, &options) {
         Ok(pages) if !pages.is_empty() => pages,
         // No browser, or nothing captured: the reader still gets the document, as text.
         Ok(_) => {
-            return Ok(vec![text_content(&fallback_text(
-                &document,
-                "captured no pages",
-            ))])
+            content.push(text_content(&fallback_text(&document, "captured no pages")));
+            return Ok(content);
         }
-        Err(reason) => return Ok(vec![text_content(&fallback_text(&document, &reason))]),
+        Err(reason) => {
+            content.push(text_content(&fallback_text(&document, &reason)));
+            return Ok(content);
+        }
     };
 
     let total = pages[0].total;
-    let mut content = vec![text_content(&opening_line(path, &pages, total))];
+    content.push(text_content(&opening_line(path, &pages, total)));
     for page in &pages {
         content.push(text_content(&format!(
             "Page {} of {total}{}",
@@ -243,15 +324,30 @@ fn every_nth(indices: &[usize], count: usize) -> Vec<usize> {
 }
 
 /// `dx_source` — the document's exact text, for quoting and editing.
+///
+/// A text read is live too: the same refresh `dx_read` performs runs first, so the
+/// captured output this hands over is what the approved code produces *now*.
 fn source(args: &Value, root: &Path) -> ToolResult {
+    source_in(args, root, &RunOptions::default().cache_root)
+}
+
+/// The body of [`source`], with the run cache stated rather than defaulted.
+fn source_in(args: &Value, root: &Path, cache_root: &Path) -> ToolResult {
+    let note = if boolean_or(args, "refresh", true) {
+        refresh_outputs(args, root, cache_root)
+    } else {
+        None
+    };
     let document = selected(args, root)?;
-    Ok(vec![text_content(&text(
+    let mut content: Vec<Value> = note.as_deref().map(text_content).into_iter().collect();
+    content.push(text_content(&text(
         &document,
         &TextOptions {
             include_ids: boolean(args, "ids"),
             ..TextOptions::default()
         },
-    ))])
+    )));
+    Ok(content)
 }
 
 /// `dx_outline` — one row per block.
@@ -336,6 +432,17 @@ fn write(args: &Value, root: &Path) -> ToolResult {
 
 /// `dx_edit` — replace one block's body.
 fn edit(args: &Value, root: &Path) -> ToolResult {
+    edit_in(args, root, RunOptions::default().cache_root)
+}
+
+/// The body of [`edit`], with the run cache — the approval ledger included — stated
+/// rather than defaulted, so the suite never approves anything in the developer's real
+/// one.
+///
+/// Editing a *runnable* block also runs it, exactly as the editing surface does the
+/// moment a field closes: the hand that typed the code is the review the approval gate
+/// asks for, and the output under new code is stale by definition. `run: false` declines.
+fn edit_in(args: &Value, root: &Path, cache_root: PathBuf) -> ToolResult {
     let path = resolve(required(args, "path")?, root);
     let wanted = required(args, "block")?.trim().trim_start_matches('#');
     let body = required(args, "text")?;
@@ -354,15 +461,57 @@ fn edit(args: &Value, root: &Path) -> ToolResult {
         })?;
 
     document.blocks[index].text = body.to_string();
+    let runnable = document.blocks[index].kind == "code" && document.blocks[index].run;
     workspace::save(&path, &document)?;
-    Ok(vec![text_content(&format!(
+
+    let mut content = vec![text_content(&format!(
         "Updated `{wanted}` in {}.",
         path.display()
+    ))];
+
+    if runnable && boolean_or(args, "run", true) {
+        let run_args = json!({
+            "path": required(args, "path")?,
+            "block": wanted,
+            "approve": true,
+        });
+        match run_in(&run_args, root, cache_root) {
+            Ok(mut ran) => content.append(&mut ran),
+            // The edit itself succeeded; a run that could not is reported, not fatal.
+            Err(reason) => content.push(text_content(&format!(
+                "Edited, but running the block failed: {reason}"
+            ))),
+        }
+    }
+    Ok(content)
+}
+
+/// `dx_index` — scaffold `index.dx`, the precursor project map, from the file tree.
+fn index(args: &Value, root: &Path) -> ToolResult {
+    let directory = directory_arg(args, root);
+    let scaffold = crate::commands::index::write_scaffold(&directory, boolean(args, "force"))?;
+    Ok(vec![text_content(&format!(
+        "Wrote {} — {} area(s), {} file(s), scaffolded from the tree alone. Read the \
+         whole document now and improve it before other work: replace each TODO with \
+         what the area does, and add ::code src= blocks for the load-bearing files so \
+         the index shows their current text forever.",
+        scaffold.path.display(),
+        scaffold.areas,
+        scaffold.files
     ))])
 }
 
 /// `dx_run` — execute the document's runnable blocks.
+///
+/// `review` is a read: it executes nothing and writes nothing, here or in the engine.
 fn run(args: &Value, root: &Path) -> ToolResult {
+    run_in(args, root, RunOptions::default().cache_root)
+}
+
+/// The body of [`run`], with the run cache — the approval ledger included — stated rather
+/// than defaulted, so the suite never records an approval in the developer's real cache.
+fn run_in(args: &Value, root: &Path, cache_root: PathBuf) -> ToolResult {
+    let review_only = boolean(args, "review");
     let path = resolve(required(args, "path")?, root);
     let source = workspace::read(&path)?;
 
@@ -370,14 +519,22 @@ fn run(args: &Value, root: &Path) -> ToolResult {
         &source,
         &RunOptions {
             document_dir: workspace::document_dir(&path),
+            cache_root,
             force: boolean(args, "force"),
             only: string(args, "block").map(str::to_string),
+            review_only,
+            approve: boolean(args, "approve"),
+            follow_board_edges: boolean(args, "follow_edges"),
             ..RunOptions::default()
         },
         &workspace::resolver_for(&path),
-    );
+    )?;
 
-    if report.changed {
+    // Review reads a document; it never writes one. `run_document` folds nothing in review
+    // mode, and this is the second lock on the same door: the tool that promises to execute
+    // nothing must not be able to touch the file either.
+    let saved = report.changed && !review_only;
+    if saved {
         workspace::write_text(&path, &report.source)?;
     }
 
@@ -399,7 +556,7 @@ fn run(args: &Value, root: &Path) -> ToolResult {
     Ok(vec![json_content(&json!({
         "executed": report.executed(),
         "allSucceeded": report.all_succeeded(),
-        "saved": report.changed,
+        "saved": saved,
         "results": results,
         "next": "Call dx_read on this path to see the results rendered.",
     }))])
@@ -479,6 +636,11 @@ fn number(args: &Value, key: &str) -> Option<u32> {
 /// An optional boolean argument, defaulting to false.
 fn boolean(args: &Value, key: &str) -> bool {
     args.get(key).and_then(Value::as_bool).unwrap_or(false)
+}
+
+/// An optional boolean argument with a stated default, for flags that are on by default.
+fn boolean_or(args: &Value, key: &str, default: bool) -> bool {
+    args.get(key).and_then(Value::as_bool).unwrap_or(default)
 }
 
 /// A text content item.
@@ -673,13 +835,122 @@ mod tests {
         )
         .expect("seed");
 
-        let body = text_of(&call("dx_run", &json!({ "path": "runnable.dx" }), &root).expect("run"));
+        let body = text_of(
+            &run_in(
+                &json!({ "path": "runnable.dx", "approve": true }),
+                &root,
+                root.join("cache"),
+            )
+            .expect("run"),
+        );
         let parsed: Value = serde_json::from_str(&body).expect("json");
         assert_eq!(parsed["allSucceeded"], true);
         assert_eq!(parsed["results"][0]["output"], "from-mcp");
         assert!(std::fs::read_to_string(root.join("runnable.dx"))
             .expect("read")
             .contains("from-mcp"));
+    }
+
+    #[test]
+    fn run_refuses_unapproved_code_pending_review() {
+        let root = project("run-gate");
+        // The ledger is this project's own scratch cache, wiped by `project`, so nothing is
+        // approved by construction rather than by hoping no sibling test approved this line.
+        workspace::write_text(
+            &root.join("gated.dx"),
+            "::code id=hi lang=bash run\necho mcp-review-gate-refusal\n::end\n",
+        )
+        .expect("seed");
+
+        let body = text_of(
+            &run_in(&json!({ "path": "gated.dx" }), &root, root.join("cache")).expect("run"),
+        );
+        let parsed: Value = serde_json::from_str(&body).expect("json");
+        assert_eq!(parsed["allSucceeded"], false);
+        assert_eq!(parsed["results"][0]["status"], "blocked");
+        let sentence = parsed["results"][0]["output"].as_str().expect("output");
+        assert!(sentence.contains("blocked pending review"), "{sentence}");
+        // Nothing executed and nothing was written into the document.
+        assert!(!std::fs::read_to_string(root.join("gated.dx"))
+            .expect("read")
+            .contains("::output"));
+    }
+
+    #[test]
+    fn run_review_reports_the_code_without_executing() {
+        let root = project("run-review");
+        let source = "::code id=hi lang=bash run\necho mcp-review-inspection\n::end\n";
+        workspace::write_text(&root.join("inspect.dx"), source).expect("seed");
+
+        let body = text_of(
+            &run_in(
+                &json!({ "path": "inspect.dx", "review": true }),
+                &root,
+                root.join("cache"),
+            )
+            .expect("review"),
+        );
+        let parsed: Value = serde_json::from_str(&body).expect("json");
+        assert_eq!(parsed["executed"], 0);
+        assert_eq!(parsed["results"][0]["status"], "review");
+        let text = parsed["results"][0]["output"].as_str().expect("output");
+        assert!(text.contains("fingerprint "), "{text}");
+        assert!(text.contains("echo mcp-review-inspection"), "{text}");
+        // Reading never executes, and never writes.
+        assert_eq!(
+            std::fs::read_to_string(root.join("inspect.dx")).expect("read"),
+            source
+        );
+    }
+
+    #[test]
+    fn run_refuses_review_with_approve_rather_than_swallowing_one() {
+        let root = project("run-review-approve");
+        workspace::write_text(
+            &root.join("both.dx"),
+            "::code id=hi lang=bash run\necho mcp-review-approve-conflict\n::end\n",
+        )
+        .expect("seed");
+
+        let sentence = run_in(
+            &json!({ "path": "both.dx", "review": true, "approve": true }),
+            &root,
+            root.join("cache"),
+        )
+        .expect_err("conflicting parameters");
+        assert!(sentence.contains("approve separately"), "{sentence}");
+
+        // The refusal approved nothing: a plain run still hits the gate.
+        let body = text_of(
+            &run_in(&json!({ "path": "both.dx" }), &root, root.join("cache")).expect("run"),
+        );
+        let parsed: Value = serde_json::from_str(&body).expect("json");
+        assert_eq!(parsed["results"][0]["status"], "blocked");
+    }
+
+    #[test]
+    fn run_review_writes_nothing_even_when_it_must_refuse_a_block() {
+        let root = project("run-review-refusal");
+        // A block whose declared `reads=` file is not there: refused before the gate is
+        // ever consulted, and once folded an ::output into the file on a review.
+        let source = "::code id=hi lang=bash run reads=missing.txt\necho no\n::end\n";
+        workspace::write_text(&root.join("needy.dx"), source).expect("seed");
+
+        let body = text_of(
+            &run_in(
+                &json!({ "path": "needy.dx", "review": true }),
+                &root,
+                root.join("cache"),
+            )
+            .expect("review"),
+        );
+        let parsed: Value = serde_json::from_str(&body).expect("json");
+        assert_eq!(parsed["executed"], 0);
+        assert_eq!(parsed["saved"], false);
+        assert_eq!(
+            std::fs::read_to_string(root.join("needy.dx")).expect("read"),
+            source
+        );
     }
 
     fn wait_frame(at_ms: u64, note: Option<&str>) -> PlayFrame {
@@ -758,6 +1029,183 @@ mod tests {
             items.iter().any(|item| item["type"] == "image"),
             "a play must return pictures"
         );
+    }
+
+    /// The read-side HMR: approved code whose recorded output is stale re-runs before
+    /// the page is rendered, so a read always shows live output without a dx_run first.
+    #[test]
+    fn a_read_refreshes_approved_stale_output_before_rendering() {
+        let root = project("read-refresh");
+        let cache = root.join("cache");
+        // Approve this exact code once, through a run of a sibling document.
+        workspace::write_text(
+            &root.join("approved.dx"),
+            "::code id=hi lang=bash run\necho hmr-live\n::end\n",
+        )
+        .expect("seed");
+        run_in(
+            &json!({ "path": "approved.dx", "approve": true }),
+            &root,
+            cache.clone(),
+        )
+        .expect("approve");
+
+        // The same approved code, no output recorded yet: stale by definition.
+        workspace::write_text(
+            &root.join("stale.dx"),
+            "::code id=hi lang=bash run\necho hmr-live\n::end\n",
+        )
+        .expect("seed");
+
+        let items = read_in(&json!({ "path": "stale.dx" }), &root, &cache).expect("read");
+        assert!(text_of(&items).contains("Refreshed stale output"));
+        let saved = workspace::read(&root.join("stale.dx")).expect("resolve");
+        assert!(saved.contains("::output"), "{saved}");
+        assert!(saved.contains("hmr-live"), "{saved}");
+    }
+
+    /// The refresh is a plain run, so the approval gate holds: unreviewed code renders
+    /// its stale page and the read says so, instead of executing on a look.
+    #[test]
+    fn a_read_never_runs_unreviewed_code_and_says_so() {
+        let root = project("read-gate");
+        let source = "::code id=hi lang=bash run\necho mcp-read-sneaky\n::end\n";
+        workspace::write_text(&root.join("handed.dx"), source).expect("seed");
+
+        let items =
+            read_in(&json!({ "path": "handed.dx" }), &root, &root.join("cache")).expect("read");
+        assert!(text_of(&items).contains("await review"));
+        assert_eq!(
+            workspace::read(&root.join("handed.dx")).expect("resolve"),
+            source,
+            "a read must not write anything for unreviewed code"
+        );
+    }
+
+    #[test]
+    fn a_read_with_refresh_declined_renders_exactly_what_is_stored() {
+        let root = project("read-no-refresh");
+        let cache = root.join("cache");
+        workspace::write_text(
+            &root.join("quiet.dx"),
+            "::code id=hi lang=bash run\necho untouched\n::end\n",
+        )
+        .expect("seed");
+        run_in(
+            &json!({ "path": "quiet.dx", "approve": true }),
+            &root,
+            cache.clone(),
+        )
+        .expect("approve");
+        workspace::write_text(
+            &root.join("copy.dx"),
+            "::code id=hi lang=bash run\necho untouched\n::end\n",
+        )
+        .expect("seed");
+
+        read_in(
+            &json!({ "path": "copy.dx", "refresh": false }),
+            &root,
+            &cache,
+        )
+        .expect("read");
+        assert!(
+            !workspace::read(&root.join("copy.dx"))
+                .expect("resolve")
+                .contains("::output"),
+            "refresh=false must leave the stored document alone"
+        );
+    }
+
+    /// A text read is live by the same rule as a page read.
+    #[test]
+    fn source_refreshes_before_handing_over_the_text() {
+        let root = project("source-refresh");
+        let cache = root.join("cache");
+        workspace::write_text(
+            &root.join("first.dx"),
+            "::code id=hi lang=bash run\necho text-live\n::end\n",
+        )
+        .expect("seed");
+        run_in(
+            &json!({ "path": "first.dx", "approve": true }),
+            &root,
+            cache.clone(),
+        )
+        .expect("approve");
+        workspace::write_text(
+            &root.join("second.dx"),
+            "::code id=hi lang=bash run\necho text-live\n::end\n",
+        )
+        .expect("seed");
+
+        let items = source_in(&json!({ "path": "second.dx" }), &root, &cache).expect("source");
+        let body = text_of(&items);
+        assert!(body.contains("Refreshed stale output"), "{body}");
+        assert!(body.contains("text-live"), "{body}");
+    }
+
+    /// Editing runnable code runs it at once — the edit is the review, exactly as the
+    /// editing surface runs a field the moment it closes — so the output is never stale.
+    #[test]
+    fn editing_runnable_code_runs_it_immediately() {
+        let root = project("edit-run");
+        workspace::write_text(
+            &root.join("live.dx"),
+            "::code id=hi lang=bash run\necho before\n::end\n",
+        )
+        .expect("seed");
+
+        let items = edit_in(
+            &json!({ "path": "live.dx", "block": "hi", "text": "echo edited-live" }),
+            &root,
+            root.join("cache"),
+        )
+        .expect("edit");
+        let body = text_of(&items);
+        assert!(body.contains("Updated `hi`"), "{body}");
+        assert!(body.contains("\"allSucceeded\": true"), "{body}");
+
+        let saved = workspace::read(&root.join("live.dx")).expect("resolve");
+        assert!(saved.contains("edited-live"), "{saved}");
+        assert!(saved.contains("::output"), "{saved}");
+    }
+
+    #[test]
+    fn editing_runnable_code_with_run_declined_only_edits() {
+        let root = project("edit-no-run");
+        workspace::write_text(
+            &root.join("later.dx"),
+            "::code id=hi lang=bash run\necho before\n::end\n",
+        )
+        .expect("seed");
+
+        edit_in(
+            &json!({ "path": "later.dx", "block": "hi", "text": "echo not-yet", "run": false }),
+            &root,
+            root.join("cache"),
+        )
+        .expect("edit");
+        let saved = workspace::read(&root.join("later.dx")).expect("resolve");
+        assert!(saved.contains("echo not-yet"), "{saved}");
+        assert!(!saved.contains("::output"), "{saved}");
+    }
+
+    #[test]
+    fn index_scaffolds_a_map_and_keeps_an_existing_one() {
+        let root = project("index");
+        std::fs::create_dir_all(root.join("src")).expect("dirs");
+        std::fs::write(root.join("src/main.rs"), "fn main() {}").expect("file");
+
+        let items = call("dx_index", &json!({}), &root).expect("index");
+        assert!(text_of(&items).contains("Read the whole document now"));
+        let text = workspace::read(&root.join("index.dx")).expect("resolve");
+        assert!(text.contains("TODO"), "{text}");
+        assert!(text.contains("src/"), "{text}");
+
+        let refused = call("dx_index", &json!({}), &root).expect_err("should refuse");
+        assert!(refused.contains("force"), "{refused}");
+        call("dx_index", &json!({ "force": true }), &root).expect("forced");
     }
 
     #[test]

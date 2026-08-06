@@ -4,7 +4,61 @@ _Resume point after `/compact` or `/clear`. Update after every task or wave (see
 
 Last updated: 2026-08-06
 
-## This wave, part 33: the repository dogfoods its own store
+## This wave, part 34: text-first reads, live output (HMR), and the scaffolded index
+
+Per the user's direction after the part-33 review: vision tokens cost more than text for
+prose, reads must never show dead output, and a project without documentation should get
+an index scaffold the agent improves. All three shipped, all in `doc-cli` (no doc-core
+change — **no wasm rebuild needed**):
+
+- **The reading economy is text-first** (`mcp/tools.rs`, `mcp/mod.rs::initialize`): the
+  catalogue reordered to find → map → text → look (`dx_list`, `dx_search`, `dx_outline`,
+  `dx_source`, then `dx_read`), `dx_source` promoted to the default read for prose and
+  code ("a fraction of the tokens of page images"), `dx_read`'s images reserved for what
+  text cannot carry — boards, diagrams, charts, rendered views. Handshake instructions
+  rewritten to teach it, plus "always index into the document — one `section`, never
+  page". Pinned: `the_catalogue_orders_the_reading_economy`,
+  `the_handshake_advertises_tools_resources_and_guidance`.
+- **Reads are live — the HMR** (`mcp/handlers.rs::refresh_outputs`): `dx_read` and
+  `dx_source` run a plain `run_document` (no approve, no force) before answering — code
+  whose exact fingerprint *this machine already approved* but whose recorded output went
+  stale re-runs and folds fresh output in; unchanged blocks skip; **unreviewed code stays
+  blocked** and the reply says what awaits review. `refresh: false` reads what is stored.
+  A refresh that cannot run degrades to a note, never fails the read. Honors
+  `DX_NO_EXEC` (the switch lives inside `run_document`). Pinned:
+  `a_read_refreshes_approved_stale_output_before_rendering`,
+  `a_read_never_runs_unreviewed_code_and_says_so`,
+  `a_read_with_refresh_declined_renders_exactly_what_is_stored`,
+  `source_refreshes_before_handing_over_the_text`.
+- **The edit is the review** (`mcp/handlers.rs::edit_in`): `dx_edit` of a runnable block
+  runs it immediately with `--only`+approve — the agent's version of the surface rule
+  that an edited field runs the moment it closes — so output under new code is never
+  stale and no separate `dx_run` is spent. `run: false` declines; a failed run is
+  reported, never fatal to the edit. Pinned: `editing_runnable_code_runs_it_immediately`,
+  `editing_runnable_code_with_run_declined_only_edits`.
+- **`dx index` / `dx_index` scaffolds the precursor map** (`commands/index.rs`, new):
+  writes `index.dx` from the file tree alone — one section per top-level area with its
+  immediate contents (recursive counts, skip list for build junk/fixtures/hidden), a TODO
+  paragraph per area, and a purpose block telling the reader to improve it with
+  `::code src=` blocks. Refuses to overwrite an existing index unless `--force` (an
+  existing index is presumed improved). The tool description and instructions both say:
+  read the whole scaffold and improve it *before other work*. Pinned in
+  `commands/index.rs` tests + `index_scaffolds_a_map_and_keeps_an_existing_one` +
+  `the_index_tool_demands_improvement`.
+- **Docs true in the same edit**: CLAUDE.md ("reads by the cheapest route" bullet, the
+  read-refresh exception stated inside "Reading never executes"), README ("For AI
+  agents" + "What executes" rewritten to name the exactly-three execution paths),
+  `dx help` WRITE section.
+- Validated: full `cargo test` green (**787** tests, 270 doc-cli incl. 13 new), clippy
+  `-D warnings` clean, fmt clean. Release binary rebuilt and reinstalled to
+  `~/.local/bin/dx` (rm-then-cp); live smoke: `dx index` on a scratch project wrote the
+  scaffold shown above, `dx mcp` handshake serves the new instructions. Restart the
+  assistant to pick up the new MCP surface.
+
+Next step: none pending from this wave — restart the MCP client, then let the next
+session exercise `dx_index` + improve on a real repository.
+
+## Previous wave, part 33: the repository dogfoods its own store
 
 Per the user's direction, `examples/` and `documents/` now live in the store like the
 product intends — pointers on disk, content in the committed `.doc/repo.dxcp` — and the

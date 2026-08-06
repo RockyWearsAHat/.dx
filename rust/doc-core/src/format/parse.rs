@@ -7,6 +7,7 @@
 //! [`super::attrs`].
 
 use super::attrs::{attr, parse_leading_attributes, Attr};
+use super::legacy::parse_legacy_blocks;
 use super::lines::{
     build_nested_list_structure, parse_block_header, parse_checklist_line, parse_inline_block,
     parse_list_items,
@@ -200,18 +201,30 @@ pub(super) fn parse_docsrc_blocks(body: &str) -> Vec<Block> {
     let lines: Vec<String> = stripped.split('\n').map(str::to_string).collect();
     let mut blocks: Vec<Block> = Vec::new();
 
+    // Prose written between `::` blocks — a Markdown heading above a listing, a paragraph
+    // under it. Buffered here and adopted through the Markdown parser when the next block
+    // header (or the end of input) arrives. A mixed document is something people actually
+    // write, and a parser that skipped these lines destroyed them on the next save.
+    let mut loose: Vec<String> = Vec::new();
+
     let mut cursor = 0;
     while cursor < lines.len() {
         let raw_line = lines[cursor].clone();
         let line = js_trim(&raw_line);
 
         if line.is_empty() {
+            // A blank inside a loose run separates its paragraphs; outside one it is
+            // nothing at all.
+            if !loose.is_empty() {
+                loose.push(String::new());
+            }
             cursor += 1;
             continue;
         }
 
         // Inline single-line block recovery.
         if let Some((block_type, inner)) = parse_inline_block(line) {
+            adopt_loose(&mut loose, &mut blocks);
             if block_type != "end" {
                 let (attrs, remainder) = parse_leading_attributes(inner);
                 let content: Vec<String> = if remainder.is_empty() {
@@ -230,10 +243,12 @@ pub(super) fn parse_docsrc_blocks(body: &str) -> Vec<Block> {
         let (block_type, _) = match header {
             Some(parsed) => parsed,
             None => {
+                loose.push(raw_line);
                 cursor += 1;
                 continue;
             }
         };
+        adopt_loose(&mut loose, &mut blocks);
         let block_type = block_type.to_lowercase();
         if block_type == "end" {
             cursor += 1;
@@ -281,7 +296,23 @@ pub(super) fn parse_docsrc_blocks(body: &str) -> Vec<Block> {
         }
     }
 
+    adopt_loose(&mut loose, &mut blocks);
     blocks
+}
+
+/// Adopt a buffered run of loose prose lines as blocks, through the Markdown parser —
+/// so `# heading`, list items, and paragraphs between `::` blocks arrive as what they
+/// say instead of being discarded. Clears the buffer; a blank or empty run adopts nothing.
+fn adopt_loose(loose: &mut Vec<String>, blocks: &mut Vec<Block>) {
+    if loose.is_empty() {
+        return;
+    }
+    let segment = loose.join("\n");
+    loose.clear();
+    if js_trim(&segment).is_empty() {
+        return;
+    }
+    blocks.extend(parse_legacy_blocks(&segment));
 }
 
 /// Where a body line's *trailing* close token starts, if it has one.

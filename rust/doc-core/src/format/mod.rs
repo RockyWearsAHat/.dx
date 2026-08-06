@@ -439,6 +439,42 @@ mod tests {
         assert_eq!(round_trip(&once), once);
     }
 
+    #[test]
+    fn a_markdown_task_bullet_is_a_checklist_item_not_item_text() {
+        // `- [ ] item` is how Markdown spells a task; treating the bullet as text turned
+        // every pasted task list into `[ ] - [ ] item` on the next save.
+        let document = parse("::checklist id=s\n- [ ] one\n- [x] two\n::end\n");
+        let items = &document.blocks[0].items;
+        assert_eq!(items.len(), 2);
+        assert_eq!((items[0].text.as_str(), items[0].checked), ("one", false));
+        assert_eq!((items[1].text.as_str(), items[1].checked), ("two", true));
+        assert_eq!(
+            stringify(&document),
+            "::checklist id=s\n[ ] one\n[x] two\n::end\n"
+        );
+    }
+
+    #[test]
+    fn prose_between_typed_blocks_is_adopted_not_destroyed() {
+        // A mixed document — Markdown prose around `::` blocks — is what a person or an
+        // agent naturally writes. The scanner once skipped every line that was not block
+        // syntax, so the next save silently erased the author's own words.
+        let mixed =
+            "# Plan\n\nThe goal.\n\n::code id=c lang=bash run\necho hi\n::end\n\nAfterword.\n";
+        let document = parse(mixed);
+        let kinds: Vec<&str> = document
+            .blocks
+            .iter()
+            .map(|block| block.kind.as_str())
+            .collect();
+        assert_eq!(kinds, ["heading", "paragraph", "code", "paragraph"]);
+        assert_eq!(document.blocks[1].text, "The goal.");
+        assert_eq!(document.blocks[3].text, "Afterword.");
+        // And the adopted form is stable: canonical output round-trips unchanged.
+        let once = round_trip(mixed);
+        assert_eq!(round_trip(&once), once);
+    }
+
     /// Byte-exact canonical output for each real example and document, captured from this
     /// crate with `dx fmt`.
     ///
