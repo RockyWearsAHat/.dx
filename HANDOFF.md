@@ -2,35 +2,335 @@
 
 _Resume point after `/compact` or `/clear`. Update after every task or wave (see CLAUDE.md)._
 
-Last updated: 2026-08-05
+Last updated: 2026-08-06
 
-## This wave, part 27: comprehensive audit, board safety, and execution security
+## This wave, part 33: the repository dogfoods its own store
 
-**Audit completed** (workflow wf_c0fe2592-861): Identified 8 specific issues, prioritized by impact.
+Per the user's direction, `examples/` and `documents/` now live in the store like the
+product intends — pointers on disk, content in the committed `.doc/repo.dxcp` — and the
+README is the high-level front door. **Part 32's "examples must stay plain text" caveat is
+obsolete**: `dx_write`/`dx_edit`/`dx sync` adopting them is now correct behavior.
 
-**FIXED:**
-1. ✅ **Block type validation** (b1b39a7): `board_invalid_block_type()` rejects empty/meta blocks (script, stylesheet, style, output, image) with clear error messages
-2. ✅ **Test coverage** (b1b39a7): Added 6 comprehensive tests for board code blocks, node references, edge sequencing, content overflow, and cleanup
-3. ✅ **Review-only mode** (e598cb7): Added `review_only` flag to `RunOptions`; `run_document()` shows code source without executing when enabled
+- **The store never adopts fixtures.** `fixture`/`fixtures` added to
+  `doc-store::store::SKIPPED_DIRECTORIES` (fixture bytes *are* the test), pinned in
+  `discovery_skips_build_output_and_the_store_directory`. That protects the `include_str!`
+  corpus in `rust/doc-core/tests/fixtures/` and `editor/github/test/fixture/`.
+- **Adopted 13 documents** with `dx sync .` at the root (`example_site_plan.dx` was
+  already a pointer); `dx git-setup .` wrote `.gitattributes` (`*.dx diff=dx`).
+  `git diff examples/welcome.dx` renders empty — textconv resolves both sides identically,
+  so adoption lost no byte. 14 documents, `dx stats` clean, all resolve.
+- **The fixture-drift guard moved to the crate that can resolve pointers**:
+  `doc-cli` `workspace::tests::every_fixture_input_still_matches_the_document_it_mirrors`
+  compares each fixture against `workspace::read` of the stored document.
+  `doc-core/tests/fixtures.rs` keeps only the corpus-completeness test.
+- **`editor/github/test/fixture.sh` materializes examples via `dx textconv`** (works for
+  pointer and plain text alike); regenerated fixture is byte-identical to what was
+  committed.
+- **README.md rewritten as the high-level overview** — what dx is, install, first ten
+  minutes, a table pointing into the real documentation (which is dx documents now).
+  Unreferenced `docs/images/{run,chart}-{light,dark}.png` deleted (only the old README
+  used them). CLAUDE.md's "examples stay readable" section replaced with "the repository
+  is a dx workspace"; the "do not sync at root" warning replaced — root sync is now normal.
+- Validated: full `cargo test` green (14 suites incl. 257 cli / 316 core / 49 store),
+  clippy `-D warnings` clean, fmt clean, both node suites green (fail 0), fixture.sh
+  byte-stable.
 
-**PARTIALLY ADDRESSED:**
-- ✅ **Security framework**: Review mode implemented at engine level
-- ⏳ **CLI integration**: `--review` flag not yet wired to commands
-- ⏳ **Approval gate**: Review mode exists but approval workflow not enforced
+- **The MCP handshake instructions now teach the token economy** (`mcp/mod.rs::initialize`):
+  find before reading (`dx_search`/`dx_list` → `dx_outline`), read one `section` instead of
+  paging, edit one block with `dx_edit`, and persist knowledge as documents — `::code src=`
+  blocks index code without stale copies, `run` blocks keep fingerprinted results so an
+  index costs one `dx_read` to consult. Pinned in
+  `the_handshake_advertises_tools_resources_and_guidance`; release binary reinstalled to
+  `~/.local/bin/dx` and the live handshake verified to serve the new text.
 
-**CRITICAL (remaining):**
-- ⏳ `--review` CLI flag to wire review_only in commands
-- ⏳ Approval workflow enforcement (block execution without explicit approve/force flags)
+Committed as the part-33 checkpoint; part 31's remaining work below still stands.
 
-**HIGH (remaining):**
-- ⏳ Board edge sequencing (`--follow-edges` mode for dependency-ordered execution)
-- ⏳ TypeScript ts-node support (currently routes to deno)
+## Previous wave, part 32: the example documentation reads like the product
 
-**Status**: Code execution foundation secure. Board node manipulation solid (309 doc-core tests). Remaining work: CLI wiring for review mode, approval enforcement, sequencing.
+Tested the example docs by reading every page as rendered (`dx_read` images), and fixed
+what the render showed:
 
-**Validation**: 457 tests pass (all green), clippy clean, fmt clean, wasm current.
+- **`examples/GETTING_STARTED.dx` rewritten** — it was malformed DOCSRC (no `::end`,
+  `::list`, bare `::heading`), so the entire file parsed as one giant title block.
+  Now 21 real blocks: install, five-line quick start, a reading order over the other
+  examples, the Hollow Fell site rendering live in a sandboxed `::view src=site/index.html`
+  frame, how-it-works, and a first-ten-minutes checklist. Verified page by page.
+- **Both board templates rebuilt** (`site_map_template.dx`, `system_diagram_template.dx`):
+  they had doubled checkbox syntax (`[ ] - [ ]` rendering as two boxes), backwards edges,
+  and 60px-tall nodes clipping their own code. Now real templates — six-page sitemap with
+  labelled visitor paths, seven-service architecture with labelled calls — text nodes on
+  `h=fit`, every node's words fully visible at natural board size (verified by block
+  capture), checklists in canonical `[ ] item` form.
+- **Ten unreferenced generated PNGs deleted from `examples/`** (git rm; grep proved only
+  the broken GETTING_STARTED text mentioned the names).
+- Learned the hard way and worth keeping: `dx_write`/`dx_edit` adopt a file into the
+  root `.doc` store — examples/ must stay plain text, so write them with the plain Write
+  tool; `.doc/repo.dxcp` was restored via `git checkout` after the accidental adoption.
+- `example_site_plan.dx` verified as-is: renders on 4 pages, its own run block holds
+  21/21 spec claims against the shipped site.
 
-Next step: Wire `--review` flag in CLI commands to expose review mode to users.
+Next: nothing pending in examples/; part 31's remaining work below still stands.
+
+## Previous wave, part 31: review findings fixed — full-digest approvals, one refusal rule
+
+A two-axis `/code-review` of the part 27–30 work surfaced three real defects; all fixed,
+suite green (14 suites, clippy and fmt clean), release binary rebuilt and reinstalled:
+
+- **The approval identity is the full sha256** (`doc-run/src/lib.rs::fingerprint`). The
+  16-hex truncation was fine as a cache key but became the security identity when the
+  ledger arrived: 64 bits is birthday-collidable (~2^32 work), letting a hostile author
+  pair a benign block the reader approves with a payload sharing its fingerprint. Now
+  untruncated everywhere — ledger, `hash=`, workdir path. Existing 16-hex `hash=` records
+  simply mismatch and re-review, which is the gate working. Pinned:
+  `fingerprints_change_with_code_and_dependencies` (asserts len 64).
+- **Review's flag conflicts are refused by the engine, once** (`run_document`):
+  `review+approve` *and* the previously unhandled `review+force` return an error sentence
+  before anything is read. The duplicated per-surface checks in `commands/exec.rs` and
+  `mcp/handlers.rs` are deleted — surfaces propagate the one sentence. Pinned:
+  `review_with_approve_or_force_is_refused_by_the_engine_itself`, plus the two existing
+  surface tests (updated to the shared wording).
+- **Blocked/refusal sentences are surface-neutral** (`pending_review`, `review_text`):
+  they name `review`/`approve`/`force` bare, because the same words are a CLI flag and an
+  MCP parameter — an MCP agent no longer gets told to run a CLI command it cannot run.
+  README updated to match.
+
+A hands-on workflow validation (write → review → approve → run → revise, in a scratch
+workspace) then surfaced four more defects, all fixed:
+
+- **Prose between `::` blocks was silently destroyed** (`doc-core/src/format/parse.rs`).
+  The DOCSRC scanner skipped every line that was not block syntax, so a mixed document —
+  a Markdown heading and goal paragraph above a `::code` block, which is what a person or
+  agent naturally writes — lost its prose at parse, and the next save (any `dx run`,
+  `dx set`) wrote the loss to disk. Loose runs are now buffered and adopted through the
+  Markdown parser (`adopt_loose`), so `# heading`, paragraphs, and lists between blocks
+  arrive as what they say. Pinned: `prose_between_typed_blocks_is_adopted_not_destroyed`.
+- **`- [ ] item` became item text** (`doc-core/src/format/lines.rs`): the Markdown task
+  spelling was not recognized by `parse_checklist_line`, so a pasted task list saved as
+  `[ ] - [ ] item`. A leading bullet is now shed on read; canonical output stays
+  bullet-free. Pinned: `a_markdown_task_bullet_is_a_checklist_item_not_item_text`.
+- **A boolean flag ate the next word** (`doc-cli/src/args.rs`): `dx run --review plan.dx`
+  took the path as `--review`'s value, then failed with "a .dx file is required". The
+  parser now carries `NEVER_VALUED`, the audited list of flags no command reads with
+  `value()` — add new boolean flags there. Pinned:
+  `a_boolean_flag_before_the_path_does_not_eat_it`.
+- **A bare body word wiped the block** (`doc-cli/src/commands/edit.rs`):
+  `dx set doc.dx block print(1)` ignored the stray positional, fell back to an empty
+  stdin, and replaced the block's body with nothing — content destroyed by a typo.
+  `set`/`insert`/`append` now refuse extra positionals with a sentence naming `--text`,
+  `--from`, and stdin. Pinned: `a_bare_body_word_is_refused_not_silently_dropped`.
+
+Validation proof: full loop in a scratch workspace — mixed markdown+`::code` document
+written, `dx run --review` (flags-first), `--approve` runs and folds output, `dx check
+--item` ticks, stray positional refused, and a cold `dx text` hands the next agent plan,
+progress, code, and real results in one ~500-byte read. Suite: 14 suites green, clippy
+and fmt clean, both wasm engines rebuilt (`editor/build.sh`), both node suites 34/34,
+`dx setup` rerun.
+
+Known and accepted (documented design, flagged by review): `dx_run approve=true` is
+agent-reachable; the editor's run click and edited-block auto-run pass `--approve`;
+`--review` reports refused blocks with status `review` (review fails nothing). Judgement
+smells left open: stringly `BlockRun.status`, doctor row `"c++"` vs runner `cpp`,
+`EDGE_ORDERED` fixture duplicated between lib.rs and exec.rs tests.
+
+Next step: consider a typed `RunStatus` enum to collapse the recurring status string
+comparisons across `lib.rs`, `exec.rs`, and `handlers.rs`.
+
+## Part 30: the approval gate answers to this machine only
+
+A fix pass over the part-27b gate — what may approve code, and what a review may touch —
+plus the four remaining adversarial-review findings, fixed in the same wave:
+
+- **`--follow-edges`: the prose now states what the code does** (`doc-run/src/order.rs`,
+  `lib.rs`, `doc-cli/src/commands/exec.rs`, `mcp/tools.rs`, HELP, README). The sort is
+  min-index Kahn, kept deliberately: at every step the earliest *ready* block by document
+  position runs next, so an edge that defers a block lets later blocks — on a board or
+  not — run before it; ties always break by document order; document-order side effects
+  between blocks no edge relates are **not** preserved (state an edge if you need an
+  order). The old "blocks on no board keep their document position" wording was false
+  (document a, b, c with board `c -> a` runs b, c, a — b overtakes) and is rewritten at
+  every site. Pinned: `a_deferred_block_is_overtaken_by_later_blocks_on_no_board`.
+- **`--only` is no longer vetoed by a cycle it did not select** (`doc-run/src/lib.rs`):
+  the `only` filter now narrows the runnable set *before* `order::edge_order`, so an
+  unrelated a↔b cycle cannot refuse `--follow-edges --only c`. Pinned:
+  `only_with_follow_edges_is_not_refused_by_a_cycle_it_did_not_select`.
+- **`--review --approve` is refused, not swallowed** (`commands/exec.rs`,
+  `mcp/handlers.rs`): review records nothing, so the pair previously printed "nothing
+  ran, nothing saved" while dropping `--approve` on the floor. Both surfaces now refuse
+  with a sentence naming the fix (run `--approve` separately); review still never writes.
+  Pinned at each surface: `review_with_approve_is_refused_not_swallowed` (CLI),
+  `run_refuses_review_with_approve_rather_than_swallowing_one` (MCP).
+- **The typescript doctor row probes npm too** (`doc-cli/src/install.rs`,
+  `commands/setup.rs`, `doc-run/src/plan.rs`): `RUNTIME_PROBES` is now requirement
+  *groups* (ready when every group has a program; typescript = `node` and `npm`), the
+  doctor's missing sentence names only the absent groups, and `plan::typescript`'s
+  refusal names whichever of node/npm is actually missing instead of always node.
+  Pinned: `the_typescript_probe_requires_npm_as_well_as_node`.
+- **README verified current**: no "prior run record counts as approval" text anywhere —
+  the run/approval sections and HELP already tell the ledger-only story (first run of a
+  handed document is blocked pending review; one `--approve`, or the editor's run click
+  which passes `--approve`, records it).
+
+The original part-30 gate fixes:
+
+- **A document could approve itself** (`doc-run/src/lib.rs`). `approved` was
+  `ledger.is_approved(fp) || existing ::output with status=ok and hash==fp`. The
+  fingerprint is a pure function of runner + deps + code, all author-controlled, so anyone
+  handing you a `.dx` could compute it and ship a matching `::output` — the block was then
+  treated as reviewed on *your* machine with nothing in the ledger. Two harms, both
+  demonstrated: a plain run reported `skipped / cached` and presented the forged output as
+  a trusted result (the code never surfaced for review), and `--force` executed the payload
+  with `FORCED_NOTICE` suppressed, because `bypassed` was keyed on the document-derived
+  `approved`. **Fixed:** `approved = ledger.is_approved(&fingerprint)` and nothing else;
+  `bypassed = !approved`, so `--force` always announces when the ledger never approved.
+- **The cache stood in front of the gate.** Even with a ledger-only `approved`, the
+  unchanged-fingerprint skip ran first, so a document arriving with a matching record was
+  reported as cached and never reviewed. **Fixed:** the gate is checked *before* the skip.
+  Consequence to know: a freshly cloned document is `blocked pending review` on first run
+  rather than `skipped` — which is the gate doing its job. After one `--approve`, the
+  ledger answers and re-runs are cheap again.
+- **`dx_run` with `review: true` wrote to the document** (`doc-cli/src/mcp/handlers.rs`,
+  `doc-run/src/lib.rs`). Refusals decided *before* the review branch — an unresolved
+  `::code src=`, a `reads=` file that is not there — still pushed an `::output`, so
+  `report.changed` was true and the MCP handler saved the file. **Fixed** at the root: one
+  `refuse` helper reports the sentence as `review` and folds no output in review mode, and
+  the handler skips the write (and reports `saved: false`) whenever `review` is set.
+- **The editing surfaces' run control was dead** (`packaging/app/Engine.swift`,
+  `editor/vscode/src/extension.ts`). Both ran `dx run <file> --only <id>` with no approval
+  flag; under the gate a just-typed block is unapproved by construction, so the run was
+  refused, nothing was written, and both hosts showed "go use a terminal". **Fixed:** both
+  pass `--approve` alongside `--only` — the reader is looking at that block's code and
+  pressed the control beside it, which is the review, and `--only` keeps the approval to
+  that one block. Documented in CLAUDE.md's surface contract and in both call sites.
+- **The suite wrote approvals into the developer's real ledger.** `exec::run` and
+  `handlers::run` built options with `..RunOptions::default()` (cache root
+  `~/.cache/dx-run`), and the tests ran `--approve` through them — so an approval of
+  `echo hi` outlived the suite and covered any later document carrying that line, and the
+  two refusal tests were green only because no sibling had approved their code yet.
+  **Fixed:** both split into `run` (real cache) and `run_in(…, cache_root)`; every test
+  passes a scratch root that `seed`/`project` wipes, so nothing is approved by construction.
+- **The offline-run test skipped the compiled runners** (`doc-run/src/plan.rs`).
+  `every_language_fetches_in_setup_and_never_in_the_run` built each runner with deps, which
+  c/cpp/java/swift refuse, so their `run` commands were never checked against the fetching
+  word list. **Fixed:** the test now builds each runner both with and without deps.
+
+**Left open, deliberately:** MCP `dx_run` still exposes `approve`, so an agent can approve
+and run in one call. Removing it would leave agents unable to run any document, which is
+the point of the tool; the block still executes confined (no network, no writes outside its
+own directory). The decision is recorded in `tools.rs` beside the parameter, and the schema
+now tells the caller to review the code first and that the approval outlives the call.
+
+**Validation**: `cargo test` all green — **769** tests (254 doc-cli + 314 doc-core + 83
+doc-run unit + 13 attacks + 49+49 doc-shot + 2 + 5), the five adversarial-fix pins among
+them. clippy `-D warnings` clean, fmt clean. Also pinned by the earlier part-30 tests: a
+document-carried run record does not approve its own code (doc-run + a CLI end-to-end
+forgery built from the fingerprint `--review` prints), `--force` over such a record still
+stamps `FORCED_NOTICE`, review writes no output for a refused block (doc-run, both refusal
+paths) and `dx_run review` leaves the file byte-identical and reports `saved: false`.
+
+**Next step**: `/code-review` the accumulated parts 8–30 diff, then commit.
+
+## Previous wave, part 29: language runners — TypeScript on Node, plus direct toolchains
+
+`lang=ts` no longer detours through Deno, and four direct-toolchain languages joined:
+
+- **Routing** (`doc-core/src/model.rs`): `ts`/`typescript` → new `typescript` runner;
+  `deno` stays its own explicit language. New runners `c` (alias `c`), `cpp`
+  (`c++`/`cc`/`cxx`), `java`, `swift`; `RUNNERS` lists all 12. Pure routing change, no
+  render bytes touched — **no wasm rebuild needed**.
+- **TypeScript** (`doc-run/src/plan.rs::typescript`): setup npm-installs `typescript` +
+  `tsx` + declared `deps` into the block dir; run is `node --import boot.mjs block.ts`,
+  offline. tsx over ts-node: zero-config ESM+CJS via esbuild, no loader-hook drift.
+  Loader mode (not the tsx CLI) on evidence: the CLI listens on a unix socket under
+  `$TMPDIR` — redirected into the block dir, long enough to overflow `sun_path`. The
+  one-line `boot.mjs` sits beside the block's `node_modules` so the bare `tsx` specifier
+  resolves.
+- **C/C++/Java/Swift**: compile in setup (`cc`/`c++` `-O2`; `javac`; `swiftc -O
+  -module-cache-path` into block dir), run the artifact offline through the same confine
+  path. `deps=` refused with a sentence (`deps_unsupported`) — no half-support. Compile
+  steps get `compile_env` (TMPDIR/TEMP/HOME → block dir): macOS `cc` writes an `xcrun`
+  cache into `$TMPDIR`, which the sandbox refuses during setup. Java sees through macOS's
+  `/usr/bin/javac` stub (fails under seatbelt without `JAVA_HOME`): `locate_jdk` resolves
+  the real JDK via `/usr/libexec/java_home` outside the sandbox and the plan names that
+  JDK's own binaries. Missing toolchains are the standard sentence, never a panic.
+- **Surface**: `dx doctor` probes all 12 (`install.rs::RUNTIME_PROBES`); README runner
+  list updated (java entry class must be `Main`; direct toolchains take no `deps=`).
+
+**Validation**: cargo test all green — 249 (doc-cli) + 314 (doc-core, incl. 4 new
+routing tests) + 78 (doc-run unit, incl. tsx plan/deps, compile-in-setup, deps-refusal,
+missing-toolchain, plus real executions: ts→42 under node, and c/c++/java/swift
+round-trips — all four ran on this machine) + **13 (attacks, re-run green — new runners
+share the confine path)** + 49+49 (doc-shot) + 5 + 2 = 759. clippy `-D warnings` clean,
+fmt clean.
+
+**HIGH (remaining):** none from this wave.
+
+Next step: none pending — pick up the next feature request.
+
+## Previous wave, part 28: `--follow-edges` — board edges order execution
+
+`dx run --follow-edges` runs blocks in the order the document's boards state, on top of
+the part-27b approval work (nothing reverted):
+
+- **One grammar** (`doc-core/src/render/board.rs`): new public `render::board_edges(doc)`
+  reads every board's `to=` targets through the board's own node parsing — `(from, to)`
+  id pairs, dangling targets returned as stated. Re-exported from `render`; doc-run never
+  re-parses a board body. Pure accessor: render bytes unchanged, **no wasm rebuild needed**.
+- **Ordering** (`doc-run/src/order.rs`): topological sort over board edges restricted to
+  runnable blocks; non-runnable nodes conduct order transitively (`setup -> note -> test`
+  still runs setup before test). **The rule:** Kahn's algorithm always emits the earliest
+  ready block by document position; ties always break by document order (deterministic).
+  (Part 30 corrected the prose here and at every surface: a deferred block is overtaken by
+  later ready blocks, on-board or off — document position alone orders nothing.)
+  Edges naming missing blocks are ignored. A cycle among runnable blocks is
+  `Err("blocks a -> b -> a form a cycle; --follow-edges needs an order")` — never a hang,
+  never a silent fallback — which is why `run_document` now returns
+  `Result<RunReport, String>`.
+- **Surface**: `RunOptions::follow_board_edges` (additive, default false = byte-identical
+  document order), `dx run --follow-edges`, MCP `dx_run` `follow_edges` param. Composes
+  with `--only`, `--review` (lists blocks in would-run order), `--approve`, `--force`;
+  the approval gate still applies per block, and the cycle check runs before it.
+- **Docs**: README quickstart, `dx help` RUN section, `dx_run` schema description.
+
+**Validation**: cargo test all green — 249 (doc-cli) + 310 (doc-core) + 70 (doc-run unit,
+incl. 6 order tests + 4 follow-edges run tests) + 13 (attacks) + 49+49 (doc-shot) + rest
+= 747. clippy `-D warnings` clean, fmt clean. Pinned: edge order beats document order
+(lib + CLI), cycle sentence (lib + CLI), unconstrained blocks run at their earliest ready
+moment, independent chains tie-break deterministically, non-runnable conduction,
+missing-target tolerance, default-false document order, review-order listing.
+
+**HIGH (remaining):** TypeScript-on-Node — done in part 29.
+
+## Previous wave, part 27b: the approval gate — review, approve, force
+
+The review mode e598cb7 left engine-only is now a complete, enforced workflow:
+
+- **Ledger** (`doc-run/src/approvals.rs`): one marker file per approved fingerprint under
+  `<cache_root>/approvals/` — beside the per-block run state, outside every repository
+  (`~/.cache/dx-run` by default), so nothing to gitignore and nothing a document carries.
+- **Enforcement** (`run_document`): a block whose fingerprint is not in the ledger is
+  `blocked` pending review. (As shipped it also accepted a prior successful `::output`
+  record as approval — a forgeable, document-carried decision, removed in part 30.)
+  Refusal: refusal sentence names `--review`/`--approve`, no `::output` written, stale
+  output untouched. Editing a block (or a `reads=` file, or `deps`) changes the
+  fingerprint, so approval expires with the edit.
+- **CLI**: `dx run --review` prints each runnable block's id, language, hydrated code,
+  fingerprint, and approval standing — executes nothing, records nothing, changes no
+  file. `--approve` records current fingerprints then runs. `--force` runs unapproved
+  code once and stamps `doc_run::FORCED_NOTICE` into its output (the `DX_UNCONFINED`
+  convention). Blocked refusals print their full sentence under the summary row.
+- **MCP**: `dx_run` gained `review` and `approve` boolean params; `force` documented as
+  the announced bypass. Schema pinned by `the_run_tool_exposes_the_review_gate`.
+- **Semantics tightened**: `RunReport::executed()` now counts only `ok`/`error` (a skip,
+  refusal, or review launched nothing); `BlockRun::succeeded()` counts `review`.
+- **Docs**: README ("New code runs only after review" bullet + quickstart lines), `dx help`
+  RUN section. `attacks.rs` runs approved on purpose — a payload the gate refused would
+  green the sandbox suite without testing it.
+
+**Validation**: cargo test all green — 247 (doc-cli) + 309 (doc-core) + 60 (doc-run unit,
+incl. 7 new gate tests + 3 ledger tests) + 13 (attacks) + 49 (doc-shot) + rest = 734.
+clippy `-D warnings` clean, fmt clean. New exec/MCP tests pin: unapproved refusal,
+review-changes-nothing, --only+unapproved, edited-block re-blocked, force notice,
+approval persistence, prior-ok-record-counts.
 
 ## Previous wave, part 26: the run record fingerprints what it reads, and the map names what it points at
 

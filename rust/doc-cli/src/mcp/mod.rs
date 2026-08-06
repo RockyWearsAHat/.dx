@@ -93,13 +93,22 @@ fn initialize() -> Value {
         "protocolVersion": PROTOCOL_VERSION,
         "capabilities": { "tools": {}, "resources": {} },
         "serverInfo": { "name": SERVER_NAME, "version": SERVER_VERSION },
-        "instructions": "This project uses .dx documents: plain-text block documents that \
-                         render to pages and can execute their own code blocks. Start with \
-                         dx_list to see what exists and dx_outline to map a document. \
-                         dx_read returns the rendered pages as images, which is how to \
-                         read one: you see the real result, including tables, diagrams, and \
-                         the output its code produced. Use dx_source when you need the exact \
-                         characters, and `section` to read one part of a long document."
+        "instructions": "This project uses .dx documents: block documents that render to \
+                         pages and can execute their own code blocks. Treat them as durable, \
+                         token-cheap memory: read recorded results instead of re-deriving \
+                         them. Find before reading: dx_search or dx_list, then dx_outline to \
+                         map a document as one row per block. Read with dx_read — the \
+                         rendered pages as images, showing the real result: tables, boards, \
+                         and the output code already produced — and pass `section` (any \
+                         block id) to read one part instead of paging through the rest; \
+                         dx_source only when the exact characters matter. Edit with dx_edit, \
+                         one block by id; never rewrite a document for a one-block change. \
+                         Save what you learn as .dx documents. A `::code src=<path>` block \
+                         renders the file's current text, so a document can index code \
+                         without carrying stale copies; a `run` block's captured output is \
+                         kept in the document and fingerprinted, so dx_run re-executes only \
+                         what changed. An index or analysis built this way costs one dx_read \
+                         to consult, forever."
     })
 }
 
@@ -206,6 +215,11 @@ mod tests {
         let instructions = response["result"]["instructions"].as_str().expect("text");
         assert!(instructions.contains("dx_read"));
         assert!(instructions.contains("images"));
+        // The guidance is a token economy: read one section, edit one block, and keep
+        // durable results in documents instead of re-deriving them each session.
+        assert!(instructions.contains("section"));
+        assert!(instructions.contains("dx_edit"));
+        assert!(instructions.contains("::code src="));
     }
 
     #[test]

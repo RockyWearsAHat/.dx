@@ -31,6 +31,10 @@ pub(crate) const STORE_DIR: &str = ".doc";
 const DB_RELATIVE: &str = ".doc/index.db";
 
 /// Directories never walked when discovering documents.
+///
+/// `fixture`/`fixtures` are here because test fixtures are files whose exact bytes *are*
+/// the test — adopting one into the store replaces it with a pointer and silently turns
+/// the suite that reads it into a suite that reads pointers.
 const SKIPPED_DIRECTORIES: &[&str] = &[
     ".git",
     "node_modules",
@@ -39,6 +43,8 @@ const SKIPPED_DIRECTORIES: &[&str] = &[
     "dist",
     ".venv",
     "__pycache__",
+    "fixture",
+    "fixtures",
     STORE_DIR,
 ];
 
@@ -1197,7 +1203,14 @@ mod tests {
     #[test]
     fn discovery_skips_build_output_and_the_store_directory() {
         let root = scratch("discover");
-        for relative in ["a.dx", "deep/b.dx", "node_modules/c.dx", "target/d.dx"] {
+        for relative in [
+            "a.dx",
+            "deep/b.dx",
+            "node_modules/c.dx",
+            "target/d.dx",
+            "tests/fixtures/e.dx",
+            "test/fixture/f.dx",
+        ] {
             let path = root.join(relative);
             fs::create_dir_all(path.parent().expect("parent")).expect("dirs");
             fs::write(&path, NOTES).expect("write");
@@ -1209,7 +1222,10 @@ mod tests {
         assert_eq!(found.len(), 2, "{found:?}");
         assert!(found.iter().all(|path| {
             let text = path.to_string_lossy();
-            !text.contains("node_modules") && !text.contains("target") && !text.contains(STORE_DIR)
+            !text.contains("node_modules")
+                && !text.contains("target")
+                && !text.contains("fixture")
+                && !text.contains(STORE_DIR)
         }));
     }
 

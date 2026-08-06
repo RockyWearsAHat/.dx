@@ -18,9 +18,11 @@ fi
 scratch="$(mktemp -d)"
 trap 'rm -rf "$scratch"' EXIT
 
+# The repository's own examples are stored documents — pointers on disk — so materialize
+# their text through `dx textconv`, which resolves a pointer and passes plain text through.
 git init -q "$scratch"
-cp "$root/examples/welcome.dx" "$scratch/"
-cp "$root/examples/showcase.dx" "$scratch/"
+"$dx" textconv "$root/examples/welcome.dx"  > "$scratch/welcome.dx"
+"$dx" textconv "$root/examples/showcase.dx" > "$scratch/showcase.dx"
 "$dx" sync "$scratch" >/dev/null
 
 mkdir -p "$here/fixture"
@@ -31,7 +33,7 @@ cp "$scratch/welcome.dx" "$here/fixture/welcome.dx"
 # worth anything if the browser shows the same document the binary does, and the way that
 # stops being true is a `doc-core` change with no `build.sh` — a committed engine one version
 # behind, which nothing else would notice.
-cp "$root/examples/showcase.dx" "$here/fixture/render-input.dx"
+"$dx" textconv "$root/examples/showcase.dx" > "$here/fixture/render-input.dx"
 "$dx" render "$root/examples/showcase.dx" --theme light --fragment > "$here/fixture/render.html"
 
 echo "wrote $here/fixture/repo.dxcp, welcome.dx, render-input.dx, and render.html"
