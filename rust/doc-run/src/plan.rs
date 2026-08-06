@@ -312,14 +312,24 @@ fn deno(code: &str, dirs: &Dirs) -> Result<Plan, String> {
 
 /// Shell scripts run under bash, which exists on macOS and Linux and ships with Git on
 /// Windows.
+///
+/// Bash runs with `pipefail`: a pipeline's exit is normally its last command's, which let a
+/// `cargo build | grep | head` whose first stage hard-failed be recorded as a success. With
+/// pipefail a failure anywhere in a pipeline fails the block. Plain `sh` does not portably
+/// accept the option, so the fallback shell runs without it.
 fn bash(code: &str, dirs: &Dirs) -> Result<Plan, String> {
     let shell = first_available(&["bash", "sh"])
         .ok_or_else(|| missing_toolchain_message("shell", &["bash"]))?;
     let script = dirs.block_path("block.sh");
+    let run = if shell.ends_with("bash") {
+        CommandSpec::new(shell, &["-o", "pipefail", &script])
+    } else {
+        CommandSpec::new(shell, &[&script])
+    };
     Ok(Plan {
         files: vec![("block.sh".to_string(), code.to_string())],
         setup: Vec::new(),
-        run: CommandSpec::new(shell, &[&script]),
+        run,
     })
 }
 
@@ -707,6 +717,21 @@ mod tests {
             plan.run.display().contains(".venv"),
             "{}",
             plan.run.display()
+        );
+    }
+
+    /// A pipeline's exit is its last command's; without pipefail a hard failure mid-pipeline
+    /// was recorded `ok`. The flag rides the invocation, so every bash block gets it.
+    #[test]
+    fn bash_runs_with_pipefail() {
+        if !have("bash") {
+            eprintln!("skipping: bash not installed");
+            return;
+        }
+        let plan = build("bash", "false | cat", &[], &dirs()).expect("bash plan");
+        assert_eq!(
+            plan.run.args[..2],
+            ["-o".to_string(), "pipefail".to_string()]
         );
     }
 

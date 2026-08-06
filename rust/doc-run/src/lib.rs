@@ -579,8 +579,53 @@ fn execute(
     let mut capture = process::run(&command, &options.document_dir, timeout);
     if confine::overridden() {
         capture.output = format!("{}\n{}", confine::UNCONFINED_NOTICE, capture.output);
+    } else if !capture.succeeded() {
+        // A sandbox denial surfaces as the tool's own error — cargo's "failed to get
+        // `tokio`" was really "no DNS in here" — and a reader who is not told about the
+        // boundary debugs the project instead. Name it on the failures shaped like it.
+        if let Some(hint) = sandbox_hint(&capture.output) {
+            capture.output = format!("{}\n{hint}", capture.output);
+        }
     }
     capture
+}
+
+/// The sentence appended to a failed block whose output looks like the sandbox, not the
+/// project: a network fetch (denied while a block's own code runs) or a write outside the
+/// block's own directory. `None` for every failure that does not carry those shapes — a
+/// hint on an ordinary assertion failure would be noise.
+fn sandbox_hint(output: &str) -> Option<&'static str> {
+    const RESOLVER_SHAPED: &[&str] = &[
+        "could not resolve host",
+        "failure in name resolution",
+        "name or service not known",
+        "nodename nor servname provided",
+        "failed to lookup address",
+        "getaddrinfo",
+        "enotfound",
+        "eai_again",
+        "dns error",
+        "network is unreachable",
+        "network is down",
+    ];
+    const WRITE_SHAPED: &[&str] = &["operation not permitted", "read-only file system"];
+
+    let lowered = output.to_lowercase();
+    if RESOLVER_SHAPED.iter().any(|mark| lowered.contains(mark)) {
+        return Some(
+            "note: dx runs a block's code in a sandbox with no network. Dependencies fetch \
+             during setup — declare them with `deps=` — and everything else must already be \
+             on disk.",
+        );
+    }
+    if WRITE_SHAPED.iter().any(|mark| lowered.contains(mark)) {
+        return Some(
+            "note: the dx sandbox lets a block write only its own directory — $DX_SANDBOX, \
+             where $HOME and $TMPDIR already point. /tmp and the document's folder stay \
+             read-only.",
+        );
+    }
+    None
 }
 
 /// Point the block's home, temp, and cache directories at its own working directory.
@@ -754,6 +799,18 @@ mod tests {
             .contains("::output id=greet-output for=greet status=ok"));
         assert!(report.source.contains("hello from dx"));
         assert!(report.changed);
+    }
+
+    /// The field-report bug: a `cargo … | grep | head` pipeline whose first command hard-failed
+    /// was recorded `ok`, because a pipeline's exit is its last command's. A failure anywhere
+    /// in a pipeline is a failed block, never a success.
+    #[test]
+    fn a_failure_inside_a_pipeline_is_not_reported_as_success() {
+        let source = "::code id=piped lang=bash run\nfalse | cat\n::end\n";
+        let report = run_isolated(source, "pipefail");
+        assert_eq!(report.runs[0].status, "error", "{}", report.runs[0].output);
+        assert_ne!(report.runs[0].exit, 0);
+        assert!(!report.all_succeeded());
     }
 
     #[test]
@@ -1035,6 +1092,50 @@ mod tests {
         let report = run_isolated(source, "deps-refused");
         assert_eq!(report.runs[0].status, "blocked");
         assert!(report.runs[0].output.contains("deps="));
+    }
+
+    /// The field-report confusion: cargo's "failed to get `tokio`" was really "no DNS in the
+    /// sandbox", and the agent debugged the project. A failure that looks like the boundary
+    /// names the boundary.
+    #[test]
+    fn a_resolver_shaped_failure_names_the_sandbox() {
+        let hint = sandbox_hint("curl: (6) Could not resolve host: index.crates.io")
+            .expect("a resolver failure earns the hint");
+        assert!(hint.contains("network"), "{hint}");
+        assert!(hint.contains("deps="), "{hint}");
+        assert!(
+            sandbox_hint("error: failed to lookup address information").is_some(),
+            "getaddrinfo failures are resolver-shaped too"
+        );
+        assert!(sandbox_hint("assertion failed: left == right").is_none());
+    }
+
+    #[test]
+    fn a_write_denied_failure_names_the_write_grant() {
+        let hint = sandbox_hint("touch: /tmp/probe: Operation not permitted")
+            .expect("a denied write earns the hint");
+        assert!(hint.contains("DX_SANDBOX"), "{hint}");
+        assert!(hint.contains("HOME"), "{hint}");
+        assert!(sandbox_hint("Read-only file system").is_some());
+    }
+
+    /// End to end on a machine with a boundary: a block that writes outside its own
+    /// directory fails, and the failure explains the sandbox instead of impersonating a
+    /// project defect.
+    #[test]
+    fn a_denied_write_explains_the_sandbox_in_the_recorded_output() {
+        if confine::overridden() || !(cfg!(target_os = "macos") || cfg!(target_os = "linux")) {
+            eprintln!("skipping: no boundary on this machine");
+            return;
+        }
+        let source = "::code id=probe lang=bash run\necho x > /tmp/dx-hint-probe\n::end\n";
+        let report = run_isolated(source, "write-hint");
+        assert_eq!(report.runs[0].status, "error", "{}", report.runs[0].output);
+        assert!(
+            report.runs[0].output.contains("DX_SANDBOX"),
+            "the record never named the sandbox: {}",
+            report.runs[0].output
+        );
     }
 
     #[test]

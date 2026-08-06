@@ -4,7 +4,52 @@ _Resume point after `/compact` or `/clear`. Update after every task or wave (see
 
 Last updated: 2026-08-06
 
-## This wave, part 34: text-first reads, live output (HMR), and the scaffolded index
+## This wave, part 35: the Self-Host field report answered
+
+Triage of `/Users/alexwaldmann/Desktop/Self-Host/DX-FEEDBACK.md` (five findings; helpfulness
+6/10, efficiency 4/10 that session). All five closed, test-first, sandbox law untouched:
+
+- **#4 false success — fixed.** Bash blocks now run `bash -o pipefail block.sh`
+  (`doc-run/src/plan.rs::bash`; plain `sh` fallback stays flagless — pipefail is not
+  portable there). A `cargo … | grep | head` whose first stage hard-fails is now `error`.
+  Pinned: `a_failure_inside_a_pipeline_is_not_reported_as_success`, `bash_runs_with_pipefail`.
+- **#1/#2/#3 sandbox surfaced, not loosened.** `doc-run/src/lib.rs::sandbox_hint` appends a
+  sentence to a *failed* confined block whose output is resolver-shaped ("Could not resolve
+  host", getaddrinfo, …) or write-denied ("Operation not permitted", read-only fs), naming
+  the no-network rule / the `$DX_SANDBOX` write grant (where `$HOME`/`$TMPDIR` already
+  point). Never on success, never when `DX_UNCONFINED` (no boundary to name). The execution
+  environment is now documented in README ("What executes") and `dx help` RUN, both stating
+  the #3 decision: **repo builds belong to the host shell; a block is self-contained
+  computation** — a `writes=` grant was weighed and deferred (it would need its own review
+  gate + attacks coverage; see the field report if revisiting). Pinned:
+  `a_resolver_shaped_failure_names_the_sandbox`, `a_write_denied_failure_names_the_write_grant`,
+  `a_denied_write_explains_the_sandbox_in_the_recorded_output`.
+- **#5 images — fixed at the engine.** `resolve::hydrate` now fills a confined
+  `::image src=` with the file's current bytes as a `data:` URI (`Resolver::binary`, new,
+  defaulted to `None`; `Provided::add_binary`; CLI `FolderResolver` reads bytes), so
+  captures from scratch dirs, `dx png`, `dx_read`, and webviews carry the picture. Raster
+  allow-list only (png/jpg/gif/webp — SVG scripts, never inlined); remote/`data:` srcs travel
+  as written; a missing file is a sentence in the alt. `base64` moved from doc-shot into
+  doc-core (`doc_core::base64`, doc-shot re-exports) — still the platform's one copy.
+  Contract updated: `docs/dx-format-contract.md` § References (now four reference kinds).
+  Pinned: `an_image_src_is_filled_into_a_data_uri` (+2 siblings).
+- **Findings-ledger pattern** folded into the `dx index` scaffold (`commands/index.rs`): a
+  `## Findings` section with the keep-a-defect-ledger instruction.
+
+Validated: `cargo test` all green (doc-core 325, doc-run 89 + 13 attacks, doc-cli 270,
+doc-shot 43), `clippy --all-targets -D warnings` clean, `fmt --check` clean, both wasm
+engines rebuilt (`./editor/build.sh` — doc-core changed), node suites 34+34 green. Live
+smoke through release `dx`: image → `data:image/png;base64,…` in `dx render`; `false | cat`
+→ error; `/tmp` write → error + `$DX_SANDBOX` hint; `curl` → error + no-network hint;
+same write payload under `DX_UNCONFINED=1` → succeeds and stamps the notice (the boundary
+still *can* fail). Binary reinstalled to `~/.local/bin/dx` (rm-then-cp). **The running MCP
+server predates this binary — restart the assistant to see the new behavior over MCP.**
+
+Next step: extend `Provided`/the daemon protocol so `dx serve` and the GitHub extension can
+carry image bytes too (today they fall back to the missing-image sentence — additive, the
+`Resolver::binary` default keeps them compiling).
+
+## Previous wave, part 34: text-first reads, live output (HMR), and the scaffolded index
 
 Per the user's direction after the part-33 review: vision tokens cost more than text for
 prose, reads must never show dead output, and a project without documentation should get

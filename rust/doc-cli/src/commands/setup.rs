@@ -534,6 +534,15 @@ RUN
               block lets later blocks (on a board or not) run before it; only
               stated edges order side effects. A cycle among runnable blocks is
               refused with a sentence naming it.
+              A block runs inside a kernel sandbox: read anything (minus
+              credential stores), write only its own scratch directory, and no
+              network while the block's code runs — libraries fetch during
+              setup, declared with deps=. $HOME, $TMPDIR, and $DX_SANDBOX all
+              point at that scratch directory, so state keyed off a real home
+              (~/.cargo, ~/.gitconfig) is deliberately out of reach. Building
+              the host repository belongs to your shell, not a block: a block
+              is self-contained computation whose writes never touch the
+              workspace.
 
 PLATFORM
   dx serve    [--port N]                        the local rendering service

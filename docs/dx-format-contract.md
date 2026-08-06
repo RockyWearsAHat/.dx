@@ -162,7 +162,7 @@ wasm has no filesystem to consult, so there is nothing to disagree about.
 
 ## References — one source of truth, shown current everywhere
 
-A document may name three things it does not itself carry, so content lives once and every
+A document may name four things it does not itself carry, so content lives once and every
 page showing it stays current:
 
 - **A sibling file**: `::code id=listing src=src/lib.rs lang=rust` renders the file's
@@ -181,6 +181,14 @@ page showing it stays current:
   sandboxed frame has no URL to scroll, and no render may need a script.
 - **One block of a sibling document**: a board node line `- plan.dx#step-one x= y=`
   draws that block on this board, resolved fresh at every render.
+- **A sibling picture**: `::image id=shot src=shots/frame.png` embeds the file's current
+  bytes as a `data:` URI at hydration, so the rendered page carries its own artwork
+  wherever it is shown — a capture made from a scratch directory, an editor webview, a
+  PNG export. Raster formats only (`png`, `jpg`/`jpeg`, `gif`, `webp` — the same
+  allow-list as `render::escape`'s `data:` images); SVG is a document that can script,
+  so it is never inlined and the reference stays as written. A remote URL or a `data:`
+  URI in `src` travels exactly as written. An image file the resolver cannot produce is
+  a sentence in the image's alt text, naming the path.
 
 The rules (`doc_core::resolve` is the implementation, and there is exactly one):
 
