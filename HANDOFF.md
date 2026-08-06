@@ -45,6 +45,16 @@ same write payload under `DX_UNCONFINED=1` → succeeds and stamps the notice (t
 still *can* fail). Binary reinstalled to `~/.local/bin/dx` (rm-then-cp). **The running MCP
 server predates this binary — restart the assistant to see the new behavior over MCP.**
 
+Reviewed: `/code-review` ran over `0382e30..HEAD` (both this wave and the previously
+unreviewed part-34 commit). Applied in 6c1f2a3: the raster `data:` allow-list now lives
+once (`render::escape::RASTER_IMAGE_MEDIA_TYPES`, drift-guard test), hydration bounds an
+embedded image at 8 MiB with a sentence, `body_argument`'s orphaned contract comment
+restored, CLAUDE.md test count true (797). Weighed and declined, with reasons: `set -e` for
+bash blocks (SIGPIPE under pipefail would fail legitimate `cmd | head` patterns; pipefail
+alone fixes the reported bug), broader HOME-keyed hint matching (no reliable error shape),
+merging the two `SKIPPED_DIRECTORIES` lists (store adoption and index mapping skip for
+different reasons).
+
 Next step: extend `Provided`/the daemon protocol so `dx serve` and the GitHub extension can
 carry image bytes too (today they fall back to the missing-image sentence — additive, the
 `Resolver::binary` default keeps them compiling).
