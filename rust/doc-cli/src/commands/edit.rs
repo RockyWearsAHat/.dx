@@ -74,7 +74,7 @@ pub fn run_fmt(args: &Args) -> Result<String, String> {
             report.push_str(&format!("would fix  {}\n", path.display()));
             continue;
         }
-        workspace::write_text(&path, &after)?;
+        workspace::save_source(&path, &after)?;
         report.push_str(&format!("formatted  {}\n", path.display()));
     }
     Ok(report)

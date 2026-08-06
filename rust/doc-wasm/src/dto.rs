@@ -96,6 +96,10 @@ pub struct BlockDto {
     /// Comma-separated sibling files an executable `code` block declares it reads.
     #[serde(default)]
     pub reads: String,
+    /// Comma-separated folders an executable `code` block may write, inside the
+    /// document's own folder.
+    #[serde(default)]
+    pub writes: String,
     /// Seconds an executable `code` block may run before it is killed; `0` means default.
     #[serde(default)]
     pub timeout: u32,
@@ -190,6 +194,7 @@ impl From<&Block> for BlockDto {
             run: block.run,
             deps: block.deps.clone(),
             reads: block.reads.clone(),
+            writes: block.writes.clone(),
             timeout: block.timeout,
             for_block: block.for_block.clone(),
             status: block.status.clone(),
@@ -223,6 +228,7 @@ impl From<&BlockDto> for Block {
             run: dto.run,
             deps: dto.deps.clone(),
             reads: dto.reads.clone(),
+            writes: dto.writes.clone(),
             timeout: dto.timeout,
             for_block: dto.for_block.clone(),
             status: dto.status.clone(),

@@ -59,6 +59,12 @@ pub struct Block {
     /// and the files' current text is part of the run's fingerprint — so editing a
     /// declared file makes the recorded output stale exactly like editing the code would.
     pub reads: String,
+    /// Comma-separated folders inside the document's own folder an executable `code`
+    /// block may write at run time (`writes=target,generated`). Each path obeys the
+    /// reference path law, and the grant is part of the run's fingerprint — changing
+    /// what a block may touch re-opens review exactly like changing its code would.
+    /// Unset means the block writes only its own sandbox directory.
+    pub writes: String,
     /// Seconds an executable `code` block may run before it is killed; `0` means default.
     pub timeout: u32,
     /// Id of the `code` block an `output` block reports on (`for=` attribute).

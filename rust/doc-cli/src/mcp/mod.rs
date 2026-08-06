@@ -109,9 +109,15 @@ fn initialize() -> Value {
                          fresh. Save what you learn as documents: `::code src=<path>` \
                          indexes a file as its current text, never a stale copy, and run \
                          output is fingerprinted in place, so an index costs one section \
-                         read to consult, forever. If dx_list finds no documents, offer \
-                         dx_index: it scaffolds index.dx from the tree — read it whole and \
-                         improve it before other work."
+                         read to consult, forever. Work through documents, not beside \
+                         them: a build or test the project needs lives as a `::code run` \
+                         block granting its build directory with writes= (for example \
+                         writes=target) and declaring what it judges with reads= — its \
+                         recorded verdict then stales mechanically when the code changes \
+                         and re-runs on your next read, so a claim recorded in a document \
+                         is never one you must re-verify by hand. If dx_list finds no \
+                         documents, offer dx_index: it scaffolds index.dx from the tree — \
+                         read it whole and improve it before other work."
     })
 }
 

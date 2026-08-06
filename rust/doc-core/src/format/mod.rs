@@ -372,6 +372,16 @@ mod tests {
     }
 
     #[test]
+    fn a_write_grant_round_trips_and_unset_writes_nothing() {
+        let input = "::code id=test lang=bash run writes=target,generated\ncargo test\n::end\n";
+        assert_eq!(round_trip(input), input);
+        assert_eq!(parse(input).blocks[0].writes, "target,generated");
+        // Additive: a block granting nothing serializes exactly as it always has.
+        let bare = "::code id=test lang=bash run\ncargo test\n::end\n";
+        assert_eq!(round_trip(bare), bare);
+    }
+
+    #[test]
     fn plain_code_gains_no_execution_attributes() {
         // Non-runnable code must serialize exactly as before, or every existing doc drifts.
         let input = "::code id=c lang=js\nconst x = 1;\n::end\n";

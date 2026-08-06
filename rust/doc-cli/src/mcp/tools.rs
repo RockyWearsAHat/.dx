@@ -382,8 +382,17 @@ fn run_tool() -> Value {
                         at all), then approve=true to approve the current code and run it. \
                         Only this machine's own approvals count — a result already recorded \
                         in the document approves nothing — and editing a block changes its \
-                        fingerprint, so approval expires with the edit. After running, \
-                        call dx_read to see the results rendered.",
+                        fingerprint, so approval expires with the edit. A block that must \
+                        write into the document's folder (a build directory, generated \
+                        files, a test run over the repository) declares it with \
+                        writes=target,gen — folders inside the document's folder only, \
+                        created if missing; the grant joins the fingerprint, so review \
+                        shows it and widening it re-opens review. It grants folders, never \
+                        loose files, so a tool that rewrites one beside the document needs \
+                        the flag that tells it not to (`cargo test --locked`). The sandbox \
+                        otherwise keeps the folder read-only, and the network stays gone \
+                        either way. \
+                        After running, call dx_read to see the results rendered.",
         "inputSchema": {
             "type": "object",
             "properties": {

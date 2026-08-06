@@ -539,10 +539,17 @@ RUN
               network while the block's code runs — libraries fetch during
               setup, declared with deps=. $HOME, $TMPDIR, and $DX_SANDBOX all
               point at that scratch directory, so state keyed off a real home
-              (~/.cargo, ~/.gitconfig) is deliberately out of reach. Building
-              the host repository belongs to your shell, not a block: a block
-              is self-contained computation whose writes never touch the
-              workspace.
+              (~/.cargo, ~/.gitconfig) is deliberately out of reach. A block
+              whose work belongs in the document's own folder — a build
+              directory, generated files — declares it with writes=target,gen:
+              each folder must sit inside the document's folder (the store and
+              any symlinked way out are refused), it is created if missing, and
+              the grant joins the block's fingerprint, so --review prints it
+              and changing what a block may touch re-opens review exactly like
+              changing its code. It grants folders, never loose files, so a
+              tool that rewrites one beside the document needs the flag that
+              tells it not to (`cargo test --locked`). The network stays gone
+              either way.
 
 PLATFORM
   dx serve    [--port N]                        the local rendering service

@@ -349,6 +349,76 @@ fn a_backgrounded_process_does_not_outlive_the_block_that_started_it() {
     );
 }
 
+/// A `writes=` grant opens exactly the folders it names, and not one path more. The grant
+/// is the sandbox's one door into the document's folder, so this test walks its edges: the
+/// granted folder takes the write, the folder beside it refuses, the network stays gone,
+/// and the store cannot be named at all.
+#[test]
+fn a_write_grant_opens_its_folder_and_nothing_beside_it() {
+    if !confined() {
+        return;
+    }
+    let (root, options) = scene("write-grant");
+    let source = "::code id=payload lang=bash run writes=out\n\
+         echo built > out/artifact.txt && echo GRANTED\n\
+         echo pwned > beside.txt && echo ESCAPED\n::end\n";
+    let report = run_document(source, &options, &Nowhere).expect("acyclic run");
+    let output = &report.runs[0].output;
+    assert!(
+        output.contains("GRANTED"),
+        "the granted write failed: {output}"
+    );
+    assert!(
+        !output.contains("ESCAPED"),
+        "a write beside the grant succeeded: {output}"
+    );
+    assert_eq!(
+        fs::read_to_string(root.join("out/artifact.txt")).expect("the artifact"),
+        "built\n"
+    );
+    assert_absent(&root.join("beside.txt"), "a write outside the grant");
+}
+
+#[test]
+fn a_write_grant_does_not_hand_back_the_network() {
+    if !confined() {
+        return;
+    }
+    let (_root, options) = scene("write-grant-network");
+    let source = "::code id=payload lang=bash run writes=out\n\
+         mkdir -p out\n\
+         curl -s -m 8 https://example.com > out/loot.txt && echo FETCHED || echo offline\n::end\n";
+    let report = run_document(source, &options, &Nowhere).expect("acyclic run");
+    assert!(
+        !report.runs[0].output.contains("FETCHED"),
+        "a granted block reached the network: {}",
+        report.runs[0].output
+    );
+}
+
+#[test]
+fn a_write_grant_naming_the_store_is_refused_before_anything_runs() {
+    if !confined() {
+        return;
+    }
+    let (root, options) = scene("write-grant-store");
+    fs::create_dir_all(root.join(".doc")).expect("store");
+    fs::write(root.join(".doc/repo.dxcp"), "PACK").expect("pack");
+    let source = "::code id=payload lang=bash run writes=.doc\n\
+         echo tampered > .doc/repo.dxcp\n::end\n";
+    let report = run_document(source, &options, &Nowhere).expect("acyclic run");
+    assert_eq!(report.runs[0].status, "blocked");
+    assert!(
+        report.runs[0].output.contains(".doc"),
+        "{}",
+        report.runs[0].output
+    );
+    assert_eq!(
+        fs::read_to_string(root.join(".doc/repo.dxcp")).expect("read"),
+        "PACK"
+    );
+}
+
 /// The first file named `name` anywhere under `root`, or `None`.
 fn find_file(root: &Path, name: &str) -> Option<PathBuf> {
     for entry in fs::read_dir(root).ok()?.flatten() {

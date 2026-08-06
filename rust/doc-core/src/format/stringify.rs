@@ -43,6 +43,9 @@ pub(crate) fn block_header(block: &Block) -> String {
             if !block.reads.is_empty() {
                 attributes.push(format!("reads={}", format_attribute_value(&block.reads)));
             }
+            if !block.writes.is_empty() {
+                attributes.push(format!("writes={}", format_attribute_value(&block.writes)));
+            }
             if block.timeout > 0 {
                 attributes.push(format!("timeout={}", block.timeout));
             }

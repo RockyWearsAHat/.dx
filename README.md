@@ -141,8 +141,14 @@ credential stores, and write only its own scratch directory — `$HOME`, `$TMPDI
 `$DX_SANDBOX` all point there, so state keyed off a real home (`~/.cargo`, `~/.gitconfig`)
 is deliberately out of reach, and `/tmp` and the workspace stay read-only. Libraries fetch
 during setup, declared with `deps=`; a failure shaped like the boundary (a denied write, an
-unreachable network) says so in the block's own output. Building the host repository belongs
-to your shell, not a block — a block is self-contained computation.
+unreachable network) says so in the block's own output. A block whose work belongs in the
+document's own folder — a build directory, generated files, a test run over the repository
+beside the document — declares it with `writes=target,generated`: each folder must sit
+inside the document's folder (the `.doc` store and any symlinked way out are refused), it
+is created if missing, and the grant joins the block's fingerprint, so review prints it and
+widening what a block may touch re-opens review exactly like editing its code. It grants
+folders, never loose files, so a tool that rewrites one beside the document needs the flag
+that tells it not to (`cargo test --locked`). The network stays gone either way.
 Author markup is sanitized against an allow-list, and
 `dx serve` answers loopback only. The claims are tested by attacking them:
 [`rust/doc-run/tests/attacks.rs`](rust/doc-run/tests/attacks.rs) is a file of real payloads,

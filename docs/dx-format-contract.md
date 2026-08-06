@@ -51,11 +51,13 @@ Every block accepts `id` and `class`; the attributes below are what each adds.
 - `bulleted-list` attrs: none
 - `numbered-list` attrs: none
 - `checklist` attrs: none — one `[x] text` / `[ ] text` line per item
-- `code` attrs: `lang` or `language`, `src`, `run`, `deps`, `reads`, `timeout`, `format` —
-  `src` names a sibling file whose **current text is the listing** (see References below);
-  the stored body stays as written and unset `src` serializes to nothing. `reads` is a
-  comma-separated list of sibling files the block's code reads at run time, each held to
-  the path law; unset it serializes to nothing
+- `code` attrs: `lang` or `language`, `src`, `run`, `deps`, `reads`, `writes`, `timeout`,
+  `format` — `src` names a sibling file whose **current text is the listing** (see
+  References below); the stored body stays as written and unset `src` serializes to
+  nothing. `reads` is a comma-separated list of sibling files the block's code reads at
+  run time, and `writes` a comma-separated list of folders inside the document's folder
+  the block may write; each is held to the path law, and unset either serializes to
+  nothing
 - `output` attrs: `for`, `status`, `exit`, `hash`, `format`
 - `image` attrs: `src`
 - `nav` attrs: `label`
@@ -230,6 +232,13 @@ like editing the code would — the record never claims "no changes" about conte
 A declared file that cannot be resolved blocks the run with a sentence, never a silent
 fingerprint that omits it.
 
+`writes` names the folders of the document's own the block may write (comma-separated,
+path-law-confined, created if missing) — the sandbox otherwise keeps everything but the
+block's scratch directory read-only. The grant joins the fingerprint, so review prints it
+and widening a grant re-opens review exactly like editing the code; the `.doc` store and
+any path that resolves outside the document's folder (a symlink on the way) are refused
+with a sentence. The grant never includes the network.
+
 Running a document writes one `output` block immediately after each code block it ran:
 
 ```text
@@ -248,9 +257,9 @@ Contract for `output` blocks:
   block, and re-running replaces it rather than appending a second one.
 - `status` is `ok`, `error`, or `blocked` (no toolchain, or execution disabled).
 - `exit` is the process exit code and is omitted when it is `0`.
-- `hash` fingerprints the code, its dependencies, and the current text of every file the
-  block declares with `reads`. A re-run whose fingerprint still matches is skipped and
-  the recorded output is left untouched.
+- `hash` fingerprints the code, its dependencies, the current text of every file the
+  block declares with `reads`, and the `writes` grant. A re-run whose fingerprint still
+  matches is skipped and the recorded output is left untouched.
 - `format` is copied from the code block, and only affects rendering: a failed block always
   renders as text so the error is legible.
 - An `output` block is data, never executable: nothing in the parser, renderer, or

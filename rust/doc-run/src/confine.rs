@@ -7,7 +7,7 @@
 //! | | |
 //! |---|---|
 //! | **Read** | anything, minus a short list of secret stores — a block is meant to open the data sitting beside the document |
-//! | **Write** | its own block directory, and nowhere else |
+//! | **Write** | its own block directory, plus any folder of the document's own that the block declares with `writes=` — the grant joins the fingerprint, so it is reviewed and approved with the code |
 //! | **Network** | never, while the block's own code is running |
 //!
 //! Those three lines are the whole security model, and the first is why the other two have to

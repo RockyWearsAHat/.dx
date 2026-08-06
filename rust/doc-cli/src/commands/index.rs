@@ -109,10 +109,14 @@ fn scaffold_source(root: &Path) -> (String, usize, usize) {
          ::end\n\n\
          ::heading level=2 id=findings\nFindings\n::end\n\n\
          ::paragraph id=findings-notes\n\
-         A hand-maintained ledger of open defects and sharp edges, one bullet each: \
-         what breaks, where, and what was tried. Add findings as you hit them and \
-         delete them when fixed — a later session reads this list first and skips \
-         re-discovering every one.\n\
+         A ledger of open defects and sharp edges. A claim that can be checked \
+         mechanically is written as a `::code run` block that checks it, declaring the \
+         files it judges with `reads=` — then the recorded verdict goes stale the moment \
+         the described code changes, and every read re-runs it, so this ledger cannot \
+         lie the way a hand-kept list does. A check that must build or test the project \
+         grants its build directory with `writes=` (for example \
+         `writes=target`). Prose bullets are only for what no check can hold: what \
+         breaks, where, what was tried. Delete findings when fixed.\n\
          ::end\n"
     );
 
