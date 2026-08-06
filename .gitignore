@@ -34,3 +34,8 @@ editor/github/test/fixture/
 
 # Helpers/GSH workspace-tool artifacts — agent tooling state, not project content.
 /.gsh/
+# dx: the local index is rebuildable from .doc/repo.dxcp
+.doc/index.db
+.doc/index.db-wal
+.doc/index.db-shm
+.doc/local.dxcp

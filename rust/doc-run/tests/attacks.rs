@@ -33,6 +33,10 @@ fn scene(label: &str) -> (PathBuf, RunOptions) {
         document_dir: root.clone(),
         cache_root: root.join("cache"),
         default_timeout: Duration::from_secs(30),
+        // Approved on purpose: these payloads must actually execute — a payload the
+        // review gate refused would leave every assertion green without testing the
+        // sandbox at all.
+        approve: true,
         ..RunOptions::default()
     };
     (root, options)
@@ -41,7 +45,7 @@ fn scene(label: &str) -> (PathBuf, RunOptions) {
 /// Run one shell block and hand back what it printed.
 fn attack(code: &str, options: &RunOptions) -> String {
     let source = format!("::code id=payload lang=bash run\n{code}\n::end\n");
-    let report = run_document(&source, options, &Nowhere);
+    let report = run_document(&source, options, &Nowhere).expect("acyclic run");
     report
         .runs
         .first()
@@ -331,7 +335,7 @@ fn a_backgrounded_process_does_not_outlive_the_block_that_started_it() {
     let source = "::code id=payload lang=bash run timeout=2\n\
          (sleep 20; echo alive > \"$DX_SANDBOX/still-alive\") &\n\
          sleep 30\n::end\n";
-    let report = run_document(source, &options, &Nowhere);
+    let report = run_document(source, &options, &Nowhere).expect("acyclic run");
     assert_eq!(report.runs[0].status, "error");
     assert!(report.runs[0].output.contains("timed out"));
 

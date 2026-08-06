@@ -338,7 +338,14 @@ example is a deliberate two-file change.
   including the blocks it would have to refuse — and folds no `::output` into the document
   and writes no file, because a review that left a record behind would be a read with a
   side effect.
-  Only `dx run` and the `dx_run` tool execute code. This is why a `nav` block is resolved from
+  Only `dx run` and the `dx_run` tool execute code — with one stated exception: the agent
+  read tools (`dx_read`, `dx_source` over MCP) refresh before answering, re-running code
+  whose exact fingerprint *this machine already approved* when its recorded output has gone
+  stale, so an agent never reads dead output and never spends a `dx_run` just to look.
+  The gate holds: unreviewed code stays blocked on a read (the reply says what awaits
+  review), `refresh: false` reads exactly what is stored, and every rendering surface —
+  `dx render`, `dx text`, `dx serve`, the editor, the extension — stays a pure read. This
+  is why a `nav` block is resolved from
   the document it sits in and never by reading another file, and why `dx serve` reads no file,
   writes none, and runs nothing. The one sanctioned outward read is `resolve::hydrate` — a
   document's own stated references (`::code src=`, `path.dx#block` board nodes), confined to
@@ -401,8 +408,16 @@ example is a deliberate two-file change.
   original LZSS) is no longer written and must be decoded **forever**: packs containing it are
   committed in real repositories. Adding a better codec means adding a magic, never converting
   anything.
-- **An agent reads by looking.** `dx_read` returns the rendered pages as images, because a
-  document renders to a page and the page is where the meaning is. Pages break between blocks,
+- **An agent reads by the cheapest route that carries the meaning.** Prose and code are
+  text: `dx_source` (with `section`) costs a fraction of a page image, so it is the default
+  read, and `dx_outline` is the map that keeps every read to one section. `dx_read`'s
+  images are spent on what text cannot carry — boards, diagrams, charts, rendered views —
+  because a document renders to a page and, for those blocks, the page is where the meaning
+  is. Both reads refresh approved stale output first (see the execution bullet above), so
+  what is read is live. A project with no documents yet gets `dx index` (`dx_index`): a
+  scaffolded `index.dx` from the file tree, read whole and improved by its first reader —
+  TODOs replaced with what each area does, `::code src=` blocks for the load-bearing
+  files — so orientation costs one read forever after. Pages break between blocks,
   never through a line, and never leave a heading without the text it titles. A `::board` is
   always a page of its own, captured **independently at its natural canvas size**
   (`render::block_page` → `doc_shot::capture_block`) — in flow the board is fitted into the

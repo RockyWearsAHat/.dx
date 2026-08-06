@@ -87,25 +87,44 @@ pub struct Block {
 ///
 /// A `code` block marked `run` is executable when [`runner_for_language`] maps its
 /// `language` to one of these.
-pub const RUNNERS: &[&str] = &["python", "node", "bash", "rust", "go", "ruby", "deno"];
+pub const RUNNERS: &[&str] = &[
+    "python",
+    "node",
+    "typescript",
+    "bash",
+    "rust",
+    "go",
+    "ruby",
+    "deno",
+    "c",
+    "cpp",
+    "java",
+    "swift",
+];
 
 /// Map a `code` block's `language` to the runner that executes it, or `None` when the
 /// language has no runner and the block is display-only.
 ///
 /// Aliases are folded here so authors can write the language name they know: `py` and
-/// `python3` both run under `python`, `js`/`javascript`/`ts`/`typescript` under `node`,
-/// `sh`/`shell`/`zsh` under `bash`, and `rs` under `rust`.
+/// `python3` both run under `python`, `js`/`javascript` under `node`, `ts` under
+/// `typescript` (the machine's own Node toolchain — `deno` stays its own explicit
+/// choice), `sh`/`shell`/`zsh` under `bash`, `rs` under `rust`, and `c++`/`cc`/`cxx`
+/// under `cpp`.
 #[must_use]
 pub fn runner_for_language(language: &str) -> Option<&'static str> {
     match language.trim().to_ascii_lowercase().as_str() {
         "python" | "python3" | "py" => Some("python"),
         "node" | "js" | "javascript" | "mjs" => Some("node"),
-        "ts" | "typescript" => Some("deno"),
+        "ts" | "typescript" => Some("typescript"),
         "deno" => Some("deno"),
         "bash" | "sh" | "shell" | "zsh" => Some("bash"),
         "rust" | "rs" => Some("rust"),
         "go" | "golang" => Some("go"),
         "ruby" | "rb" => Some("ruby"),
+        "c" => Some("c"),
+        "cpp" | "c++" | "cc" | "cxx" => Some("cpp"),
+        "java" => Some("java"),
+        "swift" => Some("swift"),
         _ => None,
     }
 }
@@ -149,5 +168,43 @@ impl Document {
             }
         }
         ""
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn typescript_routes_to_the_node_toolchain_and_deno_stays_explicit() {
+        assert_eq!(runner_for_language("ts"), Some("typescript"));
+        assert_eq!(runner_for_language("typescript"), Some("typescript"));
+        assert_eq!(runner_for_language("deno"), Some("deno"));
+    }
+
+    #[test]
+    fn direct_toolchain_languages_route_with_their_aliases() {
+        assert_eq!(runner_for_language("c"), Some("c"));
+        for alias in ["cpp", "c++", "cc", "cxx"] {
+            assert_eq!(runner_for_language(alias), Some("cpp"), "{alias}");
+        }
+        assert_eq!(runner_for_language("java"), Some("java"));
+        assert_eq!(runner_for_language("swift"), Some("swift"));
+    }
+
+    #[test]
+    fn every_routed_runner_is_in_the_catalogue() {
+        for language in [
+            "python", "js", "ts", "deno", "sh", "rust", "go", "ruby", "c", "c++", "java", "swift",
+        ] {
+            let runner = runner_for_language(language).expect(language);
+            assert!(RUNNERS.contains(&runner), "{runner} missing from RUNNERS");
+        }
+    }
+
+    #[test]
+    fn an_unknown_language_has_no_runner() {
+        assert_eq!(runner_for_language("css"), None);
+        assert_eq!(runner_for_language(""), None);
     }
 }

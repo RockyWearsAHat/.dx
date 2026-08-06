@@ -220,6 +220,31 @@ pub(crate) fn nodes(body: &str) -> Vec<Node> {
     body.lines().filter_map(parse_node_line).collect()
 }
 
+/// The directed edges every `::board` in `document` states, as `(from, to)` block-id
+/// pairs, in board order and then line order.
+///
+/// An edge on a board says *this, then that* — `- a … to=b` points `a` at `b` — and this
+/// is the one place that meaning is read out for consumers beyond the renderer, so a
+/// second parser of the node-line grammar never exists (dx run's `--follow-edges` orders
+/// execution by these pairs). Targets are returned exactly as the lines state them,
+/// including ids the document does not have; a caller decides what a dangling edge means,
+/// the same way the renderer tolerates one by not drawing it.
+#[must_use]
+pub fn board_edges(document: &Document) -> Vec<(String, String)> {
+    document
+        .blocks
+        .iter()
+        .filter(|block| block.kind == "board")
+        .flat_map(|board| nodes(&board.text))
+        .flat_map(|node| {
+            node.to
+                .iter()
+                .map(|edge| (node.id.clone(), edge.id.clone()))
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
 /// Read one node line, or `None` when the line is blank or carries no id.
 pub(crate) fn parse_node_line(line: &str) -> Option<Node> {
     let trimmed = line.trim();
@@ -1466,6 +1491,30 @@ mod tests {
             "- sketch x=-20 y=380 w=320 h=240 to=ideas:b-t,notes future=yes"
         );
         assert_eq!(parse_node_line(&line), Some(node));
+    }
+
+    #[test]
+    fn board_edges_reads_every_boards_stated_pairs_in_order() {
+        let document = crate::format::parse(
+            "::board id=plan\n\
+             - setup x=0 y=0 to=note:b-t\n\
+             - note x=0 y=200 to=test\n\
+             - test x=0 y=400\n\
+             ::end\n\n\
+             ::board id=aside\n\
+             - test x=0 y=0 to=ghost:r-l:label\n\
+             ::end\n\n\
+             ::paragraph id=prose\nNo edges here.\n::end\n",
+        );
+        assert_eq!(
+            board_edges(&document),
+            vec![
+                ("setup".to_string(), "note".to_string()),
+                ("note".to_string(), "test".to_string()),
+                // A dangling target is returned as stated; the caller decides its meaning.
+                ("test".to_string(), "ghost".to_string()),
+            ]
+        );
     }
 
     #[test]

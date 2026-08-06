@@ -4,6 +4,34 @@
 //! positional words, `--flag`, `--name value`, and `--name=value`. Anything after a lone
 //! `--` is positional, so a file named `--weird` is still reachable.
 
+/// Flags that never take a value, in any command.
+///
+/// The parser is schema-free, so without this list a boolean flag greedily takes the
+/// next word — `dx run --review plan.dx` swallowed the path and then asked for one.
+/// A name belongs here when every command reads it with [`Args::present`] alone; a name
+/// read with [`Args::value`] anywhere (`--header`, `--lang`, `--deps`) must stay out.
+/// Add new boolean flags here as they are born.
+const NEVER_VALUED: &[&str] = &[
+    "all",
+    "approve",
+    "check",
+    "dry",
+    "follow-edges",
+    "force",
+    "fragment",
+    "help",
+    "hidden",
+    "ids",
+    "no-path",
+    "open",
+    "pages",
+    "print",
+    "review",
+    "run",
+    "show-code",
+    "uninstall",
+];
+
 /// Parsed arguments for one command invocation.
 #[derive(Debug, Clone, Default)]
 pub struct Args {
@@ -41,9 +69,10 @@ impl Args {
                     .push((key.to_string(), Some(value.to_string())));
                 continue;
             }
-            let takes_value = raw
-                .get(index)
-                .is_some_and(|next| !next.starts_with("--") || next == "-");
+            let takes_value = !NEVER_VALUED.contains(&name)
+                && raw
+                    .get(index)
+                    .is_some_and(|next| !next.starts_with("--") || next == "-");
             if takes_value {
                 args.options
                     .push((name.to_string(), Some(raw[index].clone())));
@@ -127,6 +156,18 @@ mod tests {
         assert_eq!(args.number("width"), Some(1400));
         assert_eq!(args.value("theme"), Some("dark"));
         assert_eq!(args.number("theme"), None);
+    }
+
+    #[test]
+    fn a_boolean_flag_before_the_path_does_not_eat_it() {
+        // `dx run --review plan.dx` must review plan.dx, not swallow the path as the
+        // flag's value and then complain that no file was given.
+        let args = parse(&["--review", "plan.dx", "--force", "notes.dx"]);
+        assert!(args.present("review"));
+        assert!(args.present("force"));
+        assert_eq!(args.value("review"), None);
+        assert_eq!(args.positional(0), Some("plan.dx"));
+        assert_eq!(args.positional(1), Some("notes.dx"));
     }
 
     #[test]

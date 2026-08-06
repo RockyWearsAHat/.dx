@@ -97,18 +97,21 @@ fn initialize() -> Value {
                          pages and can execute their own code blocks. Treat them as durable, \
                          token-cheap memory: read recorded results instead of re-deriving \
                          them. Find before reading: dx_search or dx_list, then dx_outline to \
-                         map a document as one row per block. Read with dx_read — the \
-                         rendered pages as images, showing the real result: tables, boards, \
-                         and the output code already produced — and pass `section` (any \
-                         block id) to read one part instead of paging through the rest; \
-                         dx_source only when the exact characters matter. Edit with dx_edit, \
-                         one block by id; never rewrite a document for a one-block change. \
-                         Save what you learn as .dx documents. A `::code src=<path>` block \
-                         renders the file's current text, so a document can index code \
-                         without carrying stale copies; a `run` block's captured output is \
-                         kept in the document and fingerprinted, so dx_run re-executes only \
-                         what changed. An index or analysis built this way costs one dx_read \
-                         to consult, forever."
+                         map a document as one row per block, and always index into the \
+                         document — read one `section` (any block id), never page through \
+                         the rest. Prose and code are cheapest as text: dx_source, a \
+                         fraction of what page images cost. Spend dx_read's images only on \
+                         what text cannot carry — boards, diagrams, charts, rendered views. \
+                         Reads are live: stale output of approved code re-runs before you \
+                         see it, so what you read is what the code does now; only \
+                         unreviewed code waits, and the read says so. Edit with dx_edit, \
+                         one block by id — an edited runnable block runs at once, output \
+                         fresh. Save what you learn as documents: `::code src=<path>` \
+                         indexes a file as its current text, never a stale copy, and run \
+                         output is fingerprinted in place, so an index costs one section \
+                         read to consult, forever. If dx_list finds no documents, offer \
+                         dx_index: it scaffolds index.dx from the tree — read it whole and \
+                         improve it before other work."
     })
 }
 
@@ -213,13 +216,17 @@ mod tests {
         assert_eq!(response["result"]["serverInfo"]["name"], "dx");
         assert!(response["result"]["capabilities"]["tools"].is_object());
         let instructions = response["result"]["instructions"].as_str().expect("text");
+        // The guidance is a token economy: text before images, one section at a time,
+        // live output on every read, one block per edit, durable results in documents —
+        // and a scaffolded index for a project that has none yet.
+        assert!(instructions.contains("dx_source"));
         assert!(instructions.contains("dx_read"));
         assert!(instructions.contains("images"));
-        // The guidance is a token economy: read one section, edit one block, and keep
-        // durable results in documents instead of re-deriving them each session.
         assert!(instructions.contains("section"));
+        assert!(instructions.contains("live"));
         assert!(instructions.contains("dx_edit"));
         assert!(instructions.contains("::code src="));
+        assert!(instructions.contains("dx_index"));
     }
 
     #[test]
