@@ -146,15 +146,22 @@ Rendering never executes and never writes: `dx render`, `dx text`, `dx serve`, t
 and the extension only show what is stored. Code runs in exactly three places — `dx run`
 (or the `dx_run` tool); the agent read tools' refresh, which re-runs only code this machine
 *already approved* when its recorded output goes stale; and `dx_edit` running the runnable
-block it just rewrote, the agent's version of the surface rule that an edited field runs
-when it closes. `DX_NO_EXEC=1` turns execution off. Code that does run is confined by the kernel — Seatbelt on
-macOS, bubblewrap on Linux — with no network, and runs only after its exact code has been
-reviewed and approved on this machine. Inside the sandbox a block may read anything except
-credential stores, and write only its own scratch directory — `$HOME`, `$TMPDIR`, and
-`$DX_SANDBOX` all point there, so state keyed off a real home (`~/.cargo`, `~/.gitconfig`)
-is deliberately out of reach, and `/tmp` and the workspace stay read-only. Libraries fetch
-during setup, declared with `deps=`; a failure shaped like the boundary (a denied write, an
-unreachable network) says so in the block's own output. A block whose work belongs in the
+block it just rewrote. `DX_NO_EXEC=1` turns execution off. Code that does run is confined by the kernel — Seatbelt on
+macOS, bubblewrap on Linux — with no network, and runs only after it has been reviewed on
+this machine. **A local edit is that review**: a block you just typed — through the editor,
+`dx set`, or `dx_edit` — is approved as saved, because the hand writing the code is the
+reviewer the gate exists to consult; a document that merely *arrived* (cloned, synced,
+handed over) still waits for `--review`/`--approve`. Approval names the code and its
+powers, not its data: editing a file a block declares with `reads=` stales the recorded
+output and re-runs the already-reviewed code, while editing the code itself re-opens
+review. Inside the sandbox a block's world is its project: it may read the repository its
+document lives in, the run caches, and the system with its toolchains — never the rest of
+your files, and never credential stores — and write only its own scratch directory.
+`$HOME`, `$TMPDIR`, and `$DX_SANDBOX` all point at that scratch, so state keyed off a real
+home (`~/.gitconfig`) is deliberately out of reach, and `/tmp` and the workspace stay
+read-only. Libraries fetch
+during setup, declared with `deps=`; a failure shaped like the boundary (a denied write or
+read, an unreachable network) says so in the block's own output. A block whose work belongs in the
 document's own folder — a build directory, generated files, a test run over the repository
 beside the document — declares it with `writes=target,generated`: each folder must sit
 inside the document's folder (the `.doc` store and any symlinked way out are refused), it

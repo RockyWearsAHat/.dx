@@ -88,6 +88,12 @@ pub fn run_fmt(args: &Args) -> Result<String, String> {
 /// operation the editing surfaces perform when a reader rewrites the tag line above a
 /// block, so a person and an agent retype a block through one implementation.
 pub fn run_set(args: &Args) -> Result<String, String> {
+    set_in(args, &doc_run::RunOptions::default().cache_root)
+}
+
+/// The body of [`run_set`], with the approval ledger's location stated rather than
+/// defaulted, so the suite never approves anything in the developer's real one.
+fn set_in(args: &Args, cache_root: &Path) -> Result<String, String> {
     let path = path_argument(args, 0, "a .dx file is required")?;
     let id = args
         .positional(1)
@@ -99,14 +105,36 @@ pub fn run_set(args: &Args) -> Result<String, String> {
         let header = args.value("header").unwrap_or_default();
         let (updated, focus) = edit::replace_block(&workspace::read(&path)?, id, header, &body)?;
         workspace::save(&path, &parse(&updated))?;
+        let note = edit_is_the_review(&updated, &focus, cache_root);
         // The replacement's id, bare, the way `dx insert` answers: it is the block the
         // caller's cursor belongs in next, and a surface reads it straight off stdout.
-        return Ok(format!("{focus}\n"));
+        return Ok(format!("{focus}\n{note}"));
     }
 
     let updated = edit::set_block(&workspace::read(&path)?, id, &body)?;
     workspace::save(&path, &parse(&updated))?;
-    Ok(format!("updated `{id}` in {}\n", path.display()))
+    let note = edit_is_the_review(&updated, id, cache_root);
+    Ok(format!("updated `{id}` in {}\n{note}", path.display()))
+}
+
+/// The edit is the review: a runnable code block this local command just rewrote is
+/// approved as saved, so the next run — the surface's immediate one, or the reader's
+/// plain `dx run` — executes without a second gate. This is the command-line spelling of
+/// the surface rule that the hand typing the code is the reviewer the gate asks for; a
+/// document that merely *arrived* here goes through `dx sync`, which never comes near
+/// this. A ledger that could not be written is reported in the answer, never silently
+/// dropped — and never fails the edit, which already saved.
+fn edit_is_the_review(updated: &str, id: &str, cache_root: &Path) -> String {
+    let document = parse(updated);
+    let Some(block) = document.blocks.iter().find(|block| block.id == id) else {
+        return String::new();
+    };
+    match doc_run::approve_edited_block(block, cache_root) {
+        Ok(_) => String::new(),
+        Err(sentence) => {
+            format!("note: saved, but the edit's approval could not be recorded — {sentence}\n")
+        }
+    }
 }
 
 /// `dx append <file>` — add a block to the end of a document.
@@ -115,6 +143,11 @@ pub fn run_set(args: &Args) -> Result<String, String> {
 /// set: the new block's id is stable against the document's existing ids, and an explicit
 /// `--id` some block already answers to is refused with a sentence, never silently renamed.
 pub fn run_append(args: &Args) -> Result<String, String> {
+    append_in(args, &doc_run::RunOptions::default().cache_root)
+}
+
+/// The body of [`run_append`], with the approval ledger's location stated for the suite.
+fn append_in(args: &Args, cache_root: &Path) -> Result<String, String> {
     let path = path_argument(args, 0, "a .dx file is required")?;
     refuse_extra_positionals(args, 1)?;
     let kind = args.value("type").unwrap_or("paragraph");
@@ -132,9 +165,10 @@ pub fn run_append(args: &Args) -> Result<String, String> {
         deps: args.value("deps").unwrap_or_default(),
     };
     let last = parse(&source).blocks.last().map(|block| block.id.clone());
-    let (updated, _) = edit::insert_after(&source, last.as_deref(), &insertion)?;
+    let (updated, id) = edit::insert_after(&source, last.as_deref(), &insertion)?;
     workspace::save(&path, &parse(&updated))?;
-    Ok(format!("appended to {}\n", path.display()))
+    let note = edit_is_the_review(&updated, &id, cache_root);
+    Ok(format!("appended to {}\n{note}", path.display()))
 }
 
 /// `dx source <file> --block ID` — the exact characters of one block, and nothing else.
@@ -168,6 +202,11 @@ pub fn run_source(args: &Args) -> Result<String, String> {
 /// could name at the end of a document but not in the middle of it is a difference between
 /// two spellings of the same edit, and nothing an author could explain.
 pub fn run_insert(args: &Args) -> Result<String, String> {
+    insert_in(args, &doc_run::RunOptions::default().cache_root)
+}
+
+/// The body of [`run_insert`], with the approval ledger's location stated for the suite.
+fn insert_in(args: &Args, cache_root: &Path) -> Result<String, String> {
     let path = path_argument(args, 0, "a .dx file is required")?;
     refuse_extra_positionals(args, 1)?;
     let kind = args.value("type").unwrap_or("paragraph");
@@ -184,7 +223,8 @@ pub fn run_insert(args: &Args) -> Result<String, String> {
     let (updated, id) =
         edit::insert_after(&workspace::read(&path)?, args.value("after"), &insertion)?;
     workspace::save(&path, &parse(&updated))?;
-    Ok(format!("{id}\n"))
+    let note = edit_is_the_review(&updated, &id, cache_root);
+    Ok(format!("{id}\n{note}"))
 }
 
 /// Refuse `--lang`/`--run`/`--deps` on a block that is not code, where the format would
@@ -467,6 +507,68 @@ mod tests {
         assert!(!raw.contains("Old text"));
         assert!(raw.contains("::paragraph id=tail\nKeep me\n::end"));
         assert!(raw.contains("::heading level=1 id=h\nTitle\n::end"));
+    }
+
+    /// The edit is the review: a runnable block typed through `dx set` (or authored by
+    /// `dx insert`/`dx append`) is approved as saved, so the next plain run executes it
+    /// instead of blocking on a gate the editor already passed by typing the code.
+    #[test]
+    fn a_locally_edited_runnable_block_needs_no_second_review() {
+        let root = scratch("edit-review");
+        let path = root.join("doc.dx");
+        let file = path.to_string_lossy().into_owned();
+        let cache = root.join("cache");
+        workspace::write_text(&path, "::code id=job lang=bash run\necho old\n::end\n")
+            .expect("seed");
+
+        set_in(&args(&[&file, "job", "--text", "echo typed"]), &cache).expect("set");
+
+        let report = doc_run::run_document(
+            &workspace::read(&path).expect("resolve"),
+            &doc_run::RunOptions {
+                document_dir: root.clone(),
+                cache_root: cache.clone(),
+                ..doc_run::RunOptions::default()
+            },
+            &doc_core::resolve::Nowhere,
+        )
+        .expect("run");
+        assert_eq!(report.runs[0].status, "ok", "{}", report.runs[0].output);
+
+        // A freshly authored runnable block is reviewed by the hand that wrote it too.
+        let inserted = insert_in(
+            &args(&[
+                &file,
+                "--after",
+                "job",
+                "--type",
+                "code",
+                "--lang",
+                "bash",
+                "--run",
+                "--text",
+                "echo inserted",
+            ]),
+            &cache,
+        )
+        .expect("insert");
+        let review = doc_run::run_document(
+            &workspace::read(&path).expect("resolve"),
+            &doc_run::RunOptions {
+                document_dir: root,
+                cache_root: cache,
+                only: Some(inserted.lines().next().unwrap_or_default().to_string()),
+                review_only: true,
+                ..doc_run::RunOptions::default()
+            },
+            &doc_core::resolve::Nowhere,
+        )
+        .expect("review");
+        assert!(
+            review.runs[0].output.contains("approval approved"),
+            "{}",
+            review.runs[0].output
+        );
     }
 
     #[test]
