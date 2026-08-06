@@ -318,6 +318,13 @@ pub fn escape_style(value: &str) -> String {
 /// reader chooses to follow, and `https:` belongs there. This judges a *fetch*, which fires
 /// the instant the page paints and which the reader never agreed to. Only an inert `data:`
 /// image qualifies — a document that carries its own artwork — and nothing that names a host.
+/// The raster media types a page may carry inline as `data:` URIs — the one allow-list
+/// shared by author markup (`is_safe_url`, `is_fetchless_url`) and hydration
+/// ([`crate::resolve`] embedding `::image src=` files). SVG is deliberately absent: it
+/// is a document that can script, not a picture.
+pub(crate) const RASTER_IMAGE_MEDIA_TYPES: [&str; 4] =
+    ["image/png", "image/jpeg", "image/gif", "image/webp"];
+
 fn is_fetchless_url(target: &str) -> bool {
     let flattened: String = decode_entities(target)
         .chars()
@@ -328,7 +335,7 @@ fn is_fetchless_url(target: &str) -> bool {
         return false;
     }
     match flattened.strip_prefix("data:") {
-        Some(rest) => ["image/png", "image/jpeg", "image/gif", "image/webp"]
+        Some(rest) => RASTER_IMAGE_MEDIA_TYPES
             .iter()
             .any(|kind| rest.starts_with(kind)),
         // No scheme at all is a relative path inside whatever already loaded the document.
@@ -672,7 +679,7 @@ fn is_safe_url(value: &str) -> bool {
 
     // A `data:` image is useful and inert — except SVG, which is a document that can script.
     if let Some(rest) = lower.strip_prefix("data:") {
-        return ["image/png", "image/jpeg", "image/gif", "image/webp"]
+        return RASTER_IMAGE_MEDIA_TYPES
             .iter()
             .any(|kind| rest.starts_with(kind));
     }

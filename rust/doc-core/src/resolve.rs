@@ -405,6 +405,20 @@ pub fn hydrate(document: &mut Document, resolver: &dyn Resolver) -> Vec<Unresolv
             continue;
         };
         match resolver.binary(&path) {
+            Some(bytes) if bytes.len() > MAX_IMAGE_BYTES => {
+                let sentence = format!(
+                    "{path} is too large to embed — an image travels inside the rendered \
+                     page, and this one is {} bytes against a limit of {MAX_IMAGE_BYTES}. \
+                     Export a smaller file.",
+                    bytes.len()
+                );
+                block.alt = sentence.clone();
+                unresolved.push(Unresolved {
+                    block: block.id.clone(),
+                    reference: path,
+                    sentence,
+                });
+            }
             Some(bytes) => {
                 block.src = format!("data:{media};base64,{}", crate::base64::encode(&bytes));
             }
@@ -427,11 +441,16 @@ pub fn hydrate(document: &mut Document, resolver: &dyn Resolver) -> Vec<Unresolv
     unresolved
 }
 
+/// Largest image file hydration will embed. A `data:` URI travels inside every render of
+/// the page — a capture, an export, a tool result — and an unbounded one is a page nothing
+/// can carry ("bound anything sized by untrusted input"; the document names the file).
+const MAX_IMAGE_BYTES: usize = 8 * 1024 * 1024;
+
 /// The media type an `::image` may embed, judged by the file's extension.
 ///
-/// The same allow-list as [`crate::render::escape`]'s `data:` images — raster formats a
-/// page can show and cannot execute. SVG is deliberately absent: it is a document that
-/// can script, not a picture.
+/// Every value is one of [`crate::render::escape::RASTER_IMAGE_MEDIA_TYPES`] — the same
+/// allow-list author markup is held to, pinned by test. SVG is deliberately absent: it
+/// is a document that can script, not a picture.
 fn image_media_type(path: &str) -> Option<&'static str> {
     let extension = path.rsplit_once('.')?.1.to_ascii_lowercase();
     match extension.as_str() {
@@ -692,6 +711,37 @@ mod tests {
         assert_eq!(document.blocks[0].src, "art/logo.svg");
         assert_eq!(document.blocks[1].src, "https://example.com/x.png");
         assert_eq!(document.blocks[2].src, "data:image/png;base64,AAAA");
+    }
+
+    /// The drift guard between the two halves of one rule: hydration must never embed a
+    /// media type the escape allow-list would refuse in author markup.
+    #[test]
+    fn every_embeddable_media_type_is_one_the_escape_allow_list_keeps() {
+        for extension in ["png", "jpg", "jpeg", "gif", "webp"] {
+            let media = image_media_type(&format!("art/file.{extension}"))
+                .expect("a raster extension embeds");
+            assert!(
+                crate::render::escape::RASTER_IMAGE_MEDIA_TYPES.contains(&media),
+                "{media} is not on the escape allow-list"
+            );
+        }
+        assert_eq!(image_media_type("art/file.svg"), None);
+        assert_eq!(image_media_type("no-extension"), None);
+    }
+
+    #[test]
+    fn an_image_past_the_size_bound_is_a_sentence_not_an_embed() {
+        let mut document = parse("::image id=big src=big.png\n::end\n");
+        let mut provided = Provided::new();
+        provided.add_binary("big.png", &vec![0u8; MAX_IMAGE_BYTES + 1]);
+        let notes = hydrate(&mut document, &provided);
+        assert_eq!(notes.len(), 1);
+        assert!(notes[0].sentence.contains("too large"));
+        assert_eq!(
+            document.blocks[0].src, "big.png",
+            "src must stay a reference"
+        );
+        assert!(document.blocks[0].alt.contains("too large"));
     }
 
     #[test]
