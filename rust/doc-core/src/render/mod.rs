@@ -17,7 +17,7 @@
 //! no network — so the same input always yields the same bytes.
 
 pub(crate) mod board;
-mod escape;
+pub(crate) mod escape;
 mod field;
 mod html;
 mod inline;

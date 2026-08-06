@@ -380,7 +380,6 @@ pub fn run_remove(args: &Args) -> Result<String, String> {
     Ok(format!("removed `{id}` from {}\n", path.display()))
 }
 
-/// Read the new block body from `--text`, `--from <file>`, or standard input.
 /// Refuse positional words past the ones a command takes.
 ///
 /// A body passed bare — `dx set doc.dx block print(1)` — used to be silently ignored:
@@ -397,6 +396,7 @@ fn refuse_extra_positionals(args: &Args, expected: usize) -> Result<(), String> 
     }
 }
 
+/// Read the new block body from `--text`, `--from <file>`, or standard input.
 fn body_argument(args: &Args) -> Result<String, String> {
     if let Some(text) = args.value("text") {
         if text != "-" {

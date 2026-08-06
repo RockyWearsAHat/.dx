@@ -456,7 +456,7 @@ example is a deliberate two-file change.
 
 ```bash
 cd rust
-cargo test                                  # must be green (764 tests)
+cargo test                                  # must be green (797 tests)
 cargo clippy --all-targets -- -D warnings   # must be clean
 cargo fmt --check                           # must be clean
 ```
