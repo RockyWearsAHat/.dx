@@ -308,6 +308,8 @@ pub fn run_document(
             }
         };
         let fingerprint = fingerprint(runner, &block.text, &deps, &reads, &writes);
+        let read_paths: Vec<String> = reads.iter().map(|(path, _)| path.clone()).collect();
+        let approval = approval_fingerprint(runner, &block.text, &deps, &read_paths, &writes);
         let existing = existing_output(&document, index, &block.id);
 
         // Review mode: show what would run without executing — and without recording
@@ -320,8 +322,8 @@ pub fn run_document(
                 exit: 0,
                 output: review_text(
                     &block.text,
-                    &fingerprint,
-                    ledger.is_approved(&fingerprint),
+                    &approval,
+                    ledger.is_approved(&approval),
                     &writes,
                 ),
                 duration_ms: 0,
@@ -330,7 +332,7 @@ pub fn run_document(
         }
 
         if options.approve {
-            if let Err(sentence) = ledger.approve(&fingerprint) {
+            if let Err(sentence) = ledger.approve(&approval) {
                 runs.push(BlockRun {
                     id: block.id.clone(),
                     language: block.language.clone(),
@@ -345,8 +347,10 @@ pub fn run_document(
 
         // Approval is this machine's own record and nothing else. The document's `::output`
         // block cannot vouch for the code above it: it is content the same hand wrote, and
-        // its `hash=` is computable by whoever authored the block.
-        let approved = ledger.is_approved(&fingerprint);
+        // its `hash=` is computable by whoever authored the block. Approval names the code
+        // and its powers — not the current text of its `reads=` files — so editing an input
+        // re-runs reviewed code instead of re-opening review of a program nobody changed.
+        let approved = ledger.is_approved(&approval);
 
         // The gate stands ahead of the cache, so a document that arrives carrying a matching
         // run record is still reviewed rather than quietly accepted as already proven. The
@@ -357,7 +361,7 @@ pub fn run_document(
                 language: block.language.clone(),
                 status: "blocked".to_string(),
                 exit: BLOCKED_EXIT,
-                output: pending_review(&fingerprint),
+                output: pending_review(&approval),
                 duration_ms: 0,
             });
             continue;
@@ -479,36 +483,48 @@ fn existing_output<'a>(document: &'a Document, index: usize, id: &str) -> Option
 /// saw, which is the lie `reads=` exists to prevent.
 fn declared_reads(block: &Block, resolver: &dyn Resolver) -> Result<Vec<(String, String)>, String> {
     let mut reads = Vec::new();
-    for path in block
-        .reads
-        .split(',')
-        .map(str::trim)
-        .filter(|p| !p.is_empty())
-    {
-        let Some(confined) = resolve::confined(path) else {
-            return Err(format!(
-                "{path} is not a path this block may declare — a `reads=` file stays \
-                 inside the document's own folder, relative and walking downward."
-            ));
-        };
-        let Some(text) = resolver.file(confined) else {
+    for confined in declared_read_paths(&block.reads)? {
+        let Some(text) = resolver.file(&confined) else {
             return Err(format!(
                 "{confined} could not be read here — the block declares it with `reads=`, \
                  and its content is part of what decides whether the recorded output is \
                  still current. Check the path against the document's folder."
             ));
         };
-        reads.push((confined.to_string(), text));
+        reads.push((confined, text));
     }
     Ok(reads)
+}
+
+/// The lawful paths of a `reads=` declaration, confined and in declaration order.
+///
+/// This is the path list both identities agree on: [`fingerprint`] pairs each with its
+/// current text, [`approval_fingerprint`] takes the paths alone — so the two can never
+/// disagree about *which* files a block declared.
+fn declared_read_paths(reads: &str) -> Result<Vec<String>, String> {
+    reads
+        .split(',')
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+        .map(|path| {
+            resolve::confined(path).map(str::to_string).ok_or_else(|| {
+                format!(
+                    "{path} is not a path this block may declare — a `reads=` file stays \
+                     inside the document's own folder, relative and walking downward."
+                )
+            })
+        })
+        .collect()
 }
 
 /// Fingerprint the inputs that decide a block's output: runner, code, dependencies, the
 /// current text of every file the block declares it reads, and the write grant it asks for.
 ///
-/// The full digest, untruncated: this value is what the approval ledger trusts, and a
-/// truncated hash is one a hostile author could collide — a benign block the reader
-/// approves and a payload sharing its shortened fingerprint.
+/// This is the *staleness* identity — the `hash=` a run records — and any of its inputs
+/// changing means the recorded output no longer describes what the block would do now.
+///
+/// The full digest, untruncated: a truncated hash is one a hostile author could collide —
+/// a benign block the reader approves and a payload sharing its shortened fingerprint.
 ///
 /// The grant is *prepended*, never appended: the material's tail is a `reads=` file's
 /// text, which the document's author controls, so a suffix could be forged into an
@@ -529,6 +545,37 @@ fn fingerprint(
         material.push('\u{1f}');
         material.push_str(text);
     }
+    if !writes.is_empty() {
+        material = format!("writes={}\u{1e}{material}", writes.join(","));
+    }
+    sha256_hex(material.as_bytes())
+}
+
+/// The identity an approval names: the code and its powers.
+///
+/// Runner, dependencies, the exact code, the *paths* it declares it reads, and the
+/// folders its `writes=` grant opens — everything a reviewer weighs when deciding
+/// whether this program may run. The current text of the `reads=` files is deliberately
+/// absent: that text is the block's *data*, and editing data stales the recorded output
+/// (the run [`fingerprint`] changes) without re-opening review of a program nobody
+/// touched — reviewed code re-runs over new inputs, which is what a verify block is for.
+/// Changing *which* files are read edits the block's header, so it lands here.
+///
+/// The material opens with its own domain tag, so no run fingerprint's material can
+/// collide into an approval's; the grant prepends for the same reason as in
+/// [`fingerprint`].
+fn approval_fingerprint(
+    runner: &str,
+    code: &str,
+    deps: &[String],
+    read_paths: &[String],
+    writes: &[String],
+) -> String {
+    let mut material = format!(
+        "approval\u{1e}{runner}\u{1f}{}\u{1f}{code}\u{1f}reads={}",
+        deps.join(","),
+        read_paths.join(",")
+    );
     if !writes.is_empty() {
         material = format!("writes={}\u{1e}{material}", writes.join(","));
     }
@@ -642,6 +689,43 @@ fn review_text(code: &str, fingerprint: &str, approved: bool, writes: &[String])
     )
 }
 
+/// Record this machine's approval of `block` as the edit that produced it left it —
+/// because a local edit *is* the review.
+///
+/// The gate exists so code nobody on this machine has looked at cannot run. A person or
+/// agent who just rewrote a block here is exactly the reviewer it wants: they are looking
+/// at the code they typed, the same way the editing surface's run control treats the
+/// click beside a block as the review of that block. Editing surfaces call this after
+/// saving, so the next run — or the next live read — executes without asking again.
+/// Adoption and sync must never call it: bringing a stranger's document into the
+/// workspace is not an edit, and its code stays unreviewed.
+///
+/// Returns the approval fingerprint recorded, or `None` when there is nothing to
+/// approve: a block that is not runnable code, one whose code lives in a `src=` file
+/// (the run resolves that text; the edit did not touch it), or one declaring an unlawful
+/// `reads=`/`writes=` path — the run will refuse that block with its own sentence, and
+/// recording a decision about it here would approve a block that can never run.
+///
+/// # Errors
+/// Returns a sentence when the ledger itself could not be written — a decision the
+/// caller made must never be dropped silently.
+pub fn approve_edited_block(block: &Block, cache_root: &Path) -> Result<Option<String>, String> {
+    let Some(runner) = runnable_runner(block) else {
+        return Ok(None);
+    };
+    if !block.src.is_empty() {
+        return Ok(None);
+    }
+    let deps = parse_deps(&block.deps);
+    let (Ok(read_paths), Ok(writes)) = (declared_read_paths(&block.reads), declared_writes(block))
+    else {
+        return Ok(None);
+    };
+    let approval = approval_fingerprint(runner, &block.text, &deps, &read_paths, &writes);
+    approvals::Ledger::at(cache_root).approve(&approval)?;
+    Ok(Some(approval))
+}
+
 /// The sentence refusing an unapproved block, naming the way forward.
 ///
 /// The options are named bare — `review`, `approve`, `force` — because the same words are
@@ -688,7 +772,15 @@ fn execute(
     // document's folders writable would be a fetch that can edit the project, and no
     // install needs that.
     let writable = vec![dirs.block.clone(), dirs.toolchains.clone()];
-    let installing = Grant::offline(writable.clone()).with_network();
+    // What a block may read: the repository its document belongs to, and the run caches.
+    // Everything else of the user's is outside the boundary — see `confine`.
+    let readable = vec![
+        confine::repo_root(&options.document_dir),
+        options.cache_root.clone(),
+    ];
+    let installing = Grant::offline(writable.clone())
+        .reading(readable.clone())
+        .with_network();
     if let Err(message) = workdir::prepare(&dirs.block, &prepared, &installing, timeout) {
         return blocked(&message);
     }
@@ -703,7 +795,7 @@ fn execute(
     writable.extend(granted);
     let command = match confine::confine(
         &home_in_block(&prepared.run, block, &dirs),
-        &Grant::offline(writable),
+        &Grant::offline(writable).reading(readable),
     ) {
         Ok(command) => command,
         Err(message) => return blocked(&message),
@@ -753,14 +845,15 @@ fn sandbox_hint(output: &str) -> Option<&'static str> {
     }
     if WRITE_SHAPED.iter().any(|mark| lowered.contains(mark)) {
         return Some(
-            "note: the dx sandbox lets a block write only its own directory — $DX_SANDBOX, \
-             where $HOME and $TMPDIR already point. /tmp and the document's folder stay \
-             read-only. Grant the folders this code must write with `writes=` on the block \
-             (`writes=target,generated`): folders inside the document's own folder, created \
-             if missing, and the grant is part of the fingerprint, so it is reviewed exactly \
-             like the code. It grants folders, never loose files — a tool that rewrites one \
-             beside the document (cargo's Cargo.lock) needs the flag that tells it not to \
-             (`cargo test --locked`).",
+            "note: the dx sandbox scopes a block to its project. Reads reach the \
+             document's own repository, the run caches, and the system toolchains — never \
+             the rest of the machine. Writes land only in the block's own directory — \
+             $DX_SANDBOX, where $HOME and $TMPDIR already point — plus the folders granted \
+             with `writes=` on the block (`writes=target,generated`): folders inside the \
+             document's own folder, created if missing, and the grant is part of the \
+             fingerprint, so it is reviewed exactly like the code. It grants folders, \
+             never loose files — a tool that rewrites one beside the document (cargo's \
+             Cargo.lock) needs the flag that tells it not to (`cargo test --locked`).",
         );
     }
     None
@@ -1638,6 +1731,122 @@ mod tests {
         assert!(report.runs[0].output.contains("anyway"));
         // The notice is in the document's own record, not just the terminal report.
         assert!(report.source.contains(FORCED_NOTICE));
+    }
+
+    #[test]
+    fn approval_names_the_code_and_its_powers_never_the_data() {
+        let base = approval_fingerprint("python", "print(1)", &[], &["a.css".into()], &[]);
+        // The same program over the same declared paths is one approval — a `reads=`
+        // file's text is not an input here at all, which is the whole point.
+        assert_eq!(
+            base,
+            approval_fingerprint("python", "print(1)", &[], &["a.css".into()], &[])
+        );
+        assert_ne!(
+            base,
+            approval_fingerprint("python", "print(2)", &[], &["a.css".into()], &[])
+        );
+        assert_ne!(
+            base,
+            approval_fingerprint("python", "print(1)", &[], &["b.css".into()], &[])
+        );
+        assert_ne!(
+            base,
+            approval_fingerprint(
+                "python",
+                "print(1)",
+                &[],
+                &["a.css".into()],
+                &["target".into()]
+            )
+        );
+        assert_ne!(
+            base,
+            approval_fingerprint(
+                "python",
+                "print(1)",
+                &["rich".into()],
+                &["a.css".into()],
+                &[]
+            )
+        );
+        assert_eq!(base.len(), 64, "the full digest is the approval identity");
+    }
+
+    #[test]
+    fn an_edited_input_re_runs_reviewed_code_without_re_opening_review() {
+        let options = gate_options("input-edit");
+        let source = "::code id=check lang=bash run reads=site.css\necho verified\n::end\n";
+        let mut provided = resolve::Provided::new();
+        provided.add_file("site.css", "body{}");
+        let first = run_document(
+            source,
+            &RunOptions {
+                approve: true,
+                ..options.clone()
+            },
+            &provided,
+        )
+        .expect("acyclic run");
+        assert_eq!(first.runs[0].status, "ok");
+
+        // The input changes; the code does not. The recorded output is stale (its hash
+        // covered the old text), and the reviewed program re-runs over the new data —
+        // it is not sent back through review, because nobody edited it.
+        let mut edited = resolve::Provided::new();
+        edited.add_file("site.css", "body{color:red}");
+        let second = run_document(&first.source, &options, &edited).expect("acyclic run");
+        assert_eq!(
+            second.runs[0].status, "ok",
+            "reviewed code runs over new data: {}",
+            second.runs[0].output
+        );
+        assert_eq!(second.executed(), 1, "stale output re-ran, not skipped");
+    }
+
+    #[test]
+    fn a_local_edit_is_the_review() {
+        let options = gate_options("edit-review");
+        let block = Block {
+            kind: "code".into(),
+            id: "typed".into(),
+            language: "bash".into(),
+            run: true,
+            text: "echo typed here".into(),
+            ..Block::default()
+        };
+        approve_edited_block(&block, &options.cache_root)
+            .expect("ledger writable")
+            .expect("a runnable block records an approval");
+
+        // The block arrives in a document exactly as the edit left it: a plain run
+        // executes without asking again, because the hand that typed it reviewed it.
+        let report = run_document(
+            "::code id=typed lang=bash run\necho typed here\n::end\n",
+            &options,
+            &resolve::Nowhere,
+        )
+        .expect("acyclic run");
+        assert_eq!(report.runs[0].status, "ok", "{}", report.runs[0].output);
+
+        // Nothing to approve: prose, and code whose text lives in a `src=` file the
+        // edit did not touch.
+        let prose = Block {
+            kind: "paragraph".into(),
+            id: "p".into(),
+            text: "words".into(),
+            ..Block::default()
+        };
+        assert!(approve_edited_block(&prose, &options.cache_root)
+            .expect("ledger")
+            .is_none());
+        let sourced = Block {
+            src: "script.sh".into(),
+            ..block
+        };
+        assert!(approve_edited_block(&sourced, &options.cache_root)
+            .expect("ledger")
+            .is_none());
     }
 
     #[test]

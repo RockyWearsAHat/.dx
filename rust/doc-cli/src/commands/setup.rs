@@ -534,12 +534,16 @@ RUN
               block lets later blocks (on a board or not) run before it; only
               stated edges order side effects. A cycle among runnable blocks is
               refused with a sentence naming it.
-              A block runs inside a kernel sandbox: read anything (minus
+              A block runs inside a kernel sandbox scoped to its project: read
+              the repository the document lives in, the run caches, and the
+              system with its toolchains (never the rest of your files, never
               credential stores), write only its own scratch directory, and no
               network while the block's code runs — libraries fetch during
               setup, declared with deps=. $HOME, $TMPDIR, and $DX_SANDBOX all
               point at that scratch directory, so state keyed off a real home
-              (~/.cargo, ~/.gitconfig) is deliberately out of reach. A block
+              (~/.gitconfig) is deliberately out of reach. A block you just
+              edited runs without a second gate — the edit is the review — while
+              a document that merely arrived waits for --review/--approve. A block
               whose work belongs in the document's own folder — a build
               directory, generated files — declares it with writes=target,gen:
               each folder must sit inside the document's folder (the store and

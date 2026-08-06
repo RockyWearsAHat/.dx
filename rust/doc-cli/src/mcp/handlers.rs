@@ -482,6 +482,14 @@ fn edit_in(args: &Value, root: &Path, cache_root: PathBuf) -> ToolResult {
                 "Edited, but running the block failed: {reason}"
             ))),
         }
+    } else if runnable {
+        // `run: false` declines the immediate run, not the review the edit already was:
+        // the block is approved as typed, so the next run or live read executes it.
+        if let Err(sentence) = doc_run::approve_edited_block(&document.blocks[index], &cache_root) {
+            content.push(text_content(&format!(
+                "Edited, but the approval could not be recorded: {sentence}"
+            )));
+        }
     }
     Ok(content)
 }

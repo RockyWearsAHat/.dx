@@ -227,10 +227,13 @@ A `code` block marked `run` is executable. `deps` names the libraries to install
 running, `timeout` caps its runtime in seconds, and `format` (`svg` or `html`) declares
 that the block prints markup which should be rendered rather than quoted. `reads` names
 the sibling files the code reads (comma-separated, path-law-confined): their current text
-joins the fingerprint, so editing a declared file makes the recorded output stale exactly
-like editing the code would — the record never claims "no changes" about content it read.
-A declared file that cannot be resolved blocks the run with a sentence, never a silent
-fingerprint that omits it.
+joins the run fingerprint (`hash=`), so editing a declared file makes the recorded output
+stale exactly like editing the code would — the record never claims "no changes" about
+content it read. Review's approval is a separate, narrower identity: the code and its
+powers (runner, deps, code, the `reads=` *paths*, the `writes=` grant), never the declared
+files' text — so an edited input re-runs approved code by itself, while an edited block or
+header re-opens review. A declared file that cannot be resolved blocks the run with a
+sentence, never a silent fingerprint that omits it.
 
 `writes` names the folders of the document's own the block may write (comma-separated,
 path-law-confined, created if missing) — the sandbox otherwise keeps everything but the

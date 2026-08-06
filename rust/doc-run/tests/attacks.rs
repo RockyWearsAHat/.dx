@@ -236,8 +236,67 @@ fn a_block_that_reads_a_file_has_nowhere_to_send_it() {
     assert!(!output.contains("SENT"), "the file was uploaded: {output}");
 }
 
-/// Credentials are the exception to "reads are open": these are denied outright, so a
-/// document cannot even put a key on the page for a shoulder to read over.
+/// Reads are scoped to the repository the document lives in: the rest of the machine —
+/// here, the temp tree beside the scene — is dark. The project is a block's whole world.
+#[test]
+fn a_block_cannot_read_outside_the_repository_its_document_lives_in() {
+    if !confined() {
+        return;
+    }
+    let (root, options) = scene("read-outside");
+    // Inside the scope: a file beside the document reads normally — that is what a block
+    // is *for* — so a failure below is the boundary, not a broken interpreter.
+    fs::write(root.join("beside.txt"), "the project's own data").expect("fixture");
+    let inside = attack("cat beside.txt", &options);
+    assert!(
+        inside.contains("the project's own data"),
+        "the project itself must stay readable: {inside}"
+    );
+
+    // Outside it: the document's folder carries no repository marker, so it is its own
+    // scope, and its parent — by the same rule, the rest of the machine — is not in it.
+    let canary = root
+        .parent()
+        .expect("temp parent")
+        .join("dx-attack-outside-canary.txt");
+    fs::write(&canary, "CANARY-b7e1 beyond the boundary").expect("canary");
+    let output = attack(&format!("cat {}", canary.display()), &options);
+    let _ = fs::remove_file(&canary);
+    assert!(
+        !output.contains("CANARY-b7e1"),
+        "a block read outside its repository: {output}"
+    );
+}
+
+/// A repository marker widens the scope to the repository, never past it: a document deep
+/// in a project reads the whole project, and still nothing beside the project.
+#[test]
+fn a_repositorys_document_reads_the_repository_and_nothing_above_it() {
+    if !confined() {
+        return;
+    }
+    let (root, mut options) = scene("read-repo-scope");
+    let docs = root.join("repo/docs");
+    fs::create_dir_all(root.join("repo/.git")).expect("marker");
+    fs::create_dir_all(&docs).expect("tree");
+    fs::write(root.join("repo/data.txt"), "the whole project").expect("fixture");
+    fs::write(root.join("outside.txt"), "beside the project").expect("canary");
+    options.document_dir = docs;
+
+    let up_one = attack("cat ../data.txt", &options);
+    assert!(
+        up_one.contains("the whole project"),
+        "the repository is the scope, not the document's folder: {up_one}"
+    );
+    let past = attack("cat ../../outside.txt", &options);
+    assert!(
+        !past.contains("beside the project"),
+        "a block read past its repository's root: {past}"
+    );
+}
+
+/// Credentials are the exception inside the readable scope: these are denied outright, so
+/// a document cannot even put a key on the page for a shoulder to read over.
 #[test]
 fn a_block_cannot_read_the_credential_stores() {
     if !confined() {

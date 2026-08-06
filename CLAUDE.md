@@ -356,12 +356,16 @@ example is a deliberate two-file change.
   handed, so `doc-run::confine` puts every block inside a kernel sandbox — Seatbelt on macOS,
   bubblewrap on Linux — and the shape of it is the whole security model:
 
-  | Read | anything, minus a deny-list of credential stores |
+  | Read | the repository the document lives in, the run caches, and the system with its toolchains (`confine::TOOLCHAIN_HOMES`) — never the rest of the user's files (`USER_DATA_ROOTS` go dark), and never the credential stores even inside what remains |
   | Write | its own block directory, plus the folders a block's `writes=` grant names — inside the document's folder only, and the grant joins the fingerprint, so review shows it and widening it re-opens review |
   | Network | never, while the block's own code runs |
 
-  The first is why the other two are absolute: read plus egress is exfiltration, and read
-  without egress is a block that can *use* your files and do nothing but show you the result.
+  The project is a block's whole world: it reads the repository its document belongs to
+  (`confine::repo_root` — the nearest ancestor with `.git` or `.doc`, else the document's
+  own folder) and nothing else of the user's, which is also what makes a locally edited
+  block safe to run on the spot. Read plus egress is exfiltration, so the network line is
+  absolute; scoped read without egress is a block that can *use* the project's files and do
+  nothing but show you the result.
   Only dependency installation gets the network, which is why `plan.rs` arranges every
   language to fetch in `setup` and run offline — a `run` command that would download
   something is a reason to hand the network back, so there must never be one. A machine that
@@ -371,17 +375,27 @@ example is a deliberate two-file change.
   this area, run it, and check it still *can* fail by running the same payload with
   `DX_UNCONFINED=1`.
 
-  **And unreviewed code does not run at all.** `doc-run::approvals` is a ledger of
-  fingerprints *this machine* approved (`<cache_root>/approvals`, never in a repository);
-  a block whose fingerprint is not in it is `blocked` pending review, with the sentence
-  naming `--review`, `--approve`, and `--force`. Only that ledger approves. A document's
-  own `::output` record cannot: `hash=` is computed from the code above it, so the hand
-  that writes the block writes the record too — treating it as approval let a handed-over
-  document mark itself reviewed and, under `--force`, run with the bypass notice
-  suppressed. For the same reason the gate is checked **before** the unchanged-fingerprint
-  skip: a cached skip that trusted the document's record would hide unreviewed code behind
-  it. `--force` is the one way past, and — like `DX_UNCONFINED=1` — it stamps
-  `FORCED_NOTICE` into the output it produces, so a bypass is never silent.
+  **And unreviewed code does not run at all — but a local edit is the review.**
+  `doc-run::approvals` is a ledger of approval fingerprints *this machine* recorded
+  (`<cache_root>/approvals`, never in a repository); a block whose approval fingerprint is
+  not in it is `blocked` pending review, with the sentence naming `--review`, `--approve`,
+  and `--force`. The approval identity is the code and its powers — runner, deps, the exact
+  code, the `reads=` *paths*, the `writes=` grant — and deliberately not the `reads=`
+  files' current text: editing an input stales the recorded output (the run fingerprint,
+  `hash=`, covers the text) and re-runs reviewed code, without re-opening review of a
+  program nobody touched. Editing the code or its header is a new approval identity.
+  Every local editing surface records the approval as it saves
+  (`doc_run::approve_edited_block`, called by `dx set`/`insert`/`append` and MCP
+  `dx_edit`): the hand that typed the code is the reviewer the gate asks for, exactly as
+  the editor surface's run control treats the click beside a block. `dx sync` and adoption
+  never approve — a document that merely *arrived* is not an edit. Only that ledger
+  approves. A document's own `::output` record cannot: `hash=` is computed from the code
+  above it, so the hand that writes the block writes the record too — treating it as
+  approval let a handed-over document mark itself reviewed and, under `--force`, run with
+  the bypass notice suppressed. For the same reason the gate is checked **before** the
+  unchanged-fingerprint skip: a cached skip that trusted the document's record would hide
+  unreviewed code behind it. `--force` is the one way past, and — like `DX_UNCONFINED=1` —
+  it stamps `FORCED_NOTICE` into the output it produces, so a bypass is never silent.
 - **Untrusted input is everything a document carries.** A `.dx` rendered on github.com was
   written by whoever wrote that repository, and the page it lands in belongs to github.com —
   so author markup goes through `render::escape`, which is an **allow-list** of elements,

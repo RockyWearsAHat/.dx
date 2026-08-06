@@ -8,10 +8,13 @@
 //! Nothing here is committed, synced, or shared: an approval is this machine's own.
 //!
 //! An approval names a fingerprint, not a block — the fingerprint covers the runner,
-//! the exact code, the declared dependencies, and the current text of every declared
-//! `reads=` file, so editing any of those produces a new fingerprint and the approval
-//! expires with the edit. There is nothing to revoke by hand and nothing to keep
-//! current: stale approvals simply stop matching.
+//! the exact code, the declared dependencies, the *paths* of the declared `reads=`
+//! files, and the `writes=` grant: the program and its powers, which is what a reviewer
+//! actually weighs. Editing any of those produces a new fingerprint and the approval
+//! expires with the edit. The `reads=` files' current *text* is deliberately not part
+//! of it: that text is data, and new data re-runs reviewed code (the recorded output
+//! goes stale) without re-opening review of a program nobody touched. There is nothing
+//! to revoke by hand and nothing to keep current: stale approvals simply stop matching.
 
 use std::fs;
 use std::path::{Path, PathBuf};

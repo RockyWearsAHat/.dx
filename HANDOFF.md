@@ -4,7 +4,57 @@ _Resume point after `/compact` or `/clear`. Update after every task or wave (see
 
 Last updated: 2026-08-06
 
-## This wave, part 37: the view fold, the named method, and the measured token economy
+## This wave, part 38: the edit is the review, and reads scoped to the repository
+
+Two directives from the user: locally edited code runs without a second gate, and a
+block's read scope is the repo folder, never the rest of the machine. Both landed, with
+the approval model reshaped to make the first sound and the sandbox reshaped to make the
+second kernel-enforced.
+
+- **Approval identity ≠ staleness identity.** The run fingerprint (`hash=`) keeps covering
+  the `reads=` files' current text — that is staleness. Approval (`approval_fingerprint`)
+  now names the code and its powers only: runner, deps, exact code, `reads=` *paths*,
+  `writes=` grant, domain-separated from the run material. Consequence: editing a declared
+  input re-runs already-reviewed code on a plain run instead of blocking review of a
+  program nobody touched — which is what makes a verify-block harness actually loop.
+  Pinned: `approval_names_the_code_and_its_powers_never_the_data`,
+  `an_edited_input_re_runs_reviewed_code_without_re_opening_review`.
+- **The edit is the review, on every local editing surface.** New
+  `doc_run::approve_edited_block`; called by `dx set`/`insert`/`append`
+  (`commands/edit.rs`, cache-root-threaded for test isolation) and by MCP `dx_edit` when
+  `run:false` declines the immediate run (the run path already approved). `dx sync` and
+  adoption never approve — an arrived document is not an edit. Pinned:
+  `a_local_edit_is_the_review` (doc-run),
+  `a_locally_edited_runnable_block_needs_no_second_review` (doc-cli).
+- **Reads are scoped to the repository.** `confine::Grant` gained `readable` roots;
+  `confine::repo_root` walks to the nearest `.git`/`.doc` ancestor (else the document's
+  folder). Seatbelt: base allow → `USER_DATA_ROOTS` dark (`/Users`, `/Volumes`, `/home`,
+  `/tmp`, `/var/folders`…) → grant roots + `TOOLCHAIN_HOMES` allowed back → secrets denied
+  last; ancestors of allowed roots stat-able as metadata-only literals (interpreters
+  realpath their entry script — Node broke without it). Bubblewrap mirrors it with tmpfs
+  masks and ro-binds, writable binds last. New attacks:
+  `a_block_cannot_read_outside_the_repository_its_document_lives_in` (with an
+  inside-the-scope positive control),
+  `a_repositorys_document_reads_the_repository_and_nothing_above_it`.
+- **Proven end to end, both ways.** Scratch repo: `dx append --run` block ran on a plain
+  `dx run` with no gate; `cat ../outside.txt` came back "Operation not permitted" from the
+  kernel; the same payload under `DX_UNCONFINED=1 --force` read the canary and stamped
+  both notices. `route-economics.dx` re-measured itself on a plain run after an input
+  edit — the promise its own lead makes, now true (it previously blocked).
+- **Docs centralized in the same wave:** CLAUDE.md security table + approval bullet,
+  README "What executes", `dx help` (setup.rs), `GETTING_STARTED.dx` `how-run`,
+  format contract § Executable Code, `confine`/`approvals` module docs, sandbox hint text.
+- One false alarm worth remembering: pack manifests are **path-keyed**, so a pointer
+  copied to a different relative path cannot resolve — a flat-directory "clone simulation"
+  fails by design. A real `git clone` resolves every example and document (verified).
+
+Validated: `cargo test` 816/816 (was 809; +7), attacks 18/18 confined and the payload
+proven to succeed unconfined, clippy `-D warnings` clean, `fmt --check` clean, node suites
+34/34 + 34/34 (doc-core untouched — no wasm rebuild needed), release binary installed.
+Next step: none pending — if a field session hits a toolchain living outside
+`TOOLCHAIN_HOMES`, add its home to the allow-list rather than widening the scope.
+
+## Previous wave, part 37: the view fold, the named method, and the measured token economy
 
 A cold read of the docs graded them 9/10 with three concrete gaps; all three are closed.
 

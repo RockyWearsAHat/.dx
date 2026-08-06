@@ -6,14 +6,18 @@
 //!
 //! | | |
 //! |---|---|
-//! | **Read** | anything, minus a short list of secret stores — a block is meant to open the data sitting beside the document |
+//! | **Read** | the repository the document lives in, the run caches, the system and its toolchains — never the rest of your files, and never the credential stores even inside what remains |
 //! | **Write** | its own block directory, plus any folder of the document's own that the block declares with `writes=` — the grant joins the fingerprint, so it is reviewed and approved with the code |
 //! | **Network** | never, while the block's own code is running |
 //!
-//! Those three lines are the whole security model, and the first is why the other two have to
-//! be absolute: a block that can read your disk and reach the network is a block that can
-//! empty it. Read plus no-egress is a block that can *use* your files and do nothing with
-//! them but show you the result.
+//! Those three lines are the whole security model. Reads are scoped to the repository on
+//! purpose: a block is meant to open the data sitting beside its document — the project is
+//! its world — and everything else on the machine is somebody's mail, notes, and browsing,
+//! which no handed-over document has any business reading. The system directories and the
+//! toolchain homes ([`TOOLCHAIN_HOMES`]) stay readable because an interpreter has to load
+//! itself; the credential deny-list ([`SECRET_PATHS`]) still has the last word inside
+//! whatever is readable. And the scope is also what makes a *locally edited* block safe to
+//! run on the spot: code you just typed, confined to the project you typed it in.
 //!
 //! Only dependency installation gets the network, because `uv`, `npm`, `cargo`, and `gem`
 //! cannot work without it — and installation is still confined in every other way, which
@@ -75,11 +79,57 @@ const SECRET_PATHS: &[&str] = &[
     "Library/Application Support/Firefox",
 ];
 
+/// Roots holding the machine's user data, denied to every block.
+///
+/// This is where the read scope is drawn: everything under these is somebody's files, not
+/// the project's, and only the named [`Grant::readable`] roots (the document's repository,
+/// the run caches) and the [`TOOLCHAIN_HOMES`] are allowed back through. `/tmp` is here
+/// too — other processes' scratch is user data, and a block's own `$TMPDIR` already points
+/// inside its writable directory.
+const USER_DATA_ROOTS: &[&str] = &[
+    "/Users",
+    "/Volumes",
+    "/home",
+    "/root",
+    "/media",
+    "/mnt",
+    "/tmp",
+    "/private/tmp",
+    // macOS per-user temp and cache trees: other programs' scratch is user data too.
+    "/var/folders",
+    "/private/var/folders",
+];
+
+/// Home-relative directories where language toolchains conventionally install themselves.
+///
+/// An interpreter has to be able to load itself, and toolchains live in the home directory
+/// as often as on the system — `~/.cargo` and `~/.rustup` for Rust, `~/.local/bin` for
+/// user-installed executables, the version managers for the rest. This is an allow-list of
+/// *program* homes, never data: a manager missing from it fails closed, with the sandbox
+/// note naming the boundary.
+const TOOLCHAIN_HOMES: &[&str] = &[
+    ".cargo",
+    ".rustup",
+    ".local/bin",
+    ".local/share/uv",
+    ".local/share/mise",
+    ".nvm",
+    ".pyenv",
+    ".rbenv",
+    ".volta",
+    ".bun",
+    ".deno",
+];
+
 /// What one phase of a block's execution may do.
 #[derive(Debug, Clone)]
 pub struct Grant {
-    /// Directories the process may write to. Everything else on disk is readable only.
+    /// Directories the process may write to.
     pub writable: Vec<PathBuf>,
+    /// Roots allowed back through the [`USER_DATA_ROOTS`] read denial — the document's
+    /// repository and the run caches. The system and [`TOOLCHAIN_HOMES`] are always
+    /// readable; everything else under a user-data root is not.
+    pub readable: Vec<PathBuf>,
     /// Whether the process may reach the network.
     ///
     /// True only while installing declared dependencies. The block's own code never gets it.
@@ -92,8 +142,16 @@ impl Grant {
     pub fn offline(writable: Vec<PathBuf>) -> Self {
         Self {
             writable,
+            readable: Vec::new(),
             network: false,
         }
+    }
+
+    /// The same grant, with `readable` roots allowed back through the user-data denial.
+    #[must_use]
+    pub fn reading(mut self, readable: Vec<PathBuf>) -> Self {
+        self.readable = readable;
+        self
     }
 
     /// The same grant, plus the network — for installing declared dependencies.
@@ -101,6 +159,27 @@ impl Grant {
     pub fn with_network(mut self) -> Self {
         self.network = true;
         self
+    }
+}
+
+/// The repository a document belongs to: the nearest ancestor of `document_dir` carrying a
+/// `.git` or `.doc` marker, or `document_dir` itself when no ancestor does.
+///
+/// This is the read scope's outer edge — "the parent folder that has the repo" — so a
+/// document deep in a project reads the whole project, and a loose document in a plain
+/// folder reads that folder and nothing above it.
+#[must_use]
+pub fn repo_root(document_dir: &Path) -> PathBuf {
+    let start = std::fs::canonicalize(document_dir).unwrap_or_else(|_| document_dir.to_path_buf());
+    let mut current = start.as_path();
+    loop {
+        if current.join(".git").exists() || current.join(".doc").exists() {
+            return current.to_path_buf();
+        }
+        match current.parent() {
+            Some(parent) => current = parent,
+            None => return start.clone(),
+        }
     }
 }
 
@@ -176,8 +255,10 @@ fn seatbelt(spec: &CommandSpec, grant: &Grant) -> CommandSpec {
 /// Build the Seatbelt profile for `grant`.
 ///
 /// Written as one line because it is passed as a single argument. Order matters in SBPL —
-/// the last rule matching an operation wins — so the broad `allow file-read*` is stated
-/// before the narrow `deny` that carves the secret stores back out of it.
+/// the last rule matching an operation wins — so the read rules are stated broad to narrow:
+/// the base `allow file-read*` (the system, the toolchains), then the [`USER_DATA_ROOTS`]
+/// denial, then the grant's own roots allowed back through it, and the secret stores denied
+/// last so nothing can allow them back.
 fn seatbelt_profile(grant: &Grant) -> String {
     let mut rules = vec![
         "(version 1)".to_string(),
@@ -198,6 +279,41 @@ fn seatbelt_profile(grant: &Grant) -> String {
          (literal \"/dev/stderr\") (literal \"/dev/dtracehelper\"))"
             .to_string(),
     ];
+
+    // The user's files go dark, and only the project's world comes back: the grant's own
+    // roots (repository, run caches), the writable directories, and the toolchain homes.
+    let user_data = USER_DATA_ROOTS
+        .iter()
+        .map(|root| format!("(subpath {})", quote(root)))
+        .collect::<Vec<_>>()
+        .join(" ");
+    rules.push(format!("(deny file-read* {user_data})"));
+    let roots: Vec<String> = grant
+        .readable
+        .iter()
+        .chain(grant.writable.iter())
+        .map(|path| resolved(path))
+        .chain(toolchain_homes())
+        .collect();
+    if !roots.is_empty() {
+        let scoped = roots
+            .iter()
+            .map(|path| format!("(subpath {})", quote(path)))
+            .collect::<Vec<_>>()
+            .join(" ");
+        rules.push(format!("(allow file-read* {scoped})"));
+        // An interpreter realpaths its way down to the script it was handed, `lstat`ing
+        // each directory on the way — so the ancestors of every allowed root stay
+        // stat-able, as named directories only: their *contents* are still dark.
+        let ancestors = ancestor_literals(&roots)
+            .iter()
+            .map(|path| format!("(literal {})", quote(path)))
+            .collect::<Vec<_>>()
+            .join(" ");
+        if !ancestors.is_empty() {
+            rules.push(format!("(allow file-read-metadata {ancestors})"));
+        }
+    }
 
     if let Some(denied) = secret_subpaths() {
         rules.push(format!("(deny file-read* {denied})"));
@@ -222,6 +338,42 @@ fn seatbelt_profile(grant: &Grant) -> String {
     });
 
     rules.join(" ")
+}
+
+/// The [`TOOLCHAIN_HOMES`] resolved against this machine's home directory, existing only.
+///
+/// Empty when there is no home directory — a container's toolchains live on the system
+/// paths, which the base allow already covers.
+fn toolchain_homes() -> Vec<String> {
+    let Some(home) = std::env::var_os("HOME") else {
+        return Vec::new();
+    };
+    let home = PathBuf::from(home);
+    TOOLCHAIN_HOMES
+        .iter()
+        .map(|name| home.join(name))
+        .filter(|path| path.exists())
+        .map(|path| resolved(&path))
+        .collect()
+}
+
+/// Every distinct ancestor directory of `roots`, deduplicated, nearest first.
+///
+/// These are allowed as metadata-only literals so path resolution can walk down to an
+/// allowed root through denied territory without being able to list or read any of it.
+fn ancestor_literals(roots: &[String]) -> Vec<String> {
+    let mut seen = Vec::new();
+    for root in roots {
+        let mut current = Path::new(root);
+        while let Some(parent) = current.parent() {
+            let text = parent.to_string_lossy().into_owned();
+            if !text.is_empty() && text != "/" && !seen.contains(&text) {
+                seen.push(text);
+            }
+            current = parent;
+        }
+    }
+    seen
 }
 
 /// The `(subpath …)` clauses naming every secret store that exists on this machine.
@@ -270,6 +422,29 @@ fn bubblewrap(spec: &CommandSpec, grant: &Grant) -> Result<CommandSpec, String> 
 
     if !grant.network {
         args.push("--unshare-net".into());
+    }
+
+    // An empty filesystem over each user-data root: the machine's files go dark…
+    for root in USER_DATA_ROOTS {
+        if *root != "/tmp" && Path::new(root).exists() {
+            args.push("--tmpfs".into());
+            args.push((*root).to_string());
+        }
+    }
+    // …and the project's world is bound back through, read-only: the grant's roots and
+    // the toolchain homes. Later mounts stack over earlier ones, so these win over the
+    // masking, the secret masks win over these, and the writable binds win over all.
+    for path in grant
+        .readable
+        .iter()
+        .map(|path| resolved(path))
+        .chain(toolchain_homes())
+    {
+        if Path::new(&path).exists() {
+            args.push("--ro-bind".into());
+            args.push(path.clone());
+            args.push(path);
+        }
     }
 
     // An empty filesystem over each secret store: present, and holding nothing.
@@ -361,22 +536,53 @@ mod tests {
     }
 
     #[test]
-    fn reads_are_open_and_then_the_secret_stores_are_taken_back() {
+    fn reads_scope_to_the_grant_and_secrets_have_the_last_word() {
         let _env = crate::env_lock();
         let original = std::env::var_os("HOME");
         std::env::set_var("HOME", "/Users/nobody");
-        let profile = seatbelt_profile(&grant());
+        let scoped = Grant::offline(vec![PathBuf::from("/tmp")])
+            .reading(vec![PathBuf::from("/Users/nobody/project")]);
+        let profile = seatbelt_profile(&scoped);
         match original {
             Some(home) => std::env::set_var("HOME", home),
             None => std::env::remove_var("HOME"),
         }
-        let allow_read = profile.find("(allow file-read*)").expect("allow read");
-        let deny_read = profile.find("(deny file-read*").expect("deny read");
-        assert!(allow_read < deny_read, "the deny must win: {profile}");
-        assert!(profile.contains("/Users/nobody/.ssh"), "{profile}");
+        // Broad to narrow, last match winning: base allow, user data dark, the project
+        // allowed back through, and the secret stores denied after everything.
+        let base = profile.find("(allow file-read*)").expect("base allow");
+        let dark = profile
+            .find("(deny file-read* (subpath \"/Users\")")
+            .expect("user data denied");
+        let back = profile
+            .find("/Users/nobody/project")
+            .expect("the project is allowed back");
+        let secrets = profile.find("/Users/nobody/.ssh").expect("secrets denied");
+        assert!(base < dark && dark < back && back < secrets, "{profile}");
         assert!(
             profile.contains("/Users/nobody/Library/Keychains"),
             "{profile}"
+        );
+        assert!(profile.contains("(subpath \"/Volumes\")"), "{profile}");
+    }
+
+    #[test]
+    fn the_repo_root_is_the_nearest_marked_ancestor_or_the_folder_itself() {
+        let scratch = std::env::temp_dir().join("dx-confine-tests-repo-root");
+        let _ = std::fs::remove_dir_all(&scratch);
+        let nested = scratch.join("repo/docs/deep");
+        std::fs::create_dir_all(&nested).expect("tree");
+        std::fs::create_dir_all(scratch.join("repo/.git")).expect("marker");
+        assert_eq!(
+            repo_root(&nested),
+            std::fs::canonicalize(scratch.join("repo")).expect("canonical")
+        );
+
+        let loose = scratch.join("loose");
+        std::fs::create_dir_all(&loose).expect("loose");
+        assert_eq!(
+            repo_root(&loose),
+            std::fs::canonicalize(&loose).expect("canonical"),
+            "a folder with no repository above it is its own scope"
         );
     }
 
