@@ -1,28 +1,29 @@
 /**
- * The look of writing on a page — which is, as far as possible, no look at all.
+ * The look of editing — which is, as far as possible, no look at all.
  *
  * The page is a blank sheet: one paper tone, one ink, no second surface. An editor that
  * dropped a bordered, tinted input box onto it would be exactly the second surface the
  * stylesheet spends its whole length refusing, and the document would stop looking like a
  * document the moment anyone touched it.
  *
- * The page has two shapes while a block is open, and `edit.js` chooses between them by
- * asking what the block renders to:
+ * So the field *is* the block. It inherits the block's typeface, size, colour, and leading;
+ * it has no border, no background, and no resize handle. The only thing that changes when a
+ * reader starts writing is that the caret is theirs, and the page does not move.
  *
- * - **The field stands in for the block** when the block renders to the characters it is
- *   written in — plain prose, a code listing. The block steps out of the flow and the field
- *   takes its place, its type, and its margins, all borrowed from the live element rather
- *   than restated here. Nothing on the page moves.
- * - **The field is a note under the block** when the renderer made something the source does
- *   not show: a bullet, a strong word, a table, a drawing. The block stays exactly where it
- *   was and keeps redrawing as the characters change; the source sits beneath it in the same
- *   marginal mono the sheet already uses for its own pencil notes.
- *
- * Every colour here comes from a variable `doc-core`'s stylesheet publishes. A name it does
- * not define is not a fallback — it is an invalid declaration the browser drops.
+ * Every colour here comes from a variable `doc-core`'s stylesheet publishes: `--dx-bg`,
+ * `--dx-text`, `--dx-muted`, `--dx-faint`, `--dx-rule`, `--dx-accent`, `--dx-error`,
+ * `--dx-select`, `--dx-mono`, `--dx-serif`. A name it does not define is not a fallback —
+ * it is an invalid declaration the browser drops, which is how the completion menu once
+ * shipped transparent.
  */
 
 .dx-editable [data-block-id] {
+  cursor: text;
+}
+
+/* The blank sheet is writable — a click on it starts the next paragraph — and the cursor
+   says so. The margins outside the sheet are not paper and keep the arrow. */
+.dx-editable .dx-doc {
   cursor: text;
 }
 
@@ -43,20 +44,12 @@
   min-height: 1.2em;
 }
 
-/* The block the field is standing in for. Out of the flow, not out of the document: it is
-   still the element the renderer drew and the one the next keystroke redraws. */
-.dx-hidden {
-  display: none;
-}
-
-/* Where the writing happens. One hairline in the margin, the same weight as every other rule
-   on the page — enough to find, not enough to announce. It marks the field rather than the
-   block, because the field is the part that is yours. */
-.dx-write {
+/* Something is being written here. One hairline in the margin, the same weight as every
+   other rule on the page — enough to find, not enough to announce. */
+.dx-editing {
   position: relative;
-  margin: 0 0 1.15rem;
 }
-.dx-write::before {
+.dx-editing::before {
   content: "";
   position: absolute;
   left: -0.9rem;
@@ -66,24 +59,20 @@
   background: var(--dx-rule);
 }
 
-/* Some blocks already draw a rule down their own margin: a quotation, a listing. Standing in
-   for one of those, the field inherits that rule and does not get a second — two hairlines a
-   couple of characters apart is a page that has started to look like a form. */
-.dx-write.dx-ruled::before {
+/* Some blocks already draw a rule down their own margin: a quotation, a listing. They lend
+   it to the field instead of being given a second — two hairlines a couple of characters
+   apart is a page that has started to look like a form. */
+blockquote.dx-editing::before,
+.dx-code.dx-editing::before {
   display: none;
 }
 
-/* A note under a block that is drawing itself: the source, set the way the sheet sets every
-   other marginal note. Spaced off the block by less than a paragraph, because the two are one
-   thing being looked at. */
-.dx-write:not(.dx-standin) {
-  margin-top: 0.5rem;
-}
-.dx-write:not(.dx-standin) .dx-field {
-  font: 400 0.83rem/1.65 var(--dx-mono);
-  color: var(--dx-muted);
-  white-space: pre-wrap;
-  tab-size: 2;
+/* The stub `edit.js` leaves in an open fold while its listing is being written: a `details`
+   with no `summary` at all invents a default one, marker and all. Written to outweigh the
+   sheet's own `.dx-code-folded > summary`, whichever stylesheet loads last. */
+.dx-editing > summary.dx-fold-stub,
+.dx-editing > summary.dx-fold-stub::before {
+  display: none;
 }
 
 .dx-field {
@@ -100,9 +89,8 @@
   background: none;
   resize: none;
   overflow: hidden;
-  /* Inherited, not chosen. When the field stands in for a block, `edit.js` copies the
-     block's own type over these — so a heading edits at heading size and code at code size
-     because the renderer said so, not because a second type scale was written down here. */
+  /* Inherited, not chosen: a heading edits at heading size, code at code size, and the line
+     the reader was reading does not jump when it becomes the line they are writing. */
   font: inherit;
   color: inherit;
   letter-spacing: inherit;
@@ -111,9 +99,322 @@
   -webkit-appearance: none;
 }
 
+/* The rich field is an ordinary element holding the exact source, decorated in place by the
+   engine. Newlines are characters in it, so it wraps the way the source is written. */
+.dx-field-rich {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  caret-color: var(--dx-text);
+}
+
+/* The marks the decoration makes visible: `**`, backticks, a link's `[](…)`, a list's own
+   lead. They are the writer's machinery, so they take the margin ink — read them when you
+   look for them, lose them when you read the sentence. */
+.dx-field-rich .dx-mark {
+  color: var(--dx-faint);
+}
+.dx-field-rich .dx-link-label {
+  color: var(--dx-accent);
+}
+.dx-field-rich .dx-link-target {
+  color: var(--dx-muted);
+}
+.dx-field-rich code {
+  font-family: var(--dx-mono);
+  font-size: 0.92em;
+}
+
+/* Source is written in the page's one voice for source: the listing's own type. These
+   values mirror `.dx-code pre` in doc-core's stylesheet — the field in a code block sits
+   in the same column the listing was in, and a drawing or author markup, which render as
+   what they produce and so leave their *source* nothing to inherit, is written the same
+   way rather than dressed as a sentence in the prose serif. Wrapped, because a line pushed
+   past the page's edge is a line the writer cannot see. The ghost overlay wears whatever
+   its field wears, or the two could not sit on the same characters. */
+.dx-code.dx-editing .dx-field,
+.dx-html.dx-editing .dx-field,
+.dx-svg.dx-editing .dx-field,
+.dx-code.dx-editing .dx-ghost,
+.dx-html.dx-editing .dx-ghost,
+.dx-svg.dx-editing .dx-ghost,
+.dx-writes-source.dx-editing .dx-field,
+.dx-writes-source.dx-editing .dx-ghost {
+  font-family: var(--dx-mono);
+  font-size: 0.83rem;
+  line-height: 1.65;
+  tab-size: 2;
+  white-space: pre-wrap;
+}
+
+/* The tag line: the writer's own `::kind attrs` header, shown as a control above the body.
+   Marginal mono in the muted ink — machinery, not prose — and hidden entirely over a plain
+   paragraph, which has no machinery worth a line. It is a textarea only so a caret can live
+   in it; it wears no box, like everything else on the sheet. */
+.dx-header {
+  display: block;
+  width: 100%;
+  min-height: 1.4em;
+  margin: 0 0 0.15rem;
+  padding: 0;
+  border: 0;
+  outline: none;
+  background: none;
+  resize: none;
+  overflow: hidden;
+  font: 400 0.78rem/1.6 var(--dx-mono);
+  color: var(--dx-muted);
+  letter-spacing: 0.01em;
+  white-space: pre;
+  -webkit-appearance: none;
+}
+.dx-header-hidden {
+  display: none;
+}
+
+/* Ghost text: the rest of the selected completion, drawn where it would land, in the faint
+   ink. Over a textarea the ghost mirrors the whole text — the mirror transparent so only
+   the remainder shows, sitting exactly where the caret's line ends, wraps and all. Over the
+   rich field it is a single floating word placed at the caret's own rectangle, so nothing
+   is mirrored and nothing can misalign. The field's own characters keep their full ink
+   either way; a page that dims a sentence to suggest one word has its priorities reversed. */
+.dx-ghost {
+  position: absolute;
+  display: none;
+  pointer-events: none;
+  user-select: none;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  font: inherit;
+  letter-spacing: inherit;
+  line-height: inherit;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--dx-faint);
+}
+.dx-ghost-mirror {
+  color: transparent;
+}
+.dx-ghost-rest {
+  color: var(--dx-faint);
+}
+.dx-ghost-header {
+  font: 400 0.78rem/1.6 var(--dx-mono);
+  letter-spacing: 0.01em;
+  white-space: pre;
+}
+.dx-ghost-rich {
+  white-space: pre;
+  overflow: visible;
+}
+
+/* The completion menu: a small card of what could stand at the caret. The one raised
+   surface editing is allowed, because it is transient — it exists only under a caret
+   mid-word and leaves nothing behind on the sheet. It is paper over paper: the page's own
+   tone lifted by a hairline and a soft shadow, never a tint. */
+.dx-menu {
+  position: absolute;
+  z-index: 30;
+  min-width: 14rem;
+  max-width: 24rem;
+  max-height: 14rem;
+  overflow-y: auto;
+  padding: 0.25rem;
+  border: 1px solid var(--dx-rule);
+  border-radius: 6px;
+  background: var(--dx-bg);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.14);
+}
+.dx-menu-item {
+  display: flex;
+  width: 100%;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.28rem 0.5rem;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  cursor: pointer;
+  text-align: left;
+  font: 400 0.75rem/1.45 var(--dx-mono);
+  color: var(--dx-text);
+}
+.dx-menu-item:hover,
+.dx-menu-selected {
+  background: var(--dx-select);
+}
+.dx-menu-label {
+  font-weight: 600;
+}
+.dx-menu-detail {
+  font: 400 0.6rem/1.4 var(--dx-mono);
+  color: var(--dx-muted);
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+/* A node's box, typed instead of dragged: the same small card, holding four numbers
+   instead of a list. Right-click a node to raise it. */
+.dx-size-menu {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.35rem 0.6rem;
+  padding: 0.5rem;
+}
+.dx-size-field {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font: 400 0.72rem/1.4 var(--dx-mono);
+  color: var(--dx-muted);
+}
+.dx-size-field input {
+  width: 4.5rem;
+  padding: 0.15rem 0.35rem;
+  border: 1px solid var(--dx-rule);
+  border-radius: 4px;
+  background: transparent;
+  font: inherit;
+  color: var(--dx-text);
+}
+.dx-size-apply {
+  grid-column: 1 / -1;
+  justify-content: center;
+  font-weight: 600;
+}
+
+/* The run control: one word in the code block's own label line, in the same marginal mono.
+   It underlines on hover the way the toolbar's words do, and while the host works it says
+   so and stops being a control. */
+.dx-run {
+  margin-left: 0.9em;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  font: inherit;
+  color: var(--dx-muted);
+  letter-spacing: inherit;
+  text-decoration: underline;
+  text-decoration-color: transparent;
+  text-underline-offset: 3px;
+}
+.dx-run:hover,
+.dx-run:focus-visible {
+  color: var(--dx-text);
+  text-decoration-color: var(--dx-rule);
+  outline: none;
+}
+.dx-run.dx-running {
+  cursor: default;
+  color: var(--dx-faint);
+  text-decoration-color: transparent;
+}
+
 /* A failure the reader has to see, in the one voice the page keeps for failures. */
 .dx-edit-error {
   margin: 0.4rem 0 1.15rem;
   font: 400 0.68rem/1.6 var(--dx-mono);
   color: var(--dx-error);
+}
+
+/* The board's editing machinery. The board itself — viewport, canvas, nodes, edges — is
+   the renderer's; what editing adds is the grip a node is dragged by, the four edges a
+   connection is drawn from, the resize corner, and the accent hairline saying what Delete
+   would take. All of it holds the sheet's rules: hairlines and the marginal mono, no
+   fills, and nothing drawn until the pointer asks for it. */
+.dx-editable .dx-board {
+  cursor: default;
+}
+.dx-node-grip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  /* Stretch across the node's own padding so the bar reads as the node's top edge. */
+  margin: -0.55rem -0.8rem 0.45rem;
+  padding: 0.22rem 0.8rem;
+  border-bottom: 1px solid var(--dx-rule);
+  cursor: grab;
+  font: 400 0.68rem/1.5 var(--dx-mono);
+  color: var(--dx-muted);
+  letter-spacing: 0.02em;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.dx-node-grip:active {
+  cursor: grabbing;
+}
+
+/* A whole edge is the connection point. Each side of a node carries a strip a line is
+   dragged out of — invisible until the pointer is on it, when it inks that one edge, so a
+   reader sees which edge they are about to leave from and the page stays a blank sheet
+   until then. Fully inside the border: a node clips its overflow, so anything hung outside
+   cannot be hit, and the grab would pan the canvas instead. */
+.dx-node-port {
+  position: absolute;
+  cursor: crosshair;
+  background: transparent;
+}
+.dx-node-port-t,
+.dx-node-port-b {
+  left: 8px;
+  right: 8px;
+  height: 7px;
+}
+.dx-node-port-t { top: 0; }
+.dx-node-port-b { bottom: 0; }
+.dx-node-port-l,
+.dx-node-port-r {
+  top: 8px;
+  bottom: 8px;
+  width: 7px;
+}
+.dx-node-port-l { left: 0; }
+.dx-node-port-r { right: 0; }
+.dx-node-port:hover {
+  background: var(--dx-accent);
+}
+/* The node a link is being dragged onto: the edge it would land on is the reader's next
+   decision, so the whole box takes the accent while the pointer is over it. */
+.dx-board-node.dx-link-target {
+  border-color: var(--dx-accent);
+}
+
+/* The width handle is the bottom-right corner, so it cannot swallow the right edge a
+   connection is drawn from. */
+.dx-node-size {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 14px;
+  height: 14px;
+  cursor: nwse-resize;
+}
+.dx-board-node.dx-picked {
+  border-color: var(--dx-accent);
+}
+/* The strokes are the one part of the edge sheet a reader can mean to click; the sheet
+   itself stays transparent to the pointer. Direct children only — the arrowhead and the
+   tether live inside `defs` and are not things anyone clicks. */
+.dx-editable .dx-board-edges > path {
+  pointer-events: visibleStroke;
+  cursor: pointer;
+  /* A line is worth following under the pointer, so it takes the page's own ink there —
+     stroke only, which is the whole of what a connection is allowed to be. */
+  transition: stroke 90ms linear;
+}
+.dx-editable .dx-board-edges > path:hover {
+  stroke: var(--dx-text);
+}
+.dx-board-edges > path.dx-picked {
+  stroke: var(--dx-accent);
+}
+/* The line being drawn: dashed, so it reads as a proposal rather than a connection, and
+   deaf to the pointer — the node underneath it is what the drop is asking about. */
+.dx-board-edges > path.dx-linking {
+  stroke: var(--dx-accent);
+  stroke-dasharray: 4 3;
+  pointer-events: none;
 }

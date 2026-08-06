@@ -457,6 +457,7 @@ READ
   dx render   <file> --block ID [--body=T]      one block, as the page draws it
   dx png      <file> [--section ID] [--out F]   render to an image
   dx png      <file> --pages                    one image per page, in order
+  dx png      <file> --block ID                 one block alone — a board at natural size
   dx play     <file> --script \"wait 500ms; key Space; scroll 200\"
               [--node ID] [--fps N] [--out DIR] drive the rendered page with real
               input — wait, key, click, scroll, hover — and write one PNG frame

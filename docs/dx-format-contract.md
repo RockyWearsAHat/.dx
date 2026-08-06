@@ -51,9 +51,11 @@ Every block accepts `id` and `class`; the attributes below are what each adds.
 - `bulleted-list` attrs: none
 - `numbered-list` attrs: none
 - `checklist` attrs: none — one `[x] text` / `[ ] text` line per item
-- `code` attrs: `lang` or `language`, `src`, `run`, `deps`, `timeout`, `format` — `src`
-  names a sibling file whose **current text is the listing** (see References below); the
-  stored body stays as written and unset `src` serializes to nothing
+- `code` attrs: `lang` or `language`, `src`, `run`, `deps`, `reads`, `timeout`, `format` —
+  `src` names a sibling file whose **current text is the listing** (see References below);
+  the stored body stays as written and unset `src` serializes to nothing. `reads` is a
+  comma-separated list of sibling files the block's code reads at run time, each held to
+  the path law; unset it serializes to nothing
 - `output` attrs: `for`, `status`, `exit`, `hash`, `format`
 - `image` attrs: `src`
 - `nav` attrs: `label`
@@ -86,6 +88,15 @@ Every block accepts `id` and `class`; the attributes below are what each adds.
     and arrives at the top (`l`, `r`, `t`, `b`, or `.` for "unpinned"). A bare `to=steps` is
     unpinned at both ends and takes whichever facing pair reads best, so every board written
     before sides existed still draws.
+- `view` attrs: `src` — a sibling coded page, shown as the **page it renders to** (see
+  References below); `width`/`height` — the framed viewport in its own CSS pixels
+  (defaults 1180×760), so `width=390` is the page genuinely laid out at phone width. The
+  frame is scaled uniformly into the space it is shown in — the page column, or a board
+  node's stated box, which a view fills edge to edge. The stored body stays as written
+  (empty for a `src=` view), and unset attributes serialize to nothing. The page renders
+  inside an `<iframe sandbox="">` — an opaque origin allowed nothing — so a view is only
+  ever *shown*: nothing in it runs, submits, navigates, or reads the document's page. A
+  view may also carry an inline body instead of `src`: the body is framed the same way.
 - `script` attrs: `type`, `src`, `module`
 - `style` attrs: `media` — wraps the block's CSS in that media query
 - `stylesheet` attrs: `href`, `media` — imported ahead of every `::style` rule
@@ -151,12 +162,23 @@ wasm has no filesystem to consult, so there is nothing to disagree about.
 
 ## References — one source of truth, shown current everywhere
 
-A document may name two things it does not itself carry, so content lives once and every
+A document may name three things it does not itself carry, so content lives once and every
 page showing it stays current:
 
 - **A sibling file**: `::code id=listing src=src/lib.rs lang=rust` renders the file's
   current text as its listing, and `run` executes that text. The file is the source of
   truth; the document reviews it.
+- **A sibling coded page**: `::view id=screen src=site/index.html width=390` shows the
+  page the file renders to, framed live at the stated viewport — the same reference the
+  other way up. Hydration also inlines the page's own *relative* stylesheets
+  (`resolve::file_references` tells a prefetching host about them), because the sandboxed
+  frame has no folder to fetch from; absolute stylesheets and images stay the frame's own
+  to fetch, exactly as a browser would. The `src` may carry a fragment
+  (`src=site/index.html#visit`): the file before the `#` is read, and the frame shows
+  just that element — one screen per section of a page too tall for one frame. Only a
+  fragment that is a plain id (`[A-Za-z0-9_-]+`) is one; any other `#` stays part of the
+  filename. The crop is a selector appended to the hydrated page, never a script — a
+  sandboxed frame has no URL to scroll, and no render may need a script.
 - **One block of a sibling document**: a board node line `- plan.dx#step-one x= y=`
   draws that block on this board, resolved fresh at every render.
 
@@ -193,7 +215,12 @@ The rules (`doc_core::resolve` is the implementation, and there is exactly one):
 
 A `code` block marked `run` is executable. `deps` names the libraries to install before
 running, `timeout` caps its runtime in seconds, and `format` (`svg` or `html`) declares
-that the block prints markup which should be rendered rather than quoted.
+that the block prints markup which should be rendered rather than quoted. `reads` names
+the sibling files the code reads (comma-separated, path-law-confined): their current text
+joins the fingerprint, so editing a declared file makes the recorded output stale exactly
+like editing the code would — the record never claims "no changes" about content it read.
+A declared file that cannot be resolved blocks the run with a sentence, never a silent
+fingerprint that omits it.
 
 Running a document writes one `output` block immediately after each code block it ran:
 
@@ -213,8 +240,9 @@ Contract for `output` blocks:
   block, and re-running replaces it rather than appending a second one.
 - `status` is `ok`, `error`, or `blocked` (no toolchain, or execution disabled).
 - `exit` is the process exit code and is omitted when it is `0`.
-- `hash` fingerprints the code plus its dependencies. A re-run whose fingerprint still
-  matches is skipped and the recorded output is left untouched.
+- `hash` fingerprints the code, its dependencies, and the current text of every file the
+  block declares with `reads`. A re-run whose fingerprint still matches is skipped and
+  the recorded output is left untouched.
 - `format` is copied from the code block, and only affects rendering: a failed block always
   renders as text so the error is legible.
 - An `output` block is data, never executable: nothing in the parser, renderer, or

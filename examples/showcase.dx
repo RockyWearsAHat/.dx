@@ -21,7 +21,7 @@ Numbers, computed here
 ::code id=stats lang=python run deps=numpy
 import numpy as np
 
-latency_ms = np.array([12, 18, 9, 44, 15, 21, 13, 120, 17, 11])
+latency_ms = np.array([12, 18, 9, 44, 15, 21, 13, 125, 17, 11])
 
 print(f"requests   {latency_ms.size}")
 print(f"p50        {np.percentile(latency_ms, 50):.1f} ms")
@@ -29,11 +29,11 @@ print(f"p95        {np.percentile(latency_ms, 95):.1f} ms")
 print(f"worst      {latency_ms.max()} ms")
 ::end
 
-::output id=stats-output for=stats status=ok hash=b1323d9097e9ba05
+::output id=stats-output for=stats status=ok hash=8be1cd2717aef506
 requests   10
 p50        16.0 ms
-p95        85.8 ms
-worst      120 ms
+p95        88.5 ms
+worst      125 ms
 ::end
 
 ::heading level=2 id=picture
@@ -47,7 +47,7 @@ A block that declares `format=svg` has its output rendered as a drawing instead 
 ::code id=chart lang=python run deps=numpy format=svg
 import numpy as np
 
-latency_ms = [12, 18, 9, 44, 15, 21, 13, 120, 17, 11]
+latency_ms = [12, 18, 9, 44, 15, 21, 13, 30, 17, 11]
 width, height, pad = 720, 240, 32
 scale = (height - 2 * pad) / max(latency_ms)
 step = (width - 2 * pad) / (len(latency_ms) - 1)
@@ -69,11 +69,11 @@ print(f'''<svg viewBox="0 0 {width} {height}" xmlns="http://www.w3.org/2000/svg"
 </svg>''')
 ::end
 
-::output id=chart-output for=chart status=ok hash=6866343b9f5101b3 format=svg
+::output id=chart-output for=chart status=ok hash=529d92084dcb5d6d format=svg
 <svg viewBox="0 0 720 240" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Request latency">
   <line x1="32" y1="208" x2="688" y2="208" stroke="#8894a4" stroke-width="1"/>
-  <polyline points="32.0,190.4 104.9,181.6 177.8,194.8 250.7,143.5 323.6,186.0 396.4,177.2 469.3,188.9 542.2,32.0 615.1,183.1 688.0,191.9" fill="none" stroke="#6cb0ff" stroke-width="2.5"/>
-  <circle cx="32.0" cy="190.4" r="4" fill="#6cb0ff"/><circle cx="104.9" cy="181.6" r="4" fill="#6cb0ff"/><circle cx="177.8" cy="194.8" r="4" fill="#6cb0ff"/><circle cx="250.7" cy="143.5" r="4" fill="#6cb0ff"/><circle cx="323.6" cy="186.0" r="4" fill="#6cb0ff"/><circle cx="396.4" cy="177.2" r="4" fill="#6cb0ff"/><circle cx="469.3" cy="188.9" r="4" fill="#6cb0ff"/><circle cx="542.2" cy="32.0" r="4" fill="#6cb0ff"/><circle cx="615.1" cy="183.1" r="4" fill="#6cb0ff"/><circle cx="688.0" cy="191.9" r="4" fill="#6cb0ff"/>
+  <polyline points="32.0,160.0 104.9,136.0 177.8,172.0 250.7,32.0 323.6,148.0 396.4,124.0 469.3,156.0 542.2,88.0 615.1,140.0 688.0,164.0" fill="none" stroke="#6cb0ff" stroke-width="2.5"/>
+  <circle cx="32.0" cy="160.0" r="4" fill="#6cb0ff"/><circle cx="104.9" cy="136.0" r="4" fill="#6cb0ff"/><circle cx="177.8" cy="172.0" r="4" fill="#6cb0ff"/><circle cx="250.7" cy="32.0" r="4" fill="#6cb0ff"/><circle cx="323.6" cy="148.0" r="4" fill="#6cb0ff"/><circle cx="396.4" cy="124.0" r="4" fill="#6cb0ff"/><circle cx="469.3" cy="156.0" r="4" fill="#6cb0ff"/><circle cx="542.2" cy="88.0" r="4" fill="#6cb0ff"/><circle cx="615.1" cy="140.0" r="4" fill="#6cb0ff"/><circle cx="688.0" cy="164.0" r="4" fill="#6cb0ff"/>
   <text x="32" y="24" fill="#8894a4" font-family="monospace" font-size="13">request latency (ms)</text>
 </svg>
 ::end

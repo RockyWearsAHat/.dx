@@ -28,6 +28,13 @@ export interface Engine {
    * `[{kind: 'file' | 'document', path}, …]` — the prefetch list for `render_html`.
    */
   references(text: string): string;
+  /**
+   * The sibling files a fetched file names in turn (a `::view` page naming its
+   * stylesheets), same JSON rows as {@link Engine.references} — the second round of the
+   * prefetch. `path` is the fetched file's own reference, so its links resolve against
+   * its folder.
+   */
+  file_references(path: string, text: string): string;
   /** The canonical source of one document held in a `DXCP1` pack. */
   pack_document(pack: Uint8Array, path: string): string;
   /** Render `.dx` source to Markdown. */
@@ -167,8 +174,16 @@ export function resourcesFor(source: string, documentDir: string): string | unde
   }
   const files: Record<string, string> = {};
   const documents: Record<string, string> = {};
-  for (const ref of refs as { kind?: string; path?: string }[]) {
-    if (typeof ref.path !== 'string') {
+  // Fetched files can reference further files — a `::view` page naming its stylesheets —
+  // so the list is a queue: the engine's `file_references` says what each fetched file
+  // adds, and everything lands in one flat set before rendering. The engine decides what
+  // is referenced; this only ever reads.
+  const queue = (refs as { kind?: string; path?: string }[]).filter(
+    (ref): ref is { kind?: string; path: string } => typeof ref.path === 'string'
+  );
+  while (queue.length > 0) {
+    const ref = queue.shift() as { kind?: string; path: string };
+    if (files[ref.path] !== undefined || documents[ref.path] !== undefined) {
       continue;
     }
     const target = path.join(documentDir, ref.path);
@@ -180,6 +195,18 @@ export function resourcesFor(source: string, documentDir: string): string | unde
     }
     if (ref.kind === 'file') {
       files[ref.path] = text;
+      try {
+        const nested = JSON.parse(engine().file_references(ref.path, text));
+        if (Array.isArray(nested)) {
+          for (const entry of nested as { kind?: string; path?: string }[]) {
+            if (typeof entry.path === 'string') {
+              queue.push(entry as { kind?: string; path: string });
+            }
+          }
+        }
+      } catch {
+        // A file that names nothing readable still renders; the engine says so in place.
+      }
     } else if (ref.kind === 'document') {
       const resolved = POINTER.test(text.trim()) ? packedDocument(target) : text;
       if (resolved !== undefined) {

@@ -8,7 +8,6 @@
 //! Documents are also exposed as MCP *resources* under `dx://<path>`, so a client that
 //! browses resources sees the project's documentation without calling a tool first.
 
-mod encode;
 mod handlers;
 mod tools;
 

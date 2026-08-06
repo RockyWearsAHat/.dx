@@ -21,7 +21,10 @@
 //! # What makes a re-run cheap
 //! Every run records a fingerprint of the code plus its dependencies. Running the document
 //! again skips any block whose fingerprint still matches, so `dx run` over a large document
-//! only executes what actually changed.
+//! only executes what actually changed. A block whose code reads sibling files declares
+//! them (`reads=site/site.css`), and their current text is part of the fingerprint too —
+//! so editing a declared file re-runs the block, and the record never claims "no changes"
+//! about content it read.
 //!
 //! # Safety
 //! Running a document runs code someone else wrote, so it does not run with the reader's
@@ -211,7 +214,25 @@ pub fn run_document(source: &str, options: &RunOptions, resolver: &dyn Resolver)
         }
 
         let deps = parse_deps(&block.deps);
-        let fingerprint = fingerprint(runner, &block.text, &deps);
+        let reads = match declared_reads(block, resolver) {
+            Ok(reads) => reads,
+            Err(sentence) => {
+                runs.push(BlockRun {
+                    id: block.id.clone(),
+                    language: block.language.clone(),
+                    status: "blocked".to_string(),
+                    exit: BLOCKED_EXIT,
+                    output: sentence.clone(),
+                    duration_ms: 0,
+                });
+                outputs.push((
+                    block.id.clone(),
+                    output_block(block, "blocked", BLOCKED_EXIT, "", &sentence),
+                ));
+                continue;
+            }
+        };
+        let fingerprint = fingerprint(runner, &block.text, &deps, &reads);
         let existing = existing_output(&document, index, &block.id);
 
         if !options.force && existing.is_some_and(|output| output.hash == fingerprint) {
@@ -283,9 +304,48 @@ fn existing_output<'a>(document: &'a Document, index: usize, id: &str) -> Option
         .filter(|block| block.kind == "output" && block.for_block == id)
 }
 
-/// Fingerprint the inputs that decide a block's output: runner, code, and dependencies.
-fn fingerprint(runner: &str, code: &str, deps: &[String]) -> String {
-    let material = format!("{runner}\u{1f}{}\u{1f}{code}", deps.join(","));
+/// The files a block declares it reads (`reads=`), each resolved to its current text.
+///
+/// Paths are comma-separated and obey the reference path law. A path the law refuses, or
+/// a file the resolver cannot produce, is an error sentence — a fingerprint that silently
+/// omitted a missing input would let the record claim "no changes" about content it never
+/// saw, which is the lie `reads=` exists to prevent.
+fn declared_reads(block: &Block, resolver: &dyn Resolver) -> Result<Vec<(String, String)>, String> {
+    let mut reads = Vec::new();
+    for path in block
+        .reads
+        .split(',')
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+    {
+        let Some(confined) = resolve::confined(path) else {
+            return Err(format!(
+                "{path} is not a path this block may declare — a `reads=` file stays \
+                 inside the document's own folder, relative and walking downward."
+            ));
+        };
+        let Some(text) = resolver.file(confined) else {
+            return Err(format!(
+                "{confined} could not be read here — the block declares it with `reads=`, \
+                 and its content is part of what decides whether the recorded output is \
+                 still current. Check the path against the document's folder."
+            ));
+        };
+        reads.push((confined.to_string(), text));
+    }
+    Ok(reads)
+}
+
+/// Fingerprint the inputs that decide a block's output: runner, code, dependencies, and
+/// the current text of every file the block declares it reads.
+fn fingerprint(runner: &str, code: &str, deps: &[String], reads: &[(String, String)]) -> String {
+    let mut material = format!("{runner}\u{1f}{}\u{1f}{code}", deps.join(","));
+    for (path, text) in reads {
+        material.push('\u{1f}');
+        material.push_str(path);
+        material.push('\u{1f}');
+        material.push_str(text);
+    }
     sha256_hex(material.as_bytes())[..16].to_string()
 }
 
@@ -648,10 +708,86 @@ mod tests {
 
     #[test]
     fn fingerprints_change_with_code_and_dependencies() {
-        let base = fingerprint("python", "print(1)", &[]);
-        assert_ne!(base, fingerprint("python", "print(2)", &[]));
-        assert_ne!(base, fingerprint("python", "print(1)", &["rich".into()]));
-        assert_ne!(base, fingerprint("node", "print(1)", &[]));
+        let base = fingerprint("python", "print(1)", &[], &[]);
+        assert_ne!(base, fingerprint("python", "print(2)", &[], &[]));
+        assert_ne!(
+            base,
+            fingerprint("python", "print(1)", &["rich".into()], &[])
+        );
+        assert_ne!(base, fingerprint("node", "print(1)", &[], &[]));
         assert_eq!(base.len(), 16);
+    }
+
+    #[test]
+    fn fingerprints_change_with_declared_reads() {
+        let base = fingerprint("python", "print(1)", &[], &[]);
+        let read = fingerprint(
+            "python",
+            "print(1)",
+            &[],
+            &[("site.css".into(), "body{}".into())],
+        );
+        assert_ne!(base, read);
+        // The same file with different content is a different fingerprint — that is the
+        // whole point of declaring it.
+        assert_ne!(
+            read,
+            fingerprint(
+                "python",
+                "print(1)",
+                &[],
+                &[("site.css".into(), "body{color:red}".into())],
+            )
+        );
+        // A renamed file is a different fingerprint even with identical content.
+        assert_ne!(
+            read,
+            fingerprint(
+                "python",
+                "print(1)",
+                &[],
+                &[("other.css".into(), "body{}".into())],
+            )
+        );
+    }
+
+    #[test]
+    fn a_missing_declared_read_blocks_the_run() {
+        let source = "::code id=check lang=python run reads=site/site.css\nprint(1)\n::end\n";
+        let report = run_document(source, &RunOptions::default(), &resolve::Nowhere);
+        assert_eq!(report.runs.len(), 1);
+        assert_eq!(report.runs[0].status, "blocked");
+        assert!(report.runs[0].output.contains("site/site.css"));
+    }
+
+    #[test]
+    fn a_read_outside_the_folder_blocks_the_run() {
+        let source = "::code id=check lang=python run reads=../secrets\nprint(1)\n::end\n";
+        let report = run_document(source, &RunOptions::default(), &resolve::Nowhere);
+        assert_eq!(report.runs.len(), 1);
+        assert_eq!(report.runs[0].status, "blocked");
+        assert!(report.runs[0].output.contains("../secrets"));
+    }
+
+    #[test]
+    fn editing_a_declared_file_stales_the_recorded_output() {
+        let mut provided = resolve::Provided::new();
+        provided.add_file("site.css", "body{}");
+        let block = Block {
+            kind: "code".into(),
+            id: "check".into(),
+            language: "python".into(),
+            run: true,
+            reads: "site.css".into(),
+            text: "print(1)".into(),
+            ..Block::default()
+        };
+        let before = declared_reads(&block, &provided).expect("resolves");
+        let recorded = fingerprint("python", &block.text, &[], &before);
+
+        let mut edited = resolve::Provided::new();
+        edited.add_file("site.css", "body{color:red}");
+        let after = declared_reads(&block, &edited).expect("resolves");
+        assert_ne!(recorded, fingerprint("python", &block.text, &[], &after));
     }
 }

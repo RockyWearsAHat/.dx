@@ -102,6 +102,14 @@ fn normalize_block(block: &Block, index: usize, registry: &mut IdRegistry) -> Bl
             normalized.text = js_trim_end(&block.text).to_string();
             normalized.height = block.height;
         }
+        // View: the reference and its stated viewport; the body stays as written (the
+        // stored form of a `src=` view is empty — hydration fills it, and is never saved).
+        "view" => {
+            normalized.src = js_trim(&block.src).to_string();
+            normalized.width = block.width;
+            normalized.height = block.height;
+            normalized.text = js_trim_end(&block.text).to_string();
+        }
         "stylesheet" => {
             normalized.href = if !block.href.is_empty() {
                 js_trim(&block.href).to_string()
@@ -122,6 +130,7 @@ fn normalize_block(block: &Block, index: usize, registry: &mut IdRegistry) -> Bl
             normalized.src = js_trim(&block.src).to_string();
             normalized.run = block.run;
             normalized.deps = js_trim(&block.deps).to_string();
+            normalized.reads = js_trim(&block.reads).to_string();
             normalized.timeout = block.timeout;
             normalized.format = js_trim(&block.format).to_string();
         }

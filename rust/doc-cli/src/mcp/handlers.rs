@@ -65,6 +65,10 @@ fn read(args: &Value, root: &Path) -> ToolResult {
         ..ShotOptions::for_reading(number(args, "width"))
     };
 
+    if let Some(id) = string(args, "block") {
+        return read_block(&document, id, path, &options);
+    }
+
     let pages = match capture_pages(&document, &options) {
         Ok(pages) if !pages.is_empty() => pages,
         // No browser, or nothing captured: the reader still gets the document, as text.
@@ -96,6 +100,30 @@ fn read(args: &Value, root: &Path) -> ToolResult {
         }));
     }
     Ok(content)
+}
+
+/// `dx_read` with `block`: one image of one block — a board at its natural size, a node's
+/// block exactly as the page (or its board box) carries it.
+fn read_block(
+    document: &doc_core::model::Document,
+    id: &str,
+    path: &str,
+    options: &ShotOptions,
+) -> ToolResult {
+    match doc_shot::capture_block(document, id, options) {
+        Ok(shot) => Ok(vec![
+            text_content(&format!(
+                "{path} — block `{id}` ({}x{} px)",
+                shot.width, shot.height
+            )),
+            json!({
+                "type": "image",
+                "data": base64(&shot.png),
+                "mimeType": "image/png"
+            }),
+        ]),
+        Err(reason) => Ok(vec![text_content(&fallback_text(document, &reason))]),
+    }
 }
 
 /// The line that opens a read: what was rendered, and what to do about what was not.

@@ -74,6 +74,7 @@ const ALLOWED_ELEMENTS: &[&str] = &[
     "ins",
     "kbd",
     "li",
+    "main",
     "mark",
     "ol",
     "p",
@@ -284,10 +285,80 @@ pub fn escape_html(value: &str) -> String {
     out
 }
 
-/// Escape a value for use inside a `<style>` element, where only `</style` can break out.
+/// Make a document's own CSS safe to put in a `<style>` element.
+///
+/// A `::style` block dresses its document on every surface, so this runs on every read and
+/// has to hold the same line [`is_safe_style`] holds for an inline `style="…"`: CSS may lay a
+/// document out, and may not fetch or execute. Three things are neutralized, and the rest of
+/// the author's stylesheet passes through untouched:
+///
+/// - `</style`, the one sequence that closes the element and escapes into markup.
+/// - Remote `url(…)`. A `background: url(https://…)` fires on render, which turns reading a
+///   document into telling its author you read it — and on github.com, telling a stranger
+///   your IP. A `data:` image and a relative path are kept, because those are how a
+///   self-contained document carries its own artwork.
+/// - `@import`, `expression(`, `behavior:`, and `-moz-binding`: a fetch and three ways to run
+///   script from a declaration.
+///
+/// Neutralizing rather than deleting is deliberate — a mangled property is a rule the browser
+/// ignores, so the surrounding stylesheet still parses and the author sees one thing not work
+/// instead of their whole dress falling off at the first bad line.
 #[must_use]
 pub fn escape_style(value: &str) -> String {
-    replace_case_insensitive(value, "</style", "<\\/style")
+    let mut out = blank_unsafe_urls(value);
+    for banned in ["@import", "expression(", "behavior:", "-moz-binding"] {
+        out = replace_case_insensitive(&out, banned, &format!("_dx-blocked-{}", &banned[..2]));
+    }
+    replace_case_insensitive(&out, "</style", "<\\/style")
+}
+
+/// Whether a CSS `url(…)` target can be resolved without reaching off the document.
+///
+/// Stricter than [`is_safe_url`], and deliberately so: that one judges a *link*, which a
+/// reader chooses to follow, and `https:` belongs there. This judges a *fetch*, which fires
+/// the instant the page paints and which the reader never agreed to. Only an inert `data:`
+/// image qualifies — a document that carries its own artwork — and nothing that names a host.
+fn is_fetchless_url(target: &str) -> bool {
+    let flattened: String = decode_entities(target)
+        .chars()
+        .filter(|ch| !ch.is_ascii_whitespace() && !ch.is_control())
+        .collect::<String>()
+        .to_ascii_lowercase();
+    if flattened.is_empty() || flattened.starts_with("//") {
+        return false;
+    }
+    match flattened.strip_prefix("data:") {
+        Some(rest) => ["image/png", "image/jpeg", "image/gif", "image/webp"]
+            .iter()
+            .any(|kind| rest.starts_with(kind)),
+        // No scheme at all is a relative path inside whatever already loaded the document.
+        None => !flattened.contains(':'),
+    }
+}
+
+/// Rewrite every `url(…)` whose target this engine will not fetch into an empty `url()`.
+///
+/// An empty target is inert: the browser resolves nothing and the declaration is simply
+/// ignored, which is exactly what a dropped background should do.
+fn blank_unsafe_urls(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    let mut rest = value;
+    while let Some(at) = rest.to_ascii_lowercase().find("url(") {
+        out.push_str(&rest[..at + 4]);
+        rest = &rest[at + 4..];
+        let Some(close) = rest.find(')') else {
+            // An unclosed `url(` never becomes a request; the remainder is ordinary text.
+            break;
+        };
+        let target = rest[..close].trim().trim_matches(['"', '\''].as_slice());
+        if is_fetchless_url(target) {
+            out.push_str(&rest[..close]);
+        }
+        out.push(')');
+        rest = &rest[close + 1..];
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Keep the presentation in author-supplied markup and drop everything that could execute.

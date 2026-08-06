@@ -16,7 +16,9 @@
 //! Rendering is a pure function of the document and the options — no clock, no filesystem,
 //! no network — so the same input always yields the same bytes.
 
+pub(crate) mod board;
 mod escape;
+mod field;
 mod html;
 mod inline;
 mod nav;
@@ -26,7 +28,8 @@ mod text;
 mod theme;
 
 pub use escape::{escape_html, sanitize_markup};
-pub use html::{block, html, HtmlOptions};
+pub use field::field_html;
+pub use html::{block, block_page, html, BlockPage, HtmlOptions, PageBounds};
 pub use nav::{entries as nav_entries, NavEntry};
 pub use outline::{outline, section, OutlineEntry};
 pub use text::{text, TextOptions};

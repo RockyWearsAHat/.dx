@@ -110,9 +110,16 @@ pub fn run_render(args: &Args) -> Result<String, String> {
 ///
 /// With `--pages` it writes one image per page — `notes-1.png`, `notes-2.png`, … — which is
 /// the same division an agent gets from `dx_read`, for anyone driving `dx` from a shell.
+/// With `--block <id>` it photographs that one block alone: a `::board` at its natural
+/// canvas size (every node exactly the box its line states), anything else in the ordinary
+/// column — which is how one board, or one node's block, is rendered out and checked
+/// without paging through the document around it.
 pub fn run_png(args: &Args) -> Result<String, String> {
     if args.present("pages") {
         return run_png_pages(args);
+    }
+    if let Some(id) = args.value("block") {
+        return run_png_block(args, id);
     }
     let path = document_path(args)?;
     let document = selected_document(args)?;
@@ -138,6 +145,46 @@ pub fn run_png(args: &Args) -> Result<String, String> {
         shot.width,
         shot.height
     ))
+}
+
+/// `dx png <file> --block <id>` — one block as an image: a board at its natural size,
+/// anything else exactly as the page carries it.
+fn run_png_block(args: &Args, id: &str) -> Result<String, String> {
+    let path = document_path(args)?;
+    let document = selected_document(args)?;
+    let shot = doc_shot::capture_block(
+        &document,
+        id,
+        &ShotOptions {
+            width: args.number("width").unwrap_or(doc_shot::DEFAULT_WIDTH),
+            theme: theme_of(args),
+            scale: export_scale(args),
+            ..ShotOptions::default()
+        },
+    )?;
+
+    let target = args.value("out").map_or_else(
+        || path.with_file_name(png_block_name(&path, id)),
+        PathBuf::from,
+    );
+    std::fs::write(&target, &shot.png)
+        .map_err(|error| format!("could not write {}: {error}", target.display()))?;
+
+    Ok(format!(
+        "wrote {} ({}x{} px)\n",
+        target.display(),
+        shot.width,
+        shot.height
+    ))
+}
+
+/// The default file name for a one-block export: `<stem>-<block>.png`, beside the document.
+fn png_block_name(path: &Path, id: &str) -> String {
+    let stem = path
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "document".to_string());
+    format!("{stem}-{id}.png")
 }
 
 /// The device scale a `dx png` export captures at: 2 unless `--scale` says otherwise.

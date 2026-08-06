@@ -168,11 +168,16 @@ ul, ol { margin: 0 0 1.15rem; padding-left: 1.35rem; }
 li { margin: 0.3rem 0; }
 li > ul, li > ol { margin: 0.3rem 0 0; }
 
-/* Checklists read as ticked boxes written in the margin, not as a styled widget. */
+/* Checklists read as ticked boxes written in the margin, not as a styled widget. The box a
+   reader can actually tick is still that box — an editing surface gives it a pointer and
+   the page's ink on hover, and adds nothing else. */
 .dx-checklist { list-style: none; padding-left: 0; }
 .dx-checklist li { display: flex; gap: 0.6rem; align-items: baseline; }
-.dx-checklist .dx-mark { font-family: var(--dx-mono); font-size: 0.85em; color: var(--dx-muted); }
+.dx-checklist .dx-mark { font-family: var(--dx-mono); font-size: 0.85em; color: var(--dx-muted); white-space: nowrap; flex-shrink: 0; }
 .dx-checklist .dx-done { color: var(--dx-muted); }
+.dx-checklist .dx-mark[role="checkbox"] { cursor: pointer; }
+.dx-checklist .dx-mark[role="checkbox"]:hover,
+.dx-checklist .dx-mark[role="checkbox"]:focus-visible { color: var(--dx-text); outline: none; }
 
 /* Navigation is a list of names on the same sheet — no panel, no rail, no highlight. */
 .dx-nav ul { list-style: none; padding-left: 0; margin: 0; }
@@ -357,6 +362,14 @@ tbody tr:last-child td { border-bottom: 0; }
 /* Author markup can be genuinely wider than the page (a table with many columns). It
    scrolls inside its own box so the page body never scrolls sideways. */
 .dx-html { margin: 0 0 1.15rem; overflow-x: auto; }
+/* A view is the referenced page itself, framed. The frame is laid out at its stated
+   viewport and scaled uniformly into the box the engine computed, so the page inside is
+   the real render at a real width — a phone layout because the viewport is a phone's.
+   The sandbox is the boundary: nothing in the frame runs, and nothing leaks out of it. */
+.dx-view { margin: 0 0 1.15rem; overflow: hidden; border: 1px solid var(--dx-rule); box-sizing: content-box; }
+.dx-view iframe { display: block; border: 0; transform-origin: 0 0; }
+.dx-view-missing { border: 0; }
+.dx-view-missing p { font: 400 0.68rem/1.6 var(--dx-mono); color: var(--dx-error); margin: 0; }
 .dx-svg { margin: 0 0 1.15rem; }
 .dx-svg svg, img { max-width: 100%; height: auto; }
 
@@ -378,6 +391,102 @@ figcaption {
   color: var(--dx-muted);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+/* The board: a viewport onto a canvas of the document's own blocks. The frame is the one
+   hairline a window earns; the canvas beneath is the same paper. Nodes are paper too — a
+   hairline boundary, no fill, no shadow — and clip what overflows their width so a long
+   listing cannot smear across its neighbours. The canvas scales down statically when the
+   arrangement is wider than the column, so nothing ever leaves the sheet sideways; an
+   editing surface replaces that with real pan and zoom. */
+.dx-board {
+  position: relative;
+  overflow: hidden;
+  margin: 0 0 1.15rem;
+  border: 1px solid var(--dx-rule);
+}
+.dx-board-canvas {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform-origin: 0 0;
+}
+/* A node is a frame onto one block, at exactly the box its line states — the same four
+   numbers the engine did its geometry against, so nothing has to be measured for the two to
+   agree. Content longer than the frame scrolls inside it rather than being lost or spilling
+   over the neighbour: the reader decides how big the frame is. */
+.dx-board-node {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  padding: 0.55rem 0.8rem;
+  border: 1px solid var(--dx-rule);
+  background: var(--dx-bg);
+  overflow: hidden;
+}
+/* The body takes whatever the box has left — which is the whole of it on a page nobody can
+   click, and the rest of it under the grip bar an editing surface adds. Stating a height
+   here instead would put the block's last line under the node's own bottom edge. */
+.dx-board-node-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  scrollbar-width: thin;
+}
+.dx-board-node-body > :last-child { margin-bottom: 0; }
+/* A node holding a view is a screen: the frame takes the whole stated box, edge to edge,
+   and the frame's own hairline yields to the node's. */
+.dx-board-node-view { padding: 0; }
+.dx-board-node-view .dx-board-node-body { overflow: hidden; }
+.dx-board-node-view .dx-view { margin: 0; border: 0; }
+.dx-board-edges {
+  position: absolute;
+  left: 0;
+  top: 0;
+  overflow: visible;
+  /* The edge sheet lies across the whole canvas and paints almost nothing; it must not
+     swallow the pointer meant for the node under it. The editing surface re-enables the
+     strokes themselves, which are the one part of it a reader can mean to click. */
+  pointer-events: none;
+}
+/* The edges themselves — a direct child, so the arrowhead and the tether inside `defs` keep
+   the fills they declare. An edge means "this, then that", and a curve with no head does not
+   say which end is which; the head takes the stroke it terminates, so it is picked with it.
+   Round caps, because a line fastened to a node ends in a point, not a cut. */
+.dx-board-edges > path {
+  fill: none;
+  stroke: var(--dx-faint);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+}
+/* The arrowhead and tether ask for `context-stroke` (see `render::board`) so a picked or
+   hovered edge recolours its head along with its stem. Not every engine that draws this page
+   understands that keyword — WebKit, and any renderer without CSS support — and a declaration
+   it cannot parse is dropped rather than applied, so the fallback above it is what survives.
+   Written as two declarations of the same property for exactly that reason: an engine without
+   support keeps the plain stroke colour instead of falling back to marker's own default
+   black, which is what made an arrowhead read as a different colour than the line it tipped. */
+.dx-board-edges marker path,
+.dx-board-edges marker circle {
+  fill: var(--dx-faint);
+  fill: context-stroke;
+}
+/* Words written on an edge — "yes", "on failure". Set in the page's own marginal ink and
+   centred on the curve, with the paper painted behind the glyphs so the line does not run
+   through the middle of the word. `paint-order` is what puts that stroke under the fill;
+   without it the halo is drawn over the letters and the label reads as embossed. */
+.dx-board-edge-label {
+  font: 400 0.62rem/1 var(--dx-mono);
+  fill: var(--dx-muted);
+  stroke: var(--dx-bg);
+  stroke-width: 4;
+  paint-order: stroke fill;
+  text-anchor: middle;
+  dominant-baseline: middle;
+}
+.dx-board-missing {
+  font: 400 0.68rem/1.6 var(--dx-mono);
+  color: var(--dx-error);
 }
 
 /* On paper: real paper. The marginal notes are a screen affordance. */

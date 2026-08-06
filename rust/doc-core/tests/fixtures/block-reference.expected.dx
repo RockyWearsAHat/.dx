@@ -20,11 +20,11 @@ Every block type the parser reads and the renderer draws. `docs/dx-format-contra
 		<tr><td>output</td><td>for, status, exit, hash, format</td><td>What a run produced. A failure is the only one called out.</td></tr>
 		<tr><td>html</td><td>&mdash;</td><td>Author markup, rendered through the allow-list in <code>render::escape</code>.</td></tr>
 		<tr><td>svg</td><td>&mdash;</td><td>A drawing, sanitized the same way. Paint it <code>currentColor</code>.</td></tr>
-		<tr><td>graph / mermaid</td><td>&mdash;</td><td>Kept verbatim and shown as its own source; nothing here draws it.</td></tr>
+		<tr><td>board</td><td>height</td><td>This document's own blocks on a canvas. One <code>- id x= y= w= h= to=</code> line per node.</td></tr>
 		<tr><td>image</td><td>src, alt</td><td>A figure, with the caption as its alt text.</td></tr>
 		<tr><td>rule</td><td>&mdash;</td><td>A horizontal rule.</td></tr>
 		<tr><td>script</td><td>type, src, module</td><td>No visible body. A JSON one feeds <code>{{name}}</code> in prose.</td></tr>
-		<tr><td>style / stylesheet</td><td>media, href</td><td>No visible body, and applied only under <code>--doc-css</code>.</td></tr>
+		<tr><td>style / stylesheet</td><td>media, href</td><td>No visible body. The document's own CSS, always applied.</td></tr>
 	</tbody>
 </table>
 ::end
@@ -57,12 +57,28 @@ The shape of one block
 ::end
 
 ::heading level=2 id=block-reference-graph-heading
-A graph block, kept as written
+A flowchart, converted to a board
 ::end
 
-::graph id=block-reference-mermaid
-graph LR
-	A[.dx source] --> B[format::parse]
-	B --> C[render::html]
-	C --> D[a page]
+::paragraph id=block-reference-mermaid-a hidden
+.dx source
+::end
+
+::paragraph id=block-reference-mermaid-b hidden
+format::parse
+::end
+
+::paragraph id=block-reference-mermaid-c hidden
+render::html
+::end
+
+::paragraph id=block-reference-mermaid-d hidden
+a page
+::end
+
+::board id=block-reference-mermaid height=220
+- block-reference-mermaid-a x=0 y=0 w=140 h=64 to=block-reference-mermaid-b:r-l
+- block-reference-mermaid-b x=250 y=0 w=162 h=64 to=block-reference-mermaid-c:r-l
+- block-reference-mermaid-c x=522 y=0 w=152 h=64 to=block-reference-mermaid-d:r-l
+- block-reference-mermaid-d x=784 y=0 w=140 h=64
 ::end

@@ -75,12 +75,22 @@ fn read_tool() -> Value {
                         document, call dx_outline first and then pass `section` to read just \
                         the part you need. Falls back to Markdown text automatically if this \
                         machine has no browser installed. Use dx_source when you need the \
-                        exact characters (to quote or edit them).",
+                        exact characters (to quote or edit them). Pass `block` to photograph \
+                        one block alone — a ::board arrives at its natural canvas size, every \
+                        node at the box its line states, which is the sharp way to inspect a \
+                        board or a single node.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "path": path_property(),
                 "section": section_property(),
+                "block": {
+                    "type": "string",
+                    "description": "Optional block id: return one image of just this block. \
+                                    A board renders at its natural size instead of fitted \
+                                    into the page column; a hidden block (a board node) \
+                                    renders too. Get ids from dx_outline."
+                },
                 "theme": {
                     "type": "string",
                     "enum": ["auto", "light", "dark"],

@@ -38,7 +38,11 @@ pub fn inline_html(text: &str) -> String {
 }
 
 /// A run of already-escaped text, tagged by whether marks apply to it.
-enum Span<'a> {
+///
+/// Shared with the field renderer (`super::field`), which draws the same grammar with its
+/// markers still visible — one scanner, two views, so the two cannot disagree about where a
+/// code span begins.
+pub(super) enum Span<'a> {
     /// Text inside backticks: rendered verbatim, never re-scanned.
     Code(&'a str),
     /// Ordinary prose: links and emphasis apply.
@@ -49,7 +53,7 @@ enum Span<'a> {
 ///
 /// An unmatched backtick is not a code span: the rest of the line stays prose, so a
 /// stray tick in a sentence never swallows the remainder.
-fn split_code_spans(text: &str) -> Vec<Span<'_>> {
+pub(super) fn split_code_spans(text: &str) -> Vec<Span<'_>> {
     let mut spans = Vec::new();
     let mut rest = text;
 
@@ -92,17 +96,17 @@ fn apply_links(text: &str) -> String {
 }
 
 /// A parsed `[label](target)` span and how many bytes of input it covered.
-struct Link<'a> {
-    label: &'a str,
-    target: &'a str,
-    consumed: usize,
+pub(super) struct Link<'a> {
+    pub(super) label: &'a str,
+    pub(super) target: &'a str,
+    pub(super) consumed: usize,
 }
 
 /// Parse a link starting at the `[` in `text`, or `None` when the shape does not match.
 ///
 /// The target must be a single non-empty token; a bracketed phrase followed by an
 /// unrelated parenthetical is left as written.
-fn parse_link(text: &str) -> Option<Link<'_>> {
+pub(super) fn parse_link(text: &str) -> Option<Link<'_>> {
     let label_end = text.find(']')?;
     if !text[label_end + 1..].starts_with('(') {
         return None;

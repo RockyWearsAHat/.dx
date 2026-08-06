@@ -40,6 +40,9 @@ pub(crate) fn block_header(block: &Block) -> String {
             if !block.deps.is_empty() {
                 attributes.push(format!("deps={}", format_attribute_value(&block.deps)));
             }
+            if !block.reads.is_empty() {
+                attributes.push(format!("reads={}", format_attribute_value(&block.reads)));
+            }
             if block.timeout > 0 {
                 attributes.push(format!("timeout={}", block.timeout));
             }
@@ -99,6 +102,19 @@ pub(crate) fn block_header(block: &Block) -> String {
                 attributes.push(format!("height={}", block.height));
             }
             format!("::board {}", attributes.join(" "))
+        }
+        // Unset attributes serialize to nothing, so adding `view` reformats no document.
+        "view" => {
+            if !block.src.is_empty() {
+                attributes.push(format!("src={}", format_attribute_value(&block.src)));
+            }
+            if block.width > 0 {
+                attributes.push(format!("width={}", block.width));
+            }
+            if block.height > 0 {
+                attributes.push(format!("height={}", block.height));
+            }
+            format!("::view {}", attributes.join(" "))
         }
         "script" => {
             if !block.script_type.is_empty() {

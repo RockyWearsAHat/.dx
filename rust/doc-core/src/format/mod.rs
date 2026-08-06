@@ -33,8 +33,10 @@
 //! - [`legacy`] — the legacy-Markdown fallback parser.
 
 mod attrs;
+mod layout;
 mod legacy;
 mod lines;
+mod mermaid;
 mod normalize;
 mod parse;
 mod source;
@@ -49,6 +51,13 @@ pub use stringify::{stringify, stringify_blocks, BLOCK_SEPARATOR};
 // of each rule, two directions.
 pub(crate) use lines::{build_nested_list_structure, parse_checklist_line, parse_list_items};
 pub(crate) use stringify::list_lines;
+
+// The header rules, shared with `crate::edit` the same way: a block's header is the line
+// the canonical writer puts in the file (`block_header`), and a typed header is read by
+// the scanner's own grammar (`header_line_facts`) — never by a second parser grown in an
+// editing surface.
+pub(crate) use parse::header_line_facts;
+pub(crate) use stringify::block_header;
 
 // The id rule itself, shared with `crate::edit` so a surface can ask what an id *would*
 // become before the writer names it — one slugifier, not a second one that could disagree
@@ -72,6 +81,8 @@ const BLOCK_TYPES: &[&str] = &[
     "stylesheet",
     "svg",
     "html",
+    "board",
+    "view",
     "graph",
     "mermaid",
     "script",
@@ -79,7 +90,11 @@ const BLOCK_TYPES: &[&str] = &[
 ];
 
 /// Whether `kind` is a recognized DOCSRC block type.
-fn is_known_block_type(kind: &str) -> bool {
+///
+/// Shared with `crate::edit`, which refuses a typed header naming a kind the format would
+/// otherwise silently fold to `paragraph` — a retype that quietly became prose would be
+/// content loss with no sentence saying so.
+pub(crate) fn is_known_block_type(kind: &str) -> bool {
     BLOCK_TYPES.contains(&kind)
 }
 
@@ -98,6 +113,16 @@ mod tests {
         let input =
             "::heading level=1 id=h\nHi\n::end\n\n::paragraph id=intro\nHello world\n::end\n";
         assert_eq!(round_trip(input), input);
+    }
+
+    #[test]
+    fn a_view_round_trips_and_unset_attributes_write_nothing() {
+        // The stored form of a `src=` view is the reference and an empty body; `width`
+        // and `height` appear only when stated, so adding the kind reformats no document.
+        let full = "::view id=shipped src=site/index.html width=1180 height=760\n\n::end\n";
+        assert_eq!(round_trip(full), full);
+        let bare = "::view id=shipped src=site/index.html\n\n::end\n";
+        assert_eq!(round_trip(bare), bare);
     }
 
     #[test]
@@ -333,6 +358,20 @@ mod tests {
     }
 
     #[test]
+    fn declared_reads_round_trip_and_unset_writes_nothing() {
+        let input = "::code id=check lang=python run reads=site/index.html,site/site.css\n\
+                     print(1)\n::end\n";
+        assert_eq!(round_trip(input), input);
+        assert_eq!(
+            parse(input).blocks[0].reads,
+            "site/index.html,site/site.css"
+        );
+        // Additive: a block that declares nothing serializes exactly as it always has.
+        let bare = "::code id=check lang=python run\nprint(1)\n::end\n";
+        assert_eq!(round_trip(bare), bare);
+    }
+
+    #[test]
     fn plain_code_gains_no_execution_attributes() {
         // Non-runnable code must serialize exactly as before, or every existing doc drifts.
         let input = "::code id=c lang=js\nconst x = 1;\n::end\n";
@@ -365,6 +404,33 @@ mod tests {
 
         let output = "::output id=o for=chart status=ok format=svg\n<svg></svg>\n::end\n";
         assert_eq!(round_trip(output), output);
+    }
+
+    #[test]
+    fn a_board_round_trips_with_its_node_lines_verbatim() {
+        // The body is reference lines, one per node; the scanner keeps them verbatim so a
+        // key this version has never heard of survives the round-trip.
+        let input = "::board id=plan height=520\n- ideas x=40 y=40 w=280\n- sketch x=380 y=40 w=320 to=ideas future=yes\n::end\n";
+        assert_eq!(round_trip(input), input);
+        let block = &parse(input).blocks[0];
+        assert_eq!(block.height, 520);
+        assert!(block.text.contains("future=yes"));
+    }
+
+    #[test]
+    fn a_board_without_a_height_writes_no_height_attribute() {
+        // Additive rule: an unset attribute serializes to nothing, or every existing
+        // document reformats on its next save.
+        let input = "::board id=plan\n- a x=0 y=0\n::end\n";
+        assert_eq!(round_trip(input), input);
+        assert_eq!(parse(input).blocks[0].height, 0);
+    }
+
+    #[test]
+    fn an_empty_board_round_trips_empty() {
+        // An empty canvas is a canvas waiting for its first node, not a defect to fill in.
+        let input = "::board id=plan\n\n::end\n";
+        assert_eq!(round_trip(input), input);
     }
 
     #[test]

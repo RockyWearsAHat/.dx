@@ -2,9 +2,235 @@
 
 _Resume point after `/compact` or `/clear`. Update after every task or wave (see CLAUDE.md)._
 
-Last updated: 2026-08-04
+Last updated: 2026-08-05
 
-## This wave, part 20: references (one source of truth), vision-sized agent pages, 2× exports
+## This wave, part 26: the run record fingerprints what it reads, and the map names what it points at
+
+**"Read handoff and fix; rank dx-for-agents honestly first; fix unintended flaws; make the
+site plan beautiful."** The part-25 fingerprint gap is closed at the engine, plus one map
+flaw the grounded evaluation surfaced.
+
+- **`reads=` closes the honesty gap** (the part-25 "next step"): a run block declares the
+  sibling files its code reads (`::code … run reads=site/index.html,site/site.css` —
+  comma-separated, path-law-confined, additive: unset serializes to nothing). The files'
+  current text joins the fingerprint (`doc-run::declared_reads`/`fingerprint`), so a
+  stylesheet-only edit re-runs the proof on the next **plain** `dx run` — no `--force`, no
+  stale "no changes". A declared file that is missing or outside the folder **blocks** the
+  run with a sentence; a fingerprint that silently omitted an input would be the same lie
+  again. Wired through model, parse/stringify/normalize (normalize was the silent dropper —
+  it rebuilds code blocks field-by-field), doc-wasm DTO, surface ATTRS autocomplete,
+  format contract, README. 7 new tests.
+- **Outline previews name references** (`render::outline::preview_content`): nine `::view`
+  rows all previewed as the same hydrated `<!doctype html>` preamble — the map hid exactly
+  what an agent needs to choose the next read. A `code src=`/`view src=` row now leads with
+  its reference (`site/index.html#tonight — <!doctype…`), and previews the bare path when
+  unhydrated instead of an empty string. One new test.
+- **`examples/example_site_plan.dx` revised**: verify declares its reads; proof-note states
+  the new truth (was worded around the gap); prose caught up with the board ("two screens" →
+  the nine that exist, section screens introduced); structure gained two level-2 headings
+  ("The plan, on one canvas", "One loop, two hands"); the board gained a full-width gallery
+  caption node, the measure band is truly centered (x=335), gallery rows shifted down 60.
+- **Validated**: cargo **713** green, clippy `-D warnings` clean, fmt clean, wasm rebuilt
+  (`editor/build.sh`), github 34/34 + vscode 34/34, `~/.local/bin/dx` refreshed
+  (rm-then-cp). Live: `dx fmt` idempotent; `dx run` re-ran verify off the header change
+  (21/21); appended a comment to `site.css` → plain `dx run` **re-ran**; restored → re-ran;
+  unchanged → `skipped cached / no changes`. Board + all four pages captured and inspected.
+- **Found, not fixed (needs a restart, not code)**: the MCP server process outlives
+  `/clear` and this session's `dx` MCP still runs a pre-part-22 engine — `dx_outline`
+  reported every `::view` as an empty paragraph until the CLI was used directly. Restart
+  the assistant to pick up the refreshed binary.
+
+Next step: part 24's remaining store-listing steps, or `/code-review` the accumulated
+parts 8–26 diff and commit.
+
+## Previous wave, part 25: fragment views close the visual loop, and the site retested through them
+
+**"Fix + retest"** (from the part-24 handoff). Two halves: an engine feature, then the QA it
+unlocks — all inside dx, no browser driven.
+
+- **Engine: `::view src=page.html#id` is now a fragment view** (`doc-core/src/resolve.rs`).
+  The file before the `#` is read (stylesheets still inline; `references` strips the fragment
+  for prefetching hosts), and hydration appends one selector to the page —
+  `body :not(#id):not(#id *):not(:has(#id)) { display:none }` — so the frame shows just that
+  element: one screen per section, script-free, identical on every surface. Only a plain-id
+  fragment (`[A-Za-z0-9_-]+`) is one; any other `#` stays part of the filename, which also
+  keeps the fragment inert in the selector (a `#x{}…` src is a filename, judged by the path
+  law). Note nested `:has()` is invalid CSS — "hide what precedes" cannot be written, "show
+  the named element" can, and is the better contract anyway. Three new tests in `resolve.rs`;
+  `docs/dx-format-contract.md` § References updated. `cargo test` green, clippy/fmt clean,
+  wasm rebuilt (`./editor/build.sh`), both JS suites 34/34, `~/.local/bin/dx` refreshed
+  (rm-then-cp — cp over a signed Mac binary gets SIGKILL'd).
+- **The board now carries seven section screens** (`examples/example_site_plan.dx`):
+  tonight/fell/visit/journal at 1180, tonight/fell/visit at 390. Every part-24 visual claim
+  was then *seen*: night-bar figcaption clear of the lower labels (the 68px fix holds); fell
+  3-column desk grid and one-column phone; visit email field + aside; journal renumbered 04;
+  Fraunces loads (URL fetches 200, 24 faces — the 5-axis tuple is well-formed).
+- **Torch mode checked across the lower sections** via a scratchpad copy with the checkbox
+  `checked` (site/ untouched): full red remap on visit/fell/journal, photographs re-toned, no
+  palette leaks.
+- **Print stylesheet rendered for the first time and fixed** (`site/site.css`): the print
+  block now restates `--starlight/--ink-dim/--ink-faint/--ember/--hairline` as paper inks —
+  they were translucent starlight, near-white on paper — and gives the night-bar a printable
+  border (printers drop backgrounds). Checked via a scratch `@media print`→`all` copy.
+- **Phone night-bar overflow fixed**: the 07:54 sunrise label ran past the right edge at
+  ≤820px (page-wide horizontal scroll); the last mark's label now flips inward in the phone
+  media block.
+- **Fragile verify claim retired**: lazy-loading now pinned to `len(images) - 1` (hero eager,
+  rest lazy) instead of a magic 4. Verify: **21/21 hold**, weight 25,779 of 30,000 bytes.
+- **Honesty gap found and worded around**: `dx run` caches on the block's own text, so a
+  `site.css`-only edit reports "no changes" — the proof-note claimed the record fingerprints
+  "what was read", which it does not; it now says the next `dx run --force` rewrites the
+  record. The deeper fix (a run block declaring the files it reads, so the fingerprint covers
+  them) is open.
+
+Next step: that fingerprint gap, or part 24's remaining store-listing steps below.
+
+## This wave, part 24: the example site professionalized, tracked on its own board
+
+**"10x professionalize the example site; use the plan document to track progress."** All in
+`examples/` — no engine change, no wasm rebuild needed.
+
+- `examples/site/` revised: CSS-only **red-torch mode** (a checkbox the stylesheet listens
+  to via `:has()` — palette re-maps, photographs re-tone red; the page obeys its own
+  dark-sky code), the **night drawn to scale** (an instrument bar under the almanac, the
+  five times placed where they happen), a new **Fell** section (getting here after dark,
+  the code, what to bring), plus skip link, `<main>`, favicon/theme-color/Open Graph,
+  `required`/`autocomplete`, lazy images, a print stylesheet, and Fraunces `SOFT`/`WONK`
+  axes on the hero. Still two files, still no script.
+- `examples/example_site_plan.dx` tracks it: a `polish` checklist node on the board (all
+  ticked), the sitemap grew the Fell entry, and **verify grew a claim per polish item** —
+  recorded 21/21, 25,323 bytes (< 30 KB budget). Validated by `dx run` + board capture
+  (`dx png --block plan`); the desk/phone views show the shipped revision live.
+- **Gap found while working**: a `::view src=site/index.html#fell` does not resolve — the
+  path law reads the fragment as part of the filename, so a board can only frame a page's
+  *top*. Fragment-aware views (scroll the sandboxed frame to the anchor) would let a board
+  show one screen per section, which is exactly the review loop this document exists for.
+
+**Next step**: teach `resolve`/`render` view fragments (`src=page.html#anchor` → frame
+scrolled to the anchor), then put per-section screens on the site plan board.
+
+## Previous wave, part 23: sharp captures — boards paginate independently at natural size
+
+**"The views and screenshots are super low quality. Fix and retest. Views should auto split
+elements to the max whole number that fit. Boards always rendered independently, and boards
+or individual nodes renderable out easily."** All fixed at the engine, and the part-21
+pagination wart with them. Two root causes found:
+
+- **Pagination measured the wrong boxes** — the measuring script collected every
+  `[data-block-id]`, including the copies a board renders *inside* its nodes (at scaled,
+  in-viewport positions), which is what cut the strip pages, the blank final page, and
+  `site-css` attributed to three pages. The script now measures only the flow: an element
+  inside a `.dx-board` other than the board itself is skipped (`with_measuring_script`).
+  Flow pages therefore pack the max whole blocks per page again, as `packed_ranges` always
+  intended.
+- **Boards were photographed as their column-fitted miniature** — a ~1350px canvas fitted
+  into the 680px static column, then captured at 860px width: ~0.5× twice. New
+  `render::block_page` (doc-core) puts one block alone on a capture-ready page — a `::board`
+  at its **natural viewport** (`board::natural_viewport`, nodes' bounding box + fit margin,
+  so `fit` lands on scale 1 and every node is exactly its stated box), shrunk uniformly only
+  past stated `PageBounds`, never enlarged; any other block (hidden node blocks included) in
+  the ordinary column. `board_html` is unchanged in flow (`board_html_in` with the column
+  viewport — byte-identical output, wasm parity holds without a rebuild).
+- **`capture_pages` plans, then shoots** (`plan_pages`): flow segments paginate by
+  `packed_ranges`; every non-hidden `::board` becomes its own independent page at natural
+  size, slotted where the board sits in reading order; trailing sheet margin makes no page.
+  `ShotOptions` gained `max_page_edge`/`max_page_pixels` — `for_reading` sets the vision
+  caps so a board page arrives at the model unscaled (verified live: `dx_read block=plan` →
+  1077×1068 = the 1.15MP budget exactly); exports default to 4000px/16MP and keep density
+  via `--scale`.
+- **One block renders out in one command**: `doc_shot::capture_block`, CLI
+  `dx png <file> --block <id>` (writes `<stem>-<id>.png`), and `dx_read` gained a `block`
+  argument (one labelled image back). A missing id is a sentence.
+- **Flake fixed in passing**: live-browser tests raced the `DX_BROWSER` env tests — a
+  capture measuring during another test's bogus override silently paginated blind.
+  `browser::ENV_LOCK` is now crate-visible and every live test takes a turn on it.
+- **Validated**: cargo **704** green (10 new: 3 block_page, 4 plan/budget/script, 1 live
+  end-to-end board capture, plus refactors), clippy `-D warnings` clean, fmt clean, github
+  34/34 + vscode 34/34 (parity holds, no wasm rebuild needed — flow bytes unchanged). Live:
+  `example_site_plan.dx` paginates 4 clean pages (was strips/blanks/misattribution), board
+  page 1398×1386 natural and fully legible (inspected), `--block plan` and `--block palette`
+  inspected sharp, `block-reference.dx` (mermaid board) clean, MCP `dx_read block=plan`
+  answers one vision-budget image. Docs updated in the same edit: README, CLAUDE.md
+  (crate row + "an agent reads by looking"), HELP.
+
+**Next step**: unchanged from part 22 — nothing from parts 8–23 committed; `/code-review`
+the accumulated diff, then commit.
+
+## Previous wave, part 22: `::view` — a document shows the page its code renders to
+
+**"The example document isn't sourcing its views from the actual coded pages."** True: the
+plan's three screens were hand-written `::html` mockups dressed by the doc's own `::style`,
+parallel to `site/index.html` and free to drift. Fixed at the engine: a new reference kind
+that shows a coded page as the page, then the example rewritten onto it.
+
+- **`::view src=path width= height=` (new kind, additive)** — the third reference:
+  `::code src=` is what the file *says*, `::view src=` is what it *renders to*. Hydration
+  (`resolve`) fills the block with the page's current markup and **inlines its relative
+  stylesheets** (`inline_stylesheets`; absolute hrefs stay the frame's own to fetch); new
+  `resolve::file_references(path, text)` is the second round of the prefetch protocol for
+  gathering hosts. The renderer frames the page in an **`<iframe sandbox="">`** — opaque
+  origin, nothing allowed — which is the boundary that lets a whole page render with its own
+  `<body>`/CSS where `escape` could only mangle it; reading still executes nothing, and the
+  `sandbox` attribute must stay empty forever (CLAUDE.md's untrusted-input rule grew this).
+  The frame is laid out at its stated viewport (defaults 1180×760) and scaled uniformly:
+  in flow, into the column, never upscaled (`width=390` shows a real phone layout at phone
+  size); on a board, a view node fills its stated box edge to edge (`dx-board-node-view`,
+  padding 0, scale = (w-2)/width), and `h=fit` keeps the frame's aspect. Not template-
+  interpolated (a coded page's braces are its own). Unresolved → sentence, never an empty
+  frame; a view is never runnable.
+- **Wired everywhere**: model (`Block.width`, mirrored in doc-wasm's DTO), format arms +
+  round-trip test, `AUTHORABLE`, wasm `file_references`, daemon `file_references` (CALLS
+  now 7), VS Code `resourcesFor` and github `content.js` gather as a **queue** (fetched
+  file → `file_references` → fetch those too), surface vocab (`::view src=` in KINDS/ATTRS,
+  kindOf maps `.dx-view`).
+- **`examples/example_site_plan.dx` rewritten**: the three mockups and all `.wf` wireframe
+  CSS are gone; the board now carries `desk` (view of `site/index.html` at 1180) and
+  `phone` (same file at 390, `h=fit` both) — the real page, live, Unsplash photography and
+  Fraunces and all; edges `site-html → desk` ("renders as") and `desk → phone` ("in a
+  pocket"); board tightened (height 690, measure y=1260). `::style` keeps only the palette
+  tile and wordmark — the artifacts with no file of their own. `dx fmt` idempotent.
+- **Validated**: cargo **696** green (13 new: format round-trip, 5 resolve, 5 render, board
+  fit), clippy `-D warnings` clean, fmt clean, `tsc --noEmit` clean, both wasm engines
+  rebuilt (`editor/build.sh`), github 34/34 + vscode 34/34 (engine parity holds), live
+  `dx render`/`dx png` of the example inspected: both screens are the shipped page at the
+  right scales, stylesheet inlined (no `<link>` survives), phone layout is `site.css`'s own
+  media query answering a 390px viewport.
+- **Known gaps, deliberate**: github.com's CSP may block `about:srcdoc` frames on blob
+  pages — unverified in a real browser (extension archives need their rebuild anyway, the
+  part-20 gap); the part-21 `dx png --pages` hidden-block pagination wart stands.
+
+**Next step**: unchanged from part 21 — nothing from parts 8–22 committed; `/code-review`
+the accumulated diff, then commit. A DX.app (WebKit) look at the view frames before shipping
+visuals stays the part-12 discipline.
+
+## Previous wave, part 21: the site-plan example ships a real site
+
+**"Rewrite the example website document to demo a beautiful site designed and created in
+one shot, referenced and revised through the document."** Done and validated.
+
+- **`examples/site/` is a real site** — `index.html` + `site.css`, a dark editorial
+  one-pager for Hollow Fell (Fraunces display serif + mono almanac labels, Unsplash
+  photography, zero JavaScript, palette tokens `--night/--zenith/--starlight/--ember`
+  matching the plan's spec tile). Verified by headless-Chrome screenshots at 1440 and
+  500 px: hero, almanac, booking form, journal, footer all render as designed.
+  (Headless capture notes: window height inflates `vh` heroes — pin the hero for
+  full-page shots; headless Chrome clamps window width to 500 CSS px minimum.)
+- **`examples/example_site_plan.dx` rewritten** around design → ship → verify: the board
+  now carries two `::code src=site/…` listing nodes (the shipped files' current text at
+  every render), edges telling the story (`one sheet`, `browse`, `shipped as`), and a
+  page-flow proof section — `::code id=verify lang=python run` reads the shipped files
+  back and holds them to the spec (palette hexes, alt text, anchors→ids, no script,
+  five almanac times, twelve-cap, page weight). `dx run` recorded
+  **"13 of 13 spec claims hold"**; a second run is `skipped cached / no changes`.
+  Board `height=780` fits the whole arrangement with no dead canvas.
+- **Known wart (engine, next step candidate)**: `dx png --pages` on this document splits
+  oddly around hidden blocks — a 400 px strip page for the board, the full board repeated
+  on the next page, a blank 400 px final page, and per-page block lists that misattribute
+  (`site-css` on three pages). The HTML render and single-shot PNG are correct; the
+  pagination pass in `doc-shot::capture_pages` mis-measures hidden blocks. Worth a look
+  before shipping `dx_read` demos of this example.
+
+## Previous wave, part 20: references (one source of truth), vision-sized agent pages, 2× exports
 
 **"Board nodes should be smart links so nothing is repeated and it's always up to date —
 including local code as the source of truth, reviewed in .dx. Images must export at full

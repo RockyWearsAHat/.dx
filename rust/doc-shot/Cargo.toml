@@ -1,6 +1,6 @@
 [package]
 name = "doc-shot"
-description = "Renders a .dx document to a PNG image using an already-installed Chromium-family browser, so agents can look at a document instead of only reading it."
+description = "Renders a .dx document to a PNG image using an already-installed Chromium-family browser, so agents can look at a document instead of only reading it — and drives the rendered page live over the DevTools protocol, so they can watch it react."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,3 +8,4 @@ repository.workspace = true
 
 [dependencies]
 doc-core = { path = "../doc-core" }
+serde_json = "1.0"

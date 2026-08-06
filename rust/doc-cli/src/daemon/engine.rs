@@ -17,7 +17,7 @@
 //! [`refuse_unless_local`](super::refuse_unless_local), and that is where to look before
 //! adding a call here.
 //!
-//! # Why these five calls
+//! # Why these calls
 //! They are exactly the engine surface `editor/github/resolve.js` depends on, and they match
 //! `doc-wasm`'s exports name for name and result for result. The browser shim can therefore
 //! send the same call to whichever engine is reachable — the daemon or its bundled wasm —
@@ -43,12 +43,13 @@ pub enum Outcome {
 /// States the surface in one place, names it back to a caller who got it wrong, and gives
 /// [`every_advertised_call_is_answered`](tests::every_advertised_call_is_answered) something
 /// to check the match arms against.
-pub const CALLS: [&str; 6] = [
+pub const CALLS: [&str; 7] = [
     "pack_document",
     "pack_paths",
     "sha256_hex",
     "render_html",
     "references",
+    "file_references",
     "stylesheet",
 ];
 
@@ -125,6 +126,27 @@ pub fn call(packs: &mut Packs, name: &str, args: &[Value]) -> Result<Outcome, St
             // A JSON *string*, as `doc-wasm` returns, because the caller parses it.
             let encoded = serde_json::to_string(&rows)
                 .map_err(|error| format!("listing the document's references: {error}"))?;
+            Ok(Outcome::Value(Value::String(encoded)))
+        }
+        "file_references" => {
+            // The second half of the prefetch protocol: what a fetched file (a `::view`
+            // page) names in turn. Still a pure function of bytes the caller supplied.
+            let path = text(args, 0)?;
+            let content = text(args, 1)?;
+            let rows: Vec<Value> = doc_core::resolve::file_references(path, content)
+                .iter()
+                .map(|reference| match reference {
+                    doc_core::resolve::Reference::File(path) => {
+                        serde_json::json!({"kind": "file", "path": path})
+                    }
+                    doc_core::resolve::Reference::Document(path) => {
+                        serde_json::json!({"kind": "document", "path": path})
+                    }
+                })
+                .collect();
+            // A JSON *string*, as `doc-wasm` returns, because the caller parses it.
+            let encoded = serde_json::to_string(&rows)
+                .map_err(|error| format!("listing the file's references: {error}"))?;
             Ok(Outcome::Value(Value::String(encoded)))
         }
         "stylesheet" => Ok(Outcome::Value(Value::String(

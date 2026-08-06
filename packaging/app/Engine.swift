@@ -65,9 +65,44 @@ enum Engine {
         try run(["source", url.path, "--block", block])
     }
 
+    /// A field's text as the engine decorates it — marks styled in place, every byte kept.
+    ///
+    /// `dx render --field` reads no file: it is a pure function of the characters, called
+    /// between keystrokes so the field stays dressed as what it says.
+    static func decorate(_ text: String) throws -> String {
+        try run(["render", "--field=" + text])
+    }
+
+    /// Execute one runnable block and let `dx run` write its output into the document.
+    ///
+    /// The only call in this file that runs code, and it happens because the reader asked
+    /// for that one block by name. A failed block is still *written* — the failure lands in
+    /// the document as an output block — so the caller decides what a thrown failure means
+    /// by looking at whether the file changed.
+    static func execute(_ block: String, in url: URL) throws {
+        try run(["run", url.path, "--only", block])
+    }
+
     /// Replace one block's body, leaving every other block in the file byte-identical.
     static func set(_ block: String, in url: URL, to text: String) throws {
         try run(["set", url.path, block, "--text=" + text])
+    }
+
+    /// The canonical `::kind attrs` opening line of one block — what the editing surface
+    /// shows in the header field above the body.
+    static func header(of block: String, in url: URL) throws -> String {
+        try run(["source", url.path, "--block", block, "--header"])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Replace one block wholesale — header and body — and return the id the replacement
+    /// answers to, which is where the reader's caret belongs afterwards. An empty header
+    /// means the text is plain prose, read the way the file itself would read it.
+    static func replace(_ block: String, in url: URL, header: String, body: String) throws
+        -> String
+    {
+        try run(["set", url.path, block, "--header=" + header, "--text=" + body])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// Add a paragraph after `block` and return the id it was given.
@@ -79,6 +114,64 @@ enum Engine {
     /// Take one block out of the document.
     static func remove(_ block: String, in url: URL) throws {
         try run(["remove", url.path, block])
+    }
+
+    /// Tick or untick one box of a checklist, by its position counting from zero — the
+    /// position the renderer writes on every mark, and the one `dx check` takes.
+    static func check(_ block: String, in url: URL, item: Int) throws {
+        try run(["check", url.path, block, "--item=\(item)"])
+    }
+
+    /// One board operation, through `dx board` — move or add a node, settle the whole board
+    /// after a drag, take a node off, or draw and erase an edge between two named sides.
+    /// Returns the id of a freshly added node (the block the reader's caret belongs in
+    /// next), and nil for every other action.
+    static func board(_ action: String, on board: String, in url: URL, spec: [String: Any])
+        throws -> String?
+    {
+        func number(_ key: String) -> Int { (spec[key] as? NSNumber)?.intValue ?? 0 }
+        func name(_ key: String) -> String { spec[key] as? String ?? "" }
+
+        switch action {
+        case "place", "add":
+            var arguments = ["board", url.path, board]
+            if action == "add" {
+                arguments.append("--add")
+            } else {
+                arguments += ["--place", name("node")]
+            }
+            // `--x=` rather than `--x `, so a negative coordinate is a value and not a flag.
+            arguments += ["--x=\(number("x"))", "--y=\(number("y"))"]
+            if number("w") > 0 {
+                arguments.append("--w=\(number("w"))")
+            }
+            if number("h") > 0 {
+                arguments.append("--h=\(number("h"))")
+            }
+            let placed = try run(arguments).trimmingCharacters(in: .whitespacesAndNewlines)
+            return action == "add" ? placed : nil
+        case "arrange":
+            // Several nodes' boxes in one call — the group a reader moved, or a whole board
+            // an agent laid out. `dx board` settles what they landed on.
+            try run(["board", url.path, board, "--arrange", name("arrangement")])
+            return nil
+        case "detach":
+            try run(["board", url.path, board, "--detach", name("node")])
+            return nil
+        case "link", "unlink":
+            var arguments = ["board", url.path, board, "--\(action)", name("from"), "--to", name("to")]
+            // The sides the reader dragged between, when they chose any.
+            if !name("fromSide").isEmpty {
+                arguments += ["--from-side", name("fromSide")]
+            }
+            if !name("toSide").isEmpty {
+                arguments += ["--to-side", name("toSide")]
+            }
+            try run(arguments)
+            return nil
+        default:
+            throw Failure(message: "unknown board action `\(action)`")
+        }
     }
 
     /// Run the bundled `dx` with `arguments` and return everything it printed.

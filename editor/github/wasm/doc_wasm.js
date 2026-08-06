@@ -408,6 +408,39 @@ let wasm_bindgen = (function(exports) {
     exports.field_html = field_html;
 
     /**
+     * The sibling files a fetched file names in turn — a `::view` page naming its
+     * stylesheets — as the same JSON rows [`references`] writes.
+     *
+     * The second half of the prefetch protocol: after gathering [`references`], a host asks
+     * this about each fetched file (`path` is that file's own reference, so links resolve
+     * against *its* folder) and gathers what it returns. Files that name nothing return `[]`.
+     * @param {string} path
+     * @param {string} text
+     * @returns {string}
+     */
+    function file_references(path, text) {
+        let deferred3_0;
+        let deferred3_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(path, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passStringToWasm0(text, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len1 = WASM_VECTOR_LEN;
+            wasm.file_references(retptr, ptr0, len0, ptr1, len1);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred3_0 = r0;
+            deferred3_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export3(deferred3_0, deferred3_1, 1);
+        }
+    }
+    exports.file_references = file_references;
+
+    /**
      * Add a block of `kind` after the block called `after`, or at the top when `after` is empty.
      *
      * Returns JSON `{"source": "<canonical .dx>", "id": "<the new block's id>"}` — the id is

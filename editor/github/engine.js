@@ -70,6 +70,7 @@ const ALLOWED = new Set([
   'sha256_hex',
   'render_html',
   'references',
+  'file_references',
   'stylesheet',
 ]);
 

@@ -28,7 +28,7 @@ use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use doc_core::model::Document;
-use doc_core::render::{html, HtmlOptions, Theme};
+use doc_core::render::{block_page, html, BlockPage, HtmlOptions, PageBounds, Theme};
 
 /// Default capture width in CSS pixels.
 pub const DEFAULT_WIDTH: u32 = 1200;
@@ -73,6 +73,13 @@ const MIN_HEIGHT: u32 = 200;
 /// Tallest page captured, so a runaway document cannot produce a gigantic image.
 const MAX_HEIGHT: u32 = 12_000;
 
+/// Largest CSS-pixel edge a self-sized page (a board at its natural size) may open a
+/// window at, unless [`ShotOptions`] tightens it further.
+const NATURAL_MAX_EDGE: u32 = 4000;
+
+/// Most CSS pixels a self-sized page may cover, unless [`ShotOptions`] tightens it.
+const NATURAL_MAX_PIXELS: u32 = 16_000_000;
+
 /// Attribute the measuring script writes the content height into.
 const HEIGHT_ATTRIBUTE: &str = "data-dx-height";
 
@@ -98,6 +105,13 @@ pub struct ShotOptions {
     /// high-density screen; 1 is right for a vision model, which would only scale the
     /// extra pixels back out (see [`VISION_MAX_PIXELS`]).
     pub scale: u32,
+    /// Longest CSS-pixel edge a self-sized page may reach. A board is captured at its
+    /// natural canvas size — every node at the size its line states — and only shrunk,
+    /// uniformly, when it would pass this. [`ShotOptions::for_reading`] sets the vision
+    /// caps here so a board page arrives at the model unscaled.
+    pub max_page_edge: u32,
+    /// Most CSS pixels (width × height) a self-sized page may cover.
+    pub max_page_pixels: u32,
 }
 
 impl Default for ShotOptions {
@@ -109,6 +123,8 @@ impl Default for ShotOptions {
             page_height: DEFAULT_PAGE_HEIGHT,
             max_pages: MAX_PAGES,
             scale: 1,
+            max_page_edge: NATURAL_MAX_EDGE,
+            max_page_pixels: NATURAL_MAX_PIXELS,
         }
     }
 }
@@ -129,7 +145,18 @@ impl ShotOptions {
             width,
             page_height: (VISION_MAX_PIXELS / width).min(VISION_MAX_EDGE),
             scale: 1,
+            max_page_edge: VISION_MAX_EDGE,
+            max_page_pixels: VISION_MAX_PIXELS,
             ..Self::default()
+        }
+    }
+
+    /// The bounds a self-sized page must fit, for [`doc_core::render::block_page`].
+    fn page_bounds(&self) -> PageBounds {
+        PageBounds {
+            width: self.width,
+            max_edge: self.max_page_edge.max(MIN_WIDTH),
+            max_pixels: self.max_page_pixels.max(MIN_WIDTH * MIN_HEIGHT),
         }
     }
 }
@@ -219,6 +246,12 @@ pub fn capture(document: &Document, options: &ShotOptions) -> Result<Shot, Strin
 /// sentence, a table, or a chart is never sliced across two pictures; a single block taller
 /// than a page is the one case that must be cut, and it is cut at page height.
 ///
+/// A `::board` is always a page of its own, photographed **independently** at its natural
+/// canvas size ([`capture_block`]'s render) instead of as the column-fitted miniature the
+/// flow carries — the fitted board is right for reading in context and unreadable as a
+/// picture. The board's page slots in exactly where the board sits in the flow, so page
+/// order is still reading order.
+///
 /// [`Page::total`] counts the document's real pages even when `options.max_pages` stopped
 /// the capture early, so a caller can say what it did not show instead of implying the
 /// document ended.
@@ -236,14 +269,95 @@ pub fn capture_pages(document: &Document, options: &ShotOptions) -> Result<Vec<P
         .collect();
 
     let workspace = scratch_workspace(&options.scratch_dir)?;
-    let result = capture_all_pages(&browser, &page, &headings, options, &workspace);
+    let result = capture_all_pages(&browser, document, &page, &headings, options, &workspace);
     let _ = std::fs::remove_dir_all(&workspace);
     result
 }
 
-/// Measure once, then capture each page range inside an already-created `workspace`.
+/// Render the single block called `id` and capture it as a PNG.
+///
+/// A `::board` is photographed at its **natural size** — every node at exactly the box its
+/// line states, shrunk uniformly only past `options.max_page_edge`/`max_page_pixels`, never
+/// enlarged — which is how a board is validated: what the picture shows is what the lines
+/// say. Any other block (a board node's block included, hidden or not) is photographed in
+/// the ordinary column, exactly as the page carries it.
+pub fn capture_block(document: &Document, id: &str, options: &ShotOptions) -> Result<Shot, String> {
+    let browser = browser::find().ok_or_else(browser::missing_message)?;
+    let page = block_page(
+        document,
+        id,
+        &block_html_options(options.theme),
+        &options.page_bounds(),
+    )
+    .ok_or_else(|| format!("no block named `{id}`"))?;
+
+    let workspace = scratch_workspace(&options.scratch_dir)?;
+    let result = capture_block_page(&browser, &page, options, &workspace);
+    let _ = std::fs::remove_dir_all(&workspace);
+    result
+}
+
+/// Capture an already-rendered [`BlockPage`] inside `workspace`.
+///
+/// A page that states its own height (a board) is photographed in one window that size; a
+/// page that does not is measured first, exactly like a whole-document capture.
+fn capture_block_page(
+    browser: &Path,
+    page: &BlockPage,
+    options: &ShotOptions,
+    workspace: &Path,
+) -> Result<Shot, String> {
+    let height = match page.height {
+        Some(height) => height,
+        None => {
+            let measure_file = workspace.join("measure.html");
+            write(&measure_file, &with_measuring_script(&page.html))?;
+            dump_dom(browser, &measure_file, page.width)
+                .as_deref()
+                .and_then(read_height_attribute)
+                .unwrap_or(MEASURE_HEIGHT)
+        }
+    };
+
+    let page_file = workspace.join("block.html");
+    write(&page_file, &page.html)?;
+    screenshot(
+        browser,
+        &page_file,
+        &workspace.join("block.png"),
+        page.width,
+        height,
+        scale(options),
+    )
+}
+
+/// The render options every capture in this crate photographs a block under: the caller's
+/// theme, code open (a picture cannot be clicked).
+fn block_html_options(theme: Theme) -> HtmlOptions {
+    HtmlOptions {
+        theme,
+        collapse_code: false,
+        ..HtmlOptions::default()
+    }
+}
+
+/// One planned page of a paginated capture.
+enum PlannedPage {
+    /// A window over the document's flow.
+    Flow(PageRange),
+    /// A board photographed independently at its natural size.
+    Board {
+        /// The board block's id.
+        id: String,
+        /// Its standalone, self-sized page.
+        page: BlockPage,
+    },
+}
+
+/// Measure once, then capture each planned page inside an already-created `workspace`.
 fn capture_all_pages(
     browser: &Path,
+    document: &Document,
     page: &str,
     headings: &[String],
     options: &ShotOptions,
@@ -258,30 +372,121 @@ fn capture_all_pages(
         .unwrap_or(MEASURE_HEIGHT);
     let boxes = dom.as_deref().map(read_block_boxes).unwrap_or_default();
 
-    let ranges = page_ranges(&boxes, total_height, page_height(options), headings);
-    let total = ranges.len();
+    let plan = plan_pages(
+        document,
+        &boxes,
+        total_height,
+        page_height(options),
+        headings,
+        options,
+    );
+    let total = plan.len();
 
     let page_file = workspace.join("page.html");
     let mut pages = Vec::new();
-    for (index, range) in ranges.iter().take(options.max_pages).enumerate() {
-        write(&page_file, &shifted_to(page, range.top))?;
-        let shot = screenshot(
-            browser,
-            &page_file,
-            &workspace.join(format!("page-{index}.png")),
-            options.width,
-            range.height,
-            scale(options),
-        )?;
+    for (index, planned) in plan.iter().take(options.max_pages).enumerate() {
+        let (shot, blocks) = match planned {
+            PlannedPage::Flow(range) => {
+                write(&page_file, &shifted_to(page, range.top))?;
+                let shot = screenshot(
+                    browser,
+                    &page_file,
+                    &workspace.join(format!("page-{index}.png")),
+                    options.width,
+                    range.height,
+                    scale(options),
+                )?;
+                (shot, range.blocks.clone())
+            }
+            PlannedPage::Board { id, page: board } => {
+                write(&page_file, &board.html)?;
+                let shot = screenshot(
+                    browser,
+                    &page_file,
+                    &workspace.join(format!("page-{index}.png")),
+                    board.width,
+                    board.height.unwrap_or_else(|| page_height(options)),
+                    scale(options),
+                )?;
+                (shot, vec![id.clone()])
+            }
+        };
         pages.push(Page {
             shot,
             number: index + 1,
             total,
-            blocks: range.blocks.clone(),
+            blocks,
         });
     }
 
     Ok(pages)
+}
+
+/// Divide the measured flow into pages, giving every board a page of its own.
+///
+/// The flow between boards paginates by [`packed_ranges`] — the most whole blocks that fit
+/// a page. Where a board sits, its **independent** natural-size page takes the slot, and
+/// the flow resumes below it; the fitted miniature the flow page carries there is never
+/// photographed. Trailing space after the last block (the sheet's own bottom margin) makes
+/// no page.
+fn plan_pages(
+    document: &Document,
+    boxes: &[BlockBox],
+    total_height: u32,
+    height: u32,
+    sticky: &[String],
+    options: &ShotOptions,
+) -> Vec<PlannedPage> {
+    let board_ids: Vec<&str> = document
+        .blocks
+        .iter()
+        .filter(|block| block.kind == "board" && !block.hidden)
+        .map(|block| block.id.as_str())
+        .collect();
+    if boxes.is_empty() || board_ids.is_empty() {
+        return page_ranges(boxes, total_height, height, sticky)
+            .into_iter()
+            .map(PlannedPage::Flow)
+            .collect();
+    }
+
+    let html_options = block_html_options(options.theme);
+    let mut plan = Vec::new();
+    let mut run_start = 0;
+    let mut run_top = 0u32;
+    for (index, entry) in boxes.iter().enumerate() {
+        if !board_ids.contains(&entry.id.as_str()) {
+            continue;
+        }
+        let run = &boxes[run_start..index];
+        if !run.is_empty() {
+            let end = entry.top.max(run_top.saturating_add(1));
+            plan.extend(
+                packed_ranges(run, run_top, end, height, sticky)
+                    .into_iter()
+                    .map(PlannedPage::Flow),
+            );
+        }
+        if let Some(page) = block_page(document, &entry.id, &html_options, &options.page_bounds()) {
+            plan.push(PlannedPage::Board {
+                id: entry.id.clone(),
+                page,
+            });
+        }
+        run_top = entry.top.saturating_add(entry.height);
+        run_start = index + 1;
+    }
+
+    let run = &boxes[run_start..];
+    if !run.is_empty() || plan.is_empty() {
+        let end = total_height.max(run_top.saturating_add(1));
+        plan.extend(
+            packed_ranges(run, run_top, end, height, sticky)
+                .into_iter()
+                .map(PlannedPage::Flow),
+        );
+    }
+    plan
 }
 
 /// The page height to use, never zero (which would divide a document into infinite pages).
@@ -312,9 +517,22 @@ fn page_ranges(
     height: u32,
     sticky: &[String],
 ) -> Vec<PageRange> {
-    let total_height = total_height.max(1);
+    packed_ranges(boxes, 0, total_height.max(1), height, sticky)
+}
+
+/// [`page_ranges`] over one vertical span of the flow: pages start at `start` and the last
+/// one ends at `end`. This is the packing rule applied between boards, which paginate
+/// separately ([`plan_pages`]).
+fn packed_ranges(
+    boxes: &[BlockBox],
+    start: u32,
+    end: u32,
+    height: u32,
+    sticky: &[String],
+) -> Vec<PageRange> {
+    let end = end.max(start.saturating_add(1));
     if boxes.is_empty() {
-        return fixed_ranges(total_height, height);
+        return fixed_ranges(start, end, height);
     }
 
     let ids = |range: std::ops::Range<usize>| -> Vec<String> {
@@ -322,7 +540,7 @@ fn page_ranges(
     };
 
     let mut ranges: Vec<PageRange> = Vec::new();
-    let mut top = 0;
+    let mut top = start;
     let mut page_start = 0;
     let mut index = 0;
 
@@ -363,7 +581,7 @@ fn page_ranges(
         index += 1;
     }
 
-    let tail = total_height.max(top + 1);
+    let tail = end.max(top + 1);
     ranges.push(PageRange {
         top,
         height: tail - top,
@@ -372,22 +590,22 @@ fn page_ranges(
     ranges
 }
 
-/// Divide a height into equal pages, used when no block boxes were measured.
-fn fixed_ranges(total_height: u32, height: u32) -> Vec<PageRange> {
+/// Divide the span `start..end` into equal pages, used when no block boxes were measured.
+fn fixed_ranges(start: u32, end: u32, height: u32) -> Vec<PageRange> {
     let mut ranges = Vec::new();
-    let mut top = 0;
-    while top < total_height {
+    let mut top = start;
+    while top < end {
         ranges.push(PageRange {
             top,
-            height: height.min(total_height - top),
+            height: height.min(end - top),
             blocks: Vec::new(),
         });
         top += height;
     }
     if ranges.is_empty() {
         ranges.push(PageRange {
-            top: 0,
-            height: total_height,
+            top: start,
+            height: end.saturating_sub(start).max(1),
             blocks: Vec::new(),
         });
     }
@@ -550,13 +768,22 @@ fn browser_command(browser: &Path) -> Command {
 /// The height comes from the `<body>` box, not from `documentElement.scrollHeight`: the
 /// latter never reports less than the viewport, which would pad every short document with
 /// a screenful of empty space.
+///
+/// Only blocks **in the page flow** are measured. A board renders a copy of every block it
+/// references inside its own scaled canvas, and each copy carries the block's
+/// `data-block-id`; measuring those used to hand pagination boxes from inside the board's
+/// viewport, which cut strip pages and blank pages around every board and attributed one
+/// block to three pages. The board element itself (it has the class *and* the id) stays
+/// measured — it is the flow.
 fn with_measuring_script(page: &str) -> String {
     let script = format!(
         "<script>var b=document.body,r=document.documentElement;\
          r.setAttribute('{HEIGHT_ATTRIBUTE}', \
          String(Math.ceil(Math.max(b.scrollHeight, b.getBoundingClientRect().height))));\
+         var f=Array.prototype.filter.call(document.querySelectorAll('[data-block-id]'), \
+         function(e){{var g=e.closest('.dx-board');return !g||g===e;}});\
          r.setAttribute('{BLOCKS_ATTRIBUTE}', \
-         Array.prototype.map.call(document.querySelectorAll('[data-block-id]'), function(e){{\
+         f.map(function(e){{\
          var x=e.getBoundingClientRect();\
          return e.getAttribute('data-block-id')+':'+Math.max(0,Math.round(x.top+window.scrollY))\
          +':'+Math.ceil(x.height);}}).join(';'));</script>"
@@ -746,6 +973,100 @@ mod tests {
         assert_eq!(ranges.iter().map(|r| r.height).sum::<u32>(), 250);
     }
 
+    const BOARDED: &str = "::paragraph id=intro\nBefore.\n::end\n\n\
+::board id=plan height=400\n- note x=0 y=0 w=400 h=200\n::end\n\n\
+::paragraph id=outro\nAfter.\n::end\n\n\
+::paragraph id=note hidden\nOn the board.\n::end\n";
+
+    /// A board is a page of its own, photographed at its natural size, slotted exactly
+    /// where the board sits in the flow — and the flow resumes below it with no strip
+    /// page, no blank page, and no block attributed to a page it is not on.
+    #[test]
+    fn a_board_gets_its_own_natural_page_and_the_flow_resumes_below_it() {
+        let document = parse(BOARDED);
+        let measured = boxes(&[("intro", 0, 100), ("plan", 130, 400), ("outro", 560, 100)]);
+        let plan = plan_pages(
+            &document,
+            &measured,
+            700,
+            1000,
+            &[],
+            &ShotOptions::default(),
+        );
+
+        assert_eq!(plan.len(), 3);
+        let PlannedPage::Flow(before) = &plan[0] else {
+            panic!("the flow before the board is a flow page");
+        };
+        assert_eq!(before.blocks, vec!["intro"]);
+        assert_eq!((before.top, before.height), (0, 130));
+
+        let PlannedPage::Board { id, page } = &plan[1] else {
+            panic!("the board is its own page");
+        };
+        // The node is 400×200; the natural viewport adds the 24px fit margin around it —
+        // not the 400px flow frame, and not the capture width.
+        assert_eq!(id, "plan");
+        assert_eq!((page.width, page.height), (448, Some(248)));
+
+        let PlannedPage::Flow(after) = &plan[2] else {
+            panic!("the flow after the board is a flow page");
+        };
+        assert_eq!(after.blocks, vec!["outro"]);
+        assert_eq!((after.top, after.height), (530, 170));
+    }
+
+    /// A document that ends with a board ends with the board's page: the sheet's own
+    /// bottom margin makes no blank trailing page.
+    #[test]
+    fn a_trailing_board_leaves_no_blank_page_after_it() {
+        let document = parse(
+            "::paragraph id=intro\nBefore.\n::end\n\n\
+::board id=plan height=400\n- note x=0 y=0 w=400 h=200\n::end\n\n\
+::paragraph id=note hidden\nOn the board.\n::end\n",
+        );
+        let measured = boxes(&[("intro", 0, 100), ("plan", 130, 400)]);
+        let plan = plan_pages(
+            &document,
+            &measured,
+            700,
+            1000,
+            &[],
+            &ShotOptions::default(),
+        );
+        assert_eq!(plan.len(), 2);
+        assert!(matches!(&plan[1], PlannedPage::Board { .. }));
+    }
+
+    /// A read's board page stays inside the vision budget the way every page does: shrunk
+    /// before capture, so no pixel is scaled away in transit.
+    #[test]
+    fn a_reading_boards_page_fits_the_vision_budget() {
+        let document = parse(
+            "::board id=plan height=400\n- wide x=0 y=0 w=3000 h=200\n::end\n\n\
+::paragraph id=wide hidden\nA very wide node.\n::end\n",
+        );
+        let measured = boxes(&[("plan", 0, 400)]);
+        let options = ShotOptions::for_reading(None);
+        let plan = plan_pages(&document, &measured, 400, 1337, &[], &options);
+        let PlannedPage::Board { page, .. } = &plan[0] else {
+            panic!("the board is its own page");
+        };
+        let height = page.height.expect("a board states its height");
+        assert!(page.width <= VISION_MAX_EDGE, "{}", page.width);
+        assert!(page.width * height <= VISION_MAX_PIXELS + page.width);
+    }
+
+    /// The measuring script only measures the flow: a block copied into a board node
+    /// carries the same `data-block-id`, and measuring the copy was what cut strip pages
+    /// and misattributed blocks around every board.
+    #[test]
+    fn the_measuring_script_skips_the_copies_inside_a_board() {
+        let measured = with_measuring_script("<html><body>x</body></html>");
+        assert!(measured.contains(".dx-board"), "{measured}");
+        assert!(measured.contains("closest"), "{measured}");
+    }
+
     #[test]
     fn a_zero_height_page_cannot_produce_infinite_pages() {
         let options = ShotOptions {
@@ -781,6 +1102,7 @@ mod tests {
 
     #[test]
     fn a_real_browser_captures_one_page_per_screenful() {
+        let _turn = browser::ENV_LOCK.lock().expect("env lock");
         let Some(_) = browser::find() else {
             return; // No browser on this machine.
         };
@@ -807,6 +1129,46 @@ mod tests {
         // Every block of the document appears on exactly one page.
         let named: Vec<&String> = pages.iter().flat_map(|page| &page.blocks).collect();
         assert_eq!(named.len(), 40, "every block accounted for, none twice");
+    }
+
+    /// End to end against a real browser: a boarded document paginates with the board on
+    /// its own natural-size page, and one block captures alone at either size rule.
+    #[test]
+    fn a_real_browser_captures_a_board_independently_and_one_block_alone() {
+        let _turn = browser::ENV_LOCK.lock().expect("env lock");
+        let Some(_) = browser::find() else {
+            return; // No browser on this machine.
+        };
+        let document = parse(BOARDED);
+
+        let pages = capture_pages(&document, &ShotOptions::default()).expect("pages");
+        let board_page = pages
+            .iter()
+            .find(|page| page.blocks == ["plan"])
+            .expect("the board must be a page of its own");
+        assert_eq!(
+            (board_page.shot.width, board_page.shot.height),
+            (448, 248),
+            "the board page is its natural size, not the capture width"
+        );
+        assert!(
+            pages
+                .iter()
+                .all(|page| !page.blocks.iter().any(|b| b == "note")),
+            "a board node's block belongs to no flow page: {:?}",
+            pages.iter().map(|p| p.blocks.clone()).collect::<Vec<_>>()
+        );
+
+        let board = capture_block(&document, "plan", &ShotOptions::default()).expect("board");
+        assert_eq!((board.width, board.height), (448, 248));
+        let node = capture_block(&document, "note", &ShotOptions::default()).expect("node");
+        assert_eq!(node.width, DEFAULT_WIDTH);
+
+        let missing = capture_block(&document, "ghost", &ShotOptions::default());
+        assert!(
+            missing.is_err(),
+            "a missing block is a sentence, not a shot"
+        );
     }
 
     #[test]
@@ -839,6 +1201,7 @@ mod tests {
 
     #[test]
     fn a_real_browser_captures_a_whole_document() {
+        let _turn = browser::ENV_LOCK.lock().expect("env lock");
         let Some(_) = browser::find() else {
             return; // No browser on this machine; the capture path is exercised elsewhere.
         };

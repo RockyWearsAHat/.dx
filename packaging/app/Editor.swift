@@ -74,12 +74,24 @@ final class Editor: NSObject, WKScriptMessageHandlerWithReply {
         window.dxEditor && window.dxEditor.attach({
           source: (id) => window.webkit.messageHandlers.\(channel).postMessage(
             { op: 'source', id }),
+          parts: (id) => window.webkit.messageHandlers.\(channel).postMessage(
+            { op: 'parts', id }),
           draw: (id, text) => window.webkit.messageHandlers.\(channel).postMessage(
             { op: 'draw', id, text }),
+          decorate: (text) => window.webkit.messageHandlers.\(channel).postMessage(
+            { op: 'decorate', text }),
           commit: (id, text, then) => window.webkit.messageHandlers.\(channel).postMessage(
             { op: 'commit', id, text, then }),
+          replace: (id, header, body, then) => window.webkit.messageHandlers.\(channel).postMessage(
+            { op: 'replace', id, header, body, then }),
           remove: (id) => window.webkit.messageHandlers.\(channel).postMessage(
-            { op: 'remove', id })
+            { op: 'remove', id }),
+          run: (id) => window.webkit.messageHandlers.\(channel).postMessage(
+            { op: 'run', id }),
+          check: (id, item) => window.webkit.messageHandlers.\(channel).postMessage(
+            { op: 'check', id, item }),
+          board: (id, action, spec) => window.webkit.messageHandlers.\(channel).postMessage(
+            { op: 'board', id, action, spec })
         });
         """
 
@@ -146,10 +158,51 @@ final class Editor: NSObject, WKScriptMessageHandlerWithReply {
             switch op {
             case "source":
                 replyHandler(try Engine.source(of: try id(call), in: url), nil)
+            case "parts":
+                let block = try id(call)
+                replyHandler(
+                    [
+                        "header": try Engine.header(of: block, in: url),
+                        "body": try Engine.source(of: block, in: url),
+                    ], nil)
             case "draw":
                 replyHandler(
                     try Engine.draw(try id(call), in: url, as: call["text"] as? String ?? ""),
                     nil)
+            case "decorate":
+                replyHandler(try Engine.decorate(call["text"] as? String ?? ""), nil)
+            case "run":
+                // Off the main queue, because the run takes as long as the block's code
+                // does, and a window that cannot repaint while code runs is a hang.
+                let block = try id(call)
+                let before = try? Data(contentsOf: url)
+                DispatchQueue.global(qos: .userInitiated).async {
+                    var failure: String?
+                    do {
+                        try Engine.execute(block, in: self.url)
+                    } catch let refused as Engine.Failure {
+                        failure = refused.message
+                    } catch {
+                        failure = error.localizedDescription
+                    }
+                    DispatchQueue.main.async {
+                        // A failed *block* was still written into the document, and the page
+                        // showing that failure is the report. Only a run that changed
+                        // nothing — a missing sandbox, a refused file — has just a sentence.
+                        if let failure, (try? Data(contentsOf: self.url)) == before {
+                            replyHandler(nil, failure)
+                            return
+                        }
+                        do {
+                            replyHandler(try self.sheet(focusing: nil), nil)
+                        } catch let refused as Engine.Failure {
+                            replyHandler(nil, refused.message)
+                        } catch {
+                            replyHandler(nil, error.localizedDescription)
+                        }
+                    }
+                }
+                return
             case "commit":
                 let block = try id(call)
                 try Engine.set(block, in: url, to: call["text"] as? String ?? "")
@@ -161,9 +214,36 @@ final class Editor: NSObject, WKScriptMessageHandlerWithReply {
                     focus = try Engine.insert(after: block, in: url)
                 }
                 replyHandler(try sheet(focusing: focus), nil)
+            case "replace":
+                // A retype: the reader rewrote the tag line over the block. The engine
+                // answers with the id the replacement took, which is where the caret goes —
+                // and Return asks for the next paragraph after it, in this same call.
+                let replaced = try Engine.replace(
+                    try id(call), in: url,
+                    header: call["header"] as? String ?? "",
+                    body: call["body"] as? String ?? "")
+                var focus: String?
+                if call["then"] as? String == "insert" {
+                    focus = try Engine.insert(after: replaced, in: url)
+                }
+                replyHandler(try sheet(focusing: focus), nil)
             case "remove":
                 try Engine.remove(try id(call), in: url)
                 replyHandler(try sheet(focusing: nil), nil)
+            case "check":
+                // A box on a checklist, clicked — `dx check`, so the marker the format keeps
+                // the checked state in is spelled by the one thing that knows how to spell it.
+                let item = (call["item"] as? NSNumber)?.intValue ?? 0
+                try Engine.check(try id(call), in: url, item: item)
+                replyHandler(try sheet(focusing: nil), nil)
+            case "board":
+                // A drag, a link, or a new node on the canvas — `dx board`, which is the
+                // same operation an agent performs, so the two cannot write different lines.
+                let focus = try Engine.board(
+                    call["action"] as? String ?? "",
+                    on: try id(call), in: url,
+                    spec: call["spec"] as? [String: Any] ?? [:])
+                replyHandler(try sheet(focusing: focus), nil)
             default:
                 replyHandler(nil, "unknown editor operation `\(op)`")
             }
