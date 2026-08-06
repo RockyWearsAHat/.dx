@@ -45,7 +45,7 @@ pub fn outline(document: &Document) -> Vec<OutlineEntry> {
             } else {
                 0
             },
-            preview: preview_of(&block_content(document, index)),
+            preview: preview_of(&preview_content(document, index)),
             chars: block_content(document, index).chars().count(),
             runnable: is_runnable(document, index),
         })
@@ -92,24 +92,48 @@ pub fn section(document: &Document, selector: &str) -> Option<Document> {
     })
 }
 
-/// Collect the slice `start..end` plus the document's presentation blocks.
+/// Collect the slice `start..end` plus the document's presentation blocks and any blocks
+/// a `::board` inside the slice references.
 ///
 /// `::script` (template values) and `::style` blocks live wherever the author put them, so
-/// a slice that omitted them would render placeholders as blanks. They are carried along,
-/// deduplicated against blocks already inside the slice, and always come first.
+/// a slice that omitted them would render placeholders as blanks. A board's node lines name
+/// sibling blocks of the same document, so a slice that dropped those would draw every node
+/// as a missing-block sentence. Both are carried along, deduplicated against blocks already
+/// inside the slice, and always come first; a carried node block is marked `hidden` so it
+/// lives on the board, exactly as it does in the whole page, instead of also appearing in
+/// the slice's own flow.
 fn carry_presentation(document: &Document, start: usize, end: usize) -> Vec<crate::model::Block> {
+    let referenced = board_references(&document.blocks[start..end]);
     let mut blocks: Vec<crate::model::Block> = document
         .blocks
         .iter()
         .enumerate()
         .filter(|(index, block)| {
             (*index < start || *index >= end)
-                && matches!(block.kind.as_str(), "script" | "style" | "stylesheet")
+                && (matches!(block.kind.as_str(), "script" | "style" | "stylesheet")
+                    || referenced.contains(&block.id.to_ascii_lowercase()))
         })
-        .map(|(_, block)| block.clone())
+        .map(|(_, block)| {
+            let mut carried = block.clone();
+            if referenced.contains(&carried.id.to_ascii_lowercase()) {
+                carried.hidden = true;
+            }
+            carried
+        })
         .collect();
     blocks.extend(document.blocks[start..end].iter().cloned());
     blocks
+}
+
+/// The ids every `::board` in `slice` refers to, lowercased for the id comparison
+/// [`find_block`] already performs.
+fn board_references(slice: &[crate::model::Block]) -> Vec<String> {
+    slice
+        .iter()
+        .filter(|block| block.kind == "board")
+        .flat_map(|block| super::board::nodes(&block.text))
+        .map(|node| node.id.to_ascii_lowercase())
+        .collect()
 }
 
 /// Find the index of the block whose id matches `selector`, case-insensitively.
@@ -131,6 +155,24 @@ fn is_runnable(document: &Document, index: usize) -> bool {
         && block.run
         && crate::model::runner_for_language(&block.language)
             .is_some_and(|runner| RUNNERS.contains(&runner))
+}
+
+/// What a row previews: a reference block leads with the path it points at.
+///
+/// The map exists to tell a reader what to fetch next. A `::view src=` or `::code src=`
+/// block's content is the referenced file's text, so nine views of one page would all
+/// preview as the same doctype preamble — the reference is the row's identity, and the
+/// content, when hydrated, trails it for flavour.
+fn preview_content(document: &Document, index: usize) -> String {
+    let block = &document.blocks[index];
+    let content = block_content(document, index);
+    if matches!(block.kind.as_str(), "code" | "view") && !block.src.is_empty() {
+        if content.is_empty() {
+            return block.src.clone();
+        }
+        return format!("{} — {content}", block.src);
+    }
+    content
 }
 
 /// The reading content of a block, whichever field carries it for that kind.
@@ -187,6 +229,22 @@ mod tests {
     }
 
     #[test]
+    fn a_reference_block_previews_the_path_it_points_at() {
+        let source = "::view id=desk src=site/index.html#tonight width=1180\n::end\n\n\
+::code id=styles src=site/site.css lang=css\n::end\n";
+        let entries = outline(&parse(source));
+        // Unhydrated, the reference is the whole preview — the row's identity is what
+        // it points at, never an empty string.
+        assert_eq!(entries[0].preview, "site/index.html#tonight");
+        assert_eq!(entries[1].preview, "site/site.css");
+        // Hydrated, the reference still leads and the content trails it.
+        let mut hydrated = parse(source);
+        hydrated.blocks[1].text = "body { color: red }".to_string();
+        let entries = outline(&hydrated);
+        assert_eq!(entries[1].preview, "site/site.css — body { color: red }");
+    }
+
+    #[test]
     fn outline_previews_are_single_line_and_bounded() {
         let long = format!("::paragraph id=p\n{}\n::end\n", "word ".repeat(60));
         let entries = outline(&parse(&long));
@@ -223,6 +281,41 @@ mod tests {
         assert!(section(&parse(SAMPLE), "#ALPHA").is_some());
         assert!(section(&parse(SAMPLE), "nope").is_none());
         assert!(section(&parse(SAMPLE), "  ").is_none());
+    }
+
+    /// The bug this pins: `--section <board-id>` used to drop the rest of the document
+    /// before the board resolved its node lines, so every node rendered as a
+    /// missing-block sentence. A board is resolved from the document it sits in — nav's
+    /// own rule — so its referenced blocks ride along with the slice, hidden.
+    #[test]
+    fn a_board_section_carries_the_blocks_its_nodes_reference() {
+        let source = "::heading level=1 id=top\nTop\n::end\n\n\
+::board id=plan height=300\n- idea x=10 y=10 w=200 h=100\n- steps x=260 y=10 w=200 h=100\n::end\n\n\
+::paragraph id=idea hidden\nThe idea.\n::end\n\n\
+::checklist id=steps\n[ ] build\n::end\n";
+        let document = parse(source);
+
+        let sliced = section(&document, "plan").expect("board section");
+        let page = crate::render::html(&sliced, &crate::render::HtmlOptions::default());
+        assert!(!page.contains("no block named"), "{page}");
+        assert!(page.contains("The idea."));
+        assert!(page.contains("build"));
+        // Carried blocks live on the board, not also in the slice's own flow.
+        assert_eq!(page.matches("The idea.").count(), 1);
+        // The whole document is untouched: `steps` is still a flow block there.
+        assert!(!document.blocks.iter().any(|b| b.id == "steps" && b.hidden));
+    }
+
+    #[test]
+    fn a_heading_section_holding_a_board_resolves_nodes_outside_the_slice() {
+        let source = "::heading level=2 id=plan-sec\nPlan\n::end\n\n\
+::board id=plan height=300\n- idea x=10 y=10 w=200 h=100\n::end\n\n\
+::heading level=2 id=next\nNext\n::end\n\n\
+::paragraph id=idea hidden\nThe idea.\n::end\n";
+        let sliced = section(&parse(source), "plan-sec").expect("heading section");
+        let page = crate::render::html(&sliced, &crate::render::HtmlOptions::default());
+        assert!(!page.contains("no block named"), "{page}");
+        assert!(page.contains("The idea."));
     }
 
     #[test]

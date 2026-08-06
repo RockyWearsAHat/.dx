@@ -151,11 +151,6 @@
           "default": "match-editor",
           "description": "Palette used when rendering a .dx document."
         },
-        "dx.documentCss": {
-          "type": "boolean",
-          "default": false,
-          "description": "Apply a document's own ::style blocks when rendering it."
-        },
         "dx.cliPath": {
           "type": "string",
           "default": "dx",

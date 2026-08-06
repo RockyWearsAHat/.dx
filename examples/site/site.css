@@ -1,0 +1,583 @@
+/* Hollow Fell — one stylesheet, one night.
+   The palette is the same four values the plan document specifies; change one here
+   and the site changes everywhere, which is what lets the plan's verify block hold
+   this file to the spec. No JavaScript anywhere: the page is paper, not a program —
+   even the red-torch switch is a checkbox the stylesheet listens to. */
+
+:root {
+  --night: #101820;      /* carbon paper — the ground everything sits on */
+  --zenith: #223140;     /* the blue directly overhead */
+  --starlight: #E9E4D8;  /* the ink */
+  --ember: #C9803E;      /* the one warm thing: red torches and the booking link */
+  --hairline: #2B3542;   /* rules, drawn once and thin */
+  --ink-dim: rgba(233, 228, 216, 0.62);
+  --ink-faint: rgba(233, 228, 216, 0.38);
+  --serif: "Fraunces", Georgia, "Times New Roman", serif;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+
+* { box-sizing: border-box; }
+
+html { scroll-behavior: smooth; }
+
+body {
+  margin: 0;
+  background: var(--night);
+  color: var(--starlight);
+  font-family: var(--serif);
+  font-weight: 340;
+  font-size: 17px;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+  transition: background 0.6s ease, color 0.6s ease;
+}
+
+/* ————— red torch: the site keeps its own dark-sky code —————
+   Past the gate it's red light only, so the page has the same switch the fell does.
+   A checkbox in the masthead, no script: the palette re-maps, the photographs go
+   to dim red, and dark adaptation survives reading the almanac. */
+
+.torch-input { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+
+.torch { cursor: pointer; user-select: none; }
+
+.torch::before { content: "○ "; color: var(--ember); }
+
+body:has(.torch-input:checked) {
+  --night: #0D0605;
+  --zenith: #29100A;
+  --starlight: #E5A583;
+  --ember: #FF6A3D;
+  --hairline: #38160E;
+  --ink-dim: rgba(229, 165, 131, 0.62);
+  --ink-faint: rgba(229, 165, 131, 0.36);
+}
+
+body:has(.torch-input:checked) .torch::before { content: "● "; }
+
+body:has(.torch-input:checked) img {
+  filter: grayscale(1) sepia(1) saturate(2.6) hue-rotate(-16deg) brightness(0.55) contrast(1.05);
+}
+
+body:has(.torch-input:focus-visible) .torch { outline: 1px solid var(--ember); outline-offset: 4px; }
+
+img { display: block; width: 100%; height: 100%; object-fit: cover; transition: filter 0.6s ease; }
+
+/* ————— the two voices: serif prose, mono instrument labels ————— */
+
+.label {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 400;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+}
+
+.label b { font-weight: 400; color: var(--ember); }
+
+a { color: inherit; }
+
+:focus-visible { outline: 1px solid var(--ember); outline-offset: 4px; }
+
+::selection { background: var(--ember); color: var(--night); }
+
+h1, h2, h3 { text-wrap: balance; }
+
+.skip {
+  position: absolute;
+  left: -100vw;
+  top: 0;
+  z-index: 9;
+  padding: 12px 20px;
+  background: var(--ember);
+  color: var(--night);
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  text-decoration: none;
+}
+
+.skip:focus-visible { left: 0; outline: none; }
+
+/* ————— masthead ————— */
+
+.masthead {
+  position: relative;
+  z-index: 3;
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 24px;
+  padding: 22px clamp(20px, 5vw, 56px) 20px;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.wordmark {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  font-size: 17px;
+  letter-spacing: 0.34em;
+  text-transform: uppercase;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.wordmark .star { color: var(--ember); letter-spacing: 0; }
+
+.wordmark small {
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.28em;
+  color: var(--ink-faint);
+}
+
+.masthead nav {
+  display: flex;
+  align-items: baseline;
+  gap: clamp(16px, 3vw, 34px);
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 0.14em;
+}
+
+.masthead nav a, .torch {
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 0.14em;
+  text-decoration: none;
+  color: var(--ink-dim);
+  padding-bottom: 3px;
+  border-bottom: 1px solid transparent;
+}
+
+.masthead nav a:hover, .masthead nav a:focus-visible, .torch:hover { color: var(--starlight); border-bottom-color: var(--ember); }
+
+/* ————— hero: the sky over the fell, and one sentence about tonight ————— */
+
+.hero {
+  position: relative;
+  min-height: 88vh;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  overflow: hidden;
+}
+
+.hero img {
+  position: absolute;
+  inset: 0;
+  animation: drift 60s ease-out forwards;
+}
+
+.hero::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(180deg, rgba(16, 24, 32, 0.55) 0%, rgba(16, 24, 32, 0) 26%, rgba(16, 24, 32, 0) 52%, var(--night) 96%),
+    radial-gradient(120% 60% at 50% 100%, rgba(16, 24, 32, 0.5), rgba(16, 24, 32, 0) 60%);
+}
+
+body:has(.torch-input:checked) .hero::after {
+  background:
+    linear-gradient(180deg, rgba(13, 6, 5, 0.55) 0%, rgba(13, 6, 5, 0) 26%, rgba(13, 6, 5, 0) 52%, var(--night) 96%),
+    radial-gradient(120% 60% at 50% 100%, rgba(13, 6, 5, 0.5), rgba(13, 6, 5, 0) 60%);
+}
+
+.hero-caption {
+  position: absolute;
+  top: 26px;
+  right: clamp(20px, 5vw, 56px);
+  z-index: 2;
+  text-align: right;
+}
+
+.hero-copy {
+  position: relative;
+  z-index: 2;
+  padding: 0 clamp(20px, 5vw, 56px) clamp(48px, 9vh, 96px);
+  max-width: 860px;
+}
+
+.hero-copy h1 {
+  margin: 0 0 18px;
+  font-size: clamp(38px, 6.4vw, 76px);
+  font-weight: 300;
+  font-style: italic;
+  line-height: 1.08;
+  letter-spacing: -0.01em;
+  font-variation-settings: "SOFT" 30, "WONK" 1;
+}
+
+.hero-copy p {
+  margin: 0 0 30px;
+  max-width: 34em;
+  font-size: clamp(17px, 1.6vw, 20px);
+  color: var(--ink-dim);
+}
+
+.hero-copy > * { animation: rise 0.9s cubic-bezier(0.2, 0.6, 0.2, 1) both; }
+.hero-copy p { animation-delay: 0.15s; }
+.hero-copy .book { animation-delay: 0.3s; }
+
+/* ————— the one warm control ————— */
+
+.book {
+  display: inline-block;
+  padding: 13px 26px;
+  background: var(--ember);
+  color: var(--night);
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  text-decoration: none;
+}
+
+.book:hover, .book:focus-visible { background: var(--starlight); }
+
+/* ————— sections share one editorial skeleton ————— */
+
+section { padding: clamp(64px, 10vw, 120px) clamp(20px, 5vw, 56px); }
+
+.section-head {
+  display: flex;
+  align-items: baseline;
+  gap: 18px;
+  margin-bottom: clamp(36px, 6vw, 64px);
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.section-head h2 {
+  margin: 0;
+  font-size: clamp(26px, 3.4vw, 40px);
+  font-weight: 320;
+  letter-spacing: 0.01em;
+}
+
+.section-head .label { margin-left: auto; text-align: right; }
+
+/* ————— tonight: the almanac, in plain words ————— */
+
+.tonight-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+  gap: clamp(32px, 6vw, 88px);
+  align-items: start;
+}
+
+.tonight-lede {
+  position: sticky;
+  top: 48px;
+  margin: 0;
+  font-size: clamp(24px, 2.8vw, 34px);
+  font-weight: 300;
+  font-style: italic;
+  line-height: 1.3;
+}
+
+.tonight-lede small {
+  display: block;
+  margin-top: 22px;
+  font-family: var(--mono);
+  font-style: normal;
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  color: var(--ink-faint);
+}
+
+.sky-times { list-style: none; margin: 0; padding: 0; }
+
+.sky-times li {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  gap: 6px 26px;
+  padding: 18px 0 16px;
+  border-top: 1px solid var(--hairline);
+}
+
+.sky-times li:last-child { border-bottom: 1px solid var(--hairline); }
+
+.sky-times time {
+  font-family: var(--mono);
+  font-size: 21px;
+  color: var(--ember);
+  font-variant-numeric: tabular-nums;
+}
+
+.sky-times strong { font-weight: 420; letter-spacing: 0.02em; }
+
+.sky-times p {
+  grid-column: 2;
+  margin: 0;
+  font-style: italic;
+  color: var(--ink-dim);
+}
+
+/* ————— the night, drawn to scale —————
+   Sixteen hours, 16:00 to 08:00, one band: dusk falls, the sky is properly dark
+   until moonrise washes it, then dawn. Each mark is one line of the almanac,
+   placed where it actually happens. Decoration only — the list above is the record. */
+
+.night-bar { margin: clamp(44px, 6vw, 72px) 0 0; grid-column: 1 / -1; }
+
+.night-bar .band {
+  position: relative;
+  height: 10px;
+  background: linear-gradient(90deg,
+    var(--zenith) 0%, #0B1119 14%, #070C12 22%, #070C12 60%,
+    #16202B 63%, #1A2531 88%, var(--zenith) 96%, #3A4353 100%);
+  border: 1px solid var(--hairline);
+}
+
+.night-bar .mark {
+  position: absolute;
+  left: var(--at);
+  top: -26px;
+  height: 62px;
+  border-left: 1px solid var(--ink-faint);
+}
+
+.night-bar .mark i {
+  position: absolute;
+  left: 7px;
+  top: -2px;
+  font-family: var(--mono);
+  font-style: normal;
+  font-size: 10.5px;
+  letter-spacing: 0.14em;
+  color: var(--ember);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.night-bar .mark b {
+  position: absolute;
+  left: 7px;
+  bottom: -4px;
+  font-family: var(--mono);
+  font-weight: 400;
+  font-size: 9.5px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  white-space: nowrap;
+}
+
+.night-bar .mark:nth-child(odd) { top: 4px; }
+.night-bar .mark:nth-child(odd) i { top: auto; bottom: -2px; }
+.night-bar .mark:nth-child(odd) b { bottom: auto; top: -4px; }
+
+.night-bar figcaption {
+  margin-top: 68px;
+  font-style: italic;
+  font-size: 14px;
+  color: var(--ink-faint);
+}
+
+/* ————— visit: the twelve, the photograph, the form ————— */
+
+#visit { padding-bottom: 0; }
+
+.visit-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 6fr) minmax(0, 5fr);
+  gap: clamp(32px, 6vw, 88px);
+}
+
+.visit-figure { position: relative; margin: 0; min-height: 420px; }
+
+.visit-figure img { position: absolute; inset: 0; }
+
+.visit-figure figcaption {
+  position: absolute;
+  left: 0;
+  bottom: -14px;
+  padding: 10px 16px 10px 0;
+  background: var(--night);
+  font-style: italic;
+  color: var(--ink-dim);
+  font-size: 15px;
+  transition: background 0.6s ease;
+}
+
+.visit-copy p:first-of-type {
+  margin: 0 0 14px;
+  font-size: clamp(22px, 2.4vw, 30px);
+  font-weight: 300;
+  font-style: italic;
+  line-height: 1.35;
+}
+
+.visit-copy > p:last-of-type { color: var(--ink-dim); max-width: 36em; }
+
+/* the form is paper too: no boxes, one hairline under each answer */
+
+.visit-form { margin-top: 40px; max-width: 460px; }
+
+.visit-form .field { display: block; margin-bottom: 26px; }
+
+.visit-form .field span { display: block; margin-bottom: 2px; }
+
+.visit-form input, .visit-form select {
+  width: 100%;
+  padding: 9px 0;
+  border: 0;
+  border-bottom: 1px solid var(--ink-faint);
+  border-radius: 0;
+  background: transparent;
+  color: var(--starlight);
+  font-family: var(--serif);
+  font-size: 18px;
+}
+
+.visit-form select { appearance: none; }
+
+.visit-form input:focus, .visit-form select:focus { outline: none; border-bottom-color: var(--ember); }
+
+.visit-form .book { border: 0; cursor: pointer; margin-top: 6px; }
+
+.visit-aside { margin-top: 18px; font-style: italic; font-size: 14px; color: var(--ink-faint); }
+
+.visit-terms { margin: 56px 0 0; padding: 18px 0 26px; border-top: 1px solid var(--hairline); }
+
+/* ————— the fell: getting here after dark, and how to behave when you do ————— */
+
+.fell-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: clamp(24px, 4vw, 56px);
+}
+
+.fell-grid h3 {
+  margin: 0 0 14px;
+  padding-top: 16px;
+  border-top: 1px solid var(--hairline);
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 400;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+}
+
+.fell-grid h3 b { font-weight: 400; color: var(--ember); }
+
+.fell-grid p { margin: 0 0 12px; font-size: 15.5px; color: var(--ink-dim); }
+
+.fell-grid p strong { font-weight: 420; color: var(--starlight); }
+
+.fell-grid ul { list-style: none; margin: 0; padding: 0; }
+
+.fell-grid li {
+  padding: 9px 0 8px;
+  border-top: 1px solid var(--hairline);
+  font-size: 15.5px;
+  color: var(--ink-dim);
+}
+
+.fell-grid li:first-child { border-top: 0; padding-top: 0; }
+
+.fell-grid li b { font-weight: 400; color: var(--ember); font-family: var(--mono); font-size: 12px; letter-spacing: 0.1em; }
+
+.fell-coda {
+  margin: clamp(40px, 6vw, 64px) 0 0;
+  font-style: italic;
+  font-size: clamp(18px, 1.9vw, 23px);
+  font-weight: 300;
+  color: var(--ink-dim);
+  max-width: 44em;
+}
+
+/* ————— journal: three nights that were worth writing down ————— */
+
+.journal-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: clamp(24px, 4vw, 48px);
+}
+
+.journal-grid article:nth-child(2) { transform: translateY(clamp(24px, 4vw, 56px)); }
+
+.journal-grid figure { margin: 0 0 16px; height: clamp(240px, 30vw, 380px); overflow: hidden; }
+
+.journal-grid img { transition: transform 3s ease, filter 0.6s ease; }
+
+.journal-grid article:hover img { transform: scale(1.04); }
+
+.journal-grid h3 {
+  margin: 12px 0 6px;
+  font-size: 21px;
+  font-weight: 380;
+  font-style: italic;
+}
+
+.journal-grid p { margin: 0; font-size: 15px; color: var(--ink-dim); }
+
+/* ————— footer ————— */
+
+footer {
+  margin-top: clamp(72px, 10vw, 120px);
+  padding: 30px clamp(20px, 5vw, 56px) 44px;
+  border-top: 1px solid var(--hairline);
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 12px 32px;
+}
+
+/* ————— motion, kept polite ————— */
+
+@keyframes rise { from { opacity: 0; transform: translateY(22px); } to { opacity: 1; transform: none; } }
+
+@keyframes drift { from { transform: scale(1.06); } to { transform: none; } }
+
+/* sections surface as they arrive — only where the browser can drive it from scroll */
+
+@supports (animation-timeline: view()) {
+  .section-head, .journal-grid article, .fell-grid > div {
+    animation: rise 1s cubic-bezier(0.2, 0.6, 0.2, 1) both;
+    animation-timeline: view();
+    animation-range: entry 0% entry 60%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  .hero img, .hero-copy > *, .section-head, .journal-grid article, .fell-grid > div { animation: none; }
+  .journal-grid img { transition: none; }
+}
+
+/* ————— one column on a phone; the almanac stays an almanac ————— */
+
+@media (max-width: 820px) {
+  .masthead { flex-direction: column; align-items: flex-start; gap: 14px; }
+  .wordmark small { display: none; }
+  .hero { min-height: 76vh; }
+  .hero-caption { display: none; }
+  .tonight-grid, .visit-grid, .journal-grid, .fell-grid { grid-template-columns: minmax(0, 1fr); }
+  .tonight-lede { position: static; }
+  .night-bar .mark b { display: none; }
+  .night-bar .mark:last-child i { left: auto; right: 7px; }
+  .journal-grid article:nth-child(2) { transform: none; }
+  .visit-figure { min-height: 300px; }
+}
+
+/* ————— print: the almanac rides on the dashboard ————— */
+
+@media print {
+  /* The inks are translucent starlight — near white on paper. Restate them as ink,
+     and every label, tick, and caption follows; printers drop backgrounds, so the
+     night-bar keeps only its printable border. */
+  :root { --starlight: #101820; --ink-dim: #3a3f45; --ink-faint: #6b625a; --ember: #8a5222; --hairline: #ccc; }
+  body { background: #fff; color: #101820; }
+  .hero, .visit-figure, .journal-grid figure, .skip, .torch, .torch-input, .book { display: none; }
+  .label, .sky-times time, .fell-grid h3 { color: #6b625a; }
+  .sky-times li, .section-head, .fell-grid li { border-color: #ccc; }
+  .sky-times p, .tonight-lede, .visit-copy p, .fell-grid p, .fell-grid li, .journal-grid p { color: #3a3f45; }
+  .night-bar .band { background: #fff; border-color: #6b625a; }
+}

@@ -141,6 +141,28 @@ pub fn references(text: &str) -> String {
     serde_json::to_string(&rows).unwrap_or_else(|_| "[]".to_string())
 }
 
+/// The sibling files a fetched file names in turn — a `::view` page naming its
+/// stylesheets — as the same JSON rows [`references`] writes.
+///
+/// The second half of the prefetch protocol: after gathering [`references`], a host asks
+/// this about each fetched file (`path` is that file's own reference, so links resolve
+/// against *its* folder) and gathers what it returns. Files that name nothing return `[]`.
+#[wasm_bindgen]
+pub fn file_references(path: &str, text: &str) -> String {
+    let rows: Vec<serde_json::Value> = doc_core::resolve::file_references(path, text)
+        .iter()
+        .map(|reference| match reference {
+            doc_core::resolve::Reference::File(path) => {
+                serde_json::json!({"kind": "file", "path": path})
+            }
+            doc_core::resolve::Reference::Document(path) => {
+                serde_json::json!({"kind": "document", "path": path})
+            }
+        })
+        .collect();
+    serde_json::to_string(&rows).unwrap_or_else(|_| "[]".to_string())
+}
+
 /// Build the resolver [`render_html`] hydrates against from its `resources` JSON.
 fn provided_from(resources: Option<&str>) -> doc_core::resolve::Provided {
     let mut provided = doc_core::resolve::Provided::new();

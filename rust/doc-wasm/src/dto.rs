@@ -93,6 +93,9 @@ pub struct BlockDto {
     /// Libraries an executable `code` block needs.
     #[serde(default)]
     pub deps: String,
+    /// Comma-separated sibling files an executable `code` block declares it reads.
+    #[serde(default)]
+    pub reads: String,
     /// Seconds an executable `code` block may run before it is killed; `0` means default.
     #[serde(default)]
     pub timeout: u32,
@@ -111,6 +114,14 @@ pub struct BlockDto {
     /// How a run's output is displayed: empty, `svg`, or `html`.
     #[serde(default)]
     pub format: String,
+    /// Viewport height in CSS pixels of a `board` block, or of the framed page of a
+    /// `view` block; `0` means the renderer's default.
+    #[serde(default)]
+    pub height: u32,
+    /// Viewport width in CSS pixels the framed page of a `view` block is laid out at;
+    /// `0` means the renderer's default.
+    #[serde(default)]
+    pub width: u32,
 }
 
 /// Serializable mirror of [`doc_core::model::Document`].
@@ -178,12 +189,15 @@ impl From<&Block> for BlockDto {
             items: block.items.iter().map(ItemDto::from).collect(),
             run: block.run,
             deps: block.deps.clone(),
+            reads: block.reads.clone(),
             timeout: block.timeout,
             for_block: block.for_block.clone(),
             status: block.status.clone(),
             exit: block.exit,
             hash: block.hash.clone(),
             format: block.format.clone(),
+            height: block.height,
+            width: block.width,
         }
     }
 }
@@ -208,12 +222,15 @@ impl From<&BlockDto> for Block {
             items: dto.items.iter().map(Item::from).collect(),
             run: dto.run,
             deps: dto.deps.clone(),
+            reads: dto.reads.clone(),
             timeout: dto.timeout,
             for_block: dto.for_block.clone(),
             status: dto.status.clone(),
             exit: dto.exit,
             hash: dto.hash.clone(),
             format: dto.format.clone(),
+            height: dto.height,
+            width: dto.width,
         }
     }
 }

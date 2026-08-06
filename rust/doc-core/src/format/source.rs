@@ -167,6 +167,7 @@ pub fn parse(text: &str) -> Document {
     } else {
         normalize_blocks(&parsed.blocks)
     };
+    let blocks = convert_flowcharts(blocks);
 
     let title = if !parsed.title.is_empty() {
         parsed.title
@@ -187,6 +188,31 @@ pub fn parse(text: &str) -> Document {
         meta: parsed.meta,
         blocks,
     }
+}
+
+/// Replace every readable `::mermaid`/`::graph` block with the board it describes.
+///
+/// A mermaid block is not a kind this format keeps: a board is the same drawing a reader can
+/// take hold of, and one interactive diagram beats two renderers that have to agree. The node
+/// blocks are inserted *before* the board, so a document read by an older `dx` — which does
+/// not know they are a board's nodes — still shows the labels rather than nothing.
+///
+/// A block whose source is not a flowchart this converter reads is left exactly as written;
+/// see [`super::mermaid::convert`] for why that is the safe answer rather than an empty board.
+fn convert_flowcharts(blocks: Vec<Block>) -> Vec<Block> {
+    if !blocks
+        .iter()
+        .any(|block| matches!(block.kind.as_str(), "mermaid" | "graph"))
+    {
+        return blocks;
+    }
+    blocks
+        .into_iter()
+        .flat_map(|block| match block.kind.as_str() {
+            "mermaid" | "graph" => super::mermaid::convert(&block).unwrap_or_else(|| vec![block]),
+            _ => vec![block],
+        })
+        .collect()
 }
 
 /// Text of the first heading block, or empty when there is none.

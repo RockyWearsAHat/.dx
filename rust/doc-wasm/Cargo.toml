@@ -9,10 +9,11 @@ repository.workspace = true
 [lib]
 crate-type = ["cdylib", "rlib"]
 
-# The bundled wasm-opt is older than the bulk-memory ops LLVM now emits by default;
-# enable that feature so the optimizer accepts (and keeps optimizing) the module.
+# The bundled wasm-opt is older than the ops LLVM now emits by default — bulk memory, and
+# the non-trapping float-to-int conversions a saturating `f64 as u32` compiles to; enable
+# both so the optimizer accepts (and keeps optimizing) the module.
 [package.metadata.wasm-pack.profile.release]
-wasm-opt = ["-O", "--enable-bulk-memory"]
+wasm-opt = ["-O", "--enable-bulk-memory", "--enable-nontrapping-float-to-int"]
 
 [dependencies]
 doc-core = { path = "../doc-core" }

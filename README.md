@@ -108,6 +108,7 @@ Mark a code block `run` and name what it needs:
 |-----------|---------|
 | `run`     | This block is executable |
 | `deps`    | Libraries to install before running |
+| `reads`   | Sibling files the code reads (comma-separated) — their current text joins the run's fingerprint, so editing one re-runs the block |
 | `timeout` | Seconds before the block is killed (default 60) |
 | `format`  | `svg` or `html` — render the block's output as a drawing, not as quoted text |
 
@@ -270,6 +271,7 @@ dx outline  notes.dx                 # block ids, kinds, and previews
 dx render   notes.dx                 # a self-contained HTML page
 dx png      notes.dx                 # an image of the rendered page
 dx png      notes.dx --pages         # one image per page, in reading order
+dx png      notes.dx --block plan    # one block alone — a board at its natural size
 dx play     notes.dx --script "wait 500ms; key Space; scroll 200"
                                      # drive the rendered page with real input and
                                      # keep one PNG frame per tick, annotated
@@ -372,10 +374,17 @@ the foot of a page without the text it titles. Every page names the blocks on it
 that needs one part asks for it — `section` takes any block id from `dx_outline` — instead of
 paging through the rest. On a machine with no browser the read falls back to text and says so.
 
+**A board is always a page of its own**, photographed at its natural canvas size — every node
+at exactly the box its line states — instead of as the miniature the page column fits it to.
+And one block renders out alone: `dx_read` with `block` (or `dx png --block`) returns a single
+image of that block — a board at natural size, a node's block as the page carries it — which
+is how a board or one node is checked without paging through the document around it.
+
 The same division from a shell:
 
 ```bash
 dx png notes.dx --pages          # notes-1.png, notes-2.png, … and what is on each
+dx png notes.dx --block plan     # notes-plan.png — just that block
 ```
 
 **And it can watch the page react.** `dx_play` (and `dx play` from a shell) loads the same
@@ -451,10 +460,11 @@ changes. It ticks wherever the checklist is — down the page, or inside a node 
 
 A `::board` is a node editor drawn on the sheet: its nodes are the document's own blocks,
 arranged on a canvas instead of down the page. `examples/example_site_plan.dx` is a whole
-website drafted on one — brief, audience, a palette tile, three real wireframes and the flow
-between them, the markup the home page becomes, and what has to be true before it ships. The
-wireframes are real HTML, dressed inside their nodes by the document's own `::style` — the
-same CSS that dresses the rest of the page.
+website designed and shipped on one — brief, audience, a palette tile, the shipped files as
+listings, what has to be true before it ships, and the site itself standing on the board
+twice: the same `site/index.html`, framed live at desk width and at phone width (`::view
+src=site/index.html width=390`). The screens are not mockups — they are the coded page
+actually rendering, so editing `site/site.css` changes them on the next render.
 
 It opens **fitted**: whatever is on it, scaled on both axes, all of it in view. Drag a node
 by the label bar above it. Drag a connection out of **any edge of any node onto any edge of
@@ -486,11 +496,15 @@ not the number it resolved to.
 A document can name what it does not carry, so nothing is pasted twice and nothing shown
 is stale. `::code id=listing src=src/lib.rs lang=rust` renders the file's **current**
 text as its listing — and with `run`, executes it, so the recorded output goes stale
-exactly when the file changes: the documentation is the test surface. A board node may
-name a block of a **sibling document** — `- plan.dx#step-one x=20 y=20` — and every board
-naming it shows the block as it is now. The saved document keeps the reference, never a
-copy; a reference that resolves to nothing renders as a sentence naming the path, never
-as silence; and a path can only walk downward from the document's own folder.
+exactly when the file changes: the documentation is the test surface.
+`::view id=screen src=site/index.html width=390` shows the **page the file renders to**,
+framed live at the stated viewport with its own stylesheet inlined — the reference the
+other way up: the listing is what the code says, the view is what it does. The frame is a
+sandbox allowed nothing, so a view is only ever shown; nothing in it runs. A board node
+may name a block of a **sibling document** — `- plan.dx#step-one x=20 y=20` — and every
+board naming it shows the block as it is now. The saved document keeps the reference,
+never a copy; a reference that resolves to nothing renders as a sentence naming the path,
+never as silence; and a path can only walk downward from the document's own folder.
 `docs/dx-format-contract.md` § References has the rules.
 
 The same operations are what an agent uses (`dx source`, `dx set`, `dx insert`, `dx remove`,

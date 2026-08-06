@@ -11,6 +11,7 @@ export const build_index_and_search: (a: number, b: number, c: number, d: number
 export const compress: (a: number, b: number, c: number) => void;
 export const decompress: (a: number, b: number, c: number) => void;
 export const field_html: (a: number, b: number, c: number) => void;
+export const file_references: (a: number, b: number, c: number, d: number, e: number) => void;
 export const insert_block: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => void;
 export const join_chunks: (a: number, b: number, c: number) => void;
 export const pack_document: (a: number, b: number, c: number, d: number, e: number) => void;

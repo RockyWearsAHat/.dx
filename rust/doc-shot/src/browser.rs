@@ -104,12 +104,21 @@ pub fn missing_message() -> String {
     )
 }
 
+/// `DX_BROWSER` is process-global, so every test that sets it — and every test that
+/// *reads* it by launching a real capture — must take turns. A capture whose measuring
+/// pass lands inside another test's bogus override silently measures nothing and
+/// paginates blind.
+#[cfg(test)]
+pub(crate) static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[cfg(test)]
 mod tests {
+    use super::ENV_LOCK;
     use super::*;
 
     #[test]
     fn an_explicit_override_is_used_when_it_exists() {
+        let _turn = ENV_LOCK.lock().expect("env lock");
         let shell = if cfg!(windows) {
             "C:\\Windows\\System32\\cmd.exe"
         } else {
@@ -122,6 +131,7 @@ mod tests {
 
     #[test]
     fn a_bogus_override_falls_back_to_discovery() {
+        let _turn = ENV_LOCK.lock().expect("env lock");
         std::env::set_var(BROWSER_ENV, "/definitely/not/a/browser");
         // Either a real browser is found, or none is — but never the bogus path.
         assert_ne!(find(), Some(PathBuf::from("/definitely/not/a/browser")));

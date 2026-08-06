@@ -104,6 +104,16 @@ declare namespace wasm_bindgen {
     export function field_html(text: string): string;
 
     /**
+     * The sibling files a fetched file names in turn — a `::view` page naming its
+     * stylesheets — as the same JSON rows [`references`] writes.
+     *
+     * The second half of the prefetch protocol: after gathering [`references`], a host asks
+     * this about each fetched file (`path` is that file's own reference, so links resolve
+     * against *its* folder) and gathers what it returns. Files that name nothing return `[]`.
+     */
+    export function file_references(path: string, text: string): string;
+
+    /**
      * Add a block of `kind` after the block called `after`, or at the top when `after` is empty.
      *
      * Returns JSON `{"source": "<canonical .dx>", "id": "<the new block's id>"}` — the id is
@@ -316,6 +326,7 @@ declare interface InitOutput {
     readonly compress: (a: number, b: number, c: number) => void;
     readonly decompress: (a: number, b: number, c: number) => void;
     readonly field_html: (a: number, b: number, c: number) => void;
+    readonly file_references: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly insert_block: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => void;
     readonly join_chunks: (a: number, b: number, c: number) => void;
     readonly pack_document: (a: number, b: number, c: number, d: number, e: number) => void;

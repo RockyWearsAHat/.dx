@@ -113,6 +113,7 @@
     sha256_hex: (bytes) => call('sha256_hex', { text: new TextDecoder().decode(bytes) }),
     render_html: (...args) => call('render_html', ...args),
     references: (source) => call('references', source),
+    file_references: (path, text) => call('file_references', path, text),
     stylesheet: () => call('stylesheet'),
   };
 
@@ -238,8 +239,13 @@
     const inRepo = (relative) => (folder ? `${folder}/${relative}` : relative);
     const files = {};
     const documents = {};
-    for (const ref of refs) {
-      if (typeof ref.path !== 'string') continue;
+    // A queue, not a single pass: a fetched file can reference further files — a `::view`
+    // page naming its stylesheets — and the engine's `file_references` says what each one
+    // adds. The engine decides what is referenced; this only ever fetches.
+    const queue = refs.filter((ref) => typeof ref.path === 'string');
+    while (queue.length > 0) {
+      const ref = queue.shift();
+      if (files[ref.path] !== undefined || documents[ref.path] !== undefined) continue;
       if (ref.kind === 'document') {
         const handle = await packHandle(
           globalThis.dxResolve.rawUrl(context.location, context.ref, globalThis.dxResolve.REPO_PACK),
@@ -256,7 +262,15 @@
             globalThis.dxResolve.rawUrl(context.location, context.ref, inRepo(ref.path)),
             { credentials: 'same-origin' },
           );
-          if (response.ok) files[ref.path] = await response.text();
+          if (!response.ok) continue;
+          const text = await response.text();
+          files[ref.path] = text;
+          const nested = JSON.parse(await engine.file_references(ref.path, text));
+          if (Array.isArray(nested)) {
+            for (const entry of nested) {
+              if (typeof entry.path === 'string') queue.push(entry);
+            }
+          }
         } catch {
           // Unreachable: the engine's sentence on the page says so.
         }

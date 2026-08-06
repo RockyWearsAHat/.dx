@@ -44,10 +44,10 @@ The engine is Rust, in `rust/`, and it is the only thing on a user's or agent's 
 
 | Crate | Responsibility |
 |-------|----------------|
-| `doc-core` | The format and its views. `format` (DOCSRC parse/stringify, plus `mermaid`/`layout` — see below), `render` (HTML, Markdown, outline, sections, `nav` resolution, `board`, and `block` — one block exactly as the page carries it), `edit` (the block operations every editing surface performs — body, header, replace, insert, remove, tick a checklist box, arrange a board — plus `preview_block`, which changes nothing), `resolve` (what a document references past its own edge — `::code src=` files and `path.dx#block` board nodes — the path law, the reference grammar, and `hydrate`, which fills a view/run copy through a host-supplied `Resolver` and is **never serialized**; `docs/dx-format-contract.md` § References is the authority), `chunk` (content-addressed per-block chunks and the `DXCP1` pack), plus `digest`, `compress`, `search`. No OS dependencies — this crate also compiles to `wasm32`. |
+| `doc-core` | The format and its views. `format` (DOCSRC parse/stringify, plus `mermaid`/`layout` — see below), `render` (HTML, Markdown, outline, sections, `nav` resolution, `board`, and `block` — one block exactly as the page carries it), `edit` (the block operations every editing surface performs — body, header, replace, insert, remove, tick a checklist box, arrange a board — plus `preview_block`, which changes nothing), `resolve` (what a document references past its own edge — `::code src=` files, `::view src=` coded pages shown as the page they render to, and `path.dx#block` board nodes — the path law, the reference grammar, `file_references` for what a fetched page names in turn, and `hydrate`, which fills a view/run copy through a host-supplied `Resolver` and is **never serialized**; `docs/dx-format-contract.md` § References is the authority), `chunk` (content-addressed per-block chunks and the `DXCP1` pack), plus `digest`, `compress`, `search`. No OS dependencies — this crate also compiles to `wasm32`. |
 | `doc-store` | The SQLite chunk store and the resolver: manifests, packs, git routing, and the stub format. The authority for content. |
 | `doc-run` | Executing `::code … run` blocks: per-language plans, dependency install, timeouts, output capture, and `confine` — the kernel sandbox every block runs inside. |
-| `doc-shot` | Rendering a document to PNG through an installed Chromium browser (two passes: measure, then capture). `capture_pages` divides a document into page images, breaking between blocks. `cdp` is a live DevTools session with the same browser (a hand-rolled WebSocket, no new dependency), and `play` drives the rendered page with scripted input — wait, key, click, scroll, hover — returning annotated PNG frames; it loads the same script-free render every screenshot uses, so nothing a document carries executes. `base64` is the platform's one copy of that codec (the MCP server encodes with it too). |
+| `doc-shot` | Rendering a document to PNG through an installed Chromium browser (two passes: measure, then capture). `capture_pages` divides a document into page images, breaking between blocks, with every `::board` on an independent page at its natural size; `capture_block` photographs one block alone. `cdp` is a live DevTools session with the same browser (a hand-rolled WebSocket, no new dependency), and `play` drives the rendered page with scripted input — wait, key, click, scroll, hover — returning annotated PNG frames; it loads the same script-free render every screenshot uses, so nothing a document carries executes. `base64` is the platform's one copy of that codec (the MCP server encodes with it too). |
 | `doc-cli` | The `dx` binary: CLI commands, the MCP server (`dx mcp`), the local rendering service (`dx serve`, in `daemon/`), and the installer — `install` (MCP registration), `service` (the login agent that keeps `dx serve` running), `desktop` (`DX.app` and the LaunchServices registration that makes a double-clicked `.dx` open), `policies` (Firefox's policy file), `extension` (the browser extension and how each family receives it), `state` and `home` (shared by all five). |
 | `doc-wasm` | `doc-core` for JavaScript hosts. Built into `editor/vscode/wasm/`. |
 
@@ -351,7 +351,12 @@ change.
   so author markup goes through `render::escape`, which is an **allow-list** of elements,
   attributes, and URL schemes. Never make it a deny-list again: the previous one was defeated
   by `<img src=x/onerror=…>`, by `<iframe srcdoc>`, and by entity-encoded schemes. A shadow
-  root is not a boundary — it is the same document and the same origin.
+  root is not a boundary — it is the same document and the same origin. The one real boundary
+  the renderer uses is a `::view`'s frame: an engine-built `<iframe sandbox="">` (opaque
+  origin, nothing allowed), which is what lets a whole coded page show with its own CSS where
+  the allow-list could only mangle it. The `sandbox` attribute stays empty forever — granting
+  it `allow-scripts` or `allow-same-origin` would turn "a page is shown" back into "a page
+  runs" — and author markup still cannot write an iframe of its own.
 - **The daemon holds private content, so it checks who is asking.** `dx serve` caches packs
   the reader's browser uploaded, which can come from private repositories, and pack keys are
   guessable. Every request must name a loopback `Host` (this is what stops DNS rebinding, the
@@ -369,7 +374,13 @@ change.
   anything.
 - **An agent reads by looking.** `dx_read` returns the rendered pages as images, because a
   document renders to a page and the page is where the meaning is. Pages break between blocks,
-  never through a line, and never leave a heading without the text it titles. The pages are
+  never through a line, and never leave a heading without the text it titles. A `::board` is
+  always a page of its own, captured **independently at its natural canvas size**
+  (`render::block_page` → `doc_shot::capture_block`) — in flow the board is fitted into the
+  column, which is right for context and unreadable as a picture — and only blocks in the
+  page flow are measured for pagination, never the copies a board renders inside its nodes.
+  One block renders out alone with `dx png --block <id>` / `dx_read` `block`: a board at
+  natural size, anything else exactly as the page carries it (hidden node blocks included). The pages are
   sized for the reader they serve (`ShotOptions::for_reading`): each stays under the
   vision-ingestion limits (~1.15 MP, 1568 px longest edge), so the image the model sees is the
   image the browser captured, pixel for pixel — capturing larger only produces an image

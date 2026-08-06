@@ -1,15 +1,22 @@
 //! References a document makes past its own edge, and how they are filled in.
 //!
-//! A document may name two things it does not itself carry:
+//! A document may name three things it does not itself carry:
 //!
 //! - **A sibling file**, on a `::code src=path` block. The file is the source of truth —
 //!   the listing a reader sees, the text `dx run` executes — and the document shows it as
 //!   it is *now*, so a page reviewing code can never drift from the code.
+//! - **A sibling coded page**, on a `::view src=path` block. The same reference shown the
+//!   other way up: not the file's text but the page it renders to, framed. Hydration also
+//!   inlines the page's own relative stylesheets ([`file_references`] is how a prefetching
+//!   host learns about them), because the frame it renders in has no folder to fetch from.
+//!   The `src` may carry a fragment (`src=site/index.html#visit`): the file before the
+//!   `#` is read, and the frame shows just that element — one screen per section of a
+//!   page too tall for one frame.
 //! - **One block of a sibling document**, on a board node line (`- plan.dx#step x= y=`).
 //!   The block lives once, in its own document, and every board that names it shows the
 //!   current content instead of a copy.
 //!
-//! Both are filled in by [`hydrate`], which asks an injected [`Resolver`] for bytes and
+//! All three are filled in by [`hydrate`], which asks an injected [`Resolver`] for bytes and
 //! nothing else. The resolver is the host's — the filesystem in the CLI, workspace files
 //! in an editor, the repository origin in a browser — and it is transport only: the path
 //! law ([`confined`]), the reference grammar, and what happens to the fetched bytes all
@@ -153,6 +160,38 @@ pub fn confined(path: &str) -> Option<&str> {
     clean.then_some(path)
 }
 
+/// A view's `src`, split at its `#fragment`: the file to read, and the element the
+/// frame shows.
+///
+/// Only a fragment naming a CSS-addressable id (`[A-Za-z0-9_-]+`) is recognized — that
+/// is every id a real page carries, and it is what keeps the fragment inert when it is
+/// stamped into a selector. Any other `#` stays part of the filename, which the path
+/// law and the resolver then judge as they always have.
+fn view_fragment(src: &str) -> (&str, Option<&str>) {
+    match src.rsplit_once('#') {
+        Some((path, fragment))
+            if !fragment.is_empty()
+                && fragment
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_') =>
+        {
+            (path, Some(fragment))
+        }
+        _ => (src, None),
+    }
+}
+
+/// The page with a style appended that shows only the element `#anchor` (its ancestors
+/// keep their place; everything else is hidden), so a fragment view is that section's
+/// current render. A sandboxed frame has no URL to carry a fragment to, and no render
+/// may need a script — a selector is the whole mechanism.
+fn opened_at(page: &str, anchor: &str) -> String {
+    format!(
+        "{page}<style>body :not(#{anchor}):not(#{anchor} *):not(:has(#{anchor}))\
+         {{display:none !important}}</style>"
+    )
+}
+
 /// Read a board node id as a cross-document reference: `path.dx#block-id`.
 ///
 /// A plain id (no `#`, or a path that is not a `.dx`, or one [`confined`] refuses) is not
@@ -193,8 +232,12 @@ pub fn references(document: &Document) -> Vec<Reference> {
         }
     };
     for block in &document.blocks {
-        if block.kind == "code" && !block.src.is_empty() {
-            if let Some(path) = confined(&block.src) {
+        if matches!(block.kind.as_str(), "code" | "view") && !block.src.is_empty() {
+            let src = match block.kind.as_str() {
+                "view" => view_fragment(&block.src).0,
+                _ => block.src.as_str(),
+            };
+            if let Some(path) = confined(src) {
                 push(Reference::File(path.to_string()));
             }
         }
@@ -231,8 +274,8 @@ pub fn hydrate(document: &mut Document, resolver: &dyn Resolver) -> Vec<Unresolv
         };
         match foreign_block(resolver, path, block_id) {
             Some(mut block) => {
-                if block.kind == "code" && !block.src.is_empty() {
-                    // The listing's path is relative to the document that owns it.
+                if matches!(block.kind.as_str(), "code" | "view") && !block.src.is_empty() {
+                    // The reference's path is relative to the document that owns it.
                     block.src = joined(folder(path), &block.src).unwrap_or_default();
                 }
                 block.id = reference.clone();
@@ -252,13 +295,50 @@ pub fn hydrate(document: &mut Document, resolver: &dyn Resolver) -> Vec<Unresolv
     }
 
     for block in &mut document.blocks {
-        if block.kind != "code" || block.src.is_empty() {
+        if !matches!(block.kind.as_str(), "code" | "view") || block.src.is_empty() {
             continue;
         }
-        let text = confined(&block.src).and_then(|path| resolver.file(path));
+        let (path, fragment) = match block.kind.as_str() {
+            "view" => view_fragment(&block.src),
+            _ => (block.src.as_str(), None),
+        };
+        let (path, fragment) = (path.to_string(), fragment.map(str::to_string));
+        let text = confined(&path).and_then(|path| resolver.file(path));
         match text {
+            Some(text) if block.kind == "view" => {
+                // The framed page fetches nothing relative — its frame has no folder —
+                // so its own stylesheets ride in with it.
+                let (page, missing) = inline_stylesheets(folder(&path), &text, resolver);
+                block.text = match &fragment {
+                    Some(anchor) => opened_at(&page, anchor),
+                    None => page,
+                };
+                for path in missing {
+                    unresolved.push(Unresolved {
+                        block: block.id.clone(),
+                        sentence: format!(
+                            "{path} could not be read here — the page names it as a \
+                             stylesheet, and the view shows the page without its dress."
+                        ),
+                        reference: path,
+                    });
+                }
+            }
             Some(text) => {
                 block.text = text.trim_end_matches(['\n', '\r']).to_string();
+            }
+            None if block.kind == "view" => {
+                // The renderer shows the sentence for an empty view body; putting it in
+                // `text` would frame the sentence as if it were the page.
+                unresolved.push(Unresolved {
+                    block: block.id.clone(),
+                    reference: block.src.clone(),
+                    sentence: format!(
+                        "{} could not be shown here — the view is the page's current \
+                         render, and the file was not found inside this document's folder.",
+                        block.src
+                    ),
+                });
             }
             None => {
                 let sentence = format!(
@@ -277,6 +357,138 @@ pub fn hydrate(document: &mut Document, resolver: &dyn Resolver) -> Vec<Unresolv
     }
 
     unresolved
+}
+
+/// The sibling files a fetched file names in turn — a view's page naming its stylesheets.
+///
+/// `path` is the file's own reference (so its links resolve against *its* folder), `text`
+/// its current content. This is the second half of the prefetch protocol: a host that
+/// cannot read on demand gathers [`references`], then asks this about each fetched file
+/// and gathers what it returns, so [`hydrate`] finds everything already in hand. A host
+/// that reads on demand never needs it. Non-HTML files name nothing.
+#[must_use]
+pub fn file_references(path: &str, text: &str) -> Vec<Reference> {
+    let mut out = Vec::new();
+    for href in stylesheet_links(text) {
+        if let Some(joined) = joined(folder(path), &href) {
+            let reference = Reference::File(joined);
+            if !out.contains(&reference) {
+                out.push(reference);
+            }
+        }
+    }
+    out
+}
+
+/// The relative stylesheet hrefs a page's `<link rel="stylesheet">` tags name, in order.
+///
+/// Absolute and scheme-carrying hrefs are not returned: the frame can fetch those itself,
+/// exactly as a browser would. This is a scan, not a parse — it reads the tags a real
+/// page writes and leaves anything it does not recognize alone.
+fn stylesheet_links(page: &str) -> Vec<String> {
+    let lower = page.to_ascii_lowercase();
+    let mut out = Vec::new();
+    let mut cursor = 0;
+    while let Some(start) = lower[cursor..].find("<link") {
+        let start = cursor + start;
+        let Some(end) = lower[start..].find('>') else {
+            break;
+        };
+        let end = start + end + 1;
+        let tag = &page[start..end];
+        cursor = end;
+        let rel = tag_attribute(tag, "rel").unwrap_or_default();
+        if !rel
+            .split_ascii_whitespace()
+            .any(|word| word.eq_ignore_ascii_case("stylesheet"))
+        {
+            continue;
+        }
+        if let Some(href) = tag_attribute(tag, "href") {
+            if !href.contains(':') && !href.starts_with('/') && confined(&href).is_some() {
+                out.push(href);
+            }
+        }
+    }
+    out
+}
+
+/// The value of `name="…"` (or `name='…'`, or unquoted) inside one tag's text.
+fn tag_attribute(tag: &str, name: &str) -> Option<String> {
+    let lower = tag.to_ascii_lowercase();
+    let mut cursor = 0;
+    loop {
+        let at = lower[cursor..].find(name)?;
+        let at = cursor + at;
+        cursor = at + name.len();
+        // A whole attribute name: preceded by whitespace, followed by `=`.
+        let preceded = tag[..at].ends_with(|ch: char| ch.is_ascii_whitespace());
+        let rest = tag[cursor..].trim_start();
+        if !preceded || !rest.starts_with('=') {
+            continue;
+        }
+        let value = rest[1..].trim_start();
+        let value = match value.chars().next() {
+            Some(quote @ ('"' | '\'')) => value[1..].split(quote).next().unwrap_or(""),
+            _ => value
+                .split(|ch: char| ch.is_ascii_whitespace() || ch == '>')
+                .next()
+                .unwrap_or(""),
+        };
+        return Some(value.to_string());
+    }
+}
+
+/// Replace each relative `<link rel="stylesheet" href=…>` in `page` with an inline
+/// `<style>` holding the file's current text, resolved against `base_folder`.
+///
+/// Returns the rewritten page and the joined paths that could not be read — those tags
+/// are left exactly as written, so the page still says what it meant. Stylesheets the
+/// frame can fetch itself (absolute, scheme-carrying) are untouched.
+fn inline_stylesheets(
+    base_folder: &str,
+    page: &str,
+    resolver: &dyn Resolver,
+) -> (String, Vec<String>) {
+    let lower = page.to_ascii_lowercase();
+    let mut out = String::with_capacity(page.len());
+    let mut missing = Vec::new();
+    let mut cursor = 0;
+    while let Some(start) = lower[cursor..].find("<link") {
+        let start = cursor + start;
+        let Some(end) = lower[start..].find('>') else {
+            break;
+        };
+        let end = start + end + 1;
+        out.push_str(&page[cursor..start]);
+        let tag = &page[start..end];
+        cursor = end;
+
+        let rel = tag_attribute(tag, "rel").unwrap_or_default();
+        let is_stylesheet = rel
+            .split_ascii_whitespace()
+            .any(|word| word.eq_ignore_ascii_case("stylesheet"));
+        let href = tag_attribute(tag, "href").unwrap_or_default();
+        let relative =
+            is_stylesheet && !href.contains(':') && !href.starts_with('/') && !href.is_empty();
+        let path = relative.then(|| joined(base_folder, &href)).flatten();
+        match path {
+            Some(path) => match resolver.file(&path) {
+                Some(css) => {
+                    out.push_str("<style>\n");
+                    out.push_str(css.trim_end_matches(['\n', '\r']));
+                    out.push_str("\n</style>");
+                }
+                None => {
+                    missing.push(path);
+                    out.push_str(tag);
+                }
+            },
+            None => out.push_str(tag),
+        }
+    }
+    out.push_str(&page[cursor..]);
+    (out, missing)
 }
 
 /// The cross-document node ids every board in `document` names, minus any already
@@ -378,6 +590,144 @@ mod tests {
         let mut document = parse("::code id=x src=../../etc/passwd\n::end\n");
         let notes = hydrate(&mut document, &Panics);
         assert_eq!(notes.len(), 1);
+    }
+
+    #[test]
+    fn a_view_is_the_pages_current_markup_with_its_stylesheet_inlined() {
+        let mut document = parse("::view id=shipped src=site/index.html\n::end\n");
+        let notes = hydrate(
+            &mut document,
+            &map(
+                &[
+                    (
+                        "site/index.html",
+                        "<html><head><link rel=\"stylesheet\" href=\"site.css\">\
+                         </head><body>Hi</body></html>",
+                    ),
+                    ("site/site.css", "body { color: red }\n"),
+                ],
+                &[],
+            ),
+        );
+        assert!(notes.is_empty(), "{notes:?}");
+        let page = &document.blocks[0].text;
+        assert!(page.contains("<style>\nbody { color: red }\n</style>"));
+        assert!(!page.contains("<link"), "the link tag is replaced");
+        assert!(page.contains("<body>Hi</body>"));
+    }
+
+    #[test]
+    fn a_fragment_view_reads_the_file_and_shows_its_element() {
+        let mut document = parse("::view id=v src=site/index.html#visit\n::end\n");
+        let notes = hydrate(
+            &mut document,
+            &map(
+                &[
+                    (
+                        "site/index.html",
+                        "<link rel=\"stylesheet\" href=\"site.css\">\
+                         <body><section id=visit>Book</section></body>",
+                    ),
+                    ("site/site.css", "body { color: red }\n"),
+                ],
+                &[],
+            ),
+        );
+        assert!(notes.is_empty(), "{notes:?}");
+        let page = &document.blocks[0].text;
+        assert!(page.contains("<section id=visit>Book</section>"));
+        assert!(
+            page.contains("<style>\nbody { color: red }\n</style>"),
+            "the fragment strips before the file read, so the stylesheet still inlines"
+        );
+        assert!(
+            page.contains(":not(#visit"),
+            "the appended style narrows the frame to the named element"
+        );
+    }
+
+    #[test]
+    fn a_fragment_strips_from_the_prefetch_list_but_not_from_an_unsafe_name() {
+        let document = parse(
+            "::view id=a src=site/index.html#visit\n::end\n\n\
+             ::view id=b src=odd#name.html\n::end\n",
+        );
+        assert_eq!(
+            references(&document),
+            vec![
+                Reference::File("site/index.html".to_string()),
+                Reference::File("odd#name.html".to_string()),
+            ],
+            "a safe id is a fragment; a `#` amid other punctuation stays filename"
+        );
+    }
+
+    #[test]
+    fn a_fragment_never_reaches_a_selector_unvetted() {
+        // `#…{}` would close the crop rule and open an author-written one.
+        let mut document = parse("::view id=v src=index.html#x{}*{background:url(evil)}\n::end\n");
+        let notes = hydrate(
+            &mut document,
+            &map(&[("index.html", "<body>Hi</body>")], &[]),
+        );
+        assert_eq!(notes.len(), 1, "treated as a filename, and not found");
+        assert!(document.blocks[0].text.is_empty());
+    }
+
+    #[test]
+    fn a_missing_view_is_reported_and_its_body_stays_empty() {
+        // The sentence is the renderer's to show — framing it would draw it as a page.
+        let mut document = parse("::view id=shipped src=site/gone.html\n::end\n");
+        let notes = hydrate(&mut document, &Nowhere);
+        assert_eq!(notes.len(), 1);
+        assert_eq!(notes[0].block, "shipped");
+        assert!(notes[0].sentence.contains("site/gone.html"));
+        assert!(document.blocks[0].text.is_empty());
+    }
+
+    #[test]
+    fn a_views_missing_stylesheet_keeps_the_tag_and_says_so() {
+        let mut document = parse("::view id=shipped src=index.html\n::end\n");
+        let notes = hydrate(
+            &mut document,
+            &map(
+                &[(
+                    "index.html",
+                    "<link rel=stylesheet href=gone.css><body>Hi</body>",
+                )],
+                &[],
+            ),
+        );
+        assert_eq!(notes.len(), 1);
+        assert_eq!(notes[0].reference, "gone.css");
+        assert!(document.blocks[0]
+            .text
+            .contains("<link rel=stylesheet href=gone.css>"));
+    }
+
+    #[test]
+    fn a_pages_absolute_stylesheets_are_the_frames_own_to_fetch() {
+        let page = "<link rel=\"stylesheet\" href=\"https://fonts.example/f.css\">\
+                    <link rel=\"stylesheet\" href=\"/site.css\">\
+                    <link rel=\"preconnect\" href=\"other.css\">";
+        assert_eq!(file_references("site/index.html", page), Vec::new());
+        let mut document = parse("::view id=v src=site/index.html\n::end\n");
+        let notes = hydrate(&mut document, &map(&[("site/index.html", page)], &[]));
+        assert!(notes.is_empty(), "{notes:?}");
+        assert_eq!(
+            document.blocks[0].text, page,
+            "nothing to inline, nothing touched"
+        );
+    }
+
+    #[test]
+    fn file_references_lists_a_pages_relative_stylesheets_against_its_own_folder() {
+        let page = "<LINK REL=\"Stylesheet\" HREF=\"site.css\">\
+                    <link rel=\"stylesheet\" href=\"site.css\">";
+        assert_eq!(
+            file_references("site/index.html", page),
+            vec![Reference::File("site/site.css".to_string())]
+        );
     }
 
     #[test]

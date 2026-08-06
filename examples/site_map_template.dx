@@ -1,0 +1,47 @@
+::heading level=1 id=title
+Website Sitemap
+::end
+
+::paragraph id=intro
+Drag nodes to reorganize. Connect pages with edges to show flow. Edit the view blocks below to preview each page.
+::end
+
+::board id=sitemap
+- home x=0 y=0 w=180 h=120 to=product:r-l
+- product x=240 y=0 w=180 h=120 to=checkout:r-l
+- checkout x=480 y=0 w=180 h=120
+::end
+
+::paragraph id=home hidden
+Home
+::end
+
+::view id=home-view
+<h1>Welcome</h1>
+<p>Site entry point at /</p>
+::end
+
+::paragraph id=product hidden
+Product
+::end
+
+::view id=product-view
+<h1>Shop</h1>
+<p>Product listing at /product</p>
+::end
+
+::paragraph id=checkout hidden
+Checkout
+::end
+
+::view id=checkout-view
+<h1>Complete Order</h1>
+<p>Cart review at /checkout</p>
+::end
+
+::checklist id=launch
+- [ ] Home routes to /
+- [ ] Product routes to /product
+- [ ] Checkout routes to /checkout
+- [ ] All views rendering
+::end

@@ -54,6 +54,11 @@ pub struct Block {
     pub run: bool,
     /// Libraries an executable `code` block needs (`deps="numpy requests"`).
     pub deps: String,
+    /// Comma-separated sibling files an executable `code` block reads at run time
+    /// (`reads=site/index.html,site/site.css`). Each path obeys the reference path law,
+    /// and the files' current text is part of the run's fingerprint — so editing a
+    /// declared file makes the recorded output stale exactly like editing the code would.
+    pub reads: String,
     /// Seconds an executable `code` block may run before it is killed; `0` means default.
     pub timeout: u32,
     /// Id of the `code` block an `output` block reports on (`for=` attribute).
@@ -69,6 +74,13 @@ pub struct Block {
     /// when the code prints markup that should be rendered as a picture rather than
     /// quoted as source. Set on the `code` block; carried onto its `output`.
     pub format: String,
+    /// Viewport height in CSS pixels of a `board` block, or of the framed page of a
+    /// `view` block; `0` means the renderer's default.
+    pub height: u32,
+    /// Viewport width in CSS pixels the framed page of a `view` block is laid out at;
+    /// `0` means the renderer's default. The *displayed* width is the column or the
+    /// board node's stated box — the frame is scaled into it uniformly.
+    pub width: u32,
 }
 
 /// Names of the language runners the platform can execute, in catalogue order.
