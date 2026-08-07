@@ -513,7 +513,6 @@ section { padding: clamp(64px, 10vw, 120px) clamp(20px, 5vw, 56px); }
   display: grid;
   grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
   gap: clamp(32px, 6vw, 88px);
-  align-items: start;
 }
 
 .school-copy p { margin: 0 0 16px; color: var(--ink-dim); max-width: 36em; }
@@ -525,9 +524,10 @@ section { padding: clamp(64px, 10vw, 120px) clamp(20px, 5vw, 56px); }
 .year-bar { grid-column: 1 / -1; }
 
 .year-bar .band {
+  /* darkest at midwinter, lightest at midsummer */
   background: linear-gradient(90deg,
     #2A3443 0%, #101A24 15%, #070C12 24%, #070C12 45%,
-    #1A2531 57%, #3A4353 70%, #4A5666 85%, #3A4353 100%);
+    #1A2531 57%, #4A5666 78%, #333D4B 100%);
 }
 
 .year-bar .mark, .year-bar .mark:nth-child(odd) { top: 2px; height: 16px; }
