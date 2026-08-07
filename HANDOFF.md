@@ -45,6 +45,27 @@ through the dx surface (`dx source`/`set`/`check`/`run`/`png`), which is the tes
   carried the method, but check `dx setup`/client registration for why `dx mcp` was
   absent from the session's tool surface.
 
+### 46b: the visual pass, and the review-agent bar
+
+Looking at the frames (not just verifying claims) found what no claim covered: masthead
+nav wrapped mid-label on desk and clipped the torch control off a phone (now wraps at
+every width — the wrap rule moved to the base and the phone duplicate died); the
+journal's staggered column was dead in modern Chromium because the scroll-driven `rise`
+animation's fill owns `transform` and cancelled the static `translateY` (stagger moved
+to `margin-top`, a property the motion system doesn't touch). An independent
+review agent judging against the mission then FAILED the site on four more: nav
+overflow at 820–1300px, `.visit-aside` below AA contrast (→ `--ink-dim`),
+`aria-hidden` on the `<figure>`s swallowing their visible captions (→ moved to the
+`.band` divs), and a flag character inside the waitlist option's date value (→ clean
+`2026-11-13`). All fixed, two new verify claims pin the mechanical ones —
+**30 of 30 hold, weight 29,971** — and the re-judge returned PASS.
+
+Product gaps this loop surfaced (on `index.dx#now-worklist`): `dx play` cannot target
+inside a `::view` frame; every `dx png` pays a Chromium launch (persistent capture
+session + delta frames + golden-frame text verdicts are the 100× efficiency tier); and
+the handshake should teach that pixel judgment belongs in a subagent — the operator's
+context carries verdicts, never frames.
+
 ## Part 45: the site test — the document's own records drove the revision
 
 The example-site field test ("write the example site with the method, revise if there are
