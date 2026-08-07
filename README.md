@@ -119,9 +119,11 @@ line — which is why this README carries pictures.
 ## For AI agents
 
 The dx methodology is the standing default: an agent connected to dx works through it on
-every task — orient from the index, edit through blocks, prove claims with recorded
-verdicts — unless specifically requested not to. The server's own handshake says so, so
-the rule reaches any agent in any host.
+every task — index every codebase, keep the documents as the project's living, factual
+memory (every decision, constraint, and finding written as it forms, claims recorded as
+run blocks whose verdicts prove them), and treat planning, creation, and verification as
+one motion: edit the block, let it run, read the result — unless specifically requested
+not to. The server's own handshake says so, so the rule reaches any agent in any host.
 
 `dx setup` registers the MCP server (`dx mcp`). The server keeps itself current: when the
 `dx` binary is updated, a running server notices after its next answer and re-execs in

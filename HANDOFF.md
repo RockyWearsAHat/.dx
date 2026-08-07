@@ -40,9 +40,17 @@ the operator's desktop) hit the two remaining read-quality defects; both closed 
   `image_text` now renders an embedded image as a one-line stand-in (media type, ~KB,
   where to look), same trade as `view_text`; a file `src` stays a Markdown link. The
   stale comment claiming dx_source skips hydration corrected.
-- **The method is now the stated default.** The MCP handshake opens with the standing
-  rule: every connected agent works in the dx methodology, always, unless specifically
-  requested not to — convenience is not the exemption, an explicit request is. Pinned in
+- **The method is now the stated default, and the doctrine is complete.** The MCP
+  handshake opens with the standing rule: every connected agent works in the dx
+  methodology, always, unless specifically requested not to — convenience is not the
+  exemption, an explicit request is. It now also carries the operator's full doctrine:
+  speak minimally and work constantly, acting on what the task implies from everything
+  understood so far, not only the latest message; every codebase gets indexed, always;
+  THE DOCUMENTS ARE THE MEMORY (a linked, factual knowledge base — decisions,
+  constraints, findings written as they form, claims recorded as run-block verdicts,
+  staled documents updated in the same sweep as the change); and planning, creation, and
+  verification are one three-call motion — dx_edit writes intent and code, the edit runs
+  it, dx_read shows the result. All pinned in
   `the_handshake_advertises_tools_resources_and_guidance`; README's agent section states
   the same rule and points at the handshake as the enforcing surface.
 - Feedback triage, recorded: pipefail (#4) was already fixed; folder `reads=` and
