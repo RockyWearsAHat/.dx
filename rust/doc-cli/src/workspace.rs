@@ -345,6 +345,34 @@ pub fn write_text(path: &Path, text: &str) -> Result<(), String> {
     fs::write(path, text).map_err(|error| format!("could not write {}: {error}", path.display()))
 }
 
+/// One sentence per `::image` in `document` whose local file already exceeds the embed
+/// limit — said at save time, so the writer hears about the bound now instead of the
+/// reader meeting hydration's refusal at render. A file that does not exist yet (a run
+/// will produce it) earns no warning; hydration has its own sentence for a missing file.
+#[must_use]
+pub fn oversized_image_warnings(document: &Document, path: &Path) -> Vec<String> {
+    let dir = document_dir(path);
+    document
+        .blocks
+        .iter()
+        .filter(|block| block.kind == "image")
+        .filter_map(|block| {
+            let relative = doc_core::resolve::confined(&block.src)?;
+            let bytes = fs::metadata(dir.join(relative)).ok()?.len() as usize;
+            (bytes > doc_core::resolve::MAX_IMAGE_BYTES).then(|| {
+                format!(
+                    "note: image `{}` names {} — {bytes} bytes against the {} byte embed \
+                     limit, so the render will refuse to embed it. Export a smaller \
+                     capture (`dx png --scale 1` stays within it).",
+                    block.id,
+                    block.src,
+                    doc_core::resolve::MAX_IMAGE_BYTES
+                )
+            })
+        })
+        .collect()
+}
+
 /// The directory a document lives in, used as the working directory for its code blocks.
 #[must_use]
 pub fn document_dir(path: &Path) -> PathBuf {

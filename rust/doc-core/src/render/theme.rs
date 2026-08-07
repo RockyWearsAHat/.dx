@@ -332,6 +332,20 @@ code {
   user-select: none;
 }
 
+/* A picture whose producing run is missing or failed is called out on the figure itself —
+   pixels prove nothing by themselves, and stale ones must not read as fresh. */
+.dx-image-doubt { position: relative; }
+.dx-image-doubt::after {
+  content: attr(data-note);
+  position: absolute;
+  top: 0.1rem;
+  right: 0;
+  font: 400 0.68rem/1 var(--dx-mono);
+  color: var(--dx-error);
+  pointer-events: none;
+  user-select: none;
+}
+
 /* A drawing the code produced is just the drawing, on the page. */
 .dx-output-rendered {
   margin: 0 0 1.15rem;

@@ -66,6 +66,7 @@ fn normalize_block(block: &Block, index: usize, registry: &mut IdRegistry) -> Bl
         }
         "image" => {
             normalized.src = js_trim(&block.src).to_string();
+            normalized.for_block = js_trim(&block.for_block).to_string();
             normalized.alt = js_trim(&block.alt).to_string();
         }
         "checklist" => {

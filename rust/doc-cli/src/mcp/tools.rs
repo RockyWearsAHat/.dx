@@ -294,7 +294,12 @@ fn write_tool() -> Value {
                         ::paragraph id=intro\\nSome text.\\n::end\n\
                         ::bulleted-list id=steps\\n- one\\n- two\\n::end\n\
                         ::code id=demo lang=python run deps=\"requests\"\\nprint(1)\\n::end\n\
-                        A code block marked `run` is executed by dx_run.",
+                        A code block marked `run` is executed by dx_run. A picture a run \
+                        produces belongs on an ::image block naming its producer — \
+                        ::image src=frames/one.png for=demo — so the page vouches for \
+                        its freshness (a failed or unrun producer is called out on the \
+                        figure). Embedded image files are capped at 8MB; the save warns \
+                        about an oversized one (capture at scale 1, not 2).",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -347,7 +352,11 @@ fn edit_tool() -> Value {
         "name": "dx_edit",
         "description": "Replace the body of one block, leaving every other block byte-for-byte \
                         unchanged. This is the safe way to edit a long document. Get block ids \
-                        from dx_outline or from dx_source with ids=true. Editing a runnable \
+                        from dx_outline or from dx_source with ids=true. Pass `header` to also \
+                        retype the block's `::kind attrs` opening line — the way to change a \
+                        block's kind or any attribute (src=, reads=, writes=, run, for=) in \
+                        one call; never rewrite a whole document with dx_write to change one \
+                        attribute. Editing a runnable \
                         code block RUNS IT immediately, approving the code you just wrote — \
                         the edit is the review, exactly as the editing surface runs a field \
                         the moment it closes — and the fresh output is folded into the \
@@ -359,6 +368,14 @@ fn edit_tool() -> Value {
                 "path": path_property(),
                 "block": { "type": "string", "description": "Id of the block to replace." },
                 "text": { "type": "string", "description": "New body text for the block." },
+                "header": {
+                    "type": "string",
+                    "description": "New `::kind attrs` opening line for the block, e.g. \
+                                    `::code lang=py run reads=src writes=target`. The body \
+                                    is still `text`. The block keeps its id unless the \
+                                    header states one; an empty string retypes the block \
+                                    as plain prose. Omit to leave the header untouched."
+                },
                 "run": {
                     "type": "boolean",
                     "description": "Run a runnable block after the edit, approving the new \

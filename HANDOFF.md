@@ -10,19 +10,41 @@ Last updated: 2026-08-07
 
 Everything green, everything current, proven mechanically:
 
-- `cargo test` **828/828** (attacks 18/18 among them), clippy `-D warnings` clean,
+- `cargo test` **834/834** (attacks 18/18 among them), clippy `-D warnings` clean,
   `fmt --check` clean, both node suites 34/34, fixture corpus and drift guard green.
-- `dx run dev.dx`: all five gates ok — this wave's `rust/` edit re-ran exactly the three
-  gates that read it (engine, lints, surfaces); corpus and page-contract stayed cached.
-- Release binary reinstalled to `~/.local/bin/dx` (**rm + cp**, not cp-in-place — macOS
-  SIGKILLs a cp over a running signed binary), both wasm engines rebuilt
-  (`editor/build.sh`).
+- `dx run dev.dx`: engine/lints/surfaces re-ran on this wave's edits and passed; corpus
+  and page-contract stayed cached.
+- Release binary reinstalled to `~/.local/bin/dx`, both wasm engines rebuilt
+  (`editor/build.sh`); the running MCP server picks the new binary up itself (part 41).
 
-**One last manual restart:** running MCP servers predate the drift check below, so restart
-the assistant once more. After that the class is closed — servers pick up new binaries
-themselves.
+## This wave, part 42: the picture that names its producer, and the method said out loud
 
-## This wave, part 41: the server that stays current, and the search that answers
+A field session (screenshots, 2026-08-07) built its harness around a hand-managed PNG
+gallery — 2× captures against the embed limit, freshness by path convention — and its
+own postmortem named four product gaps. All four closed, plus the root cause:
+
+- **`dx_edit` takes `header`.** Lands on `edit::replace_block` (same op as
+  `dx set --header`), so changing a block's kind or one attribute over MCP is one call —
+  the review→full-`dx_write`→re-grant dance is gone. Focus id returned; a header that
+  renames says so in the reply.
+- **`::image for=<run-block-id>`** ties a picture to the run that produces its file.
+  Parse/stringify/normalize carry it (additive — unset writes nothing);
+  `render::html::image_doubt` judges it from the document alone: producer missing /
+  never ran / failed → the figure itself is called out (`dx-image-doubt`, red marginal
+  note, same dress as a failed run). Green producer → plain picture. Freshness is the
+  engine's claim now, not adjacency. Contract § image attrs + README updated.
+- **The 8 MB embed limit surfaces at save.** `resolve::MAX_IMAGE_BYTES` is public;
+  `workspace::oversized_image_warnings` warns from `dx_write`, `dx_edit`, and `dx set`
+  the moment a stored `::image` names an oversized local file — the render-time refusal
+  stays, but nobody meets it first anymore. Limit documented in the contract and the
+  `dx_write` schema.
+- **The handshake teaches the method, not just the tools.** `initialize()` instructions
+  rewritten: dx is the working method — index, harness, proof, memory — with named
+  sections (ORIENT / READ ECONOMY / THE HARNESS / RESULTS LIVE IN THE DOCUMENT), the
+  for= rule, the header rule, and "a gallery of hand-managed images proves nothing and
+  is the smell that you have left the method." Assertions pin every load-bearing phrase.
+
+## Part 41: the server that stays current, and the search that answers
 
 The field sessions' efficiency complaints (screenshots, 2026-08-07), fixed at the root:
 
@@ -105,6 +127,6 @@ documented grant laws, directory `reads=`, and an in-document image loop.
 - **Driving DX.app from automation:** post real `CGEvent`s — AppleScript's System Events
   click never reaches the DOM and makes a broken editor look like a working one.
 
-Next step: restart the assistant once (the last time this is ever needed — see part 41),
-then let a field session measure the new economy: search-with-answer and per-block image
-reads against the part-40 baseline of ~10 calls before the first edit.
+Next step: let a field session rebuild its gallery on the new primitives — `::image for=`
+on every run-produced frame, attrs changed via `dx_edit header` — and confirm the
+handshake's method text steers it away from hand-managed images without being told.
