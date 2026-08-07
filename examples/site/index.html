@@ -95,15 +95,16 @@
         <label class="field"><span class="label">where we confirm</span><input type="email" name="email" autocomplete="email" required></label>
         <label class="field"><span class="label">which night</span>
           <select name="night">
-            <option>Friday — nine of twelve places left</option>
-            <option>Saturday — four of twelve places left</option>
-            <option>Next Friday — all twelve open</option>
+            <option value="2026-11-06">Fri 6 Nov — moonrise 01:40, nine of twelve places</option>
+            <option value="2026-11-07">Sat 7 Nov — moonrise 02:50, four places left</option>
+            <option value="2026-11-13w">Fri 13 Nov — new moon, full — joins the waitlist</option>
+            <option value="2026-11-20">Fri 20 Nov — moon sets by seven, all twelve open</option>
           </select>
         </label>
         <label class="field"><span class="label">how many of you</span><input type="number" name="party" inputmode="numeric" min="1" max="12" value="2"></label>
         <button class="book" type="submit">Book a night</button>
       </form>
-      <p class="visit-aside">We reply the same evening. If the cloud wins, your booking rolls to the next clear night — nothing to rebook, nothing to pay.</p>
+      <p class="visit-aside">We reply the same evening. If the cloud wins, your booking rolls to the next clear night — nothing to rebook, nothing to pay. Each night stops at twelve; book a full one and you hold the first place freed.</p>
       <p class="visit-terms label">£14 · UNDER-16S FREE · WARM ROOM, COLD DOME</p>
     </div>
   </div>

@@ -1,8 +1,7 @@
 /* Hollow Fell — one stylesheet, one night.
-   The palette is the same four values the plan document specifies; change one here
-   and the site changes everywhere, which is what lets the plan's verify block hold
-   this file to the spec. No JavaScript anywhere: the page is paper, not a program —
-   even the red-torch switch is a checkbox the stylesheet listens to. */
+   The palette is the plan document's four values; change one and the site changes
+   everywhere, which lets the plan's verify block hold this file to the spec.
+   No JavaScript: the page is paper, not a program. */
 
 :root {
   --night: #101820;      /* carbon paper — the ground everything sits on */
@@ -33,9 +32,8 @@ body {
 }
 
 /* ————— red torch: the site keeps its own dark-sky code —————
-   Past the gate it's red light only, so the page has the same switch the fell does.
-   A checkbox in the masthead, no script: the palette re-maps, the photographs go
-   to dim red, and dark adaptation survives reading the almanac. */
+   A checkbox in the masthead, no script: the palette re-maps, the photographs
+   go dim red, and dark adaptation survives reading the almanac. */
 
 .torch-input { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 
@@ -331,9 +329,8 @@ section { padding: clamp(64px, 10vw, 120px) clamp(20px, 5vw, 56px); }
 }
 
 /* ————— the night, drawn to scale —————
-   Sixteen hours, 16:00 to 08:00, one band: dusk falls, the sky is properly dark
-   until moonrise washes it, then dawn. Each mark is one line of the almanac,
-   placed where it actually happens. Decoration only — the list above is the record. */
+   16:00 to 08:00, one band: dusk, proper dark, moonrise, dawn. Each mark is one
+   line of the almanac. Decoration only — the list above is the record. */
 
 .night-bar { margin: clamp(44px, 6vw, 72px) 0 0; grid-column: 1 / -1; }
 
@@ -644,9 +641,8 @@ footer {
 /* ————— print: the almanac rides on the dashboard ————— */
 
 @media print {
-  /* The inks are translucent starlight — near white on paper. Restate them as ink,
-     and every label, tick, and caption follows; printers drop backgrounds, so the
-     night-bar keeps only its printable border. */
+  /* The translucent starlight inks restate as ink and every label follows;
+     printers drop backgrounds, so the night-bar keeps only its border. */
   :root { --starlight: #101820; --ink-dim: #3a3f45; --ink-faint: #6b625a; --ember: #8a5222; --hairline: #ccc; }
   body { background: #fff; color: #101820; }
   .hero, .visit-figure, .journal-grid figure, .skip, .torch, .torch-input, .book { display: none; }
