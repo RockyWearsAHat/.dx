@@ -40,6 +40,11 @@ the operator's desktop) hit the two remaining read-quality defects; both closed 
   `image_text` now renders an embedded image as a one-line stand-in (media type, ~KB,
   where to look), same trade as `view_text`; a file `src` stays a Markdown link. The
   stale comment claiming dx_source skips hydration corrected.
+- **The method is now the stated default.** The MCP handshake opens with the standing
+  rule: every connected agent works in the dx methodology, always, unless specifically
+  requested not to — convenience is not the exemption, an explicit request is. Pinned in
+  `the_handshake_advertises_tools_resources_and_guidance`; README's agent section states
+  the same rule and points at the handshake as the enforcing surface.
 - Feedback triage, recorded: pipefail (#4) was already fixed; folder `reads=` and
   `::image`/8 MB warnings landed in parts 40/42. Still open from the postscript, next
   tier: cheap-write ergonomics (append/insert-after/check over MCP), a blessed `::now`
