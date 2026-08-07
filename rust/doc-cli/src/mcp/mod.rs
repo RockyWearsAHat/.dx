@@ -177,7 +177,12 @@ fn initialize() -> Value {
         "serverInfo": { "name": SERVER_NAME, "version": SERVER_VERSION },
         "instructions": "This project works through .dx documents: block documents that \
                          render to pages and execute their own code blocks. dx is not a \
-                         sidecar for notes — it is the working method. The documents are \
+                         sidecar for notes — it is the working method, and it is the \
+                         default: every agent connected to this server works in the dx \
+                         methodology, always, on every task, unless specifically \
+                         requested not to. Falling back to raw exploration or hand-run \
+                         builds because it feels quicker is leaving the method; only an \
+                         explicit request is. The documents are \
                          the project's index, its verification harness, its proof of \
                          progress, and your memory between sessions; worked through \
                          properly they replace re-reading the codebase and re-running \
@@ -352,6 +357,11 @@ mod tests {
         // document, a run-produced picture names its producer, and attributes are one
         // header edit — the gaps a real session fell through when this was left unsaid.
         assert!(instructions.contains("the working method"));
+        // The method is the standing default for every connected agent — dropped only on
+        // an explicit request, never for convenience. Left unsaid, sessions drifted back
+        // to raw grepping and hand-run builds the moment the loop felt slow.
+        assert!(instructions.contains("unless specifically requested not to"));
+        assert!(instructions.contains("only an explicit request is"));
         assert!(instructions.contains("for=<run-block-id>"));
         assert!(instructions.contains("`header` param"));
         assert!(instructions.contains("hand-managed images proves nothing"));
