@@ -182,7 +182,10 @@ fn initialize() -> Value {
                          methodology, always, on every task, unless specifically \
                          requested not to. Falling back to raw exploration or hand-run \
                          builds because it feels quicker is leaving the method; only an \
-                         explicit request is. The documents are \
+                         explicit request is. Speak minimally and work constantly: act on \
+                         what the task requires and implies — judged from everything \
+                         understood so far, not only the latest message — and let the \
+                         documents carry the explanation. The documents are \
                          the project's index, its verification harness, its proof of \
                          progress, and your memory between sessions; worked through \
                          properly they replace re-reading the codebase and re-running \
@@ -191,7 +194,8 @@ fn initialize() -> Value {
                          the index, edit through blocks, and let recorded verdicts prove \
                          each claim, so a task finishes in one pass and the next session \
                          inherits proof instead of redoing work.\n\n\
-                         ORIENT. dx_list first; read index.dx if it exists. If dx_list \
+                         ORIENT. Every codebase you work in gets indexed — always. \
+                         dx_list first; read index.dx if it exists. If dx_list \
                          finds no documents, run dx_index — it scaffolds index.dx from the \
                          file tree — then read the scaffold whole and improve it as you \
                          learn (replace TODOs, add `::code src=<path>` blocks for the \
@@ -220,9 +224,22 @@ fn initialize() -> Value {
                          id — an edited runnable \
                          block runs at once, output fresh — and its `header` param \
                          retypes the `::kind attrs` line, so changing an attribute never \
-                         costs a document rewrite (dx_write is for new documents). A task \
+                         costs a document rewrite (dx_write is for new documents). \
+                         Planning, creation, and verification are one motion, not three \
+                         phases: dx_edit writes the intent and the code in one block, the \
+                         edit runs it, dx_read shows the result — three calls, and the \
+                         document is already the proof. A task \
                          is complete when its document proves it, not when the code looks \
                          done.\n\n\
+                         THE DOCUMENTS ARE THE MEMORY. Everything needed to work on the \
+                         project lives in its documents — decisions, constraints, \
+                         findings, dead ends — written the moment they form and linked \
+                         across documents, so any fact is one search away and nothing is \
+                         ever re-derived. Keeping them current is your responsibility, \
+                         always: a change that stales a document updates it in the same \
+                         sweep, and a claim worth keeping is recorded as a run block whose \
+                         verdict proves it — that is what keeps this memory factual \
+                         instead of a pile of notes that drift from the code.\n\n\
                          RESULTS LIVE IN THE DOCUMENT. Run output folds in as ::output, \
                          fingerprinted in place. A picture a run produces — a screenshot, \
                          a rendered frame — is an `::image src=<file> for=<run-block-id>` \
@@ -362,6 +379,17 @@ mod tests {
         // to raw grepping and hand-run builds the moment the loop felt slow.
         assert!(instructions.contains("unless specifically requested not to"));
         assert!(instructions.contains("only an explicit request is"));
+        // Work is judged from everything understood, not the latest message alone; the
+        // reply stays thin because the documents carry the explanation.
+        assert!(instructions.contains("not only the latest message"));
+        assert!(instructions.contains("Speak minimally and work constantly"));
+        // Indexing is unconditional, the documents are the project's factual memory the
+        // agent keeps current, and plan/create/verify is one three-call motion.
+        assert!(instructions.contains("gets indexed — always"));
+        assert!(instructions.contains("THE DOCUMENTS ARE THE MEMORY"));
+        assert!(instructions.contains("in the same sweep"));
+        assert!(instructions.contains("one search away"));
+        assert!(instructions.contains("three calls"));
         assert!(instructions.contains("for=<run-block-id>"));
         assert!(instructions.contains("`header` param"));
         assert!(instructions.contains("hand-managed images proves nothing"));
