@@ -32,8 +32,8 @@ There is a single parser and a single renderer (`rust/doc-core`), compiled nativ
 1. Can prose reach the page without being escaped?
 2. Can author markup (`::html`, `::svg`) keep a `<script>`, an `on*` handler, or a
    `javascript:` URL?
-3. Can in-document CSS (`::style`, `::stylesheet`) affect rendering when `document_css` is
-   off?
+3. Can in-document CSS (`::style`) fetch anything — a `url(host)`, an `@import`, an
+   `expression(` — instead of only dressing the page?
 4. Does the rendered page reference anything external — a font, an image, a stylesheet?
 5. Does non-ASCII prose (em dashes, accents, emoji, CJK) render, or does byte-index slicing
    panic on it?
@@ -41,12 +41,22 @@ There is a single parser and a single renderer (`rust/doc-core`), compiled nativ
 ## Execution Safety
 
 1. Can reading, rendering, outlining, or screenshotting a document execute anything?
-2. Is execution still reachable only through `dx run` and the `dx_run` tool?
+2. Is execution still reachable only through its exactly-three paths — `dx run`/`dx_run`,
+   the agent read tools refreshing code *this machine already approved*, and `dx_edit`
+   running the block it just rewrote?
 3. Does `DX_NO_EXEC=1` still stop every block?
 4. Can a block outlive its timeout, or wedge the process by filling a pipe?
 5. Is a missing toolchain reported as a sentence naming what to install, rather than a crash?
-6. Does the output fingerprint still change when the code or its dependencies change?
-7. Is an `::output` block still inert data — never a thing that can run?
+6. Does the output fingerprint still change when the code, its dependencies, or anything a
+   `reads=` file or folder holds changes?
+7. Does approval still name only the code and its powers — runner, deps, code, the declared
+   `reads=` paths, the `writes=` grant — never the data, so new content under a declared
+   folder re-runs without re-opening review?
+8. Does every new capability a block can be granted join the approval fingerprint, so
+   review prints it and widening it re-opens review?
+9. Can unreviewed code run on any path without `--force` announcing itself in the output?
+10. Is an `::output` block still inert data — never a thing that can run, and never a thing
+    that can approve the code above it?
 
 ## Storage and Canonicalization
 

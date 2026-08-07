@@ -57,6 +57,21 @@ pub trait Resolver {
     fn binary(&self, _path: &str) -> Option<Vec<u8>> {
         None
     }
+    /// Every file under the directory at `path`, as `(path, text)` pairs whose paths
+    /// stay relative to the document's own folder, sorted by path — how a `reads=`
+    /// naming a folder is expanded into the files that decide staleness.
+    ///
+    /// Hidden entries and the caches a build regenerates (`target`, `node_modules`) are
+    /// left out: an input tree is its sources, and a folder that changes on every run
+    /// would keep its own verdict permanently stale. Bytes that are not UTF-8 arrive
+    /// lossily decoded, which loses nothing for the one thing this feeds — a fingerprint.
+    ///
+    /// Defaulted to `None` so hosts that cannot walk a folder keep working unchanged;
+    /// where it stays `None`, a directory declared as a read fails with the same
+    /// sentence a missing file does.
+    fn files_under(&self, _path: &str) -> Option<Vec<(String, String)>> {
+        None
+    }
 }
 
 /// A resolver that holds nothing, for surfaces that render without a workspace.

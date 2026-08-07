@@ -293,13 +293,6 @@ pub fn run_document(
         }
 
         let deps = parse_deps(&block.deps);
-        let reads = match declared_reads(block, resolver) {
-            Ok(reads) => reads,
-            Err(sentence) => {
-                refuse(block, &sentence, options, &mut runs, &mut outputs);
-                continue;
-            }
-        };
         let writes = match declared_writes(block) {
             Ok(writes) => writes,
             Err(sentence) => {
@@ -307,8 +300,23 @@ pub fn run_document(
                 continue;
             }
         };
+        let reads = match declared_reads(block, resolver, &writes) {
+            Ok(reads) => reads,
+            Err(sentence) => {
+                refuse(block, &sentence, options, &mut runs, &mut outputs);
+                continue;
+            }
+        };
         let fingerprint = fingerprint(runner, &block.text, &deps, &reads, &writes);
-        let read_paths: Vec<String> = reads.iter().map(|(path, _)| path.clone()).collect();
+        // Approval names the *declared* paths, never a directory's current expansion —
+        // a file appearing under a declared folder is new data, not a new power.
+        let read_paths = match declared_read_paths(&block.reads) {
+            Ok(paths) => paths,
+            Err(sentence) => {
+                refuse(block, &sentence, options, &mut runs, &mut outputs);
+                continue;
+            }
+        };
         let approval = approval_fingerprint(runner, &block.text, &deps, &read_paths, &writes);
         let existing = existing_output(&document, index, &block.id);
 
@@ -477,21 +485,37 @@ fn existing_output<'a>(document: &'a Document, index: usize, id: &str) -> Option
 
 /// The files a block declares it reads (`reads=`), each resolved to its current text.
 ///
-/// Paths are comma-separated and obey the reference path law. A path the law refuses, or
-/// a file the resolver cannot produce, is an error sentence — a fingerprint that silently
-/// omitted a missing input would let the record claim "no changes" about content it never
-/// saw, which is the lie `reads=` exists to prevent.
-fn declared_reads(block: &Block, resolver: &dyn Resolver) -> Result<Vec<(String, String)>, String> {
+/// Paths are comma-separated and obey the reference path law; a path may name a file or
+/// a folder. A folder expands to every file under it ([`Resolver::files_under`] — sorted,
+/// hidden entries and build caches left out), minus anything under the block's own
+/// `writes=` grant: what a block writes is its result, and a result that joined the
+/// fingerprint would stale the block's own verdict forever. A path the law refuses, or
+/// one the resolver can produce neither as file nor folder, is an error sentence — a
+/// fingerprint that silently omitted a missing input would let the record claim
+/// "no changes" about content it never saw, which is the lie `reads=` exists to prevent.
+fn declared_reads(
+    block: &Block,
+    resolver: &dyn Resolver,
+    writes: &[String],
+) -> Result<Vec<(String, String)>, String> {
     let mut reads = Vec::new();
     for confined in declared_read_paths(&block.reads)? {
-        let Some(text) = resolver.file(&confined) else {
+        if let Some(text) = resolver.file(&confined) {
+            reads.push((confined, text));
+        } else if let Some(tree) = resolver.files_under(&confined) {
+            let granted = |path: &str| {
+                writes
+                    .iter()
+                    .any(|w| path == w || path.starts_with(&format!("{w}/")))
+            };
+            reads.extend(tree.into_iter().filter(|(path, _)| !granted(path)));
+        } else {
             return Err(format!(
                 "{confined} could not be read here — the block declares it with `reads=`, \
                  and its content is part of what decides whether the recorded output is \
                  still current. Check the path against the document's folder."
             ));
-        };
-        reads.push((confined, text));
+        }
     }
     Ok(reads)
 }
@@ -1595,16 +1619,81 @@ mod tests {
             text: "print(1)".into(),
             ..Block::default()
         };
-        let before = declared_reads(&block, &provided).expect("resolves");
+        let before = declared_reads(&block, &provided, &[]).expect("resolves");
         let recorded = fingerprint("python", &block.text, &[], &before, &[]);
 
         let mut edited = resolve::Provided::new();
         edited.add_file("site.css", "body{color:red}");
-        let after = declared_reads(&block, &edited).expect("resolves");
+        let after = declared_reads(&block, &edited, &[]).expect("resolves");
         assert_ne!(
             recorded,
             fingerprint("python", &block.text, &[], &after, &[])
         );
+    }
+
+    /// A resolver whose folder walk answers, standing in for the CLI's.
+    struct Walked(Vec<(String, String)>);
+
+    impl Resolver for Walked {
+        fn file(&self, _path: &str) -> Option<String> {
+            None
+        }
+        fn document(&self, _path: &str) -> Option<String> {
+            None
+        }
+        fn files_under(&self, path: &str) -> Option<Vec<(String, String)>> {
+            (path == "data").then(|| self.0.clone())
+        }
+    }
+
+    #[test]
+    fn a_reads_folder_expands_to_its_files_and_stales_with_them() {
+        let block = Block {
+            id: "check".into(),
+            language: "bash".into(),
+            run: true,
+            reads: "data".into(),
+            text: "cat data/a.txt".into(),
+            ..Block::default()
+        };
+        let before = Walked(vec![("data/a.txt".into(), "one".into())]);
+        let reads = declared_reads(&block, &before, &[]).expect("resolves");
+        assert_eq!(reads, vec![("data/a.txt".to_string(), "one".to_string())]);
+        let recorded = fingerprint("bash", &block.text, &[], &reads, &[]);
+
+        // A file appearing under the declared folder is a change the record must see.
+        let grown = Walked(vec![
+            ("data/a.txt".into(), "one".into()),
+            ("data/b.txt".into(), "two".into()),
+        ]);
+        let after = declared_reads(&block, &grown, &[]).expect("resolves");
+        assert_ne!(recorded, fingerprint("bash", &block.text, &[], &after, &[]));
+
+        // But not a change to the block's powers: approval names the declared path.
+        let paths = declared_read_paths(&block.reads).expect("lawful");
+        assert_eq!(
+            approval_fingerprint("bash", &block.text, &[], &paths, &[]),
+            approval_fingerprint("bash", &block.text, &[], &paths, &[])
+        );
+        assert_eq!(paths, vec!["data".to_string()]);
+    }
+
+    #[test]
+    fn a_reads_folder_leaves_out_what_the_block_writes() {
+        let block = Block {
+            id: "check".into(),
+            language: "bash".into(),
+            run: true,
+            reads: "data".into(),
+            text: "true".into(),
+            ..Block::default()
+        };
+        let walked = Walked(vec![
+            ("data/a.txt".into(), "input".into()),
+            ("data/out/result.txt".into(), "changes every run".into()),
+        ]);
+        let reads = declared_reads(&block, &walked, &["data/out".to_string()]).expect("resolves");
+        assert_eq!(reads, vec![("data/a.txt".to_string(), "input".to_string())]);
     }
 
     #[test]
