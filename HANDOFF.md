@@ -10,15 +10,52 @@ Last updated: 2026-08-07
 
 Everything green, everything current, proven mechanically:
 
-- `cargo test` **847/847** (attacks 18/18 among them), clippy `-D warnings` clean,
-  `fmt --check` clean, both node suites 34/34, fixture corpus and drift guard green.
-- `dx run dev.dx` after this wave's edits: engine (345+49) and lints re-ran — exactly the
-  two gates whose `reads=rust` staled — and passed; surfaces/corpus/page-contract cached.
-- Release binary rebuilt (`cargo build --release -p doc-cli`); the running MCP server
-  picks the new binary up itself (part 41). Verified by eye: `dx_read block=pipeline`
-  on `dev.dx` — the small `host-shell` edge label, previously threshold-ink, is legible.
+- `cargo test` green every crate (doc-core **347**, doc-cli **285** among them), clippy
+  `-D warnings` clean, `fmt --check` clean, both node suites 34/34 against rebuilt wasm,
+  fixture corpus and drift guard green.
+- `dx run dev.dx` after this wave's edits: engine (347+49), lints, and surfaces re-ran —
+  exactly the gates staled by the rust and editor trees — and passed; corpus and
+  page-contract cached.
+- Release binary rebuilt and installed to `~/.local/bin/dx` on a fresh inode (see the
+  part-45 operational note); `examples/example_site_plan.dx` verify: **26 of 26 claims
+  hold**, re-proven by staleness alone after the last trim.
 
-## This wave, part 44: the inversion — work lives in the document, and small thoughts are cheap
+## This wave, part 45: the site test — the document's own records drove the revision
+
+The example-site field test ("write the example site with the method, revise if there are
+issues"), run entirely through `examples/example_site_plan.dx`:
+
+- **The document said what was missing, and the revision shipped it.** The unchecked
+  audience box (a teacher planning a term-time visit) and the sitemap's "school nights
+  still to sketch" were the spec. Shipped: a School Nights section — the year-bar as the
+  night-bar's sibling instrument (months below, an ember "dark by six" bracket, gradient
+  as data), free-for-valley-schools, a mailto letter route — plus a waning-gibbous phase
+  glyph on the almanac's moonrise line. Board gained `school-view`; audience box ticked,
+  sitemap and polish updated in the same sweep. Verify grew to **26 claims, all holding**,
+  including the 30 KB weight cap the page was trimmed back under (29,986 bytes).
+- **The verify block had silently lost its `reads=` declaration** — site edits no longer
+  staled its verdict, the exact dishonesty the doc brags it prevents. Restored
+  (`reads=site/index.html,site/site.css`); the very next file edit re-ran the proof by
+  itself, no `--force`. Watch for this: a header retype that drops attrs is invisible
+  until staleness stops working.
+- **Engine defect found on the way, fixed at the root:** `section()` sliced a hidden
+  board-node block in, but the text renderer skipped it — so MCP `dx_source section=<node>`
+  answered *empty where content exists* while CLI `--block` answered. Now a non-heading
+  block named by the selector is revealed in the slice (naming it is the ask; the slice is
+  a render view, never serialized — heading sections keep their nodes hidden). Pinned:
+  `a_section_naming_a_hidden_block_reveals_it`,
+  `a_heading_section_keeps_its_board_nodes_hidden`. Proven over a fresh `dx mcp` stdio
+  session: the brief answers its text.
+- **Operational note that cost a server:** `cp` over the *running* `~/.local/bin/dx`
+  inode gets the process SIGKILLed on macOS (stale code-signature cache) and poisons the
+  file until replaced on a fresh inode (`rm` + `cp`, or rename). The part-41 re-exec
+  assumes an atomic rename; an in-place overwrite is not one. Candidate hardening: an
+  `install`/setup path that always renames.
+- Gates: doc-core 347 (two new), doc-cli 285, clippy `-D warnings` clean, fmt clean, both
+  node suites 34/34 against rebuilt wasm, `dx run dev.dx` green with only staled gates
+  re-running.
+
+## Part 44: the inversion — work lives in the document, and small thoughts are cheap
 
 The operator's scratchbook doctrine ("context is a cache; the document is the memory"),
 built so it is the path of least resistance rather than discipline:
