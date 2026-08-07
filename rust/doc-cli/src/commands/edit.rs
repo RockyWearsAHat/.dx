@@ -104,17 +104,33 @@ fn set_in(args: &Args, cache_root: &Path) -> Result<String, String> {
     if args.present("header") {
         let header = args.value("header").unwrap_or_default();
         let (updated, focus) = edit::replace_block(&workspace::read(&path)?, id, header, &body)?;
-        workspace::save(&path, &parse(&updated))?;
+        let document = parse(&updated);
+        workspace::save(&path, &document)?;
         let note = edit_is_the_review(&updated, &focus, cache_root);
+        let warnings = joined_warnings(&document, &path);
         // The replacement's id, bare, the way `dx insert` answers: it is the block the
         // caller's cursor belongs in next, and a surface reads it straight off stdout.
-        return Ok(format!("{focus}\n{note}"));
+        return Ok(format!("{focus}\n{note}{warnings}"));
     }
 
     let updated = edit::set_block(&workspace::read(&path)?, id, &body)?;
-    workspace::save(&path, &parse(&updated))?;
+    let document = parse(&updated);
+    workspace::save(&path, &document)?;
     let note = edit_is_the_review(&updated, id, cache_root);
-    Ok(format!("updated `{id}` in {}\n{note}", path.display()))
+    let warnings = joined_warnings(&document, &path);
+    Ok(format!(
+        "updated `{id}` in {}\n{note}{warnings}",
+        path.display()
+    ))
+}
+
+/// The save-time image warnings, one per line, ready to append to a command's answer —
+/// empty when every embedded image fits the limit, which is almost always.
+fn joined_warnings(document: &doc_core::model::Document, path: &Path) -> String {
+    workspace::oversized_image_warnings(document, path)
+        .into_iter()
+        .map(|warning| format!("{warning}\n"))
+        .collect()
 }
 
 /// The edit is the review: a runnable code block this local command just rewrote is

@@ -335,7 +335,7 @@ pub(super) fn block_html(
         "nav" => nav_html(block, document, values),
         "code" => code_html(block, &text, options.collapse_code),
         "output" => output_html(block, &text),
-        "image" => image_html(block, values),
+        "image" => image_html(block, document, values),
         "rule" => format!("<hr{}>", attributes(block, &[])),
         "svg" => {
             let svg = extract_svg(&text);
@@ -622,7 +622,13 @@ fn rendered_output_html(block: &Block, text: &str) -> String {
 }
 
 /// Render an image, using the alt text as both alt attribute and caption.
-fn image_html(block: &Block, values: &Values) -> String {
+///
+/// An image carrying `for=` claims a runnable block's run produced its file. The claim is
+/// checked here, from nothing but the document: while that block's recorded `::output`
+/// says `ok`, the picture is vouched for and shown plain; a missing producer, a producer
+/// that has not run, or a failed run is called out on the figure itself — the reader must
+/// never take stale pixels as proof two blocks after a red verdict.
+fn image_html(block: &Block, document: &Document, values: &Values) -> String {
     if block.src.is_empty() {
         return String::new();
     }
@@ -632,12 +638,42 @@ fn image_html(block: &Block, values: &Values) -> String {
     } else {
         format!("\n<figcaption>{}</figcaption>", inline_html(&alt))
     };
+    let (classes, note) = match image_doubt(block, document) {
+        Some(doubt) => (
+            vec!["dx-image-doubt"],
+            format!(" data-note=\"{}\"", escape_html(&doubt)),
+        ),
+        None => (Vec::new(), String::new()),
+    };
     format!(
-        "<figure{}>\n<img src=\"{}\" alt=\"{}\">{caption}\n</figure>",
-        attributes(block, &[]),
+        "<figure{}{note}>\n<img src=\"{}\" alt=\"{}\">{caption}\n</figure>",
+        attributes(block, &classes),
         escape_html(&block.src),
         escape_html(&alt)
     )
+}
+
+/// Why an image's `for=` claim cannot be vouched for, if it cannot — `None` means the
+/// producing block's recorded output says `ok` and the picture stands proven.
+fn image_doubt(block: &Block, document: &Document) -> Option<String> {
+    if block.for_block.is_empty() {
+        return None;
+    }
+    let producer = &block.for_block;
+    if !document.blocks.iter().any(|other| other.id == *producer) {
+        return Some(format!("{producer} is not in this document"));
+    }
+    let Some(output) = document
+        .blocks
+        .iter()
+        .find(|other| other.kind == "output" && other.for_block == *producer)
+    else {
+        return Some(format!("{producer} has not run"));
+    };
+    if output.status == "error" || output.exit != 0 {
+        return Some(format!("{producer} failed — picture may be stale"));
+    }
+    None
 }
 
 /// The viewport width a `::view` frames its page at when the block states none.
@@ -1370,6 +1406,49 @@ mod tests {
         let out = fragment("::output id=o for=c status=error exit=2\nboom\n::end\n");
         assert!(out.contains("dx-output-error"));
         assert!(out.contains("data-note=\"error · exit 2\""), "{out}");
+    }
+
+    #[test]
+    fn an_image_vouched_for_by_a_green_run_renders_plain() {
+        let out = fragment(
+            "::code id=frames lang=sh run\nmake frames\n::end\n\n\
+             ::output id=frames-output for=frames status=ok\ndone\n::end\n\n\
+             ::image id=shot src=frames/one.png for=frames\n::end\n",
+        );
+        assert!(!out.contains("dx-image-doubt"), "{out}");
+        assert!(!out.contains("data-note=\"frames"), "{out}");
+    }
+
+    #[test]
+    fn an_image_whose_producer_failed_is_called_out_on_the_figure() {
+        let out = fragment(
+            "::code id=frames lang=sh run\nmake frames\n::end\n\n\
+             ::output id=frames-output for=frames status=error exit=1\nboom\n::end\n\n\
+             ::image id=shot src=frames/one.png for=frames\n::end\n",
+        );
+        assert!(out.contains("dx-image-doubt"), "{out}");
+        assert!(
+            out.contains("data-note=\"frames failed — picture may be stale\""),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn an_image_whose_producer_never_ran_or_is_missing_is_called_out() {
+        let unrun = fragment(
+            "::code id=frames lang=sh run\nmake frames\n::end\n\n\
+             ::image id=shot src=frames/one.png for=frames\n::end\n",
+        );
+        assert!(
+            unrun.contains("data-note=\"frames has not run\""),
+            "{unrun}"
+        );
+
+        let missing = fragment("::image id=shot src=frames/one.png for=ghost\n::end\n");
+        assert!(
+            missing.contains("data-note=\"ghost is not in this document\""),
+            "{missing}"
+        );
     }
 
     #[test]

@@ -126,6 +126,16 @@ mod tests {
     }
 
     #[test]
+    fn an_image_round_trips_its_producer_and_unset_for_writes_nothing() {
+        // `for=` ties the picture to the run that produces its file. Additive rule: an
+        // image that states no producer must not gain the attribute on its next save.
+        let tied = "::image id=shot src=frames/one.png for=frames\nthe first frame\n::end\n";
+        assert_eq!(round_trip(tied), tied);
+        let bare = "::image id=shot src=frames/one.png\nthe first frame\n::end\n";
+        assert_eq!(round_trip(bare), bare);
+    }
+
+    #[test]
     fn a_nav_block_round_trips_including_an_empty_one() {
         // The empty body is the feature — it means "this document's contents" — so the
         // writer must not fill it in, the way an empty list gets a placeholder item.

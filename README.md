@@ -149,8 +149,11 @@ the method end to end — brief, board, shipped site, and the verify block that 
 into a measured claim: a run block prices every read route in bytes against this repository's
 own documents and fails if the cheap route ever stops being cheap. Work that is judged by
 pictures lives inside the document too: an `::image src=` block embeds the file's current
-bytes on every surface, so a frame-review loop — capture, look, fix — keeps its captures on
-the page it is reviewing. [`dev.dx`](dev.dx) is the method applied to this repository
+bytes on every surface (capped at 8 MB — capture at scale 1), so a frame-review loop —
+capture, look, fix — keeps its captures on the page it is reviewing, and `for=<run-block-id>`
+names the run that produces the file, so the page itself vouches for the picture's
+freshness: a failed or unrun producer is called out on the figure instead of showing stale
+pixels as proof. [`dev.dx`](dev.dx) is the method applied to this repository
 itself: its gates run the engine suites, the lints, both JS surface suites, and the
 rendered-page contract inside the sandbox, each gate declaring the tree it judges with
 `reads=`, so editing any source stales exactly the verdicts that read it.

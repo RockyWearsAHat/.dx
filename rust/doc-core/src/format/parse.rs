@@ -97,9 +97,12 @@ fn push_block(blocks: &mut Vec<Block>, block_type: &str, attrs: &[Attr], content
             let flat = parse_list_items(content_lines);
             block.items = build_nested_list_structure(&flat);
         }
-        // Image: `src` is an attribute; the body is the alt text.
+        // Image: `src` is an attribute; the body is the alt text. `for` names the
+        // runnable block whose run produces the pictured file, tying the picture's
+        // freshness to that block's recorded output.
         "image" => {
             block.src = js_trim(attr(attrs, "src")).to_string();
+            block.for_block = js_trim(attr(attrs, "for")).to_string();
             block.alt = content;
         }
         // Checklist: each non-empty line becomes an item; `[x]`/`[ ]` prefixes set `checked`,

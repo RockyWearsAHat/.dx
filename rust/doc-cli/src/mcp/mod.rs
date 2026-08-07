@@ -175,40 +175,57 @@ fn initialize() -> Value {
         "protocolVersion": PROTOCOL_VERSION,
         "capabilities": { "tools": {}, "resources": {} },
         "serverInfo": { "name": SERVER_NAME, "version": SERVER_VERSION },
-        "instructions": "This project uses .dx documents: block documents that render to \
-                         pages and can execute their own code blocks. Treat them as durable, \
-                         token-cheap memory: read recorded results instead of re-deriving \
-                         them. Find before reading: dx_search or dx_list — a search hit \
-                         carries its answer (the best-matching block's id and text), so a \
-                         search that lands is the read. Then dx_outline to \
-                         map a document as one row per block, and always index into the \
-                         document — read one `section` (any block id), never page through \
-                         the rest. Prose and code are cheapest as text: dx_source, a \
-                         fraction of what page images cost. Spend dx_read's images only on \
-                         what text cannot carry — boards, diagrams, charts, rendered views — \
-                         and one block at a time (`block`), never a page sweep. \
-                         Reads are live: stale output of approved code re-runs before you \
-                         see it, so what you read is what the code does now; only \
-                         unreviewed code waits, and the read says so. Edit with dx_edit, \
-                         one block by id — an edited runnable block runs at once, output \
-                         fresh. Save what you learn as documents: `::code src=<path>` \
-                         indexes a file as its current text, never a stale copy, and run \
-                         output is fingerprinted in place, so an index costs one section \
-                         read to consult, forever. Work through documents, not beside \
-                         them: a build or test the project needs lives as a `::code run` \
-                         block granting its build directory with writes= (for example \
-                         writes=target) and declaring what it judges with reads= — files \
-                         or whole folders (reads=src) — so its \
-                         recorded verdict stales mechanically when any input changes \
-                         and re-runs on your next read, so a claim recorded in a document \
-                         is never one you must re-verify by hand. That is the harness, and \
-                         the loop it drives: build, run the verify block, read the verdict, \
-                         fix, repeat — until every claim holds. A task is complete when its \
-                         document proves it, not when the code looks done; the harness \
-                         outlives the task, so the next session inherits the proof instead \
-                         of redoing the work. If dx_list finds no \
-                         documents, offer dx_index: it scaffolds index.dx from the tree — \
-                         read it whole and improve it before other work."
+        "instructions": "This project works through .dx documents: block documents that \
+                         render to pages and execute their own code blocks. dx is not a \
+                         sidecar for notes — it is the working method. The documents are \
+                         the project's index, its verification harness, its proof of \
+                         progress, and your memory between sessions; worked through \
+                         properly they replace re-reading the codebase and re-running \
+                         builds by hand, which is where the order-of-magnitude token and \
+                         time savings live. Whole projects are built this way: orient from \
+                         the index, edit through blocks, and let recorded verdicts prove \
+                         each claim, so a task finishes in one pass and the next session \
+                         inherits proof instead of redoing work.\n\n\
+                         ORIENT. dx_list first; read index.dx if it exists. If dx_list \
+                         finds no documents, run dx_index — it scaffolds index.dx from the \
+                         file tree — then read the scaffold whole and improve it as you \
+                         learn (replace TODOs, add `::code src=<path>` blocks for the \
+                         load-bearing files: they render as the file's current text, never \
+                         a stale copy), so orientation costs one read forever after. Find \
+                         before reading: dx_search — a hit carries the best block's id and \
+                         text, so a search that lands is the read. Map with dx_outline \
+                         (one row per block) and read one `section` with dx_source; never \
+                         page through a document.\n\n\
+                         READ ECONOMY. Prose and code are text: dx_source, a fraction of \
+                         what images cost. Spend dx_read's page images only on what text \
+                         cannot carry — boards, diagrams, charts, rendered views — one \
+                         `block` at a time, never a page sweep. Reads are live: stale \
+                         output of approved code re-runs before you see it, so what you \
+                         read is what the code does now; only unreviewed code waits, and \
+                         the read says so.\n\n\
+                         THE HARNESS. Every claim the work depends on — it compiles, the \
+                         tests pass, the page renders right — lives as a `::code run` \
+                         block declaring what it judges with reads= (files or folders, \
+                         reads=src) and granting its build directory with writes= \
+                         (writes=target). Its recorded verdict stales mechanically when \
+                         any input changes and re-runs on your next read, so a recorded \
+                         claim never needs re-verifying by hand. Build the harness before \
+                         building the thing, then loop: edit, read the verdict, fix, \
+                         repeat — until every claim holds. dx_edit changes one block by \
+                         id — an edited runnable \
+                         block runs at once, output fresh — and its `header` param \
+                         retypes the `::kind attrs` line, so changing an attribute never \
+                         costs a document rewrite (dx_write is for new documents). A task \
+                         is complete when its document proves it, not when the code looks \
+                         done.\n\n\
+                         RESULTS LIVE IN THE DOCUMENT. Run output folds in as ::output, \
+                         fingerprinted in place. A picture a run produces — a screenshot, \
+                         a rendered frame — is an `::image src=<file> for=<run-block-id>` \
+                         so the page itself vouches for its freshness: a failed or unrun \
+                         producer is called out on the figure. A gallery of hand-managed \
+                         images proves nothing and is the smell that you have left the \
+                         method; prefer the verdict, and keep any embedded image under \
+                         8MB (capture at scale 1)."
     })
 }
 
@@ -331,6 +348,13 @@ mod tests {
         // until every claim holds — completion is the document's proof, not an impression.
         assert!(instructions.contains("harness"));
         assert!(instructions.contains("until every claim holds"));
+        // The method is the point: dx is the way the work is done, results live in the
+        // document, a run-produced picture names its producer, and attributes are one
+        // header edit — the gaps a real session fell through when this was left unsaid.
+        assert!(instructions.contains("the working method"));
+        assert!(instructions.contains("for=<run-block-id>"));
+        assert!(instructions.contains("`header` param"));
+        assert!(instructions.contains("hand-managed images proves nothing"));
     }
 
     #[test]

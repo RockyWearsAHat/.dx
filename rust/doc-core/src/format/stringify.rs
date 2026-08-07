@@ -78,9 +78,13 @@ pub(crate) fn block_header(block: &Block) -> String {
             }
             format!("::nav {}", attributes.join(" "))
         }
+        // Unset `for` adds nothing, so no existing `::image` reformats on its next save.
         "image" => {
             if !block.src.is_empty() {
                 attributes.push(format!("src={}", format_attribute_value(&block.src)));
+            }
+            if !block.for_block.is_empty() {
+                attributes.push(format!("for={}", format_attribute_value(&block.for_block)));
             }
             format!("::image {}", attributes.join(" "))
         }

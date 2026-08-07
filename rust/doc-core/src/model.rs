@@ -67,7 +67,10 @@ pub struct Block {
     pub writes: String,
     /// Seconds an executable `code` block may run before it is killed; `0` means default.
     pub timeout: u32,
-    /// Id of the `code` block an `output` block reports on (`for=` attribute).
+    /// Id of the `code` block an `output` block reports on (`for=` attribute). On an
+    /// `image`, the runnable block whose run produces the pictured file: the render
+    /// vouches for the picture only while that block's recorded output says `ok`, and
+    /// calls the image out otherwise — pixels prove nothing by themselves.
     pub for_block: String,
     /// Result of the run recorded on an `output` block: `ok` or `error`.
     pub status: String,

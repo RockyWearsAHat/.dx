@@ -459,7 +459,9 @@ pub fn hydrate(document: &mut Document, resolver: &dyn Resolver) -> Vec<Unresolv
 /// Largest image file hydration will embed. A `data:` URI travels inside every render of
 /// the page — a capture, an export, a tool result — and an unbounded one is a page nothing
 /// can carry ("bound anything sized by untrusted input"; the document names the file).
-const MAX_IMAGE_BYTES: usize = 8 * 1024 * 1024;
+/// Public so a writing surface can warn at save time instead of leaving the reader to
+/// discover the refusal at render.
+pub const MAX_IMAGE_BYTES: usize = 8 * 1024 * 1024;
 
 /// The media type an `::image` may embed, judged by the file's extension.
 ///

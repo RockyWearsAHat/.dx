@@ -59,7 +59,12 @@ Every block accepts `id` and `class`; the attributes below are what each adds.
   the block may write; each is held to the path law, and unset either serializes to
   nothing
 - `output` attrs: `for`, `status`, `exit`, `hash`, `format`
-- `image` attrs: `src`
+- `image` attrs: `src`, `for` — `for` names the runnable block whose run produces the
+  pictured file; the render vouches for the picture only while that block's recorded
+  `::output` says `ok`, and calls the figure out otherwise (`render::html::image_doubt`).
+  Unset `for` serializes to nothing. An embedded file is capped at 8 MB
+  (`resolve::MAX_IMAGE_BYTES`) — an image travels inside the rendered page, so an
+  oversized one is refused with a sentence naming the path
 - `nav` attrs: `label`
 - `rule` attrs: none
 - `html` attrs: none — author markup, rendered through the allow-list in `render::escape`
@@ -194,7 +199,9 @@ page showing it stays current:
   allow-list as `render::escape`'s `data:` images); SVG is a document that can script,
   so it is never inlined and the reference stays as written. A remote URL or a `data:`
   URI in `src` travels exactly as written. An image file the resolver cannot produce is
-  a sentence in the image's alt text, naming the path.
+  a sentence in the image's alt text, naming the path — an oversized one too (8 MB,
+  `resolve::MAX_IMAGE_BYTES`). A picture a run block produces should say so with
+  `for=<block-id>`: freshness becomes the engine's claim, not a path convention's.
 
 The rules (`doc_core::resolve` is the implementation, and there is exactly one):
 

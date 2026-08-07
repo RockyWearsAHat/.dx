@@ -450,12 +450,16 @@ fn write(args: &Value, root: &Path) -> ToolResult {
     let content = required(args, "content")?;
     let document = parse(content);
     workspace::save(&path, &document)?;
-    Ok(vec![text_content(&format!(
+    let mut content = vec![text_content(&format!(
         "Wrote {} ({} blocks). Block ids: {}",
         path.display(),
         document.blocks.len(),
         block_ids(&document)
-    ))])
+    ))];
+    for warning in workspace::oversized_image_warnings(&document, &path) {
+        content.push(text_content(&warning));
+    }
+    Ok(content)
 }
 
 /// `dx_edit` — replace one block's body.
@@ -470,37 +474,59 @@ fn edit(args: &Value, root: &Path) -> ToolResult {
 /// Editing a *runnable* block also runs it, exactly as the editing surface does the
 /// moment a field closes: the hand that typed the code is the review the approval gate
 /// asks for, and the output under new code is stale by definition. `run: false` declines.
+///
+/// `header` retypes the whole block through [`doc_core::edit::replace_block`] — the same
+/// operation a reader performs rewriting the tag line above a block — so changing a
+/// block's kind or one attribute (`src=`, `reads=`, `writes=`, `run`) is one call, never
+/// a rewrite of the document.
 fn edit_in(args: &Value, root: &Path, cache_root: PathBuf) -> ToolResult {
     let path = resolve(required(args, "path")?, root);
     let wanted = required(args, "block")?.trim().trim_start_matches('#');
     let body = required(args, "text")?;
 
-    let mut document = parse(&workspace::read(&path)?);
-    let index = document
-        .blocks
-        .iter()
-        .position(|block| block.id.eq_ignore_ascii_case(wanted))
-        .ok_or_else(|| {
-            format!(
-                "no block named `{wanted}` in {}. Available ids: {}",
-                path.display(),
-                block_ids(&document)
-            )
-        })?;
+    let (document, focus) = if let Some(header) = string(args, "header") {
+        let (updated, focus) =
+            doc_core::edit::replace_block(&workspace::read(&path)?, wanted, header, body)?;
+        (parse(&updated), focus)
+    } else {
+        let mut document = parse(&workspace::read(&path)?);
+        let index = document
+            .blocks
+            .iter()
+            .position(|block| block.id.eq_ignore_ascii_case(wanted))
+            .ok_or_else(|| {
+                format!(
+                    "no block named `{wanted}` in {}. Available ids: {}",
+                    path.display(),
+                    block_ids(&document)
+                )
+            })?;
+        document.blocks[index].text = body.to_string();
+        let focus = document.blocks[index].id.clone();
+        (document, focus)
+    };
 
-    document.blocks[index].text = body.to_string();
-    let runnable = document.blocks[index].kind == "code" && document.blocks[index].run;
+    let index = document.blocks.iter().position(|block| block.id == focus);
+    let runnable =
+        index.is_some_and(|at| document.blocks[at].kind == "code" && document.blocks[at].run);
     workspace::save(&path, &document)?;
 
-    let mut content = vec![text_content(&format!(
-        "Updated `{wanted}` in {}.",
-        path.display()
-    ))];
+    let mut content = vec![text_content(&if focus.eq_ignore_ascii_case(wanted) {
+        format!("Updated `{focus}` in {}.", path.display())
+    } else {
+        format!(
+            "Updated `{wanted}` in {} — the block is now `{focus}`.",
+            path.display()
+        )
+    })];
+    for warning in workspace::oversized_image_warnings(&document, &path) {
+        content.push(text_content(&warning));
+    }
 
     if runnable && boolean_or(args, "run", true) {
         let run_args = json!({
             "path": required(args, "path")?,
-            "block": wanted,
+            "block": focus,
             "approve": true,
         });
         match run_in(&run_args, root, cache_root) {
@@ -510,10 +536,10 @@ fn edit_in(args: &Value, root: &Path, cache_root: PathBuf) -> ToolResult {
                 "Edited, but running the block failed: {reason}"
             ))),
         }
-    } else if runnable {
+    } else if let Some(at) = index.filter(|_| runnable) {
         // `run: false` declines the immediate run, not the review the edit already was:
         // the block is approved as typed, so the next run or live read executes it.
-        if let Err(sentence) = doc_run::approve_edited_block(&document.blocks[index], &cache_root) {
+        if let Err(sentence) = doc_run::approve_edited_block(&document.blocks[at], &cache_root) {
             content.push(text_content(&format!(
                 "Edited, but the approval could not be recorded: {sentence}"
             )));
@@ -836,6 +862,43 @@ mod tests {
 
         let saved = workspace::read(&root.join("guide.dx")).expect("resolve");
         assert!(saved.contains("Install it second."));
+        assert!(saved.contains("::paragraph id=usage-body\nThen run it.\n::end"));
+    }
+
+    #[test]
+    fn saving_an_oversized_image_warns_at_write_time() {
+        let root = project("big-image");
+        let too_big = vec![0u8; doc_core::resolve::MAX_IMAGE_BYTES + 1];
+        std::fs::write(root.join("big.png"), too_big).expect("seed image");
+        let items = call(
+            "dx_write",
+            &json!({ "path": "doc.dx", "content": "::image id=shot src=big.png\n::end\n" }),
+            &root,
+        )
+        .expect("write");
+        let reply = text_of(&items);
+        assert!(reply.contains("embed"), "{reply}");
+        assert!(reply.contains("big.png"), "{reply}");
+    }
+
+    #[test]
+    fn edit_with_header_retypes_the_block_in_one_call() {
+        let root = project("edit-header");
+        let items = call(
+            "dx_edit",
+            &json!({
+                "path": "guide.dx",
+                "block": "setup-body",
+                "header": "::quote",
+                "text": "Install it first.",
+            }),
+            &root,
+        )
+        .expect("edit");
+        assert!(text_of(&items).contains("setup-body"));
+
+        let saved = workspace::read(&root.join("guide.dx")).expect("resolve");
+        assert!(saved.contains("::quote id=setup-body\nInstall it first.\n::end"));
         assert!(saved.contains("::paragraph id=usage-body\nThen run it.\n::end"));
     }
 
