@@ -17,10 +17,35 @@ Everything green, everything current, proven mechanically:
   exactly the gates staled by the rust and editor trees — and passed; corpus and
   page-contract cached.
 - Release binary rebuilt and installed to `~/.local/bin/dx` on a fresh inode (see the
-  part-45 operational note); `examples/example_site_plan.dx` verify: **26 of 26 claims
-  hold**, re-proven by staleness alone after the last trim.
+  part-45 operational note); `examples/example_site_plan.dx` verify: **28 of 28 claims
+  hold**, verdict written by `dx run` after the part-46 edits.
 
-## This wave, part 45: the site test — the document's own records drove the revision
+## This wave, part 46: the launch boxes closed — the form is the calendar
+
+The site test continued from the document's own two open launch boxes; everything ran
+through the dx surface (`dx source`/`set`/`check`/`run`/`png`), which is the test:
+
+- **"Wire the booking form to the calendar" shipped as dated nights carrying their
+  moon.** The select's options are the almanac's own calendar — `value="2026-11-…"`,
+  each stating the night's moon in the page's voice, and the lunar month is real:
+  tonight's waning gibbous (moonrise 01:40, agreeing with the hero and the almanac)
+  rises later the next night, the new-moon night is the one that sold out, the crescent
+  night after sets by seven. **"Cap each night at twelve, waitlist the rest"** is the
+  full night's option (`joins the waitlist`) plus the aside's rule: book a full night
+  and you hold the first place freed. The DNS box stays honestly unchecked.
+- **Verify grew to 28 claims** (`the form offers the almanac's own nights`, `a full
+  night joins the waitlist, never oversold`), edited with `dx set` — the edit recorded
+  the approval, `dx run` executed the new code with no `--force`, staleness alone
+  re-proved the page. Weight law held: 29,915 of 30,000 bytes, the additions paid for
+  by tightening four CSS comments (words only; no rule, no voice).
+- **Surfaces observed working:** the board's `::view src=` frames showed the edited
+  file with no sync step; `dx png --block visit-view` was the design review (the dated
+  option reads cleanly in the closed select on the rendered page).
+- **Finding:** this Claude Code session had no `dx` MCP server registered — the CLI
+  carried the method, but check `dx setup`/client registration for why `dx mcp` was
+  absent from the session's tool surface.
+
+## Part 45: the site test — the document's own records drove the revision
 
 The example-site field test ("write the example site with the method, revise if there are
 issues"), run entirely through `examples/example_site_plan.dx`:
