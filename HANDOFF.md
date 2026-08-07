@@ -4,7 +4,42 @@ _Resume point after `/compact` or `/clear`. Update after every task or wave (see
 
 Last updated: 2026-08-06
 
-## This wave, part 38: the edit is the review, and reads scoped to the repository
+## This wave, part 39: the repository gets its own index.dx, and two paper cuts fixed
+
+"Write dx for this project; fix issues found." The repo now documents itself the way the
+product tells every project to: `index.dx` at the root, written through the real loop
+(`dx index` scaffold → improved → `dx sync .` adopted → verify block approved and run).
+
+- **`index.dx`** — the project map as a dx document: what each area is for, a mermaid
+  flowchart that parse turned into a live architecture board (six crates → four surfaces,
+  both wasm builds labelled), `::code src=` listings for `rust/Cargo.toml` and
+  `editor/build.sh` (current text, never a copy), and a Findings ledger whose one claim is
+  mechanical: a `::code run reads=rust/Cargo.toml` block asserting every workspace member
+  is a real crate, every surface file exists, every document is a pointer, and the fixture
+  corpus stays plain text — recorded verdict `ok - map holds`. Cold `dx text index.dx` is
+  ~8.8 KB; the whole loop (scaffold, adopt, gate-then-approve, board capture, page capture,
+  folded output) worked first try.
+- **Fixed: `--out` naming a directory** (`doc-cli/src/commands/view.rs`). `dx png --out .`
+  produced pages named `.-1.png`, and `--out dir/` failed with "Is a directory". New
+  `export_target` (one helper, all three export paths): an `--out` that is an existing
+  directory keeps the default file name and writes inside it; a file-shaped `--out` is
+  taken exactly as written. Pinned:
+  `an_out_naming_a_directory_keeps_the_default_file_name_inside_it`; verified live both
+  ways.
+- **Fixed: stale contract line.** `docs/dx-format-contract.md` § kinds still said
+  `graph`/`mermaid` is "kept verbatim" — it has converted flowcharts to boards since the
+  mermaid work. The line now states the conversion, the fallback for unreadable dialects,
+  and that this is parse's one conversion (matching CLAUDE.md).
+- Observed, not fixed (cosmetic): on a dense board an edge can pass through another
+  edge's *label* (the label sits at its curve's midpoint); text stays legible. Engine
+  nit, noted for a future board-render pass.
+
+Validated: `cargo test` 817/817 (was 816; +1), clippy `-D warnings` clean, `fmt --check`
+clean, release binary reinstalled to `~/.local/bin/dx`. doc-core untouched — no wasm
+rebuild needed. Next step: none pending — the index is live; keep it true as areas change
+(its verify re-runs whenever `rust/Cargo.toml` changes).
+
+## Previous wave, part 38: the edit is the review, and reads scoped to the repository
 
 Two directives from the user: locally edited code runs without a second gate, and a
 block's read scope is the repo folder, never the rest of the machine. Both landed, with

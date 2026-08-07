@@ -64,7 +64,11 @@ Every block accepts `id` and `class`; the attributes below are what each adds.
 - `rule` attrs: none
 - `html` attrs: none — author markup, rendered through the allow-list in `render::escape`
 - `svg` attrs: none — a drawing, sanitized the same way
-- `graph` / `mermaid` attrs: none — kept verbatim and shown as its own source
+- `graph` / `mermaid` attrs: none — not a kind this format keeps. A readable flowchart is
+  converted at parse (`format::mermaid` + `format::layout`) into a `::board` plus one
+  hidden block per node, labels and edge direction preserved; source the converter cannot
+  read (a sequence diagram, an unknown dialect) is kept verbatim and shown as its own
+  source. This is the one conversion `parse` performs.
 - `board` attrs: `height` (viewport CSS px; unset means the renderer's default) — the body
   is one reference line per node, `- <block-id> x=N y=N w=N h=N to=a,b`, kept **verbatim**:
   the line grammar belongs to the renderer (`render::board`), unknown keys survive a

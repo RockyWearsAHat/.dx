@@ -133,9 +133,7 @@ pub fn run_png(args: &Args) -> Result<String, String> {
         },
     )?;
 
-    let target = args
-        .value("out")
-        .map_or_else(|| path.with_extension("png"), PathBuf::from);
+    let target = export_target(args.value("out"), path.with_extension("png"));
     std::fs::write(&target, &shot.png)
         .map_err(|error| format!("could not write {}: {error}", target.display()))?;
 
@@ -163,9 +161,9 @@ fn run_png_block(args: &Args, id: &str) -> Result<String, String> {
         },
     )?;
 
-    let target = args.value("out").map_or_else(
-        || path.with_file_name(png_block_name(&path, id)),
-        PathBuf::from,
+    let target = export_target(
+        args.value("out"),
+        path.with_file_name(png_block_name(&path, id)),
     );
     std::fs::write(&target, &shot.png)
         .map_err(|error| format!("could not write {}: {error}", target.display()))?;
@@ -241,13 +239,31 @@ fn run_png_pages(args: &Args) -> Result<String, String> {
     Ok(out)
 }
 
+/// Where an export lands: `--out` when given, else `fallback` beside the document.
+///
+/// An `--out` naming an existing directory keeps the fallback's file name and writes
+/// inside it — a folder says *where*, not *what to call it*. Taking the directory as
+/// the name itself produced `.-1.png` from `--out .` and "Is a directory" from a
+/// trailing slash.
+fn export_target(out: Option<&str>, fallback: PathBuf) -> PathBuf {
+    match out {
+        None => fallback,
+        Some(out) => {
+            let given = PathBuf::from(out);
+            match (given.is_dir(), fallback.file_name()) {
+                (true, Some(name)) => given.join(name),
+                _ => given,
+            }
+        }
+    }
+}
+
 /// The base name page images are numbered from: `--out` when given, else the document's path.
 ///
 /// The extension comes off either way, because the page number goes *between* the name and the
 /// extension. Leaving it on turned `--out pages.png` into `pages.png-1.png`.
 fn page_stem(out: Option<&str>, path: &Path) -> PathBuf {
-    out.map_or_else(|| path.to_path_buf(), PathBuf::from)
-        .with_extension("")
+    export_target(out, path.to_path_buf()).with_extension("")
 }
 
 /// Where page `number` is written, given the stem [`page_stem`] chose.
@@ -477,5 +493,23 @@ mod tests {
 
         let defaulted = page_stem(None, Path::new("dir/notes.dx"));
         assert_eq!(page_target(&defaulted, 2), PathBuf::from("dir/notes-2.png"));
+    }
+
+    #[test]
+    fn an_out_naming_a_directory_keeps_the_default_file_name_inside_it() {
+        // `--out .` used to take the directory as the stem itself, producing `.-1.png`
+        // page names and "Is a directory" from the whole-document export.
+        let dir = std::env::temp_dir();
+        let dir_arg = dir.to_string_lossy().into_owned();
+
+        let whole = export_target(Some(&dir_arg), PathBuf::from("notes.png"));
+        assert_eq!(whole, dir.join("notes.png"));
+
+        let paged = page_stem(Some(&dir_arg), Path::new("sub/notes.dx"));
+        assert_eq!(page_target(&paged, 1), dir.join("notes-1.png"));
+
+        // A file-shaped --out is still taken exactly as written.
+        let file = export_target(Some("shots/page.png"), PathBuf::from("notes.png"));
+        assert_eq!(file, PathBuf::from("shots/page.png"));
     }
 }
