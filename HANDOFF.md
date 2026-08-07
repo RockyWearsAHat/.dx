@@ -48,12 +48,24 @@ issues"), run entirely through `examples/example_site_plan.dx`:
   session: the brief answers its text.
 - **Operational note that cost a server:** `cp` over the *running* `~/.local/bin/dx`
   inode gets the process SIGKILLed on macOS (stale code-signature cache) and poisons the
-  file until replaced on a fresh inode (`rm` + `cp`, or rename). The part-41 re-exec
-  assumes an atomic rename; an in-place overwrite is not one. Candidate hardening: an
-  `install`/setup path that always renames.
-- Gates: doc-core 347 (two new), doc-cli 285, clippy `-D warnings` clean, fmt clean, both
-  node suites 34/34 against rebuilt wasm, `dx run dev.dx` green with only staled gates
-  re-running.
+  file until replaced on a fresh inode. **The product already guards this** —
+  `setup.rs::replace` unlinks before copying and its comment names the SIGKILL — the
+  session's mistake was bypassing `dx setup` with a raw `cp`. Install a rebuilt binary
+  with the build's own `dx setup`, or at minimum `rm` before `cp`.
+- **`dx set --header` no longer erases silently** (part 40's watch-out closed): a header
+  retype whose body arrives empty from anywhere but an explicit `--text ''` is refused
+  when the block has words to lose; `--text ''` stays the deliberate way. Pinned:
+  `a_header_retype_with_nothing_on_stdin_keeps_the_words`,
+  `an_explicit_empty_text_still_empties_on_a_header_retype`.
+- **Design QA through the document:** `school-view`/`school-phone` frames on the board
+  (a phone frame must state its viewport — `width=390`, the miss that made the first
+  capture desk-wide); phone width verified by eye, year-bar gradient corrected to peak
+  at midsummer, the orphaned label line shortened. Weight held at the 30 KB law through
+  every trim (final: 26/26).
+- Gates: doc-core 347 (two new), doc-cli 287 (two new), clippy `-D warnings` clean, fmt
+  clean, both node suites 34/34 against rebuilt wasm, `dx run dev.dx` green with only
+  staled gates re-running. `index.dx#now-worklist` records all of it; the three standing
+  items (store submission, gallery field test, private-repo proof) remain open.
 
 ## Part 44: the inversion — work lives in the document, and small thoughts are cheap
 

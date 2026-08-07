@@ -87,6 +87,10 @@ pub fn run_fmt(args: &Args) -> Result<String, String> {
 /// read the way the file itself would read it. This is [`edit::replace_block`], the same
 /// operation the editing surfaces perform when a reader rewrites the tag line above a
 /// block, so a person and an agent retype a block through one implementation.
+///
+/// A `--header` retype whose body arrives empty from anywhere but an explicit
+/// `--text ''` is refused when the block has words to lose: a closed stdin was never
+/// how anyone meant to erase a block, and it has erased them (part 40's field note).
 pub fn run_set(args: &Args) -> Result<String, String> {
     set_in(args, &doc_run::RunOptions::default().cache_root)
 }
@@ -103,7 +107,20 @@ fn set_in(args: &Args, cache_root: &Path) -> Result<String, String> {
 
     if args.present("header") {
         let header = args.value("header").unwrap_or_default();
-        let (updated, focus) = edit::replace_block(&workspace::read(&path)?, id, header, &body)?;
+        let source = workspace::read(&path)?;
+        if body.is_empty() && args.value("text") != Some("") {
+            let document = parse(&source);
+            if let Ok(index) = edit::find(&document, id) {
+                if !edit::body(&document.blocks[index]).is_empty() {
+                    return Err(format!(
+                        "a --header retype with an empty body would erase what `{id}` says — \
+                         pass the body with --text or a pipe, or say --text '' to empty it \
+                         on purpose"
+                    ));
+                }
+            }
+        }
+        let (updated, focus) = edit::replace_block(&source, id, header, &body)?;
         let document = parse(&updated);
         workspace::save(&path, &document)?;
         let note = edit_is_the_review(&updated, &focus, cache_root);
@@ -598,6 +615,40 @@ mod tests {
         assert!(error.contains("--text"), "{error}");
         let raw = workspace::read(&path).expect("resolve");
         assert!(raw.contains("keep me"), "body was touched: {raw}");
+    }
+
+    #[test]
+    fn a_header_retype_with_nothing_on_stdin_keeps_the_words() {
+        // `dx set doc.dx p --header "::quote"` with no --text and a closed stdin
+        // silently emptied the block (part 40's field note). It refuses now, and the
+        // refusal names the deliberate way to empty.
+        let path = scratch("set-header-empty").join("doc.dx");
+        let file = path.to_string_lossy().into_owned();
+        workspace::write_text(&path, "::paragraph id=p\nkeep me\n::end\n").expect("seed");
+        let error =
+            run_set(&args(&[&file, "p", "--header", "::quote"])).expect_err("should refuse");
+        assert!(error.contains("--text ''"), "{error}");
+        let raw = workspace::read(&path).expect("resolve");
+        assert!(raw.contains("keep me"), "body was touched: {raw}");
+    }
+
+    #[test]
+    fn an_explicit_empty_text_still_empties_on_a_header_retype() {
+        let path = scratch("set-header-deliberate").join("doc.dx");
+        let file = path.to_string_lossy().into_owned();
+        workspace::write_text(&path, "::paragraph id=p\nold words\n::end\n").expect("seed");
+        run_set(&args(&[
+            &file,
+            "p",
+            "--header",
+            "::quote id=p",
+            "--text",
+            "",
+        ]))
+        .expect("set");
+        let raw = workspace::read(&path).expect("resolve");
+        assert!(raw.contains("::quote"), "{raw}");
+        assert!(!raw.contains("old words"), "{raw}");
     }
 
     #[test]
