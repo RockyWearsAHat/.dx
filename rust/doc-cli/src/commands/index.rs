@@ -107,6 +107,19 @@ fn scaffold_source(root: &Path) -> (String, usize, usize) {
          `::code src=` blocks for the load-bearing files — they render as the file's \
          current text, never a stale copy. Keep this document true as the code changes.\n\
          ::end\n\n\
+         ::heading level=2 id=now\nNow\n::end\n\n\
+         ::paragraph id=now-note\n\
+         The working section — the designated first read of every turn, and its last \
+         write. The worklist below is the task's program counter (found / fixing / \
+         verified), which makes the task the unit of work instead of the session: it \
+         survives compaction, crashes, and handoffs, and a second agent can pick up an \
+         unclaimed line. Thoughts land here the moment they form (`dx_append`, \
+         `dx_check`) and are promoted into the sections below when they harden. Keep it \
+         small — everything else in this document is the archive.\n\
+         ::end\n\n\
+         ::checklist id=now-worklist\n\
+         [ ] Improve this index: replace each TODO with what the area does\n\
+         ::end\n\n\
          ::heading level=2 id=findings\nFindings\n::end\n\n\
          ::paragraph id=findings-notes\n\
          A ledger of open defects and sharp edges. A claim that can be checked \
@@ -262,6 +275,12 @@ mod tests {
         assert!(!text.contains("node_modules"), "{text}");
         // The index never lists itself as a loose file.
         assert!(!text.contains("- index.dx"), "{text}");
+        // The working section is scaffolded in: the `now` worklist is the designated
+        // first read of a turn and its last write — the program counter that makes the
+        // task, not the session, the unit of work.
+        assert!(text.contains("::heading level=2 id=now"), "{text}");
+        assert!(text.contains("::checklist id=now-worklist"), "{text}");
+        assert!(text.contains("program counter"), "{text}");
     }
 
     #[test]

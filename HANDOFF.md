@@ -18,7 +18,34 @@ Everything green, everything current, proven mechanically:
   picks the new binary up itself (part 41). Verified by eye: `dx_read block=pipeline`
   on `dev.dx` — the small `host-shell` edge label, previously threshold-ink, is legible.
 
-## This wave, part 43: pixels that survive the budget, and text that stays text
+## This wave, part 44: the inversion — work lives in the document, and small thoughts are cheap
+
+The operator's scratchbook doctrine ("context is a cache; the document is the memory"),
+built so it is the path of least resistance rather than discipline:
+
+- **`dx_append`** — the cheap write. `block` grows a block's body by the new lines alone
+  (a finding onto a ledger, a line onto the worklist — no resending what's there; lands
+  on the same replace `dx_edit` performs, so edit-is-the-review holds for runnable code);
+  `after` inserts a new block after an id; neither appends at the document's end. Prose
+  kinds only — code enters through dx_edit/dx_write where its powers are reviewed.
+- **`dx_check`** — tick/untick one box by position, `edit::toggle_check` underneath, every
+  other byte identical.
+- **Fixed a real dx_edit defect found on the way:** the plain path wrote `.text` directly —
+  a silent no-op for checklists and lists (content lives in items only `set_body`
+  rebuilds) and it skipped board hidden-node creation. Now routed through the engine's
+  `set_block`. Pinned: `editing_a_checklist_body_through_dx_edit_actually_changes_it`.
+- **The `now` convention.** `dx_index` scaffolds a `Now` section (note + `now-worklist`
+  checklist) — the designated first read of a turn and its last write, the task's program
+  counter (found / fixing / verified). Handshake gained WORK IN THE DOCUMENT, NOT IN
+  CONTEXT: think by writing, the thin-conversation loop, scratch-promotes, first-call-
+  reads/last-call-writes — all assertion-pinned. This repo's own `index.dx` now carries
+  its `now` section (inserted via `dx insert`, the CLI twin).
+- **Proven live over stdio:** a real `dx mcp` process appended a two-line thought for two
+  lines and ticked item 2; the wrong-item call refused with the counting sentence.
+  doc-cli 285/285, clippy zero, fmt clean; `dev.dx` re-ran only what each edit staled
+  (engine+lints for the rust edits, corpus for the index.dx edit).
+
+## Part 43: pixels that survive the budget, and text that stays text
 
 A field session judging UI from `dx_read` pages (Self-Host console, `DX-FEEDBACK.md` on
 the operator's desktop) hit the two remaining read-quality defects; both closed at the root:
@@ -168,7 +195,8 @@ documented grant laws, directory `reads=`, and an in-document image loop.
 - **Driving DX.app from automation:** post real `CGEvent`s — AppleScript's System Events
   click never reaches the DOM and makes a broken editor look like a working one.
 
-Next step: the postscript's cheap-write tier — an MCP `append`/`insert after id` so a
-two-line thought costs two lines (the CLI ops exist; `edit::insert_block` is the landing
-point), then the `::now` bootstrap convention in the handshake text. The gallery-rebuild
-field test from part 42 still stands, now with reads worth judging pixels from.
+Next step: the postscript's remaining tier, one down — text-first frame description,
+delta reads after edits, golden-frame verdicts in text, symbol-level source sections.
+The gallery-rebuild field test from part 42 still stands, now with supersampled reads
+and the `now`/cheap-write loop to run it through; `index.dx#now-worklist` is the live
+worklist.
