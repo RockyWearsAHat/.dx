@@ -134,8 +134,10 @@ h1, h2, h3 { text-wrap: balance; }
 
 .masthead nav {
   display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   align-items: baseline;
-  gap: clamp(16px, 3vw, 34px);
+  gap: 8px clamp(16px, 3vw, 34px);
   font-family: var(--mono);
   font-size: 12px;
   letter-spacing: 0.14em;
@@ -149,6 +151,7 @@ h1, h2, h3 { text-wrap: balance; }
   color: var(--ink-dim);
   padding-bottom: 3px;
   border-bottom: 1px solid transparent;
+  white-space: nowrap;
 }
 
 .masthead nav a:hover, .masthead nav a:focus-visible, .torch:hover { color: var(--starlight); border-bottom-color: var(--ember); }
@@ -450,7 +453,7 @@ section { padding: clamp(64px, 10vw, 120px) clamp(20px, 5vw, 56px); }
 
 .visit-form .book { border: 0; cursor: pointer; margin-top: 6px; }
 
-.visit-aside { margin-top: 18px; font-style: italic; font-size: 14px; color: var(--ink-faint); }
+.visit-aside { margin-top: 18px; font-style: italic; font-size: 14px; color: var(--ink-dim); }
 
 .visit-terms { margin: 56px 0 0; padding: 18px 0 26px; border-top: 1px solid var(--hairline); }
 
@@ -521,7 +524,6 @@ section { padding: clamp(64px, 10vw, 120px) clamp(20px, 5vw, 56px); }
 .year-bar { grid-column: 1 / -1; }
 
 .year-bar .band {
-  /* darkest at midwinter, lightest at midsummer */
   background: linear-gradient(90deg,
     #2A3443 0%, #101A24 15%, #070C12 24%, #070C12 45%,
     #1A2531 57%, #4A5666 78%, #333D4B 100%);
@@ -571,7 +573,7 @@ section { padding: clamp(64px, 10vw, 120px) clamp(20px, 5vw, 56px); }
   gap: clamp(24px, 4vw, 48px);
 }
 
-.journal-grid article:nth-child(2) { transform: translateY(clamp(24px, 4vw, 56px)); }
+.journal-grid article:nth-child(2) { margin-top: clamp(24px, 4vw, 56px); }
 
 .journal-grid figure { margin: 0 0 16px; height: clamp(240px, 30vw, 380px); overflow: hidden; }
 
@@ -626,6 +628,7 @@ footer {
 
 @media (max-width: 820px) {
   .masthead { flex-direction: column; align-items: flex-start; gap: 14px; }
+  .masthead nav { justify-content: flex-start; }
   .wordmark small { display: none; }
   .hero { min-height: 76vh; }
   .hero-caption { display: none; }
@@ -634,7 +637,7 @@ footer {
   .tonight-lede { position: static; }
   .night-bar .mark b { display: none; }
   .night-bar .mark:last-child i { left: auto; right: 7px; }
-  .journal-grid article:nth-child(2) { transform: none; }
+  .journal-grid article:nth-child(2) { margin-top: 0; }
   .visit-figure { min-height: 300px; }
 }
 
