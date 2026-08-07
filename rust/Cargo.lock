@@ -78,6 +78,7 @@ name = "doc-shot"
 version = "0.1.0"
 dependencies = [
  "doc-core",
+ "miniz_oxide",
  "serde_json",
 ]
 

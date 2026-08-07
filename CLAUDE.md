@@ -446,8 +446,12 @@ example is a deliberate two-file change.
   natural size, anything else exactly as the page carries it (hidden node blocks included). The pages are
   sized for the reader they serve (`ShotOptions::for_reading`): each stays under the
   vision-ingestion limits (~1.15 MP, 1568 px longest edge), so the image the model sees is the
-  image the browser captured, pixel for pixel — capturing larger only produces an image
-  something else shrinks in transit. Human exports are the opposite trade: `dx png` captures
+  image dx delivered, pixel for pixel — *delivering* larger only produces an image something
+  else shrinks in transit, by whatever resample it happens to use. The pixels themselves are
+  supersampled: a reading capture rasterizes at twice the density (`ShotOptions::oversample`)
+  and `doc_shot::png` averages it back down in linear light, so a hairline rule or a faint
+  mark survives the budget as gray ink instead of falling between the raster and vanishing.
+  Human exports are the opposite trade: `dx png` captures
   at device scale 2 by default (`--scale`), so an exported page matches a high-density screen.
   `dx_source` is the exact text, for quoting and editing. `dx_play` (`dx play`) is the same read with hands: it
   loads the render live over `doc-shot::cdp`, performs a small input script — wait, key,

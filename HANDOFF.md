@@ -10,14 +10,42 @@ Last updated: 2026-08-07
 
 Everything green, everything current, proven mechanically:
 
-- `cargo test` **834/834** (attacks 18/18 among them), clippy `-D warnings` clean,
+- `cargo test` **847/847** (attacks 18/18 among them), clippy `-D warnings` clean,
   `fmt --check` clean, both node suites 34/34, fixture corpus and drift guard green.
-- `dx run dev.dx`: engine/lints/surfaces re-ran on this wave's edits and passed; corpus
-  and page-contract stayed cached.
-- Release binary reinstalled to `~/.local/bin/dx`, both wasm engines rebuilt
-  (`editor/build.sh`); the running MCP server picks the new binary up itself (part 41).
+- `dx run dev.dx` after this wave's edits: engine (345+49) and lints re-ran — exactly the
+  two gates whose `reads=rust` staled — and passed; surfaces/corpus/page-contract cached.
+- Release binary rebuilt (`cargo build --release -p doc-cli`); the running MCP server
+  picks the new binary up itself (part 41). Verified by eye: `dx_read block=pipeline`
+  on `dev.dx` — the small `host-shell` edge label, previously threshold-ink, is legible.
 
-## This wave, part 42: the picture that names its producer, and the method said out loud
+## This wave, part 43: pixels that survive the budget, and text that stays text
+
+A field session judging UI from `dx_read` pages (Self-Host console, `DX-FEEDBACK.md` on
+the operator's desktop) hit the two remaining read-quality defects; both closed at the root:
+
+- **Reading captures are supersampled, then compressed smart.** `ShotOptions.oversample`
+  (new, default 1; `for_reading` sets 2): the browser rasterizes at `scale × oversample`
+  and `doc_shot::png` — the platform's one PNG codec, hand-rolled on the `miniz_oxide`
+  already in-tree — averages it back down **in linear light** to the same vision budget.
+  Near-threshold ink (hairlines, faint marks, small edge labels) now arrives as gray
+  instead of vanishing at rasterization; sRGB-naive averaging (the "just whatever"
+  resize) is exactly what the codec's checker test pins against (linear average of
+  black/white = 188, not 127). Codec: 8-bit, four plain color types, non-interlaced,
+  bounded decode (64 MP cap, hostile chunk lengths refused), opaque images written as
+  RGB, per-row min-sum filter heuristic. Real-Chromium proof:
+  `a_real_browser_reading_capture_arrives_at_its_stated_size`.
+- **`dx_source` on an image block no longer dumps base64.** Root cause: every reading
+  tool hydrates (`document_at`), so an `::image src=` arrives as a multi-MB `data:` URI
+  and `render::text` printed it raw — 3.5M characters at a reader who asked for words.
+  `image_text` now renders an embedded image as a one-line stand-in (media type, ~KB,
+  where to look), same trade as `view_text`; a file `src` stays a Markdown link. The
+  stale comment claiming dx_source skips hydration corrected.
+- Feedback triage, recorded: pipefail (#4) was already fixed; folder `reads=` and
+  `::image`/8 MB warnings landed in parts 40/42. Still open from the postscript, next
+  tier: cheap-write ergonomics (append/insert-after/check over MCP), a blessed `::now`
+  bootstrap section convention, scratch-that-promotes.
+
+## Part 42: the picture that names its producer, and the method said out loud
 
 A field session (screenshots, 2026-08-07) built its harness around a hand-managed PNG
 gallery — 2× captures against the embed limit, freshness by path convention — and its
@@ -127,6 +155,7 @@ documented grant laws, directory `reads=`, and an in-document image loop.
 - **Driving DX.app from automation:** post real `CGEvent`s — AppleScript's System Events
   click never reaches the DOM and makes a broken editor look like a working one.
 
-Next step: let a field session rebuild its gallery on the new primitives — `::image for=`
-on every run-produced frame, attrs changed via `dx_edit header` — and confirm the
-handshake's method text steers it away from hand-managed images without being told.
+Next step: the postscript's cheap-write tier — an MCP `append`/`insert after id` so a
+two-line thought costs two lines (the CLI ops exist; `edit::insert_block` is the landing
+point), then the `::now` bootstrap convention in the handshake text. The gallery-rebuild
+field test from part 42 still stands, now with reads worth judging pixels from.

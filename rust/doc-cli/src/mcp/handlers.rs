@@ -136,7 +136,9 @@ fn read_in(args: &Value, root: &Path, cache_root: &Path) -> ToolResult {
     let path = string(args, "path").unwrap_or("document");
     // Pages sized for the reader this tool serves: a vision model. `for_reading` keeps
     // every page under the limits past which ingestion would downscale it, so the image
-    // the model sees is the image the browser captured, pixel for pixel.
+    // the model sees is the image this process delivered, pixel for pixel — and each of
+    // those pixels is averaged down from a denser rasterization, so fine ink survives
+    // the budget as gray instead of vanishing.
     let options = ShotOptions {
         theme: Theme::parse(string(args, "theme").unwrap_or("auto")),
         ..ShotOptions::for_reading(number(args, "width"))
@@ -640,10 +642,12 @@ fn selected(args: &Value, root: &Path) -> Result<Document, String> {
 
 /// Load the whole document named by `path`, with its references filled in.
 ///
-/// Every reading tool comes through here, so an agent looking at a document sees what a
-/// person sees: `::code src=` listings holding the file's current text, boards showing
-/// the blocks their nodes name — including blocks of sibling documents. `dx_source`
-/// does not: it hands over the exact stored characters, references included.
+/// Every reading tool comes through here — `dx_source` included — so an agent looking
+/// at a document sees what a person sees: `::code src=` listings holding the file's
+/// current text, boards showing the blocks their nodes name — including blocks of
+/// sibling documents. The text view is what keeps that honest for an `::image src=`:
+/// hydration fills it with the file's bytes, and `render::text` states what they are
+/// instead of printing megabytes of base64 at a reader who asked for words.
 fn document_at(args: &Value, root: &Path) -> Result<Document, String> {
     let path = resolve(required(args, "path")?, root);
     let mut document = parse(&workspace::read(&path)?);
