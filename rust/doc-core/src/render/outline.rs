@@ -58,6 +58,9 @@ pub fn outline(document: &Document) -> Vec<OutlineEntry> {
 /// to just before the next heading at the same or a shallower level — the section a reader
 /// means when they point at a title. When it names any other block, the slice is that block
 /// plus the `::output` that belongs to it, so asking for a code block always shows its result.
+/// A non-heading block named by the selector is revealed even when it is `hidden` — naming
+/// it is the ask, and an answer of nothing where content exists would be a lie. The slice
+/// is a render view, never serialized, so the stored document keeps the mark.
 #[must_use]
 pub fn section(document: &Document, selector: &str) -> Option<Document> {
     let start = find_block(document, selector)?;
@@ -79,6 +82,17 @@ pub fn section(document: &Document, selector: &str) -> Option<Document> {
         end
     };
 
+    let reveal = anchor.kind != "heading";
+    let selector_id = anchor.id.clone();
+    let mut blocks = carry_presentation(document, start, end);
+    if reveal {
+        for block in &mut blocks {
+            if block.id == selector_id {
+                block.hidden = false;
+            }
+        }
+    }
+
     Some(Document {
         title: if anchor.kind == "heading" {
             anchor.text.clone()
@@ -88,7 +102,7 @@ pub fn section(document: &Document, selector: &str) -> Option<Document> {
         summary: document.summary.clone(),
         tags: document.tags.clone(),
         meta: document.meta.clone(),
-        blocks: carry_presentation(document, start, end),
+        blocks,
     })
 }
 
@@ -226,6 +240,29 @@ mod tests {
         assert_eq!(entries[0].preview, "Top");
         assert!(entries[4].runnable);
         assert!(!entries[1].runnable);
+    }
+
+    #[test]
+    fn a_section_naming_a_hidden_block_reveals_it() {
+        let source = "::board id=plan\n- note x=0 y=0 w=200 h=100\n::end\n\n\
+::paragraph id=note hidden\nA thought that lives on the board\n::end\n";
+        let sliced = section(&parse(source), "note").expect("the block exists");
+        let text = crate::render::text(&sliced, &crate::render::TextOptions::default());
+        // The reader named the block; an empty answer where content exists is a lie.
+        assert!(text.contains("A thought that lives on the board"));
+        // The stored document keeps its mark — only the render view reveals.
+        assert!(stringify(&parse(source)).contains("::paragraph id=note hidden"));
+    }
+
+    #[test]
+    fn a_heading_section_keeps_its_board_nodes_hidden() {
+        let source = "::heading level=1 id=top\nTop\n::end\n\n\
+::board id=plan\n- note x=0 y=0 w=200 h=100\n::end\n\n\
+::paragraph id=note hidden\nBoard-only thought\n::end\n";
+        let sliced = section(&parse(source), "top").expect("the heading exists");
+        let text = crate::render::text(&sliced, &crate::render::TextOptions::default());
+        // Pointing at the title is not pointing at the node: it stays on the board.
+        assert!(!text.contains("Board-only thought"));
     }
 
     #[test]

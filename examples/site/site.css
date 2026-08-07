@@ -311,6 +311,18 @@ section { padding: clamp(64px, 10vw, 120px) clamp(20px, 5vw, 56px); }
 
 .sky-times strong { font-weight: 420; letter-spacing: 0.02em; }
 
+/* the moon, drawn as it will actually look: a waning gibbous, lit from the east */
+.phase {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  margin-right: 9px;
+  vertical-align: -1px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 74% 50%, var(--night) 0 44%, var(--starlight) 52%);
+  border: 1px solid var(--ink-faint);
+}
+
 .sky-times p {
   grid-column: 2;
   margin: 0;
@@ -493,6 +505,67 @@ section { padding: clamp(64px, 10vw, 120px) clamp(20px, 5vw, 56px); }
   max-width: 44em;
 }
 
+/* ————— school nights: the year-bar, the night-bar's sibling instrument —————
+   Months below, one ember bracket over the weeks it is dark before bedtime;
+   the gradient is the data. */
+
+.school-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+  gap: clamp(32px, 6vw, 88px);
+  align-items: start;
+}
+
+.school-copy p { margin: 0 0 16px; color: var(--ink-dim); max-width: 36em; }
+
+.school-copy strong { font-weight: 420; color: var(--starlight); }
+
+#school a { color: var(--ember); text-decoration-color: var(--ink-faint); text-underline-offset: 3px; }
+
+.year-bar { grid-column: 1 / -1; }
+
+.year-bar .band {
+  background: linear-gradient(90deg,
+    #2A3443 0%, #101A24 15%, #070C12 24%, #070C12 45%,
+    #1A2531 57%, #3A4353 70%, #4A5666 85%, #3A4353 100%);
+}
+
+.year-bar .mark, .year-bar .mark:nth-child(odd) { top: 2px; height: 16px; }
+
+.year-bar .mark i, .year-bar .mark:nth-child(odd) i {
+  top: auto;
+  bottom: -18px;
+  left: 4px;
+  font-size: 9.5px;
+  color: var(--ink-faint);
+}
+
+.year-bar .window {
+  position: absolute;
+  top: -18px;
+  left: var(--from);
+  width: calc(var(--to) - var(--from));
+  height: 12px;
+  border: 1px solid var(--ember);
+  border-bottom: 0;
+}
+
+.year-bar .window b {
+  position: absolute;
+  left: 50%;
+  top: -18px;
+  transform: translateX(-50%);
+  font-family: var(--mono);
+  font-weight: 400;
+  font-size: 10px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--ember);
+  white-space: nowrap;
+}
+
+.year-bar figcaption { margin-top: 44px; }
+
 /* ————— journal: three nights that were worth writing down ————— */
 
 .journal-grid {
@@ -559,7 +632,8 @@ footer {
   .wordmark small { display: none; }
   .hero { min-height: 76vh; }
   .hero-caption { display: none; }
-  .tonight-grid, .visit-grid, .journal-grid, .fell-grid { grid-template-columns: minmax(0, 1fr); }
+  .tonight-grid, .visit-grid, .journal-grid, .fell-grid, .school-grid { grid-template-columns: minmax(0, 1fr); }
+  .year-bar .mark:nth-child(odd) i { display: none; }
   .tonight-lede { position: static; }
   .night-bar .mark b { display: none; }
   .night-bar .mark:last-child i { left: auto; right: 7px; }
