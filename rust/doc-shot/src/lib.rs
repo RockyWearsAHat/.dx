@@ -22,6 +22,7 @@ pub mod base64;
 pub mod browser;
 pub mod cdp;
 pub mod play;
+pub mod png;
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -46,8 +47,11 @@ pub const MAX_PAGES: usize = 12;
 
 /// Most pixels one image may carry before a vision model's ingestion scales it down
 /// (~1.15 megapixels). [`ShotOptions::for_reading`] sizes pages under this, so every
-/// pixel captured is a pixel the model actually sees — capturing larger only produces
-/// an image something else shrinks in transit.
+/// pixel the image carries is a pixel the model actually sees. *Delivering* larger
+/// only produces an image something else shrinks in transit, by whatever resample it
+/// happens to use — which is why the extra density a reading capture rasterizes at
+/// ([`ShotOptions::oversample`]) is averaged back down here, in linear light, before
+/// the image leaves this crate.
 pub const VISION_MAX_PIXELS: u32 = 1_150_000;
 
 /// Longest edge a vision model accepts without scaling, in pixels.
@@ -101,10 +105,18 @@ pub struct ShotOptions {
     pub page_height: u32,
     /// Most pages [`capture_pages`] will take before it stops and says so.
     pub max_pages: usize,
-    /// Image pixels per CSS pixel, clamped to 1–4. 2 makes an export match a
-    /// high-density screen; 1 is right for a vision model, which would only scale the
-    /// extra pixels back out (see [`VISION_MAX_PIXELS`]).
+    /// Image pixels per CSS pixel *delivered*, clamped to 1–4. 2 makes an export match
+    /// a high-density screen; 1 is right for a vision model, whose ingestion would only
+    /// scale the extra pixels back out (see [`VISION_MAX_PIXELS`]).
     pub scale: u32,
+    /// Extra density rasterized per delivered pixel, clamped so `scale × oversample`
+    /// stays within the browser's sane range. The page is rasterized at
+    /// `scale × oversample` and averaged back down to `scale` in linear light
+    /// ([`png::downsample`]) before the capture leaves this crate — supersampling, so a
+    /// hairline rule or a near-threshold mark survives the small image as gray ink
+    /// instead of falling between the raster and vanishing. 1 delivers the browser's
+    /// own rasterization untouched.
+    pub oversample: u32,
     /// Longest CSS-pixel edge a self-sized page may reach. A board is captured at its
     /// natural canvas size — every node at the size its line states — and only shrunk,
     /// uniformly, when it would pass this. [`ShotOptions::for_reading`] sets the vision
@@ -123,6 +135,7 @@ impl Default for ShotOptions {
             page_height: DEFAULT_PAGE_HEIGHT,
             max_pages: MAX_PAGES,
             scale: 1,
+            oversample: 1,
             max_page_edge: NATURAL_MAX_EDGE,
             max_page_pixels: NATURAL_MAX_PIXELS,
         }
@@ -130,13 +143,17 @@ impl Default for ShotOptions {
 }
 
 impl ShotOptions {
-    /// Options for a read by a vision model: pages that arrive exactly as captured.
+    /// Options for a read by a vision model: pages that arrive exactly as delivered.
     ///
     /// Each page stays within [`VISION_MAX_PIXELS`] and [`VISION_MAX_EDGE`], the two
     /// limits past which ingestion downscales an image, so zero compaction happens
-    /// between the browser and the model. Pages still break between blocks — a narrower,
-    /// shorter page means more pages, never a sliced line. `width` overrides
-    /// [`READ_WIDTH`]; the page height is derived so the pixel budget holds.
+    /// between this crate and the model. The pixels themselves are better than a
+    /// budget-sized rasterization: the page is captured at twice the density
+    /// (`oversample`) and averaged down in linear light, so fine ink the budget cannot
+    /// afford a full pixel still arrives as gray instead of vanishing. Pages still
+    /// break between blocks — a narrower, shorter page means more pages, never a
+    /// sliced line. `width` overrides [`READ_WIDTH`]; the page height is derived so
+    /// the pixel budget holds.
     pub fn for_reading(width: Option<u32>) -> Self {
         let width = width
             .unwrap_or(READ_WIDTH)
@@ -145,6 +162,7 @@ impl ShotOptions {
             width,
             page_height: (VISION_MAX_PIXELS / width).min(VISION_MAX_EDGE),
             scale: 1,
+            oversample: 2,
             max_page_edge: VISION_MAX_EDGE,
             max_page_pixels: VISION_MAX_PIXELS,
             ..Self::default()
@@ -327,7 +345,7 @@ fn capture_block_page(
         &workspace.join("block.png"),
         page.width,
         height,
-        scale(options),
+        options,
     )
 }
 
@@ -394,7 +412,7 @@ fn capture_all_pages(
                     &workspace.join(format!("page-{index}.png")),
                     options.width,
                     range.height,
-                    scale(options),
+                    options,
                 )?;
                 (shot, range.blocks.clone())
             }
@@ -406,7 +424,7 @@ fn capture_all_pages(
                     &workspace.join(format!("page-{index}.png")),
                     board.width,
                     board.height.unwrap_or_else(|| page_height(options)),
-                    scale(options),
+                    options,
                 )?;
                 (shot, vec![id.clone()])
             }
@@ -634,31 +652,44 @@ fn capture_page(
         &workspace.join("shot.png"),
         options.width,
         height,
-        scale(options),
+        options,
     )
 }
 
-/// The device scale factor to capture at, never zero and never absurd.
+/// The device scale factor a capture delivers, never zero and never absurd.
 fn scale(options: &ShotOptions) -> u32 {
     options.scale.clamp(1, MAX_SCALE)
+}
+
+/// The extra density a capture rasterizes at, clamped so the browser is never asked
+/// for more than [`MAX_SCALE`] in total.
+fn oversample(options: &ShotOptions) -> u32 {
+    options.oversample.clamp(1, MAX_SCALE / scale(options))
 }
 
 /// Capture one window of `page_file` as a PNG, clamped to a sane height.
 ///
 /// `--window-size` is CSS pixels and the image comes out `scale` times larger on each
 /// axis, so the layout is identical at every scale — only the pixel density changes.
-/// [`Shot`] reports the image's real pixel dimensions.
+/// An oversampled capture rasterizes `oversample` times denser still and is averaged
+/// back down in linear light ([`png::downsample`]) before it leaves, so [`Shot`]
+/// always reports — and carries — `width × scale` pixels.
 fn screenshot(
     browser: &Path,
     page_file: &Path,
     image_file: &Path,
     width: u32,
     height: u32,
-    scale: u32,
+    options: &ShotOptions,
 ) -> Result<Shot, String> {
     let height = height.clamp(MIN_HEIGHT, MAX_HEIGHT);
+    let scale = scale(options);
+    let oversample = oversample(options);
     let status = browser_command(browser)
-        .arg(format!("--force-device-scale-factor={scale}"))
+        .arg(format!(
+            "--force-device-scale-factor={}",
+            scale * oversample
+        ))
         .arg(format!("--screenshot={}", image_file.display()))
         .arg(format!("--window-size={width},{height}"))
         .arg(file_url(page_file))
@@ -674,6 +705,8 @@ fn screenshot(
             browser::BROWSER_ENV
         )
     })?;
+    let png = png::downsample(&png, oversample)
+        .map_err(|reason| format!("could not resample the capture: {reason}"))?;
 
     Ok(Shot {
         png,
@@ -847,7 +880,11 @@ mod tests {
             assert!(options.width.max(options.page_height) <= VISION_MAX_EDGE);
             assert_eq!(
                 options.scale, 1,
-                "extra density would only be scaled back out"
+                "delivered density past 1 would only be scaled back out in transit"
+            );
+            assert_eq!(
+                options.oversample, 2,
+                "the budget-sized page is averaged down from a denser rasterization"
             );
         }
     }
@@ -864,6 +901,26 @@ mod tests {
             ..ShotOptions::default()
         };
         assert_eq!(scale(&absurd), MAX_SCALE);
+    }
+
+    #[test]
+    fn oversampling_never_asks_the_browser_past_its_sane_range() {
+        // scale × oversample is what the browser is asked for; the product stays
+        // within MAX_SCALE, giving up oversample before giving up delivered density.
+        let reading = ShotOptions::for_reading(None);
+        assert_eq!(scale(&reading) * oversample(&reading), 2);
+        let dense_export = ShotOptions {
+            scale: 4,
+            oversample: 2,
+            ..ShotOptions::default()
+        };
+        assert_eq!(oversample(&dense_export), 1, "no room above scale 4");
+        let absurd = ShotOptions {
+            scale: 1,
+            oversample: 99,
+            ..ShotOptions::default()
+        };
+        assert_eq!(oversample(&absurd), MAX_SCALE);
     }
 
     #[test]
@@ -1212,5 +1269,30 @@ mod tests {
         assert_eq!(&shot.png[1..4], b"PNG");
         assert_eq!(shot.width, DEFAULT_WIDTH);
         assert!(shot.height >= 1);
+    }
+
+    /// End to end against a real browser: a reading capture rasterizes at twice the
+    /// density and arrives averaged back down to its stated size — which is also the
+    /// proof that [`png`] speaks the browser's own PNG (its color type, its row
+    /// filters), not only its own output.
+    #[test]
+    fn a_real_browser_reading_capture_arrives_at_its_stated_size() {
+        let _turn = browser::ENV_LOCK.lock().expect("env lock");
+        let Some(_) = browser::find() else {
+            return; // No browser on this machine.
+        };
+        let document = parse(
+            "::heading level=1 id=h\nFine ink\n::end\n\n::paragraph id=p\nBody line.\n::end\n",
+        );
+        let options = ShotOptions::for_reading(Some(400));
+        assert_eq!(oversample(&options), 2);
+        let shot = capture(&document, &options).expect("capture");
+        let image = png::decode(&shot.png).expect("the delivered PNG decodes");
+        assert_eq!(
+            (image.width, image.height),
+            (shot.width, shot.height),
+            "the denser rasterization was averaged down before delivery"
+        );
+        assert_eq!(shot.width, 400);
     }
 }

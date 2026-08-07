@@ -112,7 +112,7 @@ fn block_text(block: &Block, document: &Document, values: &Values) -> String {
             output_caption(block),
             fence(output_language(block), &body).trim_end()
         ),
-        "image" => format!("![{}]({})", block.alt, block.src),
+        "image" => image_text(block),
         "rule" => "---".to_string(),
         "svg" | "html" | "mermaid" | "graph" => fence(&block.kind, &body),
         "script" => fence(script_language(block), &body),
@@ -120,6 +120,36 @@ fn block_text(block: &Block, document: &Document, values: &Values) -> String {
         "stylesheet" => format!("<!-- stylesheet: {} -->", block.href),
         _ => body,
     }
+}
+
+/// The Markdown for a picture: a link when `src` names a file, a one-line stand-in when
+/// it carries the bytes themselves.
+///
+/// Hydration fills an `::image src=` with the file's current bytes as a `data:` URI so
+/// the rendered page travels whole — and printing that URI here handed a text reader
+/// megabytes of base64 nobody can read. Pixels are exactly what a text view cannot
+/// carry, so the stand-in states what the payload is and where to look at it, the same
+/// trade [`view_text`] makes for a framed page.
+fn image_text(block: &Block) -> String {
+    let Some(payload) = block.src.strip_prefix("data:") else {
+        return format!("![{}]({})", block.alt, block.src);
+    };
+    let media = payload
+        .split([';', ','])
+        .next()
+        .filter(|media| !media.is_empty())
+        .unwrap_or("image");
+    // Base64 spends four characters per three bytes.
+    let kilobytes = (payload.rsplit(',').next().unwrap_or("").len() * 3 / 4).max(1024) / 1024;
+    let name = if block.alt.is_empty() {
+        String::new()
+    } else {
+        format!(" \u{201c}{}\u{201d}", block.alt)
+    };
+    format!(
+        "*Image{name}: {media}, ~{kilobytes} KB, embedded — look at it rendered \
+         (`dx png`, `dx_read` with `block`).*"
+    )
 }
 
 /// The one-line stand-in for a framed page: what it shows and where to see it rendered.
@@ -257,6 +287,27 @@ mod tests {
              ::heading level=2 id=setup\nSetup\n::end\n",
         );
         assert_eq!(out, "# Guide\n\n- [Setup](#setup)\n\n## Setup\n");
+    }
+
+    #[test]
+    fn an_image_file_is_a_link_but_embedded_bytes_are_a_sentence() {
+        assert_eq!(
+            render("::image id=i src=frames/console.png\nConsole\n::end\n"),
+            "![Console](frames/console.png)\n"
+        );
+        // A hydrated image carries its bytes as a `data:` URI; printing that payload
+        // handed a text reader megabytes of base64. The text view states what it is and
+        // where to look instead — and never a character of the payload.
+        let embedded = format!(
+            "::image id=i src=data:image/png;base64,{}\nConsole\n::end\n",
+            "A".repeat(6000)
+        );
+        let out = render(&embedded);
+        assert!(!out.contains("AAAA"), "no payload in a text read: {out}");
+        assert!(out.contains("image/png"), "{out}");
+        assert!(out.contains("~4 KB"), "{out}");
+        assert!(out.contains("\u{201c}Console\u{201d}"), "{out}");
+        assert!(out.contains("dx_read"), "{out}");
     }
 
     #[test]
