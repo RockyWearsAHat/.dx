@@ -96,9 +96,9 @@ dx sync     .               # adopt, restore, and repair a workspace
 
 ## Where the documentation lives
 
-**This repository is itself a dx workspace.** The example documents and working notes are
-stored the way the product stores everything: `examples/*.dx` and `documents/*.dx` are
-one-line pointers, and their content is in the committed pack at
+**This repository is itself a dx workspace.** The example documents, the project index, and
+the development harness are stored the way the product stores everything: `examples/*.dx`,
+`index.dx`, and `dev.dx` are one-line pointers, and their content is in the committed pack at
 [`.doc/repo.dxcp`](.doc/README.md). Read them through `dx` (`dx text`, `dx open`, `dx png`) or
 on github.com with the browser extension installed, which resolves pointers in place and
 renders pull requests as document diffs. Without the extension, github.com shows the pointer
@@ -108,8 +108,11 @@ line — which is why this README carries pictures.
 |---------------|----------------|
 | [`examples/GETTING_STARTED.dx`](examples/GETTING_STARTED.dx) | The guided tour: first document, running code, boards, references |
 | [`examples/`](examples/) | Real documents: a showcase, a tutorial, board templates, a whole site designed and shipped on one board |
+| [`index.dx`](index.dx) | The project map, held true by its own verify block |
+| [`dev.dx`](dev.dx) | The development harness: `dx run dev.dx` proves the repository |
 | [`docs/dx-format-contract.md`](docs/dx-format-contract.md) | The format: every block type, every attribute, canonical form |
 | [`docs/github.md`](docs/github.md) | The browser extension and how github.com pages resolve |
+| [`docs/grill-me.md`](docs/grill-me.md) | The review checklist for parser, renderer, and save-path changes |
 | [`packaging/README.md`](packaging/README.md) | Building and publishing `DX.app` and the browser extensions |
 | [`.doc/README.md`](.doc/README.md) | The store: packs, chunks, and what to commit |
 
@@ -138,7 +141,13 @@ redoing the verification. [`examples/example_site_plan.dx`](examples/example_sit
 the method end to end — brief, board, shipped site, and the verify block that holds it — and
 [`examples/route-economics.dx`](examples/route-economics.dx) turns the token economy itself
 into a measured claim: a run block prices every read route in bytes against this repository's
-own documents and fails if the cheap route ever stops being cheap.
+own documents and fails if the cheap route ever stops being cheap. Work that is judged by
+pictures lives inside the document too: an `::image src=` block embeds the file's current
+bytes on every surface, so a frame-review loop — capture, look, fix — keeps its captures on
+the page it is reviewing. [`dev.dx`](dev.dx) is the method applied to this repository
+itself: its gates run the engine suites, the lints, both JS surface suites, and the
+rendered-page contract inside the sandbox, each gate declaring the tree it judges with
+`reads=`, so editing any source stales exactly the verdicts that read it.
 
 ## What executes, and what does not
 
@@ -159,16 +168,28 @@ document lives in, the run caches, and the system with its toolchains — never 
 your files, and never credential stores — and write only its own scratch directory.
 `$HOME`, `$TMPDIR`, and `$DX_SANDBOX` all point at that scratch, so state keyed off a real
 home (`~/.gitconfig`) is deliberately out of reach, and `/tmp` and the workspace stay
-read-only. Libraries fetch
+read-only. A toolchain that keys off the real home is named explicitly instead —
+[`dev.dx`](dev.dx)'s cargo gates show the working pattern (`CARGO_HOME` derived from the
+rustup cargo's own path). Libraries fetch
 during setup, declared with `deps=`; a failure shaped like the boundary (a denied write or
-read, an unreachable network) says so in the block's own output. A block whose work belongs in the
-document's own folder — a build directory, generated files, a test run over the repository
-beside the document — declares it with `writes=target,generated`: each folder must sit
-inside the document's folder (the `.doc` store and any symlinked way out are refused), it
-is created if missing, and the grant joins the block's fingerprint, so review prints it and
-widening what a block may touch re-opens review exactly like editing its code. It grants
-folders, never loose files, so a tool that rewrites one beside the document needs the flag
-that tells it not to (`cargo test --locked`). The network stays gone either way.
+read, an unreachable network) says so in the block's own output.
+
+Two declared attributes are the whole grant language. **`reads=`** names what the code
+judges — files or folders, comma-separated, confined to the document's folder. Declared
+content joins the run's fingerprint, so editing an input stales the recorded output and
+re-runs already-reviewed code on the next plain run; a folder covers every file under it
+(hidden entries, `target`, `node_modules`, and the block's own `writes=` folders left out),
+so a file appearing or vanishing is a change the record sees. **`writes=`** names where the
+block's work lands — a build directory, generated files, a test run over the repository
+beside the document (`writes=target,generated`): each folder must sit inside the document's
+folder (the `.doc` store and any symlinked way out are refused), it is created if missing,
+and the grant joins the block's fingerprint, so review prints it and widening what a block
+may touch re-opens review exactly like editing its code. It grants folders, never loose
+files, so a tool that rewrites one beside the document needs the flag that tells it not to
+(`cargo test --locked`). The asymmetry is deliberate: approval names the code and its
+powers — runner, deps, code, the declared `reads=` paths, the `writes=` grant — never the
+data, so new content re-runs by itself while new powers re-open review. The network stays
+gone either way.
 Author markup is sanitized against an allow-list, and
 `dx serve` answers loopback only. The claims are tested by attacking them:
 [`rust/doc-run/tests/attacks.rs`](rust/doc-run/tests/attacks.rs) is a file of real payloads,
@@ -192,9 +213,20 @@ like one thing in your editor and another to an agent:
 
 ## Development
 
+The fast loop is the repository's own harness — a dx document whose run blocks execute the
+gates and record their verdicts, staling themselves when the source they judge changes:
+
+```bash
+dx run dev.dx            # engine suites, lints, JS suites, corpus, page contract
+dx run dev.dx --force    # re-prove everything regardless of staleness
+```
+
+Two suites must watch from outside the sandbox — the attack payloads that prove the kernel
+boundary, and the Chromium captures — so the full proof stays a host-shell command:
+
 ```bash
 cd rust
-cargo test                                  # the full suite
+cargo test                                  # the whole suite, attacks and Chromium included
 cargo clippy --all-targets -- -D warnings
 cargo fmt --check
 ```

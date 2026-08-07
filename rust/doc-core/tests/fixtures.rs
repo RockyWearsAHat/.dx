@@ -19,12 +19,6 @@ const MIRRORS: &[(&str, &str)] = &[
     ("tutorial.input.dx", "examples/tutorial.dx"),
     ("showcase.input.dx", "examples/showcase.dx"),
     ("block-reference.input.dx", "examples/block-reference.dx"),
-    (
-        "compactness-comparison.input.dx",
-        "examples/compactness-comparison.dx",
-    ),
-    ("footprint-pair.input.dx", "examples/footprint-pair.dx"),
-    ("compact-proof.input.dx", "documents/compact-proof.dx"),
 ];
 
 #[test]

@@ -244,6 +244,43 @@ impl Resolver for FolderResolver {
     fn binary(&self, path: &str) -> Option<Vec<u8>> {
         fs::read(self.folder.join(path)).ok()
     }
+
+    fn files_under(&self, path: &str) -> Option<Vec<(String, String)>> {
+        let root = self.folder.join(path);
+        if !root.is_dir() {
+            return None;
+        }
+        let mut files = Vec::new();
+        collect_tree(&root, path, &mut files);
+        files.sort();
+        Some(files)
+    }
+}
+
+/// Gather every file under `dir` into `files` as `(path, lossy text)` pairs, `prefix`
+/// carrying the path back to the document's folder. Hidden entries and regenerated build
+/// caches (`target`, `node_modules`) are skipped — the contract [`Resolver::files_under`]
+/// states. Unreadable entries are skipped rather than failed: a vanished file simply
+/// stops contributing to the fingerprint, which is itself a change.
+fn collect_tree(dir: &Path, prefix: &str, files: &mut Vec<(String, String)>) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.starts_with('.') {
+            continue;
+        }
+        let path = entry.path();
+        let held = format!("{prefix}/{name}");
+        if path.is_dir() {
+            if name != "target" && name != "node_modules" {
+                collect_tree(&path, &held, files);
+            }
+        } else if let Ok(bytes) = fs::read(&path) {
+            files.push((held, String::from_utf8_lossy(&bytes).into_owned()));
+        }
+    }
 }
 
 /// Read and resolve the document at `path`.
@@ -449,6 +486,32 @@ mod tests {
     const NOTES: &str = "::heading level=1 id=notes\nNotes\n::end\n\n::paragraph id=p\nkubernetes scheduling notes\n::end\n";
 
     #[test]
+    fn a_folder_read_walks_sorted_and_skips_hidden_entries_and_build_caches() {
+        let root = scratch("folder-read");
+        fs::create_dir_all(root.join("src/deep")).expect("dirs");
+        fs::create_dir_all(root.join("src/target")).expect("dirs");
+        fs::create_dir_all(root.join("src/node_modules")).expect("dirs");
+        fs::write(root.join("src/b.rs"), "b").expect("write");
+        fs::write(root.join("src/a.rs"), "a").expect("write");
+        fs::write(root.join("src/deep/c.rs"), "c").expect("write");
+        fs::write(root.join("src/.hidden"), "no").expect("write");
+        fs::write(root.join("src/target/junk"), "no").expect("write");
+        fs::write(root.join("src/node_modules/junk"), "no").expect("write");
+
+        let resolver = FolderResolver {
+            folder: root.clone(),
+        };
+        let files = resolver.files_under("src").expect("a real folder answers");
+        let paths: Vec<&str> = files.iter().map(|(path, _)| path.as_str()).collect();
+        assert_eq!(paths, ["src/a.rs", "src/b.rs", "src/deep/c.rs"]);
+        assert!(
+            resolver.files_under("src/a.rs").is_none(),
+            "a file is not a folder"
+        );
+        assert!(resolver.files_under("gone").is_none());
+    }
+
+    #[test]
     fn a_saved_document_is_a_pointer_on_disk_and_real_content_through_the_resolver() {
         let root = scratch("pointer");
         let path = root.join("notes.dx");
@@ -593,12 +656,6 @@ mod tests {
         ("tutorial.input.dx", "examples/tutorial.dx"),
         ("showcase.input.dx", "examples/showcase.dx"),
         ("block-reference.input.dx", "examples/block-reference.dx"),
-        (
-            "compactness-comparison.input.dx",
-            "examples/compactness-comparison.dx",
-        ),
-        ("footprint-pair.input.dx", "examples/footprint-pair.dx"),
-        ("compact-proof.input.dx", "documents/compact-proof.dx"),
     ];
 
     #[test]

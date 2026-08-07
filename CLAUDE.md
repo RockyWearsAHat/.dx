@@ -281,10 +281,11 @@ through `doc-wasm` rather than reimplementing it.
 ### The repository is a dx workspace, and the fixtures are hermetic
 
 **This repository stores its own documents the way the product stores everything.**
-`examples/*.dx` and `documents/*.dx` are one-line pointers; their content is in the committed
-pack at `.doc/repo.dxcp`, and every read resolves them — `dx text`, `dx_read`, git after
-`dx git-setup`. Edit them through `dx` (`dx set`, `dx_edit`, `dx sync` after a plain-text
-write), never by writing pointer files by hand.
+`examples/*.dx`, `index.dx` (the project map, held true by its own verify block), and
+`dev.dx` (the development harness — see Quality bar) are one-line pointers; their content is
+in the committed pack at `.doc/repo.dxcp`, and every read resolves them — `dx text`,
+`dx_read`, git after `dx git-setup`. Edit them through `dx` (`dx set`, `dx_edit`, `dx sync`
+after a plain-text write), never by writing pointer files by hand.
 
 The round-trip test corpus must never become pointers, because `doc-core` compiles it in with
 `include_str!` — a suite that compiled pointers would stop testing documents. So the store's
@@ -380,10 +381,14 @@ example is a deliberate two-file change.
   (`<cache_root>/approvals`, never in a repository); a block whose approval fingerprint is
   not in it is `blocked` pending review, with the sentence naming `--review`, `--approve`,
   and `--force`. The approval identity is the code and its powers — runner, deps, the exact
-  code, the `reads=` *paths*, the `writes=` grant — and deliberately not the `reads=`
-  files' current text: editing an input stales the recorded output (the run fingerprint,
-  `hash=`, covers the text) and re-runs reviewed code, without re-opening review of a
-  program nobody touched. Editing the code or its header is a new approval identity.
+  code, the `reads=` *paths as declared*, the `writes=` grant — and deliberately not the
+  `reads=` files' current text: editing an input stales the recorded output (the run
+  fingerprint, `hash=`, covers the content) and re-runs reviewed code, without re-opening
+  review of a program nobody touched. A `reads=` path may name a **folder**: it expands to
+  every file under it (sorted; hidden entries, `target`, `node_modules`, and the block's
+  own `writes=` folders left out), so a file appearing or vanishing under it is a
+  fingerprint change — while approval keeps naming the declared path, because new data is
+  not a new power. Editing the code or its header is a new approval identity.
   Every local editing surface records the approval as it saves
   (`doc_run::approve_edited_block`, called by `dx set`/`insert`/`append` and MCP
   `dx_edit`): the hand that typed the code is the reviewer the gate asks for, exactly as
@@ -468,9 +473,16 @@ example is a deliberate two-file change.
 
 ## Quality bar
 
+The fast loop is the repository's own harness: `dx run dev.dx` runs the engine suites, the
+lints, both JS surface suites, corpus resolution, and the rendered-page contract inside the
+sandbox, recording each verdict in the document. Its gates declare their input trees with
+`reads=` (`rust`, `editor`, `examples`), so an edit stales exactly the gates that read it.
+The full proof still needs the host shell — the attack payloads watch the kernel boundary
+from outside it, and doc-shot drives a real Chromium:
+
 ```bash
 cd rust
-cargo test                                  # must be green (807 tests)
+cargo test                                  # must be green, every crate
 cargo clippy --all-targets -- -D warnings   # must be clean
 cargo fmt --check                           # must be clean
 ```

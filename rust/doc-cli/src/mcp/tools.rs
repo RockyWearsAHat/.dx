@@ -391,7 +391,14 @@ fn run_tool() -> Value {
                         loose files, so a tool that rewrites one beside the document needs \
                         the flag that tells it not to (`cargo test --locked`). The sandbox \
                         otherwise keeps the folder read-only, and the network stays gone \
-                        either way. \
+                        either way. What a block reads it declares with reads=src,data.csv \
+                        — files or folders; a folder covers every file under it (hidden \
+                        entries, target/node_modules, and the block's own writes= folders \
+                        left out). Declared content joins the run fingerprint, so an \
+                        edited input re-runs approved code by itself; approval names the \
+                        declared paths, never the content. Inside the sandbox $HOME is \
+                        redirected, so a toolchain keyed off a real home is named \
+                        explicitly (export CARGO_HOME from the rustup cargo's own path). \
                         After running, call dx_read to see the results rendered.",
         "inputSchema": {
             "type": "object",

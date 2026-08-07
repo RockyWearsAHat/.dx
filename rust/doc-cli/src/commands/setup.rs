@@ -553,7 +553,14 @@ RUN
               changing its code. It grants folders, never loose files, so a
               tool that rewrites one beside the document needs the flag that
               tells it not to (`cargo test --locked`). The network stays gone
-              either way.
+              either way. What a block reads it declares with reads=src,data.csv
+              — files or folders, comma-separated, confined to the document's
+              folder. Their current content joins the run fingerprint, so
+              editing a declared input re-runs already-approved code on the
+              next plain run; a folder covers every file under it (hidden
+              entries, target and node_modules, and the block's own writes=
+              folders left out). Approval names the declared paths, never the
+              content — new data re-runs, new powers re-review.
 
 PLATFORM
   dx serve    [--port N]                        the local rendering service

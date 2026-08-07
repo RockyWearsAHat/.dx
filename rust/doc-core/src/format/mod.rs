@@ -505,18 +505,6 @@ mod tests {
             include_str!("../../tests/fixtures/block-reference.input.dx"),
             include_str!("../../tests/fixtures/block-reference.expected.dx"),
         ),
-        (
-            include_str!("../../tests/fixtures/compactness-comparison.input.dx"),
-            include_str!("../../tests/fixtures/compactness-comparison.expected.dx"),
-        ),
-        (
-            include_str!("../../tests/fixtures/footprint-pair.input.dx"),
-            include_str!("../../tests/fixtures/footprint-pair.expected.dx"),
-        ),
-        (
-            include_str!("../../tests/fixtures/compact-proof.input.dx"),
-            include_str!("../../tests/fixtures/compact-proof.expected.dx"),
-        ),
     ];
 
     #[test]

@@ -112,8 +112,9 @@ fn initialize() -> Value {
                          read to consult, forever. Work through documents, not beside \
                          them: a build or test the project needs lives as a `::code run` \
                          block granting its build directory with writes= (for example \
-                         writes=target) and declaring what it judges with reads= — its \
-                         recorded verdict then stales mechanically when the code changes \
+                         writes=target) and declaring what it judges with reads= — files \
+                         or whole folders (reads=src) — so its \
+                         recorded verdict stales mechanically when any input changes \
                          and re-runs on your next read, so a claim recorded in a document \
                          is never one you must re-verify by hand. That is the harness, and \
                          the loop it drives: build, run the verify block, read the verdict, \

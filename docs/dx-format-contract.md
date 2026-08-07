@@ -233,11 +233,17 @@ that the block prints markup which should be rendered rather than quoted. `reads
 the sibling files the code reads (comma-separated, path-law-confined): their current text
 joins the run fingerprint (`hash=`), so editing a declared file makes the recorded output
 stale exactly like editing the code would — the record never claims "no changes" about
-content it read. Review's approval is a separate, narrower identity: the code and its
-powers (runner, deps, code, the `reads=` *paths*, the `writes=` grant), never the declared
-files' text — so an edited input re-runs approved code by itself, while an edited block or
-header re-opens review. A declared file that cannot be resolved blocks the run with a
-sentence, never a silent fingerprint that omits it.
+content it read. A `reads` path may name a **folder**: it expands to every file under it,
+sorted, with hidden entries and the caches a build regenerates (`target`,
+`node_modules`) left out, and anything under the block's own `writes=` grant excluded —
+what a block writes is its result, and a result inside the fingerprint would stale the
+block's own verdict forever. A file appearing, changing, or vanishing under a declared
+folder is a fingerprint change like any other. Review's approval is a separate, narrower
+identity: the code and its powers (runner, deps, code, the `reads=` *paths as declared*,
+the `writes=` grant), never the declared files' text or a folder's current expansion — so
+an edited input, or a new file under a declared folder, re-runs approved code by itself,
+while an edited block or header re-opens review. A declared path that cannot be resolved
+blocks the run with a sentence, never a silent fingerprint that omits it.
 
 `writes` names the folders of the document's own the block may write (comma-separated,
 path-law-confined, created if missing) — the sandbox otherwise keeps everything but the
