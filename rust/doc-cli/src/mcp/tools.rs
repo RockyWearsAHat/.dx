@@ -27,6 +27,8 @@ pub const TOOL_NAMES: &[&str] = &[
     "dx_index",
     "dx_write",
     "dx_edit",
+    "dx_append",
+    "dx_check",
     "dx_run",
 ];
 
@@ -44,6 +46,8 @@ pub fn catalogue() -> Value {
         index_tool(),
         write_tool(),
         edit_tool(),
+        append_tool(),
+        check_tool(),
         run_tool(),
     ])
 }
@@ -384,6 +388,92 @@ fn edit_tool() -> Value {
                 }
             },
             "required": ["path", "block", "text"]
+        }
+    })
+}
+
+/// `dx_append` — the cheap write.
+fn append_tool() -> Value {
+    json!({
+        "name": "dx_append",
+        "description": "The cheap write: a small thought lands for the cost of its own \
+                        lines. Think by writing — a finding, a hypothesis, a worklist line \
+                        goes into the document the moment it forms, not into conversation \
+                        memory to be distilled later. Pass `block` to append `text` to that \
+                        block's body (a finding onto the ledger, a line onto the `now` \
+                        worklist) without resending what is already there; pass `after` to \
+                        insert a new block after that id; with neither, the new block lands \
+                        at the end of the document. New blocks are prose kinds (`type`; \
+                        default paragraph) — a code block enters through dx_edit or \
+                        dx_write, where its powers are stated and reviewed. Growing a \
+                        runnable code block via `block` is an edit like any other: it runs, \
+                        and the edit is the review (run=false declines).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": path_property(),
+                "text": {
+                    "type": "string",
+                    "description": "The lines to add: appended to `block`'s body, or the \
+                                    body of the new block."
+                },
+                "block": {
+                    "type": "string",
+                    "description": "Id of an existing block to grow. Its body becomes \
+                                    body + newline + text. Not combinable with `after`."
+                },
+                "after": {
+                    "type": "string",
+                    "description": "Id of the block to insert a new block after. Omit \
+                                    both this and `block` to append at the document's end."
+                },
+                "type": {
+                    "type": "string",
+                    "description": "Kind of the new block: paragraph, bulleted-list, \
+                                    numbered-list, checklist, heading, quote… Default: \
+                                    paragraph. Ignored when `block` is given."
+                },
+                "level": {
+                    "type": "number",
+                    "description": "A new heading's level (1–4). Default: 2."
+                },
+                "id": {
+                    "type": "string",
+                    "description": "Id for the new block; omit to let the document name it. \
+                                    A taken id is refused, never silently renamed."
+                },
+                "run": {
+                    "type": "boolean",
+                    "description": "When growing a runnable code block: run it after the \
+                                    append. Default: true."
+                }
+            },
+            "required": ["path", "text"]
+        }
+    })
+}
+
+/// `dx_check` — tick one box.
+fn check_tool() -> Value {
+    json!({
+        "name": "dx_check",
+        "description": "Tick or untick one checklist box — the worklist move: claim a line \
+                        before working it, check it off when its verdict holds. The same \
+                        toggle a reader's click performs; every other item and block comes \
+                        back byte-identical. Cheaper than editing the list's whole body, \
+                        and the only honest way to spell the checked state.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": path_property(),
+                "block": { "type": "string", "description": "Id of the checklist block." },
+                "item": {
+                    "type": "number",
+                    "description": "The box's position in the checklist, counting from 0 — \
+                                    the order the renderer draws them."
+                }
+            },
+            "required": ["path", "block", "item"]
         }
     })
 }

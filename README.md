@@ -138,7 +138,9 @@ rather than a page sweep. Both reads are live: recorded
 output of already-approved code is re-run when it goes stale, so what the agent reads is
 what the code does now, with no `dx_run` in between; unreviewed code still never runs on a
 read. `dx_edit` changes one block — and runs a runnable one it just rewrote, since the edit
-is the review — `dx_run` executes, `dx_play` drives the rendered page with scripted input,
+is the review — `dx_append` and `dx_check` are the cheap writes (a finding onto a ledger,
+a tick on the worklist, for the cost of the change alone — think by writing, not by
+holding it in context), `dx_run` executes, `dx_play` drives the rendered page with scripted input,
 and `dx_index` scaffolds `index.dx`, a precursor project map the agent improves once and
 every later session consults for the price of one read. An assistant without MCP needs
 nothing: `dx` is a command, and `dx help` explains itself.

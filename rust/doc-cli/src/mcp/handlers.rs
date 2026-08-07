@@ -40,6 +40,8 @@ pub fn call(name: &str, args: &Value, root: &Path) -> ToolResult {
         "dx_render" => render(args, root),
         "dx_write" => write(args, root),
         "dx_edit" => edit(args, root),
+        "dx_append" => append(args, root),
+        "dx_check" => check(args, root),
         "dx_run" => run(args, root),
         other => Err(format!("unknown tool: {other}")),
     }
@@ -491,19 +493,17 @@ fn edit_in(args: &Value, root: &Path, cache_root: PathBuf) -> ToolResult {
             doc_core::edit::replace_block(&workspace::read(&path)?, wanted, header, body)?;
         (parse(&updated), focus)
     } else {
-        let mut document = parse(&workspace::read(&path)?);
-        let index = document
-            .blocks
-            .iter()
-            .position(|block| block.id.eq_ignore_ascii_case(wanted))
-            .ok_or_else(|| {
-                format!(
-                    "no block named `{wanted}` in {}. Available ids: {}",
-                    path.display(),
-                    block_ids(&document)
-                )
-            })?;
-        document.blocks[index].text = body.to_string();
+        // The body goes through the engine's own `set_block`, never a direct field
+        // write: a list's or checklist's content lives in its items, which only
+        // `set_body` knows how to rebuild — assigning `.text` here was a silent no-op
+        // for exactly those kinds, and skipped the hidden-node creation a board edit
+        // performs.
+        let document = parse(&doc_core::edit::set_block(
+            &workspace::read(&path)?,
+            wanted,
+            body,
+        )?);
+        let index = doc_core::edit::find(&document, wanted)?;
         let focus = document.blocks[index].id.clone();
         (document, focus)
     };
@@ -548,6 +548,101 @@ fn edit_in(args: &Value, root: &Path, cache_root: PathBuf) -> ToolResult {
         }
     }
     Ok(content)
+}
+
+/// `dx_append` — the cheap write: a small thought lands for the cost of its own lines.
+///
+/// This is what makes think-by-writing the path of least resistance instead of a
+/// discipline: a finding, a hypothesis, a worklist line goes into the document the
+/// moment it forms, without resending anything that is already there. `block` grows
+/// that block's body by `text` — it lands on the same replace [`edit`] performs, so a
+/// runnable code block grown this way runs, exactly as any edit of it would (`run:
+/// false` declines). `after` inserts a new block after that id; with neither, the new
+/// block lands at the end of the document. New blocks are prose kinds only — code
+/// enters through `dx_edit` or `dx_write`, where its powers are stated and reviewed,
+/// so the quick path can never quietly grow the executable surface.
+fn append(args: &Value, root: &Path) -> ToolResult {
+    if string(args, "block").is_some() && string(args, "after").is_some() {
+        return Err(
+            "pass `block` (grow that block's body) or `after` (insert a new block after it), \
+             not both"
+                .into(),
+        );
+    }
+    let text = required(args, "text")?;
+    let path = resolve(required(args, "path")?, root);
+
+    if let Some(wanted) = string(args, "block") {
+        let wanted = wanted.trim().trim_start_matches('#');
+        let document = parse(&workspace::read(&path)?);
+        let index = doc_core::edit::find(&document, wanted)?;
+        let existing = doc_core::edit::body(&document.blocks[index]);
+        let grown = if existing.is_empty() {
+            text.to_string()
+        } else {
+            format!("{existing}\n{text}")
+        };
+        return edit(
+            &json!({
+                "path": required(args, "path")?,
+                "block": document.blocks[index].id.clone(),
+                "text": grown,
+                "run": boolean_or(args, "run", true),
+            }),
+            root,
+        );
+    }
+
+    let kind = string(args, "type").unwrap_or("paragraph");
+    if kind == "code" {
+        return Err(
+            "dx_append writes prose; a code block enters through dx_edit or dx_write, where \
+             its powers (run, reads=, writes=) are stated and reviewed"
+                .into(),
+        );
+    }
+    let source = workspace::read(&path)?;
+    let after = match string(args, "after") {
+        Some(id) => Some(id.trim().trim_start_matches('#').to_string()),
+        None => parse(&source).blocks.last().map(|block| block.id.clone()),
+    };
+    let insertion = doc_core::edit::Insertion {
+        kind,
+        body: text,
+        id: string(args, "id").unwrap_or_default(),
+        level: number(args, "level").map_or(0, |level| level as u8),
+        language: "",
+        run: false,
+        deps: "",
+    };
+    let (updated, id) = doc_core::edit::insert_after(&source, after.as_deref(), &insertion)?;
+    workspace::save(&path, &parse(&updated))?;
+    Ok(vec![text_content(&format!(
+        "Added `{id}` to {}.",
+        path.display()
+    ))])
+}
+
+/// `dx_check` — tick or untick one checklist box: the worklist move.
+///
+/// The same [`doc_core::edit::toggle_check`] a reader's click and `dx check` perform,
+/// so every surface spells the checked state the same way. Every other item and every
+/// other block comes back byte-identical.
+fn check(args: &Value, root: &Path) -> ToolResult {
+    let path = resolve(required(args, "path")?, root);
+    let wanted = required(args, "block")?.trim().trim_start_matches('#');
+    let item = args
+        .get("item")
+        .and_then(Value::as_u64)
+        .ok_or("`item` is required: the box's position in the checklist, counting from 0")?
+        as usize;
+    let (updated, now_checked) =
+        doc_core::edit::toggle_check(&workspace::read(&path)?, wanted, item)?;
+    workspace::save(&path, &parse(&updated))?;
+    Ok(vec![text_content(&format!(
+        "Item {item} of `{wanted}` is now {}.",
+        if now_checked { "checked" } else { "unchecked" }
+    ))])
 }
 
 /// `dx_index` — scaffold `index.dx`, the precursor project map, from the file tree.
@@ -745,6 +840,110 @@ mod tests {
             .map(|item| item["text"].as_str().unwrap_or("").to_string())
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    #[test]
+    fn appending_to_a_block_costs_only_the_new_lines() {
+        let root = project("append-grow");
+        workspace::write_text(
+            &root.join("lab.dx"),
+            "::checklist id=worklist\n[x] shipped\n[ ] open\n::end\n",
+        )
+        .expect("seed");
+        call(
+            "dx_append",
+            &json!({ "path": "lab.dx", "block": "worklist", "text": "[ ] a fresh thought" }),
+            &root,
+        )
+        .expect("append");
+        let text = text_of(&call("dx_source", &json!({ "path": "lab.dx" }), &root).expect("read"));
+        // Everything already there survives, marks included, and the new line is last.
+        assert!(text.contains("shipped"), "{text}");
+        assert!(text.contains("a fresh thought"), "{text}");
+    }
+
+    #[test]
+    fn appending_inserts_a_new_block_after_an_id_or_at_the_end() {
+        let root = project("append-insert");
+        let after = call(
+            "dx_append",
+            &json!({ "path": "guide.dx", "after": "setup-body", "text": "A note in place." }),
+            &root,
+        )
+        .expect("insert");
+        assert!(text_of(&after).contains("Added"), "{after:?}");
+        call(
+            "dx_append",
+            &json!({ "path": "guide.dx", "text": "A trailing thought." }),
+            &root,
+        )
+        .expect("append at end");
+        let source = workspace::read(&root.join("guide.dx")).expect("read");
+        let note = source.find("A note in place.").expect("inserted");
+        assert!(
+            note < source.find("Usage").expect("usage"),
+            "in place, not at the end"
+        );
+        assert!(
+            source.trim_end().ends_with("::end"),
+            "canonical to the last byte"
+        );
+        assert!(source.contains("A trailing thought."));
+
+        let both = call(
+            "dx_append",
+            &json!({ "path": "guide.dx", "block": "setup-body", "after": "usage", "text": "x" }),
+            &root,
+        );
+        assert!(both.is_err(), "block and after together is a refusal");
+        let code = call(
+            "dx_append",
+            &json!({ "path": "guide.dx", "type": "code", "text": "x" }),
+            &root,
+        );
+        assert!(code.expect_err("code is refused").contains("dx_edit"));
+    }
+
+    #[test]
+    fn a_checkbox_ticks_by_position_and_everything_else_is_untouched() {
+        let root = project("check");
+        workspace::write_text(
+            &root.join("lab.dx"),
+            "::checklist id=worklist\n[ ] first\n[ ] second\n::end\n",
+        )
+        .expect("seed");
+        let ticked = call(
+            "dx_check",
+            &json!({ "path": "lab.dx", "block": "worklist", "item": 1 }),
+            &root,
+        )
+        .expect("tick");
+        assert!(text_of(&ticked).contains("now checked"), "{ticked:?}");
+        let source = workspace::read(&root.join("lab.dx")).expect("read");
+        assert!(source.contains("[ ] first"), "{source}");
+        assert!(source.contains("[x] second"), "{source}");
+    }
+
+    /// The regression this wave fixed: `dx_edit` wrote `.text` directly, which for a
+    /// checklist or list is a silent no-op — their content lives in items only
+    /// `set_body` rebuilds. The body now goes through the engine's `set_block`.
+    #[test]
+    fn editing_a_checklist_body_through_dx_edit_actually_changes_it() {
+        let root = project("edit-checklist");
+        workspace::write_text(
+            &root.join("lab.dx"),
+            "::checklist id=worklist\n[x] old line\n::end\n",
+        )
+        .expect("seed");
+        call(
+            "dx_edit",
+            &json!({ "path": "lab.dx", "block": "worklist", "text": "[ ] rewritten" }),
+            &root,
+        )
+        .expect("edit");
+        let source = workspace::read(&root.join("lab.dx")).expect("read");
+        assert!(source.contains("rewritten"), "{source}");
+        assert!(!source.contains("old line"), "{source}");
     }
 
     #[test]

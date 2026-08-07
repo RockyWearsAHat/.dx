@@ -240,6 +240,24 @@ fn initialize() -> Value {
                          sweep, and a claim worth keeping is recorded as a run block whose \
                          verdict proves it — that is what keeps this memory factual \
                          instead of a pile of notes that drift from the code.\n\n\
+                         WORK IN THE DOCUMENT, NOT IN CONTEXT. Conversation context is a \
+                         cache; the document is the memory. Think by writing: a \
+                         hypothesis, a judgment, a dead end goes into the working section \
+                         the moment it forms — reading your own two-line note back costs \
+                         ~50 tokens, re-deriving it costs thousands, every time. \
+                         dx_append adds the lines without resending anything; dx_check \
+                         ticks a worklist box. The `now` section (dx_index scaffolds it) \
+                         is the program counter: a live worklist — found / fixing / \
+                         verified — that makes the task the unit of work, not the \
+                         session; it survives compaction, crashes, and handoffs, and a \
+                         second agent picks up an unclaimed line. The convention that \
+                         makes it hold: the first tool call of a turn reads the working \
+                         section, the last one writes it. Between them the conversation \
+                         stays thin — read the worklist line, read the one section under \
+                         edit, run the verdict, write the result back; context never \
+                         holds the project, only the current move. Scratch promotes: \
+                         when a note hardens, move it into the durable section it \
+                         belongs to and delete the scratch.\n\n\
                          RESULTS LIVE IN THE DOCUMENT. Run output folds in as ::output, \
                          fingerprinted in place. A picture a run produces — a screenshot, \
                          a rendered frame — is an `::image src=<file> for=<run-block-id>` \
@@ -390,6 +408,16 @@ mod tests {
         assert!(instructions.contains("in the same sweep"));
         assert!(instructions.contains("one search away"));
         assert!(instructions.contains("three calls"));
+        // The inversion: work lives in the document while it happens — the `now` section
+        // carries the program counter, the first call of a turn reads it and the last
+        // writes it, and the cheap writes are what make that the easy path.
+        assert!(instructions.contains("WORK IN THE DOCUMENT, NOT IN CONTEXT"));
+        assert!(instructions.contains("Think by writing"));
+        assert!(instructions.contains("program counter"));
+        assert!(instructions.contains("first tool call of a turn reads the working section"));
+        assert!(instructions.contains("dx_append"));
+        assert!(instructions.contains("dx_check"));
+        assert!(instructions.contains("Scratch promotes"));
         assert!(instructions.contains("for=<run-block-id>"));
         assert!(instructions.contains("`header` param"));
         assert!(instructions.contains("hand-managed images proves nothing"));
