@@ -61,8 +61,25 @@ pub fn run_search(args: &Args) -> Result<String, String> {
             hit.document.relative,
             hit.document.title()
         ));
+        // The hit carries its answer: the best-matching block's first line, and the id
+        // to read the rest with `dx text <path> --section <id>`.
+        if let Some(id) = &hit.block {
+            if let Some(line) = first_line_of(&hit.document.document, id) {
+                out.push_str(&format!("       #{id}  {line}\n"));
+            }
+        }
     }
     Ok(out)
+}
+
+/// The first non-empty line of one block's text, for the hit's answer line.
+fn first_line_of(document: &doc_core::model::Document, id: &str) -> Option<String> {
+    let scoped = doc_core::render::section(document, id)?;
+    let text = doc_core::render::text(&scoped, &doc_core::render::TextOptions::default());
+    text.lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(ToString::to_string)
 }
 
 /// The directory to search: positional `index` if given, else the current directory.
@@ -120,6 +137,9 @@ mod tests {
         let out = run_search(&args(&["kubernetes", &root.to_string_lossy()])).expect("search");
         assert!(out.contains("guide.dx"));
         assert!(!out.contains("misc.dx"));
+        // The hit carries its answer line: the matching block's id and first line.
+        assert!(out.contains("#p"));
+        assert!(out.contains("kubernetes rollout steps"));
     }
 
     /// `--limit` bounds the hits, which is how a caller asks for the best few instead of
@@ -140,12 +160,15 @@ mod tests {
         }
         let directory = root.to_string_lossy().into_owned();
 
+        // A hit line starts with its score; the indented answer line under it does not count.
+        let hit_lines = |out: &str| out.lines().filter(|line| !line.starts_with(' ')).count();
+
         let all = run_search(&args(&["kubernetes", &directory])).expect("search");
-        assert_eq!(all.lines().count(), 3);
+        assert_eq!(hit_lines(&all), 3);
 
         let bounded =
             run_search(&args(&["kubernetes", &directory, "--limit", "2"])).expect("search");
-        assert_eq!(bounded.lines().count(), 2);
+        assert_eq!(hit_lines(&bounded), 2);
     }
 
     #[test]

@@ -26,7 +26,7 @@ mod service;
 mod state;
 mod workspace;
 
-use std::io::{self, BufReader, Write};
+use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -105,7 +105,8 @@ fn emit(output: &Output, args: &Args) -> ExitCode {
     }
 }
 
-/// Serve MCP over stdio until the client disconnects.
+/// Serve MCP over stdio until the client disconnects, re-execing when the binary on disk
+/// is updated so a long-lived session always answers with the current engine.
 ///
 /// The banner goes to stderr: stdout carries the JSON-RPC stream and nothing else.
 fn serve_mcp() -> ExitCode {
@@ -116,9 +117,7 @@ fn serve_mcp() -> ExitCode {
         root.display()
     );
 
-    let stdin = BufReader::new(io::stdin().lock());
-    let mut stdout = io::stdout().lock();
-    match mcp::serve(&root, stdin, &mut stdout) {
+    match mcp::serve(&root) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             let _ = writeln!(io::stderr(), "dx mcp — fatal I/O error: {error}");

@@ -118,10 +118,16 @@ line — which is why this README carries pictures.
 
 ## For AI agents
 
-`dx setup` registers the MCP server (`dx mcp`). An agent reads by the cheapest route that
-carries the meaning: `dx_outline` maps a document, `dx_source` reads prose and code as text
+`dx setup` registers the MCP server (`dx mcp`). The server keeps itself current: when the
+`dx` binary is updated, a running server notices after its next answer and re-execs in
+place, so a long-lived agent session picks up the new engine without anyone restarting the
+assistant. An agent reads by the cheapest route that
+carries the meaning: `dx_search` finds — and each hit carries its answer, the
+best-matching block's id and text, so a search that lands is the read — `dx_outline` maps
+a document, `dx_source` reads prose and code as text
 for a fraction of what images cost, and `dx_read` spends its page images on what text
-cannot carry — boards, diagrams, charts, rendered views. Both reads are live: recorded
+cannot carry — boards, diagrams, charts, rendered views — one block at a time (`block`)
+rather than a page sweep. Both reads are live: recorded
 output of already-approved code is re-run when it goes stale, so what the agent reads is
 what the code does now, with no `dx_run` in between; unreviewed code still never runs on a
 read. `dx_edit` changes one block — and runs a runnable one it just rewrote, since the edit

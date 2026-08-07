@@ -73,13 +73,7 @@ impl SearchIndex {
 
         let mut hits: Vec<ScoredHit> = Vec::new();
         for doc in &self.docs {
-            let mut score = 0.0f64;
-            for token in &query_tokens {
-                if let Some(&count) = doc.counts.get(token) {
-                    let frequency = f64::from(count) / f64::from(doc.total.max(1));
-                    score += frequency + 1.0; // coverage bonus per matched distinct token
-                }
-            }
+            let score = score_against(&doc.counts, doc.total, &query_tokens);
             if score > 0.0 {
                 hits.push(ScoredHit {
                     path: doc.path.clone(),
@@ -97,6 +91,54 @@ impl SearchIndex {
         });
         hits
     }
+}
+
+/// The one scoring rule, at every granularity: per distinct query token present, its
+/// normalised term frequency (`occurrences / total.max(1)`) plus a coverage bonus of `1.0`.
+/// [`SearchIndex::search`] applies it to documents and [`best_block_id`] to single blocks,
+/// so the two rankings cannot drift apart.
+fn score_against(counts: &HashMap<String, u32>, total: u32, query_tokens: &[String]) -> f64 {
+    let mut score = 0.0f64;
+    for token in query_tokens {
+        if let Some(&count) = counts.get(token) {
+            score += f64::from(count) / f64::from(total.max(1)) + 1.0;
+        }
+    }
+    score
+}
+
+/// The id of the block within `document` that best matches `query`, under the same scoring
+/// [`SearchIndex::search`] ranks documents with. Only searchable blocks compete (see the
+/// module contract), the earliest block wins a tie so the answer is deterministic, and
+/// `None` means nothing matched — or the query tokenised to nothing.
+///
+/// This is what lets a search hit carry its answer: the caller hands back this one block's
+/// text with the hit, instead of leaving the reader a second read to find it.
+#[must_use]
+pub fn best_block_id(document: &Document, query: &str) -> Option<String> {
+    let query_tokens = distinct_tokens(query);
+    if query_tokens.is_empty() {
+        return None;
+    }
+
+    let mut best: Option<(f64, &Block)> = None;
+    for block in &document.blocks {
+        if !is_searchable(&block.kind) || block.id.is_empty() {
+            continue;
+        }
+        let mut tokens = Vec::new();
+        push_block_tokens(&mut tokens, block);
+        let total = tokens.len() as u32;
+        let mut counts: HashMap<String, u32> = HashMap::new();
+        for token in tokens {
+            *counts.entry(token).or_insert(0) += 1;
+        }
+        let score = score_against(&counts, total, &query_tokens);
+        if score > 0.0 && best.as_ref().is_none_or(|(top, _)| score > *top) {
+            best = Some((score, block));
+        }
+    }
+    best.map(|(_, block)| block.id.clone())
 }
 
 /// Build a [`SearchIndex`] over `(path, document)` pairs.
@@ -347,6 +389,44 @@ mod tests {
         let index = build_index(&[("one.dx".to_string(), one), ("both.dx".to_string(), both)]);
         let hits = index.search("rust wasm");
         assert_eq!(hits[0].path, "both.dx");
+    }
+
+    #[test]
+    fn best_block_is_the_block_that_answers_the_query() {
+        let source = "::heading level=1 id=top\nGuide\n::end\n\n\
+::paragraph id=intro\nInstalling is elsewhere.\n::end\n\n\
+::paragraph id=rollout\nkubernetes rollout steps, rollout twice\n::end\n";
+        let document = crate::format::parse(source);
+        assert_eq!(
+            best_block_id(&document, "rollout").as_deref(),
+            Some("rollout")
+        );
+    }
+
+    #[test]
+    fn best_block_covering_more_query_terms_beats_repeating_one() {
+        let source = "::paragraph id=repeat\ninstalling installing installing\n::end\n\n\
+::paragraph id=covers\ninstalling elsewhere\n::end\n";
+        let document = crate::format::parse(source);
+        assert_eq!(
+            best_block_id(&document, "installing elsewhere").as_deref(),
+            Some("covers")
+        );
+    }
+
+    #[test]
+    fn best_block_is_none_when_nothing_matches_or_the_query_is_empty() {
+        let document = crate::format::parse("::paragraph id=p\nplain prose\n::end\n");
+        assert!(best_block_id(&document, "absent").is_none());
+        assert!(best_block_id(&document, "  ::  ").is_none());
+    }
+
+    #[test]
+    fn best_block_ties_go_to_the_earliest_block() {
+        let source = "::paragraph id=first\nsame words\n::end\n\n\
+::paragraph id=second\nsame words\n::end\n";
+        let document = crate::format::parse(source);
+        assert_eq!(best_block_id(&document, "same").as_deref(), Some("first"));
     }
 
     #[test]

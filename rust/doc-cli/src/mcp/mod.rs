@@ -11,7 +11,7 @@
 mod handlers;
 mod tools;
 
-use std::io::{BufRead, Write};
+use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
@@ -40,29 +40,111 @@ mod code {
     pub const INVALID_PARAMS: i64 = -32602;
 }
 
-/// Serve MCP over `input`/`output` until the client disconnects.
+/// Serve MCP over this process's stdio until the client disconnects, re-execing in place
+/// when the binary on disk is updated so a long-lived session always answers with the
+/// current engine.
 ///
 /// Returns the first I/O error; a clean end-of-input is success.
-pub fn serve<R: BufRead, W: Write>(root: &Path, input: R, output: &mut W) -> std::io::Result<()> {
-    for line in input.lines() {
-        let line = line?;
-        if line.trim().is_empty() {
-            continue;
+pub fn serve(root: &Path) -> std::io::Result<()> {
+    let engine = engine_fingerprint();
+    let mut input = BufReader::new(std::io::stdin().lock());
+    let mut output = std::io::stdout().lock();
+    serve_buffered(root, &mut input, &mut output, engine.as_ref())
+}
+
+/// The serving loop behind [`serve`]: answer requests line by line — and keep the engine
+/// current.
+///
+/// MCP clients hold a server for the life of a session, which outlives any `dx` upgrade:
+/// without the drift check, every long-lived agent session keeps running the engine it
+/// started with, old bugs included, until a person thinks to restart the assistant. So
+/// after each answer, if the binary on disk no longer matches `engine` — the fingerprint
+/// recorded at startup — the server re-execs it in place: same arguments, same stdio, and
+/// the next request is served by the new engine. The check runs only while the reader's
+/// own buffer is empty: bytes still in the kernel pipe survive an exec, bytes already
+/// buffered here would not, so a pipelined request is never dropped (drift is caught
+/// after a later answer instead).
+fn serve_buffered<R: std::io::Read, W: Write>(
+    root: &Path,
+    input: &mut BufReader<R>,
+    output: &mut W,
+    engine: Option<&(PathBuf, EngineFingerprint)>,
+) -> std::io::Result<()> {
+    let mut line = String::new();
+    loop {
+        line.clear();
+        if input.read_line(&mut line)? == 0 {
+            return Ok(()); // clean end of input: the client disconnected
         }
-
-        let response = match serde_json::from_str::<Value>(&line) {
-            Ok(request) => handle(&request, root),
-            Err(_) => Some(error(Value::Null, code::PARSE_ERROR, "Parse error")),
-        };
-
-        if let Some(response) = response {
-            let encoded = serde_json::to_string(&response).unwrap_or_else(|_| "null".to_string());
+        if let Some(encoded) = answer(&line, root) {
             writeln!(output, "{encoded}")?;
             output.flush()?;
         }
+        if let Some((exe, recorded)) = engine {
+            if input.buffer().is_empty() && engine_drifted(exe, recorded) {
+                let _ = writeln!(
+                    std::io::stderr(),
+                    "dx mcp — binary updated on disk; restarting with the new engine"
+                );
+                reexec(exe); // returns only if the exec failed; keep serving then
+            }
+        }
     }
-    Ok(())
 }
+
+/// Answer one wire line: parse, dispatch, encode. `None` for blank lines and
+/// notifications, which get no reply.
+fn answer(line: &str, root: &Path) -> Option<String> {
+    if line.trim().is_empty() {
+        return None;
+    }
+    let response = match serde_json::from_str::<Value>(line) {
+        Ok(request) => handle(&request, root)?,
+        Err(_) => error(Value::Null, code::PARSE_ERROR, "Parse error"),
+    };
+    Some(serde_json::to_string(&response).unwrap_or_else(|_| "null".to_string()))
+}
+
+/// What identifies the engine on disk: its length and modification time. Cheap enough to
+/// check after every request, and any reinstall changes it (a rewritten file gets a new
+/// mtime even at the same length).
+type EngineFingerprint = (u64, std::time::SystemTime);
+
+/// The running binary's path and fingerprint, recorded at startup. `None` when the
+/// binary cannot be identified — then the server simply never re-execs.
+fn engine_fingerprint() -> Option<(PathBuf, EngineFingerprint)> {
+    let exe = std::env::current_exe().ok()?;
+    let recorded = fingerprint_of(&exe)?;
+    Some((exe, recorded))
+}
+
+/// Fingerprint the file at `path`, or `None` when it cannot be read.
+fn fingerprint_of(path: &Path) -> Option<EngineFingerprint> {
+    let meta = std::fs::metadata(path).ok()?;
+    Some((meta.len(), meta.modified().ok()?))
+}
+
+/// Whether the binary at `exe` no longer matches `recorded`. A file that cannot be
+/// fingerprinted right now (mid-replacement, or gone) is not drift — the next answer
+/// checks again.
+fn engine_drifted(exe: &Path, recorded: &EngineFingerprint) -> bool {
+    fingerprint_of(exe).is_some_and(|current| current != *recorded)
+}
+
+/// Replace this process with a fresh execution of `exe`, same arguments, same stdio.
+/// Returns only when the exec itself failed; the caller keeps serving with the old engine.
+#[cfg(unix)]
+fn reexec(exe: &Path) {
+    use std::os::unix::process::CommandExt;
+    let error = std::process::Command::new(exe)
+        .args(std::env::args_os().skip(1))
+        .exec();
+    let _ = writeln!(std::io::stderr(), "dx mcp — restart failed: {error}");
+}
+
+/// On platforms without `exec`, an updated binary keeps serving until the session ends.
+#[cfg(not(unix))]
+fn reexec(_exe: &Path) {}
 
 /// Handle one request, returning the response — or `None` for a notification.
 #[must_use]
@@ -96,12 +178,15 @@ fn initialize() -> Value {
         "instructions": "This project uses .dx documents: block documents that render to \
                          pages and can execute their own code blocks. Treat them as durable, \
                          token-cheap memory: read recorded results instead of re-deriving \
-                         them. Find before reading: dx_search or dx_list, then dx_outline to \
+                         them. Find before reading: dx_search or dx_list — a search hit \
+                         carries its answer (the best-matching block's id and text), so a \
+                         search that lands is the read. Then dx_outline to \
                          map a document as one row per block, and always index into the \
                          document — read one `section` (any block id), never page through \
                          the rest. Prose and code are cheapest as text: dx_source, a \
                          fraction of what page images cost. Spend dx_read's images only on \
-                         what text cannot carry — boards, diagrams, charts, rendered views. \
+                         what text cannot carry — boards, diagrams, charts, rendered views — \
+                         and one block at a time (`block`), never a page sweep. \
                          Reads are live: stale output of approved code re-runs before you \
                          see it, so what you read is what the code does now; only \
                          unreviewed code waits, and the read says so. Edit with dx_edit, \
@@ -239,10 +324,54 @@ mod tests {
         assert!(instructions.contains("dx_edit"));
         assert!(instructions.contains("::code src="));
         assert!(instructions.contains("dx_index"));
+        // A search hit carries its answer, and images are spent one block at a time.
+        assert!(instructions.contains("a search that lands is the read"));
+        assert!(instructions.contains("never a page sweep"));
         // And the guidance names the method: the verify-block harness, driven in a loop
         // until every claim holds — completion is the document's proof, not an impression.
         assert!(instructions.contains("harness"));
         assert!(instructions.contains("until every claim holds"));
+    }
+
+    #[test]
+    fn a_rewritten_binary_is_drift_and_an_untouched_one_is_not() {
+        let dir = std::env::temp_dir().join("dx-server-tests-drift");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("dir");
+        let exe = dir.join("engine");
+        std::fs::write(&exe, b"engine v1").expect("write");
+        let recorded = fingerprint_of(&exe).expect("fingerprint");
+
+        assert!(!engine_drifted(&exe, &recorded));
+        // A reinstall writes new bytes; the different length alone must register.
+        std::fs::write(&exe, b"engine v2, longer").expect("rewrite");
+        assert!(engine_drifted(&exe, &recorded));
+    }
+
+    #[test]
+    fn a_binary_that_cannot_be_read_is_not_drift() {
+        // Mid-replacement (or deleted), the file may be unreadable for a moment; the
+        // server must keep serving rather than re-exec into nothing.
+        let gone = std::env::temp_dir().join("dx-server-tests-drift-gone/engine");
+        assert!(fingerprint_of(&gone).is_none());
+        assert!(!engine_drifted(
+            &gone,
+            &(0, std::time::SystemTime::UNIX_EPOCH)
+        ));
+    }
+
+    #[test]
+    fn answers_carry_the_reply_and_skip_blank_lines_and_notifications() {
+        let root = project("answer");
+        let ping = serde_json::to_string(&request(9, "ping", json!({}))).expect("encode");
+        assert!(answer(&ping, &root).expect("reply").contains("\"id\":9"));
+        assert!(answer("", &root).is_none());
+        assert!(answer("   ", &root).is_none());
+        // A notification (no id) gets no reply.
+        let note = r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#;
+        assert!(answer(note, &root).is_none());
+        // Garbage still gets a parse error, not silence.
+        assert!(answer("not json", &root).expect("reply").contains("-32700"));
     }
 
     #[test]
@@ -341,7 +470,13 @@ mod tests {
             serde_json::to_string(&request(2, "tools/list", json!({}))).expect("json"),
         );
         let mut output = Vec::new();
-        serve(&root, input.as_bytes(), &mut output).expect("serve");
+        serve_buffered(
+            &root,
+            &mut BufReader::new(input.as_bytes()),
+            &mut output,
+            None,
+        )
+        .expect("serve");
 
         let lines: Vec<&str> = std::str::from_utf8(&output)
             .expect("utf8")
@@ -361,7 +496,13 @@ mod tests {
             serde_json::to_string(&request(9, "ping", json!({}))).expect("json")
         );
         let mut output = Vec::new();
-        serve(&root, input.as_bytes(), &mut output).expect("serve");
+        serve_buffered(
+            &root,
+            &mut BufReader::new(input.as_bytes()),
+            &mut output,
+            None,
+        )
+        .expect("serve");
 
         let lines: Vec<&str> = std::str::from_utf8(&output)
             .expect("utf8")
