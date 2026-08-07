@@ -4,26 +4,48 @@ _Resume point after `/compact` or `/clear`. Update after every task or wave (see
 The full wave-by-wave history (parts 1–39) lives in this file's own git history —
 `git log -p HANDOFF.md`._
 
-Last updated: 2026-08-06
+Last updated: 2026-08-07
 
 ## Current state
 
 Everything green, everything current, proven mechanically:
 
-- `cargo test` **820/820** (attacks 18/18 among them), clippy `-D warnings` clean,
+- `cargo test` **828/828** (attacks 18/18 among them), clippy `-D warnings` clean,
   `fmt --check` clean, both node suites 34/34, fixture corpus and drift guard green.
-- `dx run dev.dx --force`: all five gates ok — engine crates in-sandbox, lints, both JS
-  surfaces, corpus (10 documents resolve, canonical), rendered-page contract (fold present,
-  no scripts, no external fetches, view sandbox empty).
-- `index.dx` verify: map holds. `dx doctor` fully clean — release binary reinstalled to
-  `~/.local/bin/dx`, both wasm engines rebuilt (`editor/build.sh`), `DX.app` rebuilt from
-  this tree and installed, all 12 runners probed.
+- `dx run dev.dx`: all five gates ok — this wave's `rust/` edit re-ran exactly the three
+  gates that read it (engine, lints, surfaces); corpus and page-contract stayed cached.
+- Release binary reinstalled to `~/.local/bin/dx` (**rm + cp**, not cp-in-place — macOS
+  SIGKILLs a cp over a running signed binary), both wasm engines rebuilt
+  (`editor/build.sh`).
 
-**Known, needs a restart, not code:** the running MCP server outlives sessions and predates
-this binary (its `dx_edit` still drops `writes=` — the pre-part-36 normalize). Restart the
-assistant before using the `dx` MCP tools; the CLI is always current.
+**One last manual restart:** running MCP servers predate the drift check below, so restart
+the assistant once more. After that the class is closed — servers pick up new binaries
+themselves.
 
-## This wave, part 40: the harness, folder reads, and the publish cleanup
+## This wave, part 41: the server that stays current, and the search that answers
+
+The field sessions' efficiency complaints (screenshots, 2026-08-07), fixed at the root:
+
+- **`dx mcp` re-execs when its binary is updated** (`mcp::serve_buffered`). Fingerprint =
+  length + mtime of `current_exe`, recorded at startup, checked after each answer; on
+  drift the server re-execs itself — same args, same stdio — and the next request is
+  served by the new engine. The check only runs while the reader's own buffer is empty
+  (bytes in the kernel pipe survive an exec; buffered bytes would not), so pipelined
+  requests are never dropped. Proven live: touch the binary mid-session → answer, stderr
+  notice, second banner, next request answered by the new process. This closes the
+  "restart the assistant" class part 40 misfiled as operational, including stale handshake
+  instructions steering agents to page-image reads.
+- **A search hit carries its answer.** `doc_core::search::best_block_id` ranks blocks by
+  the same rule as documents (shared `score_against` — one scoring implementation);
+  `workspace::Hit.block` names the winner; MCP `dx_search` hands over `block` +
+  `excerpt` (the block's section text, capped at 700 bytes on a char boundary) and
+  `dx search` prints an indented `#id first-line` answer line. Find-then-read is one call.
+- **Steering: images one block at a time.** Handshake instructions now say a search that
+  lands *is* the read, and `dx_read` images are spent per-block (`block`), never a page
+  sweep; `dx_search`'s description no longer says "follow up with dx_read". README agent
+  section updated with all three.
+
+## Part 40: the harness, folder reads, and the publish cleanup
 
 "Rewrite all documentation, set the project up with dx properly, test every surface by
 automating inside dx, make it publish-worthy" — plus a field review (7.5/10) asking for
@@ -83,5 +105,6 @@ documented grant laws, directory `reads=`, and an in-document image loop.
 - **Driving DX.app from automation:** post real `CGEvent`s — AppleScript's System Events
   click never reaches the DOM and makes a broken editor look like a working one.
 
-Next step: restart the assistant so the MCP server picks up this binary, then let a field
-session exercise directory `reads=` and the harness pattern on a real project.
+Next step: restart the assistant once (the last time this is ever needed — see part 41),
+then let a field session measure the new economy: search-with-answer and per-block image
+reads against the part-40 baseline of ~10 calls before the first edit.

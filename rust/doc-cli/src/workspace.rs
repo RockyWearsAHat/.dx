@@ -408,13 +408,16 @@ pub fn load_all(root: &Path) -> Vec<Loaded> {
     loaded
 }
 
-/// One search hit: a document and why it matched.
+/// One search hit: a document, why it matched, and where the answer is.
 #[derive(Debug, Clone)]
 pub struct Hit {
     /// The matching document.
     pub document: Loaded,
     /// Relevance score from the index; higher is a better match.
     pub score: f64,
+    /// Id of the block that best matches the query — the hit's answer, so a caller can
+    /// hand its text over (or read its section) without a second search.
+    pub block: Option<String>,
 }
 
 /// Search every document under `root` for `query`, best matches first.
@@ -433,6 +436,7 @@ pub fn search(root: &Path, query: &str, limit: usize) -> Vec<Hit> {
                     Some(Hit {
                         // Ranking order is the store's; the score is not re-derived here.
                         score: 1.0,
+                        block: doc_core::search::best_block_id(&document, query),
                         document: Loaded {
                             path: root.join(&summary.path),
                             relative: summary.path,
@@ -463,6 +467,7 @@ pub fn search(root: &Path, query: &str, limit: usize) -> Vec<Hit> {
                 .iter()
                 .find(|loaded| loaded.relative == result.path)
                 .map(|loaded| Hit {
+                    block: doc_core::search::best_block_id(&loaded.document, query),
                     document: loaded.clone(),
                     score: result.score,
                 })

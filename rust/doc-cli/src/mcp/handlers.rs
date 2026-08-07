@@ -385,7 +385,11 @@ fn list(args: &Value, root: &Path) -> ToolResult {
     Ok(vec![json_content(&json!({ "documents": documents }))])
 }
 
-/// `dx_search` — documents matching a query.
+/// `dx_search` — documents matching a query, each hit carrying its answer.
+///
+/// A hit names the block that best matches the query and hands over that block's text (a
+/// heading brings its whole section), capped at [`SEARCH_EXCERPT_LIMIT`] — so the search
+/// that lands usually needs no follow-up read at all.
 fn search(args: &Value, root: &Path) -> ToolResult {
     let query = required(args, "query")?;
     let directory = directory_arg(args, root);
@@ -394,14 +398,38 @@ fn search(args: &Value, root: &Path) -> ToolResult {
     let hits: Vec<Value> = workspace::search(&directory, query, limit)
         .into_iter()
         .map(|hit| {
-            json!({
+            let mut item = json!({
                 "path": hit.document.relative,
                 "title": hit.document.title(),
                 "score": hit.score,
-            })
+            });
+            if let Some(id) = &hit.block {
+                if let Some(scoped) = section(&hit.document.document, id) {
+                    item["block"] = json!(id);
+                    item["excerpt"] = json!(excerpt(&text(&scoped, &TextOptions::default())));
+                }
+            }
+            item
         })
         .collect();
     Ok(vec![json_content(&json!({ "matches": hits }))])
+}
+
+/// Longest excerpt one search hit carries, in bytes — enough to answer most questions on
+/// the spot, while the hit still names its block for a full section read.
+const SEARCH_EXCERPT_LIMIT: usize = 700;
+
+/// Cap `answer` at [`SEARCH_EXCERPT_LIMIT`] bytes on a character boundary, marking the cut.
+fn excerpt(answer: &str) -> String {
+    let trimmed = answer.trim_end();
+    if trimmed.len() <= SEARCH_EXCERPT_LIMIT {
+        return trimmed.to_string();
+    }
+    let mut end = SEARCH_EXCERPT_LIMIT;
+    while !trimmed.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…", &trimmed[..end])
 }
 
 /// `dx_render` — the HTML page source.
@@ -832,6 +860,22 @@ mod tests {
 
         let found = text_of(&call("dx_search", &json!({ "query": "install" }), &root).expect("s"));
         assert!(found.contains("guide.dx"));
+        // The hit carries its answer: the matching block's id and text, no second read.
+        let parsed: Value = serde_json::from_str(&found).expect("json");
+        assert_eq!(parsed["matches"][0]["block"], "setup-body");
+        assert!(parsed["matches"][0]["excerpt"]
+            .as_str()
+            .expect("excerpt")
+            .contains("Install it first."));
+    }
+
+    #[test]
+    fn a_long_search_answer_is_capped_on_a_character_boundary() {
+        let long = "é".repeat(SEARCH_EXCERPT_LIMIT); // 2 bytes per char, well past the cap
+        let capped = excerpt(&long);
+        assert!(capped.len() <= SEARCH_EXCERPT_LIMIT + '…'.len_utf8());
+        assert!(capped.ends_with('…'));
+        assert!(excerpt("short answer") == "short answer");
     }
 
     #[test]

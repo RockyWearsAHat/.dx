@@ -476,7 +476,7 @@ READ
               executes; targets are block ids from dx outline, or x,y pixels.
   dx open     <file> [--section ID]             open the rendered page in a browser
   dx ls       [dir]                             every .dx document in a project
-  dx search   <query> [dir] [--limit N]         find documents by content
+  dx search   <query> [dir] [--limit N]         find documents; each hit shows its answering block
 
 WRITE
   dx new      <file> [--title T]                create a document
