@@ -40,6 +40,7 @@ pub fn call(name: &str, args: &Value, root: &Path) -> ToolResult {
         "dx_render" => render(args, root),
         "dx_write" => write(args, root),
         "dx_edit" => edit(args, root),
+        "dx_board" => board(args, root),
         "dx_append" => append(args, root),
         "dx_check" => check(args, root),
         "dx_run" => run(args, root),
@@ -550,6 +551,99 @@ fn edit_in(args: &Value, root: &Path, cache_root: PathBuf) -> ToolResult {
     Ok(content)
 }
 
+/// `dx_board` — place, arrange, detach, or link/unlink a node on a `::board`.
+///
+/// The one MCP path to [`doc_core::edit`]'s board operations — the same ones `dx board`
+/// and every editing surface's drag/arrange/link actions call — so a node an agent places
+/// gets the identical collision-safe board a person dragging one gets: anything it lands
+/// on is [settled](doc_core::edit) out of its way, never left stacked. `dx_edit` writes a
+/// board's raw body text verbatim and stops at `create_missing_nodes` — right for a caller
+/// stating exact coordinates by hand, wrong for "put this node here": this is that tool.
+fn board(args: &Value, root: &Path) -> ToolResult {
+    let path = resolve(required(args, "path")?, root);
+    let board_id = required(args, "board")?;
+    let action = required(args, "action")?;
+    let source = workspace::read(&path)?;
+
+    let (updated, message) = match action {
+        "place" => {
+            let node = string(args, "node").unwrap_or_default();
+            let w = doc_core::edit::SizeSpec::parse(string(args, "w").unwrap_or_default())
+                .map_err(|why| format!("`w`: {why}"))?;
+            let h = doc_core::edit::SizeSpec::parse(string(args, "h").unwrap_or_default())
+                .map_err(|why| format!("`h`: {why}"))?;
+            let (updated, id) = doc_core::edit::board_place(
+                &source,
+                board_id,
+                node,
+                integer(args, "x"),
+                integer(args, "y"),
+                w,
+                h,
+            )?;
+            (
+                updated,
+                format!("Placed `{id}` on `{board_id}` in {}.", path.display()),
+            )
+        }
+        "arrange" => {
+            let spec = required(args, "placements")?;
+            let placements = doc_core::edit::placements(spec)?;
+            let count = placements.len();
+            let updated = doc_core::edit::board_arrange(&source, board_id, &placements)?;
+            (
+                updated,
+                format!(
+                    "Placed {count} node{} on `{board_id}` in {}.",
+                    if count == 1 { "" } else { "s" },
+                    path.display()
+                ),
+            )
+        }
+        "detach" => {
+            let node = required(args, "node")?;
+            let updated = doc_core::edit::board_detach(&source, board_id, node)?;
+            (
+                updated,
+                format!("Detached `{node}` from `{board_id}` in {}.", path.display()),
+            )
+        }
+        "link" | "unlink" => {
+            let from = required(args, "node")?;
+            let to = required(args, "to")?;
+            let updated = doc_core::edit::board_link(
+                &source,
+                board_id,
+                from,
+                to,
+                action == "link",
+                string(args, "from_side").unwrap_or_default(),
+                string(args, "to_side").unwrap_or_default(),
+            )?;
+            (
+                updated,
+                format!(
+                    "{} `{from}` -> `{to}` on `{board_id}` in {}.",
+                    if action == "link" {
+                        "Linked"
+                    } else {
+                        "Unlinked"
+                    },
+                    path.display()
+                ),
+            )
+        }
+        other => {
+            return Err(format!(
+                "`action` must be one of place, arrange, detach, link, unlink — not `{other}`"
+            ))
+        }
+    };
+
+    workspace::save(&path, &parse(&updated))?;
+    Ok(vec![text_content(&message)])
+}
+
 /// `dx_append` — the cheap write: a small thought lands for the cost of its own lines.
 ///
 /// This is what makes think-by-writing the path of least resistance instead of a
@@ -794,6 +888,13 @@ fn number(args: &Value, key: &str) -> Option<u32> {
         .map(|value| value as u32)
 }
 
+/// An optional signed integer argument — a board coordinate may be any whole number.
+fn integer(args: &Value, key: &str) -> Option<i32> {
+    args.get(key)
+        .and_then(Value::as_i64)
+        .map(|value| value as i32)
+}
+
 /// An optional boolean argument, defaulting to false.
 fn boolean(args: &Value, key: &str) -> bool {
     args.get(key).and_then(Value::as_bool).unwrap_or(false)
@@ -840,6 +941,153 @@ mod tests {
             .map(|item| item["text"].as_str().unwrap_or("").to_string())
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    /// The gap this tool closes: an MCP-driven placement must get the same collision
+    /// guarantee a drag or `dx board --place` gives, not the raw verbatim write `dx_edit`
+    /// performs on a board's body text.
+    #[test]
+    fn placing_a_node_through_dx_board_settles_it_off_anything_it_covers() {
+        let root = project("board-place-settles");
+        workspace::write_text(
+            &root.join("plan.dx"),
+            "::board id=plan height=520\n- ideas x=40 y=40 w=280 h=160\n::end\n\n\
+::paragraph id=ideas hidden\nRough ideas.\n::end\n",
+        )
+        .expect("seed");
+
+        // Land squarely on top of the existing node.
+        call(
+            "dx_board",
+            &json!({
+                "path": "plan.dx", "board": "plan", "action": "place", "node": "intruder",
+                "x": 40, "y": 40, "w": "280", "h": "160",
+            }),
+            &root,
+        )
+        .expect("place");
+
+        let source = workspace::read(&root.join("plan.dx")).expect("read");
+        let node_box = |id: &str| -> (i32, i32, i32, i32) {
+            let line = source
+                .lines()
+                .find(|line| line.trim_start().starts_with(&format!("- {id} ")))
+                .unwrap_or_else(|| panic!("no line for `{id}` in:\n{source}"));
+            let field = |name: &str| -> i32 {
+                line.split_whitespace()
+                    .find_map(|token| token.strip_prefix(&format!("{name}=")))
+                    .and_then(|value| value.parse().ok())
+                    .unwrap_or_else(|| panic!("no {name}= on `{line}`"))
+            };
+            (field("x"), field("y"), field("w"), field("h"))
+        };
+        let (ix, iy, iw, ih) = node_box("intruder");
+        let (ox, oy, ow, oh) = node_box("ideas");
+        let overlaps = ix < ox + ow && ox < ix + iw && iy < oy + oh && oy < iy + ih;
+        assert!(
+            !overlaps,
+            "intruder ({ix},{iy},{iw}x{ih}) still overlaps ideas ({ox},{oy},{ow}x{oh}):\n{source}"
+        );
+
+        // Contrast: `dx_edit` on the same board writes the body verbatim, uncollided —
+        // that is the hand-authored-layout path `dx_board` is deliberately not.
+        call(
+            "dx_edit",
+            &json!({
+                "path": "plan.dx",
+                "block": "plan",
+                "text": "- ideas x=40 y=40 w=280 h=160\n- stacked x=40 y=40 w=280 h=160",
+            }),
+            &root,
+        )
+        .expect("raw board edit");
+        let source = workspace::read(&root.join("plan.dx")).expect("read");
+        assert!(
+            source.contains("- ideas x=40 y=40 w=280 h=160")
+                && source.contains("- stacked x=40 y=40 w=280 h=160"),
+            "dx_edit must still write a board body verbatim: {source}"
+        );
+    }
+
+    #[test]
+    fn arranging_several_nodes_through_dx_board_settles_them_together() {
+        let root = project("board-arrange");
+        workspace::write_text(&root.join("plan.dx"), "::board id=plan height=520\n::end\n")
+            .expect("seed");
+        let result = call(
+            "dx_board",
+            &json!({
+                "path": "plan.dx", "board": "plan", "action": "arrange",
+                "placements": "first,40,40,200,120 second,40,40,200,120",
+            }),
+            &root,
+        )
+        .expect("arrange");
+        assert!(text_of(&result).contains("Placed 2 nodes"), "{result:?}");
+        let source = workspace::read(&root.join("plan.dx")).expect("read");
+        assert!(source.contains("- first"), "{source}");
+        assert!(source.contains("- second"), "{source}");
+        // Both new hidden blocks were created for the nodes named on a board with none yet.
+        assert!(
+            source.contains("id=first") && source.contains("id=second"),
+            "{source}"
+        );
+    }
+
+    #[test]
+    fn detaching_and_linking_through_dx_board_reach_the_same_edit_core_operations() {
+        let root = project("board-detach-link");
+        workspace::write_text(
+            &root.join("plan.dx"),
+            "::board id=plan height=520\n- a x=40 y=40 w=200 h=120\n\
+- b x=300 y=40 w=200 h=120\n::end\n\n\
+::paragraph id=a hidden\nA.\n::end\n\n::paragraph id=b hidden\nB.\n::end\n",
+        )
+        .expect("seed");
+
+        call(
+            "dx_board",
+            &json!({ "path": "plan.dx", "board": "plan", "action": "link", "node": "a", "to": "b" }),
+            &root,
+        )
+        .expect("link");
+        let linked = workspace::read(&root.join("plan.dx")).expect("read");
+        assert!(linked.contains("to=b"), "{linked}");
+
+        call(
+            "dx_board",
+            &json!({ "path": "plan.dx", "board": "plan", "action": "unlink", "node": "a", "to": "b" }),
+            &root,
+        )
+        .expect("unlink");
+        let unlinked = workspace::read(&root.join("plan.dx")).expect("read");
+        assert!(!unlinked.contains("to=b"), "{unlinked}");
+
+        call(
+            "dx_board",
+            &json!({ "path": "plan.dx", "board": "plan", "action": "detach", "node": "b" }),
+            &root,
+        )
+        .expect("detach");
+        let detached = workspace::read(&root.join("plan.dx")).expect("read");
+        assert!(!detached.contains("- b "), "{detached}");
+        assert!(
+            !detached.contains("id=b"),
+            "the orphaned hidden block leaves too: {detached}"
+        );
+    }
+
+    #[test]
+    fn an_unknown_board_action_is_refused() {
+        let root = project("board-bad-action");
+        workspace::write_text(&root.join("plan.dx"), "::board id=plan\n::end\n").expect("seed");
+        let err = call(
+            "dx_board",
+            &json!({ "path": "plan.dx", "board": "plan", "action": "teleport" }),
+            &root,
+        )
+        .expect_err("unknown action");
+        assert!(err.contains("teleport"), "{err}");
     }
 
     #[test]

@@ -20,8 +20,12 @@
 //! ```
 //!
 //! A target is a block id (as `dx outline` reports them) or an `x,y` pixel coordinate.
-//! During a `wait`, frames keep arriving at the configured rate; every other action
-//! captures one frame the moment it lands, annotated with the action's own words.
+//! With no node set, `x,y` is a viewport coordinate; when [`PlayOptions::node`] names a
+//! block, `x,y` is read inside that block's box — the frame the reader sees in the
+//! clipped frames is the frame the script steers, which is what makes the controls of an
+//! embedded `::view` targetable. During a `wait`, frames keep arriving at the configured
+//! rate; every other action captures one frame the moment it lands, annotated with the
+//! action's own words.
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -62,7 +66,11 @@ pub struct PlayOptions {
     pub theme: Theme,
     /// Frames per second captured during waits, clamped to `1..=`[`MAX_FPS`].
     pub fps: u32,
-    /// Clip every frame to this block's box instead of the whole viewport.
+    /// Clip every frame to this block's box instead of the whole viewport — and read the
+    /// script's `x,y` targets inside that same box: `0,0` is the block's top-left corner,
+    /// and a bare `scroll` turns over the block's centre. Clip and coordinates share one
+    /// frame of reference, so what a clipped frame shows at `x,y` is what a click at
+    /// `x,y` touches. Without a node, `x,y` stays viewport-absolute.
     pub node: Option<String>,
     /// Directory for the temporary HTML and browser profile.
     pub scratch_dir: PathBuf,
@@ -121,6 +129,12 @@ enum Action {
 }
 
 /// Perform `script` against the rendered `document` and return every captured frame.
+///
+/// When [`PlayOptions::node`] is set, frames are clipped to that block's box and the
+/// script's `x,y` targets are read inside it — measured fresh as each action lands, so a
+/// scroll that moves the block does not strand the coordinates. Without a node, `x,y` is
+/// viewport-absolute. Block-id targets resolve to the named block wherever it is, in
+/// either mode.
 ///
 /// # Errors
 /// Returns a sentence when the script does not parse, exceeds the stated limits, names a
@@ -404,7 +418,7 @@ fn perform(cdp: &mut Cdp, action: &Action, options: &PlayOptions) -> Result<(), 
             Ok(())
         }
         Action::Click(target) => {
-            let (x, y) = locate(cdp, target)?;
+            let (x, y) = locate(cdp, target, options)?;
             for kind in ["mousePressed", "mouseReleased"] {
                 cdp.command(
                     "Input.dispatchMouseEvent",
@@ -417,7 +431,7 @@ fn perform(cdp: &mut Cdp, action: &Action, options: &PlayOptions) -> Result<(), 
             Ok(())
         }
         Action::Hover(target) => {
-            let (x, y) = locate(cdp, target)?;
+            let (x, y) = locate(cdp, target, options)?;
             cdp.command(
                 "Input.dispatchMouseEvent",
                 json!({ "type": "mouseMoved", "x": x, "y": y }),
@@ -426,11 +440,8 @@ fn perform(cdp: &mut Cdp, action: &Action, options: &PlayOptions) -> Result<(), 
         }
         Action::Scroll(target, amount) => {
             let (x, y) = match target {
-                Some(target) => locate(cdp, target)?,
-                None => (
-                    f64::from(options.width) / 2.0,
-                    f64::from(options.height) / 2.0,
-                ),
+                Some(target) => locate(cdp, target, options)?,
+                None => scroll_centre(options, script_frame(cdp, options)?.as_ref()),
             };
             cdp.command(
                 "Input.dispatchMouseEvent",
@@ -463,10 +474,75 @@ fn block_rect_js(id: &str) -> String {
     )
 }
 
+/// The frame of reference a script's `x,y` coordinates are stated in: one block's box,
+/// in viewport CSS pixels — the on-page counterpart of the `--node` clip.
+#[derive(Debug, Clone, PartialEq)]
+struct Frame {
+    /// The box's top-left corner: where the script's `0,0` lands.
+    left: f64,
+    top: f64,
+    /// The box's size, which places the default scroll centre.
+    width: f64,
+    height: f64,
+}
+
+/// Where a stated `x,y` lands in viewport pixels: inside `frame` when a `--node` set one,
+/// on the viewport itself otherwise.
+fn resolve_point(x: u32, y: u32, frame: Option<&Frame>) -> (f64, f64) {
+    match frame {
+        Some(frame) => (frame.left + f64::from(x), frame.top + f64::from(y)),
+        None => (f64::from(x), f64::from(y)),
+    }
+}
+
+/// Where a bare `scroll` turns the wheel: the frame's centre when a `--node` set one, the
+/// viewport's centre otherwise.
+fn scroll_centre(options: &PlayOptions, frame: Option<&Frame>) -> (f64, f64) {
+    match frame {
+        Some(frame) => (
+            frame.left + frame.width / 2.0,
+            frame.top + frame.height / 2.0,
+        ),
+        None => (
+            f64::from(options.width) / 2.0,
+            f64::from(options.height) / 2.0,
+        ),
+    }
+}
+
+/// The `--node` block's box in viewport pixels right now, or `None` with no node set.
+///
+/// Measured fresh for each action that needs it rather than once at the start: a scroll
+/// moves the block across the viewport, and coordinates translated against a stale box
+/// would land beside the frame the reader is watching.
+fn script_frame(cdp: &mut Cdp, options: &PlayOptions) -> Result<Option<Frame>, String> {
+    let Some(id) = options.node.as_deref() else {
+        return Ok(None);
+    };
+    let value = cdp.evaluate(&block_rect_js(id))?;
+    if value.is_null() {
+        return Err(format!("no block named `{id}` on the page"));
+    }
+    let (cx, cy) = (field(&value, "cx")?, field(&value, "cy")?);
+    let (width, height) = (field(&value, "w")?, field(&value, "h")?);
+    Ok(Some(Frame {
+        left: cx - width / 2.0,
+        top: cy - height / 2.0,
+        width,
+        height,
+    }))
+}
+
 /// Resolve a target to viewport coordinates, naming the block when it is not on the page.
-fn locate(cdp: &mut Cdp, target: &Target) -> Result<(f64, f64), String> {
+///
+/// A block id finds its block wherever it is; an `x,y` is read in the script's frame of
+/// reference — inside the `--node` box when one is set, viewport-absolute otherwise.
+fn locate(cdp: &mut Cdp, target: &Target, options: &PlayOptions) -> Result<(f64, f64), String> {
     match target {
-        Target::Point(x, y) => Ok((f64::from(*x), f64::from(*y))),
+        Target::Point(x, y) => {
+            let frame = script_frame(cdp, options)?;
+            Ok(resolve_point(*x, *y, frame.as_ref()))
+        }
         Target::Block(id) => {
             let value = cdp.evaluate(&block_rect_js(id))?;
             if value.is_null() {
@@ -644,6 +720,44 @@ mod tests {
         png.extend_from_slice(&480u32.to_be_bytes());
         assert_eq!(png_dimensions(&png), Some((640, 480)));
         assert_eq!(png_dimensions(b"not a png"), None);
+    }
+
+    #[test]
+    fn a_point_target_is_viewport_absolute_without_a_node() {
+        assert_eq!(resolve_point(30, 40, None), (30.0, 40.0));
+    }
+
+    /// With `--node`, `x,y` and the clip share one frame: `0,0` is the block's own corner,
+    /// which is what makes a control inside an embedded `::view` targetable.
+    #[test]
+    fn with_a_node_a_point_is_read_inside_the_blocks_box() {
+        let frame = Frame {
+            left: 100.0,
+            top: 250.0,
+            width: 400.0,
+            height: 300.0,
+        };
+        assert_eq!(resolve_point(0, 0, Some(&frame)), (100.0, 250.0));
+        assert_eq!(resolve_point(30, 40, Some(&frame)), (130.0, 290.0));
+    }
+
+    #[test]
+    fn a_bare_scroll_turns_over_the_frames_centre_when_a_node_sets_one() {
+        let options = PlayOptions::default();
+        assert_eq!(
+            scroll_centre(&options, None),
+            (
+                f64::from(options.width) / 2.0,
+                f64::from(options.height) / 2.0
+            )
+        );
+        let frame = Frame {
+            left: 100.0,
+            top: 250.0,
+            width: 400.0,
+            height: 300.0,
+        };
+        assert_eq!(scroll_centre(&options, Some(&frame)), (300.0, 400.0));
     }
 
     #[test]

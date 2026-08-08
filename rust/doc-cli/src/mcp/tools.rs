@@ -27,6 +27,7 @@ pub const TOOL_NAMES: &[&str] = &[
     "dx_index",
     "dx_write",
     "dx_edit",
+    "dx_board",
     "dx_append",
     "dx_check",
     "dx_run",
@@ -46,6 +47,7 @@ pub fn catalogue() -> Value {
         index_tool(),
         write_tool(),
         edit_tool(),
+        board_tool(),
         append_tool(),
         check_tool(),
         run_tool(),
@@ -128,8 +130,10 @@ fn play_tool() -> Value {
                         Script statements are separated by ';': `wait 500ms`, `key Space`, \
                         `click <target>`, `scroll 200`, `scroll <target> 200` (a node's own \
                         overflow), `hover <target>`. A target is a block id from dx_outline \
-                        or an x,y pixel pair. Set `node` to clip every frame to one block's \
-                        box. Nothing in the document executes — this drives the same static \
+                        or an x,y pixel pair — viewport pixels, unless `node` is set. Set \
+                        `node` to clip every frame to one block's box and read x,y inside \
+                        that box (0,0 its corner), so controls inside an embedded ::view \
+                        are targetable. Nothing in the document executes — this drives the same static \
                         render dx_read photographs. Use dx_read for a plain look; use `dx play \
                         --out` from a shell to keep every frame as files.",
         "inputSchema": {
@@ -142,7 +146,9 @@ fn play_tool() -> Value {
                 },
                 "node": {
                     "type": "string",
-                    "description": "Optional block id: clip every frame to this block's box."
+                    "description": "Optional block id: clip every frame to this block's box \
+                                    and read the script's x,y targets inside it — 0,0 is the \
+                                    box's top-left corner."
                 },
                 "section": section_property(),
                 "theme": {
@@ -388,6 +394,83 @@ fn edit_tool() -> Value {
                 }
             },
             "required": ["path", "block", "text"]
+        }
+    })
+}
+
+/// `dx_board` — place, arrange, detach, or link a node on a board.
+fn board_tool() -> Value {
+    json!({
+        "name": "dx_board",
+        "description": "Place, arrange, detach, or link/unlink a node on a `::board` — the \
+                        same collision-safe operations `dx board` and every editing \
+                        surface's drag/arrange/link actions perform, so a node placed here \
+                        gets the identical board a person dragging one gets: anything it \
+                        lands on is shoved out of its way, never left stacked. This is the \
+                        tool for board layout — dx_edit writes a board's raw body text \
+                        verbatim and never resolves overlap, which is right for stating a \
+                        layout by hand but wrong for \"put this node here.\"",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": path_property(),
+                "board": { "type": "string", "description": "Id of the `::board` block." },
+                "action": {
+                    "type": "string",
+                    "enum": ["place", "arrange", "detach", "link", "unlink"],
+                    "description": "place: move/add/resize one node, settling the board \
+                                    afterwards. arrange: place several nodes in one call \
+                                    (needs `placements`), settled once at the end. detach: \
+                                    remove a node, its edges, and its block if the block \
+                                    was the board's own and no other board shows it. \
+                                    link/unlink: draw or erase the edge from `node` to `to`."
+                },
+                "node": {
+                    "type": "string",
+                    "description": "The node's id. For `place`, omit for a new node (a \
+                                    fresh id is chosen and returned). Required for detach, \
+                                    link, unlink — the edge's source node for link/unlink."
+                },
+                "x": {
+                    "type": "number",
+                    "description": "place only: left edge in canvas pixels. Omit to keep \
+                                    the node's current x (0 for a new node)."
+                },
+                "y": {
+                    "type": "number",
+                    "description": "place only: top edge in canvas pixels. Omit to keep \
+                                    the node's current y (0 for a new node)."
+                },
+                "w": {
+                    "type": "string",
+                    "description": "place only: width — a number of canvas pixels, \
+                                    `page`, or `fit`. Omit to keep the node's current width."
+                },
+                "h": {
+                    "type": "string",
+                    "description": "place only: height, the same way."
+                },
+                "placements": {
+                    "type": "string",
+                    "description": "arrange only: one placement per node, `id,x,y[,w[,h]]`, \
+                                    separated by spaces, semicolons, or newlines."
+                },
+                "to": {
+                    "type": "string",
+                    "description": "link/unlink only: the edge's target node id."
+                },
+                "from_side": {
+                    "type": "string",
+                    "description": "link only: which side of `node` the edge leaves — \
+                                    left, right, top, bottom (or their initials). Omit for \
+                                    unpinned."
+                },
+                "to_side": {
+                    "type": "string",
+                    "description": "link only: which side of `to` the edge meets, the same way."
+                }
+            },
+            "required": ["path", "board", "action"]
         }
     })
 }

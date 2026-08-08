@@ -113,13 +113,19 @@ pub fn run_render(args: &Args) -> Result<String, String> {
 /// With `--block <id>` it photographs that one block alone: a `::board` at its natural
 /// canvas size (every node exactly the box its line states), anything else in the ordinary
 /// column — which is how one board, or one node's block, is rendered out and checked
-/// without paging through the document around it.
+/// without paging through the document around it. `--block` also takes a comma-separated
+/// list (`--block desk,phone`), captured from **one** browser session with one
+/// `<stem>-<id>.png` per block. `--block <id> --against <golden.png>` writes nothing and
+/// prints a one-line verdict instead ([`run_png_against`]).
 pub fn run_png(args: &Args) -> Result<String, String> {
+    if let Some(golden) = args.value("against") {
+        return run_png_against(args, golden);
+    }
     if args.present("pages") {
         return run_png_pages(args);
     }
-    if let Some(id) = args.value("block") {
-        return run_png_block(args, id);
+    if let Some(list) = args.value("block") {
+        return run_png_blocks(args, list);
     }
     let path = document_path(args)?;
     let document = selected_document(args)?;
@@ -143,6 +149,109 @@ pub fn run_png(args: &Args) -> Result<String, String> {
         shot.width,
         shot.height
     ))
+}
+
+/// `dx png <file> --block <id>[,<id>…]` — the named blocks, each as its own image.
+///
+/// One id keeps the single-block export exactly as it has always been. A list captures
+/// every named block from one browser session ([`doc_shot::capture_blocks`]) — a visual
+/// loop over N blocks pays one browser startup instead of N — writing `<stem>-<id>.png`
+/// per block, the same name the single export chooses.
+fn run_png_blocks(args: &Args, list: &str) -> Result<String, String> {
+    let ids = block_ids(list);
+    match ids.as_slice() {
+        [] => Err(format!(
+            "no block ids in `{list}` — name at least one, e.g. --block desk,phone"
+        )),
+        [id] => run_png_block(args, id),
+        many => {
+            let path = document_path(args)?;
+            let document = selected_document(args)?;
+            let shots = doc_shot::capture_blocks(
+                &document,
+                many,
+                &ShotOptions {
+                    width: args.number("width").unwrap_or(doc_shot::DEFAULT_WIDTH),
+                    theme: theme_of(args),
+                    scale: export_scale(args),
+                    ..ShotOptions::default()
+                },
+            )?;
+
+            let stem = page_stem(args.value("out"), &path);
+            let mut out = String::new();
+            for (id, shot) in many.iter().zip(&shots) {
+                let target = block_target(&stem, id);
+                std::fs::write(&target, &shot.png)
+                    .map_err(|error| format!("could not write {}: {error}", target.display()))?;
+                out.push_str(&format!(
+                    "wrote {} ({}x{} px)\n",
+                    target.display(),
+                    shot.width,
+                    shot.height
+                ));
+            }
+            Ok(out)
+        }
+    }
+}
+
+/// `dx png <file> --block <id> --against <golden.png>` — a text verdict, no file written.
+///
+/// The block is captured exactly as `--block` alone would capture it, then compared to the
+/// golden PNG pixel by pixel through the platform's own codec ([`doc_shot::diff`]). The
+/// answer is one line: `identical` (every pixel within the antialiasing tolerance
+/// [`doc_shot::diff::CHANNEL_TOLERANCE`] — 3 of 255 per channel), or
+/// `differs: N px in x,y wxh` naming the bounding box of every changed pixel. Different
+/// dimensions are a stated verdict too, never an error — a board that grew *is* the
+/// difference being asked about. This is how a visual check is read without spending an
+/// image.
+fn run_png_against(args: &Args, golden: &str) -> Result<String, String> {
+    let Some(list) = args.value("block") else {
+        return Err("--against compares one block's render — add --block <id>".to_string());
+    };
+    let ids = block_ids(list);
+    let [id] = ids.as_slice() else {
+        return Err(format!(
+            "--against compares one block at a time — name exactly one id, not `{list}`"
+        ));
+    };
+    if args.present("pages") {
+        return Err("--against compares one block — it does not take --pages".to_string());
+    }
+    if args.value("out").is_some() {
+        return Err("--against prints a verdict and writes no file — drop --out".to_string());
+    }
+
+    let document = selected_document(args)?;
+    let shot = doc_shot::capture_block(
+        &document,
+        id,
+        &ShotOptions {
+            width: args.number("width").unwrap_or(doc_shot::DEFAULT_WIDTH),
+            theme: theme_of(args),
+            scale: export_scale(args),
+            ..ShotOptions::default()
+        },
+    )?;
+    let golden_bytes = std::fs::read(golden)
+        .map_err(|error| format!("could not read the golden image {golden}: {error}"))?;
+    let verdict = doc_shot::diff::compare_png(&shot.png, &golden_bytes)?;
+    Ok(format!("{verdict}\n"))
+}
+
+/// The ids a `--block` list names: split on commas, stray whitespace and empty entries
+/// dropped, order kept — the shots come back in this order.
+fn block_ids(list: &str) -> Vec<&str> {
+    list.split(',')
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .collect()
+}
+
+/// Where one block of a batch lands, given the stem [`page_stem`] chose.
+fn block_target(stem: &Path, id: &str) -> PathBuf {
+    PathBuf::from(format!("{}-{id}.png", stem.display()))
 }
 
 /// `dx png <file> --block <id>` — one block as an image: a board at its natural size,
@@ -493,6 +602,84 @@ mod tests {
 
         let defaulted = page_stem(None, Path::new("dir/notes.dx"));
         assert_eq!(page_target(&defaulted, 2), PathBuf::from("dir/notes-2.png"));
+    }
+
+    #[test]
+    fn a_block_list_splits_on_commas_dropping_stray_blanks() {
+        assert_eq!(
+            block_ids("desk,phone, journal-view"),
+            vec!["desk", "phone", "journal-view"]
+        );
+        assert_eq!(block_ids("solo"), vec!["solo"]);
+        assert!(block_ids(" , ,").is_empty());
+    }
+
+    /// `--against` names one block or nothing: without `--block` there is no render to
+    /// compare, and a list would be a verdict about nobody-knows-which image.
+    #[test]
+    fn against_without_exactly_one_block_is_refused_before_any_file_is_read() {
+        let missing = run_png(&args(&["/dx/nowhere.dx", "--against", "gold.png"]))
+            .expect_err("no block named");
+        assert!(missing.contains("--block"), "{missing}");
+
+        let many = run_png(&args(&[
+            "/dx/nowhere.dx",
+            "--block",
+            "desk,phone",
+            "--against",
+            "gold.png",
+        ]))
+        .expect_err("two blocks");
+        assert!(many.contains("exactly one"), "{many}");
+    }
+
+    /// A comparison writes nothing, so flags about where to write are a contradiction to
+    /// refuse by name, never swallow.
+    #[test]
+    fn against_refuses_the_flags_that_would_write_files() {
+        let with_out = run_png(&args(&[
+            "/dx/nowhere.dx",
+            "--block",
+            "desk",
+            "--against",
+            "gold.png",
+            "--out",
+            "x.png",
+        ]))
+        .expect_err("nothing is written");
+        assert!(with_out.contains("--out"), "{with_out}");
+
+        let with_pages = run_png(&args(&[
+            "/dx/nowhere.dx",
+            "--block",
+            "desk",
+            "--against",
+            "gold.png",
+            "--pages",
+        ]))
+        .expect_err("one block, not pages");
+        assert!(with_pages.contains("--pages"), "{with_pages}");
+    }
+
+    #[test]
+    fn an_empty_block_list_is_refused_before_any_file_is_read() {
+        let error =
+            run_png(&args(&["/dx/nowhere.dx", "--block", " , "])).expect_err("should refuse");
+        assert!(error.contains("--block desk,phone"), "{error}");
+    }
+
+    #[test]
+    fn a_batch_export_names_each_file_by_its_block() {
+        let named = page_stem(Some("shots.png"), Path::new("notes.dx"));
+        assert_eq!(
+            block_target(&named, "desk"),
+            PathBuf::from("shots-desk.png")
+        );
+        let defaulted = page_stem(None, Path::new("dir/notes.dx"));
+        assert_eq!(
+            block_target(&defaulted, "phone"),
+            PathBuf::from("dir/notes-phone.png")
+        );
     }
 
     #[test]

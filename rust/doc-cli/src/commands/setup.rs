@@ -468,12 +468,26 @@ READ
   dx png      <file> [--section ID] [--out F]   render to an image
   dx png      <file> --pages                    one image per page, in order
   dx png      <file> --block ID                 one block alone — a board at natural size
+  dx png      <file> --block A,B,…              every named block from one browser
+                                                session — one <stem>-<id>.png each
+  dx png      <file> --block ID --against G.png compare the block's render to a
+                                                golden PNG and print one line —
+                                                `identical` or `differs: N px in
+                                                x,y wxh` (the changed region;
+                                                drift up to 3/255 per channel is
+                                                antialiasing, not a difference).
+                                                Different sizes are stated the
+                                                same way. Writes no file.
   dx play     <file> --script \"wait 500ms; key Space; scroll 200\"
               [--node ID] [--fps N] [--out DIR] drive the rendered page with real
               input — wait, key, click, scroll, hover — and write one PNG frame
               per tick, each stamped with its moment and the action it shows.
-              --node clips every frame to one block. Nothing in the document
-              executes; targets are block ids from dx outline, or x,y pixels.
+              --node clips every frame to one block and reads x,y targets
+              inside that block's box (0,0 its corner, bare scroll its centre)
+              — clip and coordinates share one frame, so a control inside an
+              embedded ::view is targetable; without --node, x,y is viewport
+              pixels. Nothing in the document executes; targets are block ids
+              from dx outline, or x,y.
   dx open     <file> [--section ID]             open the rendered page in a browser
   dx ls       [dir]                             every .dx document in a project
   dx search   <query> [dir] [--limit N]         find documents; each hit shows its answering block
@@ -644,6 +658,15 @@ mod tests {
         ] {
             assert!(help.contains(command), "help omits {command}");
         }
+    }
+
+    /// `dx play --node` reads `x,y` inside the clipped block's box; the help has to say so,
+    /// or a script author aims viewport pixels at a clipped frame.
+    #[test]
+    fn play_help_states_the_node_coordinate_frame() {
+        let help = run_help(&args(&[])).expect("help");
+        assert!(help.contains("reads x,y targets"), "{help}");
+        assert!(help.contains("share one frame"), "{help}");
     }
 
     /// `dx setup` reaches every surface, so the report has to account for every one of them —

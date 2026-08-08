@@ -3,8 +3,11 @@
 //! Where `dx png` photographs a document, `dx play` handles it: the page is loaded live,
 //! a script of inputs is performed against it — wait, key, click, scroll, hover — and one
 //! PNG per tick lands in a directory, each listed in the report with its moment and the
-//! action it shows. Nothing the document carries executes; this is the same script-free
-//! render every screenshot uses, with synthetic input dispatched at it.
+//! action it shows. `--node` clips every frame to one block's box and reads the script's
+//! `x,y` targets inside that same box — clip and coordinates share one frame of
+//! reference — while without it `x,y` is viewport-absolute. Nothing the document carries
+//! executes; this is the same script-free render every screenshot uses, with synthetic
+//! input dispatched at it.
 
 use std::path::PathBuf;
 

@@ -138,7 +138,8 @@ rather than a page sweep. Both reads are live: recorded
 output of already-approved code is re-run when it goes stale, so what the agent reads is
 what the code does now, with no `dx_run` in between; unreviewed code still never runs on a
 read. `dx_edit` changes one block — and runs a runnable one it just rewrote, since the edit
-is the review — `dx_append` and `dx_check` are the cheap writes (a finding onto a ledger,
+is the review — `dx_board` places, arranges, detaches, and links board nodes with the
+same collision-safe settle a drag performs — `dx_append` and `dx_check` are the cheap writes (a finding onto a ledger,
 a tick on the worklist, for the cost of the change alone — think by writing, not by
 holding it in context), `dx_run` executes, `dx_play` drives the rendered page with scripted input,
 and `dx_index` scaffolds `index.dx`, a precursor project map the agent improves once and
@@ -156,7 +157,10 @@ redoing the verification. [`examples/example_site_plan.dx`](examples/example_sit
 the method end to end — brief, board, shipped site, and the verify block that holds it — and
 [`examples/route-economics.dx`](examples/route-economics.dx) turns the token economy itself
 into a measured claim: a run block prices every read route in bytes against this repository's
-own documents and fails if the cheap route ever stops being cheap. Work that is judged by
+own documents and fails if the cheap route ever stops being cheap.
+[`examples/site-economics.dx`](examples/site-economics.dx) prices the site the plan shipped —
+a run block measures the shipped files, the plan's source, and the fixed cost of a page
+image, and holds the lean design loop cheaper than the naive one. Work that is judged by
 pictures lives inside the document too: an `::image src=` block embeds the file's current
 bytes on every surface (capped at 8 MB — capture at scale 1), so a frame-review loop —
 capture, look, fix — keeps its captures on the page it is reviewing, and `for=<run-block-id>`

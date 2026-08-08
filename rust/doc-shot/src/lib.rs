@@ -21,6 +21,7 @@
 pub mod base64;
 pub mod browser;
 pub mod cdp;
+pub mod diff;
 pub mod play;
 pub mod png;
 
@@ -313,6 +314,123 @@ pub fn capture_block(document: &Document, id: &str, options: &ShotOptions) -> Re
     let result = capture_block_page(&browser, &page, options, &workspace);
     let _ = std::fs::remove_dir_all(&workspace);
     result
+}
+
+/// Render every block named in `ids` and capture all of them from **one** browser session.
+///
+/// The batch form of [`capture_block`]: each shot is the same picture that function takes —
+/// a `::board` at its natural size, anything else exactly as the page carries it — but a
+/// single Chromium launch serves the whole list. The live [`cdp`] session loads each
+/// block's page in turn and photographs it through the DevTools channel, so a visual loop
+/// over N blocks pays one browser startup instead of N (the one-shot `--screenshot` route
+/// pays one per pass). Shots come back in the order the ids were given, one per id.
+///
+/// An id naming no block fails the whole batch — before any browser starts — so a typo is
+/// a sentence, never a half-written set of pictures.
+pub fn capture_blocks(
+    document: &Document,
+    ids: &[&str],
+    options: &ShotOptions,
+) -> Result<Vec<Shot>, String> {
+    let html_options = block_html_options(options.theme);
+    let mut pages = Vec::with_capacity(ids.len());
+    for id in ids {
+        pages.push(
+            block_page(document, id, &html_options, &options.page_bounds())
+                .ok_or_else(|| format!("no block named `{id}`"))?,
+        );
+    }
+
+    let browser = browser::find().ok_or_else(browser::missing_message)?;
+    let workspace = scratch_workspace(&options.scratch_dir)?;
+    let result = capture_block_pages(&browser, &pages, options, &workspace);
+    let _ = std::fs::remove_dir_all(&workspace);
+    result
+}
+
+/// Capture every rendered [`BlockPage`] from one live [`cdp::Cdp`] session.
+///
+/// Each page is opened in turn — [`cdp::Cdp::open`] waits for its load event, so nothing
+/// here reads the previous block's page — then the viewport is sized to it: a page that
+/// states its own height (a board) gets a viewport exactly that size, one that does not is
+/// measured on the live page first. The capture rasterizes at `scale × oversample` and is
+/// averaged back down in linear light, exactly like every other capture in this crate.
+fn capture_block_pages(
+    browser: &Path,
+    pages: &[BlockPage],
+    options: &ShotOptions,
+    workspace: &Path,
+) -> Result<Vec<Shot>, String> {
+    let profile = workspace.join("profile");
+    std::fs::create_dir_all(&profile)
+        .map_err(|error| format!("could not create {}: {error}", profile.display()))?;
+    let scale = scale(options);
+    let oversample = oversample(options);
+
+    let mut session = cdp::Cdp::launch(browser, &profile, options.width, MEASURE_HEIGHT)?;
+    let mut shots = Vec::with_capacity(pages.len());
+    for (index, page) in pages.iter().enumerate() {
+        let page_file = workspace.join(format!("block-{index}.html"));
+        write(&page_file, &page.html)?;
+        session.open(&file_url(&page_file))?;
+        let height = match page.height {
+            Some(height) => height,
+            None => {
+                // Measure at scale 1, like the one-shot measuring pass: the height is
+                // CSS pixels, and the capture applies its own density on top of them.
+                set_viewport(&mut session, page.width, MEASURE_HEIGHT, 1)?;
+                measure_body_height(&mut session).unwrap_or(MEASURE_HEIGHT)
+            }
+        };
+        let height = height.clamp(MIN_HEIGHT, MAX_HEIGHT);
+        set_viewport(&mut session, page.width, height, scale * oversample)?;
+        let png = session.screenshot(None)?;
+        let png = png::downsample(&png, oversample)
+            .map_err(|reason| format!("could not resample the capture: {reason}"))?;
+        shots.push(Shot {
+            png,
+            width: page.width * scale,
+            height: height * scale,
+        });
+    }
+    Ok(shots)
+}
+
+/// Size the live page's viewport in CSS pixels, rasterized at `density` pixels each.
+fn set_viewport(
+    session: &mut cdp::Cdp,
+    width: u32,
+    height: u32,
+    density: u32,
+) -> Result<(), String> {
+    session
+        .command(
+            "Emulation.setDeviceMetricsOverride",
+            serde_json::json!({
+                "width": width,
+                "height": height,
+                "deviceScaleFactor": density,
+                "mobile": false,
+            }),
+        )
+        .map(|_| ())
+}
+
+/// The live page's content height in CSS pixels — the same `<body>` box the one-shot
+/// measuring script reads (`documentElement.scrollHeight` never reports less than the
+/// viewport, which would pad every short block with a screenful of empty space).
+fn measure_body_height(session: &mut cdp::Cdp) -> Option<u32> {
+    let value = session
+        .evaluate(
+            "Math.ceil(Math.max(document.body.scrollHeight, \
+             document.body.getBoundingClientRect().height))",
+        )
+        .ok()?;
+    let height = value.as_f64()?;
+    if !height.is_finite() || height < 0.0 {
+        return None;
+    }
+    Some(height as u32)
 }
 
 /// Capture an already-rendered [`BlockPage`] inside `workspace`.
@@ -1226,6 +1344,54 @@ mod tests {
             missing.is_err(),
             "a missing block is a sentence, not a shot"
         );
+    }
+
+    /// The batch form refuses an unknown id up front: no browser starts, and no
+    /// half-written set of pictures is left behind a typo.
+    #[test]
+    fn a_batch_with_an_unknown_id_is_refused_before_any_browser_starts() {
+        let document = parse(BOARDED);
+        let error = capture_blocks(&document, &["intro", "ghost"], &ShotOptions::default())
+            .expect_err("no such block");
+        assert!(error.contains("ghost"), "{error}");
+    }
+
+    /// One live session serves the whole batch: every named block comes back as its own
+    /// image, in the order asked — the board at its natural size, an ordinary block in
+    /// the ordinary column — from a single Chromium launch.
+    #[test]
+    fn a_real_browser_captures_many_blocks_from_one_session() {
+        let _turn = browser::ENV_LOCK.lock().expect("env lock");
+        let Some(_) = browser::find() else {
+            return; // No browser on this machine.
+        };
+        let document = parse(BOARDED);
+        let shots = capture_blocks(
+            &document,
+            &["plan", "note", "intro"],
+            &ShotOptions::default(),
+        )
+        .expect("batch");
+
+        assert_eq!(shots.len(), 3, "one image per block");
+        assert_eq!(
+            (shots[0].width, shots[0].height),
+            (448, 248),
+            "the board keeps its natural size in a batch"
+        );
+        let board = png::decode(&shots[0].png).expect("the delivered PNG decodes");
+        assert_eq!(
+            (board.width, board.height),
+            (448, 248),
+            "the live session delivers the stated size, pixel for pixel"
+        );
+        assert_eq!(
+            shots[1].width, DEFAULT_WIDTH,
+            "an ordinary block keeps the ordinary column"
+        );
+        for shot in &shots {
+            assert_eq!(&shot.png[1..4], b"PNG");
+        }
     }
 
     #[test]
