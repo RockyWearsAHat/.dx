@@ -10,14 +10,47 @@ Last updated: 2026-08-08
 
 Everything green, everything current, proven mechanically:
 
-- `dx run dev.dx` after this wave's edits: corpus (11 documents) and page-contract re-ran
-  — exactly the gates staled by the examples tree — and passed; engine (347+50), lints,
-  and both JS surfaces (34/34) stayed cached.
+- `dx run dev.dx` after this wave's engine edits: **all five gates re-ran and passed** —
+  engine (350+50), lints, both JS surfaces (34/34, parity to the rebuilt wasm), corpus,
+  page-contract. Host shell confirmed the same: cargo test (14 binaries, 0 failed),
+  clippy `-D warnings`, fmt, both node suites. `dx setup` installed the new build.
 - `examples/example_site_plan.dx` verify: **33 of 33 claims hold**, weight
   **29,978 of 30,000 bytes — 22 in hand**; `site-economics.dx` 4/4 (lean round 18% of
-  naive) and `route-economics.dx` 3/3 (ten questions at 43%), re-priced after the edits.
+  naive) and `route-economics.dx` 3/3 (ten questions at 43%).
 
-## This wave, part 48: the viewer caught the smear — the plan board holds only the plan
+## This wave, part 49: the smear can never ship silently again — and the feature tier landed
+
+Two commits. First, the in-flight visual-loop tier (built by the part-46b workflow, green
+in the tree for two sessions) was validated on the host shell and committed: batch
+captures (`dx png --block A,B,…`, one browser session for the list), golden-PNG verdicts
+in text (`--against`, `doc_shot::diff`, 3/255 antialiasing tolerance), `dx play --node`
+reading x,y inside the clipped block (a `::view`'s own controls are now targetable),
+`dx_board` over MCP, and the handshake doctrine (pixels in subagents, the review bar is
+standing, batch every capture).
+
+Second, part 48's two engine candidates shipped, so the board smear is now mechanically
+impossible to miss:
+
+- **A board fitted below 1:3 says so on its own frame** (`render::board::FIT_LEGIBLE` →
+  `fit_notice`): the notice names the ratio and the canvas and the way out, drawn on the
+  page's own paper along the frame's bottom edge. Only a failure is called out — a board
+  that reads carries nothing.
+- **An unstated board height takes the frame its canvas needs** (`flow_height`): the
+  column's width already fixes the scale, so the frame shows the whole canvas at that
+  scale, clamped between the classic 480 and 1,600. The plan board now renders at
+  scale 0.409 in a 690px frame — legible, no notice — where the old fixed 480 forced
+  0.27; only a true filmstrip hits the cap and earns the notice.
+- **`h=fit` stopped double-charging list margins**: sibling `li` margins collapse, so
+  `FIT_ITEM_LEAD` dropped 10→6 — the ~80px band under a sixteen-item checklist was
+  exactly the double charge. The remaining breath of room is the constants' stated
+  clip-protection bias, kept on purpose.
+
+Tests pin all three (`an_illegible_fit_is_called_out_on_the_board_itself`,
+`an_unstated_height_grows_the_frame_to_the_width_scale`,
+`a_legible_fit_carries_no_notice`, and the rewritten both-axes fit test). Wasm rebuilt
+for both surfaces; parity held.
+
+## Part 48: the viewer caught the smear — the plan board holds only the plan
 
 The user opened the document in DX.app and the canvas was a dark smear. Root cause read
 straight off the board's own body: ten `::view` frames (two of them 6,100px-tall
