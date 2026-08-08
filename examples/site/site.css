@@ -5,12 +5,13 @@
 
 :root {
   --night: #101820;      /* carbon paper — the ground everything sits on */
+  --night-rgb: 16, 24, 32;   /* the same paper as channels, for the hero's glass */
   --zenith: #223140;     /* the blue directly overhead */
   --starlight: #E9E4D8;  /* the ink */
   --ember: #C9803E;      /* the one warm thing: red torches and the booking link */
   --hairline: #2B3542;   /* rules, drawn once and thin */
-  --ink-dim: rgba(233, 228, 216, 0.62);
-  --ink-faint: rgba(233, 228, 216, 0.38);
+  --ink-dim: rgba(233, 228, 216, .62);
+  --ink-faint: rgba(233, 228, 216, .38);
   --serif: "Fraunces", Georgia, "Times New Roman", serif;
   --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 }
@@ -28,7 +29,7 @@ body {
   font-size: 17px;
   line-height: 1.65;
   -webkit-font-smoothing: antialiased;
-  transition: background 0.6s ease, color 0.6s ease;
+  transition: background .6s ease, color .6s ease;
 }
 
 /* ————— red torch: the site keeps its own dark-sky code —————
@@ -43,23 +44,24 @@ body {
 
 body:has(.torch-input:checked) {
   --night: #0D0605;
+  --night-rgb: 13, 6, 5;
   --zenith: #29100A;
   --starlight: #E5A583;
   --ember: #FF6A3D;
   --hairline: #38160E;
-  --ink-dim: rgba(229, 165, 131, 0.62);
-  --ink-faint: rgba(229, 165, 131, 0.36);
+  --ink-dim: rgba(229, 165, 131, .62);
+  --ink-faint: rgba(229, 165, 131, .36);
 }
 
 body:has(.torch-input:checked) .torch::before { content: "● "; }
 
 body:has(.torch-input:checked) img {
-  filter: grayscale(1) sepia(1) saturate(2.6) hue-rotate(-16deg) brightness(0.55) contrast(1.05);
+  filter: grayscale(1) sepia(1) saturate(2.6) hue-rotate(-16deg) brightness(.55) contrast(1.05);
 }
 
 body:has(.torch-input:focus-visible) .torch { outline: 1px solid var(--ember); outline-offset: 4px; }
 
-img { display: block; width: 100%; height: 100%; object-fit: cover; transition: filter 0.6s ease; }
+img { display: block; width: 100%; height: 100%; object-fit: cover; transition: filter .6s ease; }
 
 /* ————— the two voices: serif prose, mono instrument labels ————— */
 
@@ -67,7 +69,7 @@ img { display: block; width: 100%; height: 100%; object-fit: cover; transition: 
   font-family: var(--mono);
   font-size: 11px;
   font-weight: 400;
-  letter-spacing: 0.22em;
+  letter-spacing: .22em;
   text-transform: uppercase;
   color: var(--ink-dim);
 }
@@ -92,7 +94,7 @@ h1, h2, h3 { text-wrap: balance; }
   color: var(--night);
   font-family: var(--mono);
   font-size: 12px;
-  letter-spacing: 0.18em;
+  letter-spacing: .18em;
   text-transform: uppercase;
   text-decoration: none;
 }
@@ -117,7 +119,7 @@ h1, h2, h3 { text-wrap: balance; }
   align-items: baseline;
   gap: 14px;
   font-size: 17px;
-  letter-spacing: 0.34em;
+  letter-spacing: .34em;
   text-transform: uppercase;
   text-decoration: none;
   white-space: nowrap;
@@ -128,7 +130,7 @@ h1, h2, h3 { text-wrap: balance; }
 .wordmark small {
   font-family: var(--mono);
   font-size: 9px;
-  letter-spacing: 0.28em;
+  letter-spacing: .28em;
   color: var(--ink-faint);
 }
 
@@ -140,13 +142,10 @@ h1, h2, h3 { text-wrap: balance; }
   gap: 8px clamp(16px, 3vw, 34px);
   font-family: var(--mono);
   font-size: 12px;
-  letter-spacing: 0.14em;
+  letter-spacing: .14em;
 }
 
 .masthead nav a, .torch {
-  font-family: var(--mono);
-  font-size: 12px;
-  letter-spacing: 0.14em;
   text-decoration: none;
   color: var(--ink-dim);
   padding-bottom: 3px;
@@ -178,14 +177,8 @@ h1, h2, h3 { text-wrap: balance; }
   position: absolute;
   inset: 0;
   background:
-    linear-gradient(180deg, rgba(16, 24, 32, 0.55) 0%, rgba(16, 24, 32, 0) 26%, rgba(16, 24, 32, 0) 52%, var(--night) 96%),
-    radial-gradient(120% 60% at 50% 100%, rgba(16, 24, 32, 0.5), rgba(16, 24, 32, 0) 60%);
-}
-
-body:has(.torch-input:checked) .hero::after {
-  background:
-    linear-gradient(180deg, rgba(13, 6, 5, 0.55) 0%, rgba(13, 6, 5, 0) 26%, rgba(13, 6, 5, 0) 52%, var(--night) 96%),
-    radial-gradient(120% 60% at 50% 100%, rgba(13, 6, 5, 0.5), rgba(13, 6, 5, 0) 60%);
+    linear-gradient(180deg, rgba(var(--night-rgb), .55) 0%, rgba(var(--night-rgb), 0) 26%, rgba(var(--night-rgb), 0) 34%, rgba(var(--night-rgb), .8) 62%, var(--night) 96%),
+    radial-gradient(120% 60% at 50% 100%, rgba(var(--night-rgb), .5), rgba(var(--night-rgb), 0) 60%);
 }
 
 .hero-caption {
@@ -217,12 +210,12 @@ body:has(.torch-input:checked) .hero::after {
   margin: 0 0 30px;
   max-width: 34em;
   font-size: clamp(17px, 1.6vw, 20px);
-  color: var(--ink-dim);
+  color: var(--starlight);
 }
 
-.hero-copy > * { animation: rise 0.9s cubic-bezier(0.2, 0.6, 0.2, 1) both; }
-.hero-copy p { animation-delay: 0.15s; }
-.hero-copy .book { animation-delay: 0.3s; }
+.hero-copy > * { animation: rise .9s cubic-bezier(.2, .6, .2, 1) both; }
+.hero-copy p { animation-delay: .15s; }
+.hero-copy .book { animation-delay: .3s; }
 
 /* ————— the one warm control ————— */
 
@@ -233,7 +226,7 @@ body:has(.torch-input:checked) .hero::after {
   color: var(--night);
   font-family: var(--mono);
   font-size: 12px;
-  letter-spacing: 0.24em;
+  letter-spacing: .24em;
   text-transform: uppercase;
   text-decoration: none;
 }
@@ -257,7 +250,7 @@ section { padding: clamp(64px, 10vw, 120px) clamp(20px, 5vw, 56px); }
   margin: 0;
   font-size: clamp(26px, 3.4vw, 40px);
   font-weight: 320;
-  letter-spacing: 0.01em;
+  letter-spacing: .01em;
 }
 
 .section-head .label { margin-left: auto; text-align: right; }
@@ -287,8 +280,9 @@ section { padding: clamp(64px, 10vw, 120px) clamp(20px, 5vw, 56px); }
   font-family: var(--mono);
   font-style: normal;
   font-size: 11px;
-  letter-spacing: 0.18em;
-  color: var(--ink-faint);
+  letter-spacing: .18em;
+  text-wrap: balance;
+  color: var(--ink-dim);
 }
 
 .sky-times { list-style: none; margin: 0; padding: 0; }
@@ -310,7 +304,7 @@ section { padding: clamp(64px, 10vw, 120px) clamp(20px, 5vw, 56px); }
   font-variant-numeric: tabular-nums;
 }
 
-.sky-times strong { font-weight: 420; letter-spacing: 0.02em; }
+.sky-times strong { font-weight: 420; letter-spacing: .02em; }
 
 /* the moon, drawn as it will actually look: a waning gibbous, lit from the east */
 .phase {
@@ -360,8 +354,8 @@ section { padding: clamp(64px, 10vw, 120px) clamp(20px, 5vw, 56px); }
   top: -2px;
   font-family: var(--mono);
   font-style: normal;
-  font-size: 10.5px;
-  letter-spacing: 0.14em;
+  font-size: 11px;
+  letter-spacing: .14em;
   color: var(--ember);
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
@@ -373,10 +367,10 @@ section { padding: clamp(64px, 10vw, 120px) clamp(20px, 5vw, 56px); }
   bottom: -4px;
   font-family: var(--mono);
   font-weight: 400;
-  font-size: 9.5px;
-  letter-spacing: 0.16em;
+  font-size: 10px;
+  letter-spacing: .16em;
   text-transform: uppercase;
-  color: var(--ink-faint);
+  color: var(--ink-dim);
   white-space: nowrap;
 }
 
@@ -388,7 +382,7 @@ section { padding: clamp(64px, 10vw, 120px) clamp(20px, 5vw, 56px); }
   margin-top: 68px;
   font-style: italic;
   font-size: 14px;
-  color: var(--ink-faint);
+  color: var(--ink-dim);
 }
 
 /* ————— visit: the twelve, the photograph, the form ————— */
@@ -414,7 +408,7 @@ section { padding: clamp(64px, 10vw, 120px) clamp(20px, 5vw, 56px); }
   font-style: italic;
   color: var(--ink-dim);
   font-size: 15px;
-  transition: background 0.6s ease;
+  transition: background .6s ease;
 }
 
 .visit-copy p:first-of-type {
@@ -431,7 +425,9 @@ section { padding: clamp(64px, 10vw, 120px) clamp(20px, 5vw, 56px); }
 
 .visit-form { margin-top: 40px; max-width: 460px; }
 
-.visit-form .field { display: block; margin-bottom: 26px; }
+.visit-form .field { display: block; position: relative; margin-bottom: 26px; }
+
+.visit-form .field:has(select)::after { content: "▾"; position: absolute; right: 2px; bottom: 13px; color: var(--ember); pointer-events: none; }
 
 .visit-form .field span { display: block; margin-bottom: 2px; }
 
@@ -447,7 +443,7 @@ section { padding: clamp(64px, 10vw, 120px) clamp(20px, 5vw, 56px); }
   font-size: 18px;
 }
 
-.visit-form select { appearance: none; }
+.visit-form select { appearance: none; overflow: hidden; text-overflow: ellipsis; }
 
 .visit-form input:focus, .visit-form select:focus { outline: none; border-bottom-color: var(--ember); }
 
@@ -455,7 +451,7 @@ section { padding: clamp(64px, 10vw, 120px) clamp(20px, 5vw, 56px); }
 
 .visit-aside { margin-top: 18px; font-style: italic; font-size: 14px; color: var(--ink-dim); }
 
-.visit-terms { margin: 56px 0 0; padding: 18px 0 26px; border-top: 1px solid var(--hairline); }
+.visit-terms { margin: 56px 0 0; padding: 18px 0 26px; border-top: 1px solid var(--hairline); text-wrap: balance; }
 
 /* ————— the fell: getting here after dark, and how to behave when you do ————— */
 
@@ -472,7 +468,7 @@ section { padding: clamp(64px, 10vw, 120px) clamp(20px, 5vw, 56px); }
   font-family: var(--mono);
   font-size: 11px;
   font-weight: 400;
-  letter-spacing: 0.22em;
+  letter-spacing: .22em;
   text-transform: uppercase;
   color: var(--ink-dim);
 }
@@ -481,7 +477,7 @@ section { padding: clamp(64px, 10vw, 120px) clamp(20px, 5vw, 56px); }
 
 .fell-grid p { margin: 0 0 12px; font-size: 15.5px; color: var(--ink-dim); }
 
-.fell-grid p strong { font-weight: 420; color: var(--starlight); }
+.fell-grid p strong, .school-copy strong { font-weight: 420; color: var(--starlight); }
 
 .fell-grid ul { list-style: none; margin: 0; padding: 0; }
 
@@ -494,7 +490,7 @@ section { padding: clamp(64px, 10vw, 120px) clamp(20px, 5vw, 56px); }
 
 .fell-grid li:first-child { border-top: 0; padding-top: 0; }
 
-.fell-grid li b { font-weight: 400; color: var(--ember); font-family: var(--mono); font-size: 12px; letter-spacing: 0.1em; }
+.fell-grid li b { font-weight: 400; color: var(--ember); font-family: var(--mono); font-size: 12px; letter-spacing: .1em; }
 
 .fell-coda {
   margin: clamp(40px, 6vw, 64px) 0 0;
@@ -517,8 +513,6 @@ section { padding: clamp(64px, 10vw, 120px) clamp(20px, 5vw, 56px); }
 
 .school-copy p { margin: 0 0 16px; color: var(--ink-dim); max-width: 36em; }
 
-.school-copy strong { font-weight: 420; color: var(--starlight); }
-
 #school a { color: var(--ember); text-decoration-color: var(--ink-faint); text-underline-offset: 3px; }
 
 .year-bar { grid-column: 1 / -1; }
@@ -535,8 +529,8 @@ section { padding: clamp(64px, 10vw, 120px) clamp(20px, 5vw, 56px); }
   top: auto;
   bottom: -18px;
   left: 4px;
-  font-size: 9.5px;
-  color: var(--ink-faint);
+  font-size: 10px;
+  color: var(--ink-dim);
 }
 
 .year-bar .window {
@@ -557,7 +551,7 @@ section { padding: clamp(64px, 10vw, 120px) clamp(20px, 5vw, 56px); }
   font-family: var(--mono);
   font-weight: 400;
   font-size: 10px;
-  letter-spacing: 0.22em;
+  letter-spacing: .22em;
   text-transform: uppercase;
   color: var(--ember);
   white-space: nowrap;
@@ -573,11 +567,11 @@ section { padding: clamp(64px, 10vw, 120px) clamp(20px, 5vw, 56px); }
   gap: clamp(24px, 4vw, 48px);
 }
 
-.journal-grid article:nth-child(2) { margin-top: clamp(24px, 4vw, 56px); }
+.journal-grid article:nth-child(2) { margin-top: clamp(40px, 6vw, 88px); }
 
 .journal-grid figure { margin: 0 0 16px; height: clamp(240px, 30vw, 380px); overflow: hidden; }
 
-.journal-grid img { transition: transform 3s ease, filter 0.6s ease; }
+.journal-grid img { transition: transform 3s ease, filter .6s ease; }
 
 .journal-grid article:hover img { transform: scale(1.04); }
 
@@ -612,7 +606,7 @@ footer {
 
 @supports (animation-timeline: view()) {
   .section-head, .journal-grid article, .fell-grid > div {
-    animation: rise 1s cubic-bezier(0.2, 0.6, 0.2, 1) both;
+    animation: rise 1s cubic-bezier(.2, .6, .2, 1) both;
     animation-timeline: view();
     animation-range: entry 0% entry 60%;
   }
@@ -630,6 +624,10 @@ footer {
   .masthead { flex-direction: column; align-items: flex-start; gap: 14px; }
   .masthead nav { justify-content: flex-start; }
   .wordmark small { display: none; }
+  .section-head { flex-wrap: wrap; }
+  .section-head h2 { width: 100%; }
+  .sky-times li { grid-template-columns: 76px minmax(0, 1fr); }
+  .fell-grid > div:first-child h3 { border-top: 0; padding-top: 0; }
   .hero { min-height: 76vh; }
   .hero-caption { display: none; }
   .tonight-grid, .visit-grid, .journal-grid, .fell-grid, .school-grid { grid-template-columns: minmax(0, 1fr); }
@@ -647,10 +645,9 @@ footer {
   /* The translucent starlight inks restate as ink and every label follows;
      printers drop backgrounds, so the night-bar keeps only its border. */
   :root { --starlight: #101820; --ink-dim: #3a3f45; --ink-faint: #6b625a; --ember: #8a5222; --hairline: #ccc; }
-  body { background: #fff; color: #101820; }
+  body { background: #fff; }
   .hero, .visit-figure, .journal-grid figure, .skip, .torch, .torch-input, .book { display: none; }
   .label, .sky-times time, .fell-grid h3 { color: #6b625a; }
-  .sky-times li, .section-head, .fell-grid li { border-color: #ccc; }
-  .sky-times p, .tonight-lede, .visit-copy p, .fell-grid p, .fell-grid li, .journal-grid p { color: #3a3f45; }
+  .tonight-lede, .visit-copy p { color: #3a3f45; }
   .night-bar .band { background: #fff; border-color: #6b625a; }
 }
