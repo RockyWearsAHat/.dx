@@ -124,7 +124,9 @@ pub struct BlockPage {
 /// be too large to deliver, and never enlarged. In the page flow the same board is fitted
 /// into the column, which is right for reading in context and wrong for reading the board:
 /// a 1200px canvas fitted into a 680px column is 10px type drawn at 5px. Any other block
-/// renders in the ordinary column at `bounds.width`, exactly as the page carries it.
+/// renders at the page's own content measure, exactly as the page carries it — but with
+/// **no sheet margin around it**: a lone block is content, not a page, and the sheet's
+/// margins were ~40% of a small block's picture, spent on empty paper at reading sizes.
 ///
 /// A block marked `hidden` renders like any other: hidden means "lives on the board, not
 /// in the flow", and photographing one node is precisely when it must show itself.
@@ -164,12 +166,12 @@ pub fn block_page(
 
     let rendered = block_html(block, document, options, &values);
     let body = format!(
-        "<div class=\"dx-doc\">\n{}{rendered}\n</div>\n",
+        "<div class=\"dx-doc\" style=\"max-width:none;margin:0;padding:0\">\n{}{rendered}\n</div>\n",
         document_css(document),
     );
     Some(BlockPage {
         html: page_shell(&title, options.theme, &body),
-        width: bounds.width,
+        width: bounds.width.min(super::board::PAGE_NODE_WIDTH),
         height: None,
     })
 }
@@ -1150,14 +1152,17 @@ mod tests {
         );
     }
 
-    /// Any other block — a board node's hidden block included — photographs in the
-    /// ordinary column, exactly as the page carries it.
+    /// Any other block — a board node's hidden block included — photographs at the page's
+    /// own content measure, exactly as the page carries it.
     #[test]
     fn a_block_page_holds_one_block_even_a_hidden_one() {
         let document = parse(TWO_NODE_BOARD);
         let page = block_page(&document, "a", &HtmlOptions::default(), &wide_bounds())
             .expect("hidden blocks photograph too");
-        assert_eq!((page.width, page.height), (860, None));
+        assert_eq!(
+            (page.width, page.height),
+            (super::super::board::PAGE_NODE_WIDTH, None)
+        );
         assert!(page.html.starts_with("<!doctype html>"), "{}", page.html);
         assert!(page.html.contains("First node."), "{}", page.html);
         assert!(!page.html.contains("Second node."), "{}", page.html);
@@ -1166,6 +1171,29 @@ mod tests {
             block_page(&document, "ghost", &HtmlOptions::default(), &wide_bounds()).is_none(),
             "a missing block is a None, not an empty page"
         );
+    }
+
+    /// A lone block is content, not a page: its picture carries no sheet margin. The
+    /// sheet's `4rem`/`6rem` padding was ~40% of a small block's capture — empty paper
+    /// bought at the full pixel price of a reading image.
+    #[test]
+    fn a_block_page_is_trimmed_to_the_block_alone() {
+        let document = parse(TWO_NODE_BOARD);
+        let page = block_page(&document, "a", &HtmlOptions::default(), &wide_bounds())
+            .expect("the block exists");
+        assert!(
+            page.html
+                .contains("class=\"dx-doc\" style=\"max-width:none;margin:0;padding:0\""),
+            "{}",
+            page.html
+        );
+        let narrow = PageBounds {
+            width: 390,
+            ..wide_bounds()
+        };
+        let phone =
+            block_page(&document, "a", &HtmlOptions::default(), &narrow).expect("the block exists");
+        assert_eq!(phone.width, 390, "a narrow ask stays narrow");
     }
 
     /// A node holding markup renders it live — sanitized HTML with its classes and inline

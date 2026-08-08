@@ -60,6 +60,9 @@ pub struct Cdp {
     next_id: u64,
     /// The attached page's session id; `None` until [`Cdp::open`] attaches one.
     session: Option<String>,
+    /// The open page's target id, closed when [`Cdp::open`] replaces it — a session that
+    /// opens page after page must not leave every one of them alive in the browser.
+    target: Option<String>,
     /// Events received while waiting for command responses, oldest first.
     events: VecDeque<Value>,
 }
@@ -127,6 +130,7 @@ impl Cdp {
                 socket,
                 next_id: 0,
                 session: None,
+                target: None,
                 events: VecDeque::new(),
             }),
             Err(reason) => {
@@ -145,11 +149,17 @@ impl Cdp {
     /// # Errors
     /// Returns a sentence when the browser cannot create or attach the page.
     pub fn open(&mut self, url: &str) -> Result<(), String> {
+        if let Some(previous) = self.target.take() {
+            // Best-effort: a page that will not close must not stop the next one opening.
+            let _ = self.raw_command("Target.closeTarget", json!({ "targetId": previous }));
+            self.session = None;
+        }
         let created = self.raw_command("Target.createTarget", json!({ "url": "about:blank" }))?;
         let target = created["targetId"]
             .as_str()
             .ok_or("the browser created no page")?
             .to_string();
+        self.target = Some(target.clone());
         let attached = self.raw_command(
             "Target.attachToTarget",
             json!({ "targetId": target, "flatten": true }),
@@ -163,6 +173,25 @@ impl Cdp {
         self.command("Page.enable", json!({}))?;
         self.command("Page.navigate", json!({ "url": url }))?;
         self.wait_for_event("Page.loadEventFired", LOAD_TIMEOUT);
+        Ok(())
+    }
+
+    /// Let the page finish becoming itself before it is measured or photographed.
+    ///
+    /// Advances virtual time until `budget_ms` of it has passed with no network fetches
+    /// pending — the DevTools form of the `--virtual-time-budget` flag the one-shot
+    /// capture route always carried. Without it a capture lands the instant the load
+    /// event fires, which is before a `::view`'s sandboxed frame has painted; the first
+    /// paginated read over this channel shipped nine empty view frames that way.
+    ///
+    /// # Errors
+    /// Returns a sentence when the browser refuses to run virtual time.
+    pub fn settle(&mut self, budget_ms: u32) -> Result<(), String> {
+        self.command(
+            "Emulation.setVirtualTimePolicy",
+            json!({ "policy": "pauseIfNetworkFetchesPending", "budget": budget_ms }),
+        )?;
+        self.wait_for_event("Emulation.virtualTimeBudgetExpired", COMMAND_TIMEOUT);
         Ok(())
     }
 
