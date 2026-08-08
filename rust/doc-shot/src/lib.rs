@@ -6,13 +6,15 @@
 //! of an image.
 //!
 //! # How the full page fits in the frame
-//! A headless browser screenshot is only as tall as its window, so capture runs twice.
-//! The first pass loads the page with a one-line measuring script and reads the real
-//! content height back out of the DOM; the second pass opens a window exactly that tall
-//! and takes the picture. The result is the whole document, never a cropped viewport.
+//! A headless browser screenshot is only as tall as its window, so capture happens in two
+//! steps over one live [`cdp`] session: the page is asked its real content height, then the
+//! viewport is sized exactly that tall and the picture taken. The result is the whole
+//! document, never a cropped viewport — and a whole capture, however many pages it
+//! produces, costs **one** browser launch (the one-shot `--screenshot` route it replaced
+//! paid one per page).
 //!
-//! The measuring script exists only in the throwaway capture copy. The stored document and
-//! everything [`doc_core::render`] produces stay script-free.
+//! The measuring question is asked over the DevTools channel of the throwaway capture
+//! copy. The stored document and everything [`doc_core::render`] produces stay script-free.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -26,7 +28,6 @@ pub mod play;
 pub mod png;
 
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use doc_core::model::Document;
@@ -41,9 +42,9 @@ pub const DEFAULT_PAGE_HEIGHT: u32 = 1550;
 
 /// Most pages one paginated capture will produce.
 ///
-/// Each page costs a browser launch, and a reader who needs the 30th page of something
-/// wants a section, not a flip-book. [`capture_pages`] reports the pages it did not take
-/// rather than pretending the document ended.
+/// A reader who needs the 30th page of something wants a section, not a flip-book.
+/// [`capture_pages`] reports the pages it did not take rather than pretending the
+/// document ended.
 pub const MAX_PAGES: usize = 12;
 
 /// Most pixels one image may carry before a vision model's ingestion scales it down
@@ -72,8 +73,26 @@ const MAX_SCALE: u32 = 4;
 /// Window height used for the measuring pass, before the real height is known.
 const MEASURE_HEIGHT: u32 = 900;
 
+/// Virtual milliseconds a capture lets a freshly opened page settle for
+/// ([`cdp::Cdp::settle`]) — the same budget the one-shot route's
+/// `--virtual-time-budget=4000` always carried, without which a `::view`'s sandboxed
+/// frame is photographed before it paints.
+const SETTLE_BUDGET_MS: u32 = 4000;
+
+/// Virtual milliseconds granted after each scroll of a paginated capture. The opening
+/// settle leaves virtual time paused, so a frame first painted when the window reaches
+/// it gets no life to paint in — the first read shipped its first three view frames
+/// empty and the rest full, exactly the order the window met them.
+const SCROLL_SETTLE_BUDGET_MS: u32 = 800;
+
 /// Shortest page captured, so a one-line document still produces a legible image.
 const MIN_HEIGHT: u32 = 200;
+
+/// Shortest a lone-block capture may come out. A trimmed block is content, not a page:
+/// a one-line strip is the honest picture, and padding it to [`MIN_HEIGHT`] would ship
+/// the sheet of blank paper the trim exists to remove. The floor only catches a failed
+/// or degenerate measure.
+const BLOCK_MIN_HEIGHT: u32 = 24;
 
 /// Tallest page captured, so a runaway document cannot produce a gigantic image.
 const MAX_HEIGHT: u32 = 12_000;
@@ -85,13 +104,23 @@ const NATURAL_MAX_EDGE: u32 = 4000;
 /// Most CSS pixels a self-sized page may cover, unless [`ShotOptions`] tightens it.
 const NATURAL_MAX_PIXELS: u32 = 16_000_000;
 
-/// Attribute the measuring script writes the content height into.
-const HEIGHT_ATTRIBUTE: &str = "data-dx-height";
-
-/// Attribute the measuring script writes each block's box into, as
-/// `id:top:height;id:top:height…`. This is what lets a page break fall between blocks
-/// instead of through the middle of a line.
-const BLOCKS_ATTRIBUTE: &str = "data-dx-blocks";
+/// The measuring question a paginated capture asks the live page: the `<body>` box's
+/// height, then each flow block's box as `id:top:height;…` — the answer
+/// [`parse_measure_answer`] reads. The height comes from the `<body>` box, not
+/// `documentElement.scrollHeight`: the latter never reports less than the viewport, which
+/// would pad every short document with a screenful of empty space. Only blocks **in the
+/// page flow** are measured: a board renders a copy of every block it references inside
+/// its own scaled canvas, each copy carrying the block's `data-block-id`, and measuring
+/// those used to hand pagination boxes from inside the board's viewport — strip pages and
+/// blank pages around every board, one block attributed to three pages. The board element
+/// itself (it has the class *and* the id) stays measured — it is the flow.
+const MEASURE_EXPRESSION: &str = "(function(){var b=document.body;\
+var f=Array.prototype.filter.call(document.querySelectorAll('[data-block-id]'),\
+function(e){var g=e.closest('.dx-board');return !g||g===e;});\
+return String(Math.ceil(Math.max(b.scrollHeight,b.getBoundingClientRect().height)))+'|'+\
+f.map(function(e){var x=e.getBoundingClientRect();\
+return e.getAttribute('data-block-id')+':'+Math.max(0,Math.round(x.top+window.scrollY))\
++':'+Math.ceil(x.height);}).join(';');})()";
 
 /// How to capture a document.
 #[derive(Debug, Clone)]
@@ -373,6 +402,7 @@ fn capture_block_pages(
         let page_file = workspace.join(format!("block-{index}.html"));
         write(&page_file, &page.html)?;
         session.open(&file_url(&page_file))?;
+        session.settle(SETTLE_BUDGET_MS)?;
         let height = match page.height {
             Some(height) => height,
             None => {
@@ -382,9 +412,9 @@ fn capture_block_pages(
                 measure_body_height(&mut session).unwrap_or(MEASURE_HEIGHT)
             }
         };
-        let height = height.clamp(MIN_HEIGHT, MAX_HEIGHT);
+        let height = height.clamp(BLOCK_MIN_HEIGHT, MAX_HEIGHT);
         set_viewport(&mut session, page.width, height, scale * oversample)?;
-        let png = session.screenshot(None)?;
+        let png = stable_screenshot(&mut session)?;
         let png = png::downsample(&png, oversample)
             .map_err(|reason| format!("could not resample the capture: {reason}"))?;
         shots.push(Shot {
@@ -433,38 +463,17 @@ fn measure_body_height(session: &mut cdp::Cdp) -> Option<u32> {
     Some(height as u32)
 }
 
-/// Capture an already-rendered [`BlockPage`] inside `workspace`.
-///
-/// A page that states its own height (a board) is photographed in one window that size; a
-/// page that does not is measured first, exactly like a whole-document capture.
+/// Capture an already-rendered [`BlockPage`] inside `workspace`: a batch of one.
 fn capture_block_page(
     browser: &Path,
     page: &BlockPage,
     options: &ShotOptions,
     workspace: &Path,
 ) -> Result<Shot, String> {
-    let height = match page.height {
-        Some(height) => height,
-        None => {
-            let measure_file = workspace.join("measure.html");
-            write(&measure_file, &with_measuring_script(&page.html))?;
-            dump_dom(browser, &measure_file, page.width)
-                .as_deref()
-                .and_then(read_height_attribute)
-                .unwrap_or(MEASURE_HEIGHT)
-        }
-    };
-
-    let page_file = workspace.join("block.html");
-    write(&page_file, &page.html)?;
-    screenshot(
-        browser,
-        &page_file,
-        &workspace.join("block.png"),
-        page.width,
-        height,
-        options,
-    )
+    let mut shots = capture_block_pages(browser, std::slice::from_ref(page), options, workspace)?;
+    shots
+        .pop()
+        .ok_or_else(|| "the capture produced no image".to_string())
 }
 
 /// The render options every capture in this crate photographs a block under: the caller's
@@ -490,7 +499,8 @@ enum PlannedPage {
     },
 }
 
-/// Measure once, then capture each planned page inside an already-created `workspace`.
+/// Measure once, then capture each planned page — the whole run from **one** live
+/// [`cdp`] session inside an already-created `workspace`.
 fn capture_all_pages(
     browser: &Path,
     document: &Document,
@@ -499,14 +509,17 @@ fn capture_all_pages(
     options: &ShotOptions,
     workspace: &Path,
 ) -> Result<Vec<Page>, String> {
-    let measure_file = workspace.join("measure.html");
-    write(&measure_file, &with_measuring_script(page))?;
-    let dom = dump_dom(browser, &measure_file, options.width);
-    let total_height = dom
-        .as_deref()
-        .and_then(read_height_attribute)
-        .unwrap_or(MEASURE_HEIGHT);
-    let boxes = dom.as_deref().map(read_block_boxes).unwrap_or_default();
+    let profile = workspace.join("profile");
+    std::fs::create_dir_all(&profile)
+        .map_err(|error| format!("could not create {}: {error}", profile.display()))?;
+    let mut session = cdp::Cdp::launch(browser, &profile, options.width, MEASURE_HEIGHT)?;
+
+    let page_file = workspace.join("measure.html");
+    write(&page_file, page)?;
+    session.open(&file_url(&page_file))?;
+    session.settle(SETTLE_BUDGET_MS)?;
+    set_viewport(&mut session, options.width, MEASURE_HEIGHT, 1)?;
+    let (total_height, boxes) = measure_page(&mut session);
 
     let plan = plan_pages(
         document,
@@ -517,45 +530,124 @@ fn capture_all_pages(
         options,
     );
     let total = plan.len();
+    let scale = scale(options);
+    let oversample = oversample(options);
 
-    let page_file = workspace.join("page.html");
-    let mut pages = Vec::new();
+    // Every flow page is a window scrolled over the document already open in the
+    // session — the document loads once, however many pages it breaks into. Scrolling,
+    // not a clip past the viewport: a `::view`'s sandboxed frame only paints inside the
+    // viewport, and `captureBeyondViewport` delivered nine of them as empty paper.
+    // Boards follow in a second pass because each opens its own self-sized page, and
+    // interleaving would make the session reload the document around every one of them.
+    let mut pages: Vec<Option<Page>> = Vec::new();
+    pages.resize_with(plan.len().min(options.max_pages), || None);
     for (index, planned) in plan.iter().take(options.max_pages).enumerate() {
-        let (shot, blocks) = match planned {
-            PlannedPage::Flow(range) => {
-                write(&page_file, &shifted_to(page, range.top))?;
-                let shot = screenshot(
-                    browser,
-                    &page_file,
-                    &workspace.join(format!("page-{index}.png")),
-                    options.width,
-                    range.height,
-                    options,
-                )?;
-                (shot, range.blocks.clone())
-            }
-            PlannedPage::Board { id, page: board } => {
-                write(&page_file, &board.html)?;
-                let shot = screenshot(
-                    browser,
-                    &page_file,
-                    &workspace.join(format!("page-{index}.png")),
-                    board.width,
-                    board.height.unwrap_or_else(|| page_height(options)),
-                    options,
-                )?;
-                (shot, vec![id.clone()])
-            }
-        };
-        pages.push(Page {
-            shot,
-            number: index + 1,
-            total,
-            blocks,
-        });
+        if let PlannedPage::Flow(range) = planned {
+            let height = range.height.clamp(MIN_HEIGHT, MAX_HEIGHT);
+            set_viewport(&mut session, options.width, height, scale * oversample)?;
+            session.evaluate(&format!("window.scrollTo(0,{})", range.top))?;
+            session.settle(SCROLL_SETTLE_BUDGET_MS)?;
+            let shot = delivered(
+                stable_screenshot(&mut session)?,
+                options.width,
+                height,
+                options,
+            )?;
+            pages[index] = Some(Page {
+                shot,
+                number: index + 1,
+                total,
+                blocks: range.blocks.clone(),
+            });
+        }
+    }
+    for (index, planned) in plan.iter().take(options.max_pages).enumerate() {
+        if let PlannedPage::Board { id, page: board } = planned {
+            let board_file = workspace.join(format!("page-{index}.html"));
+            write(&board_file, &board.html)?;
+            session.open(&file_url(&board_file))?;
+            session.settle(SETTLE_BUDGET_MS)?;
+            let height = board
+                .height
+                .unwrap_or_else(|| page_height(options))
+                .clamp(MIN_HEIGHT, MAX_HEIGHT);
+            set_viewport(&mut session, board.width, height, scale * oversample)?;
+            let shot = delivered(
+                stable_screenshot(&mut session)?,
+                board.width,
+                height,
+                options,
+            )?;
+            pages[index] = Some(Page {
+                shot,
+                number: index + 1,
+                total,
+                blocks: vec![id.clone()],
+            });
+        }
     }
 
-    Ok(pages)
+    Ok(pages.into_iter().flatten().collect())
+}
+
+/// Photograph the page once it stops changing.
+///
+/// Virtual time ([`cdp::Cdp::settle`]) advances the page's own clocks, but the
+/// compositor rasters in real time — a heavy `::view` frame can take a few hundred real
+/// milliseconds to paint after its page is "loaded", and a capture that fires first
+/// ships the frame as empty paper. Two consecutive captures that agree are the
+/// definition of settled; a page that never stops moving is delivered as it last stood
+/// rather than stalling the read.
+fn stable_screenshot(session: &mut cdp::Cdp) -> Result<Vec<u8>, String> {
+    /// Real time between looks — about two compositor frames.
+    const BREATH: std::time::Duration = std::time::Duration::from_millis(120);
+    /// Most looks taken before the page is delivered as it stands.
+    const MOST_LOOKS: usize = 12;
+
+    let mut last = session.screenshot(None)?;
+    for _ in 0..MOST_LOOKS {
+        std::thread::sleep(BREATH);
+        let next = session.screenshot(None)?;
+        if next == last {
+            return Ok(next);
+        }
+        last = next;
+    }
+    Ok(last)
+}
+
+/// Average an oversampled capture back down and box it as the [`Shot`] it claims to be:
+/// `width × scale` pixels, whatever density it was rasterized at.
+fn delivered(png: Vec<u8>, width: u32, height: u32, options: &ShotOptions) -> Result<Shot, String> {
+    let png = png::downsample(&png, oversample(options))
+        .map_err(|reason| format!("could not resample the capture: {reason}"))?;
+    Ok(Shot {
+        png,
+        width: width * scale(options),
+        height: height * scale(options),
+    })
+}
+
+/// Ask the live page [`MEASURE_EXPRESSION`] and read its answer.
+///
+/// A page that cannot be measured still captures — at [`MEASURE_HEIGHT`] with no block
+/// boxes, so the breaks are less precise, never absent.
+fn measure_page(session: &mut cdp::Cdp) -> (u32, Vec<BlockBox>) {
+    session
+        .evaluate(MEASURE_EXPRESSION)
+        .ok()
+        .as_ref()
+        .and_then(serde_json::Value::as_str)
+        .map_or((MEASURE_HEIGHT, Vec::new()), parse_measure_answer)
+}
+
+/// Parse [`MEASURE_EXPRESSION`]'s answer: the page height, `|`, then the block boxes.
+fn parse_measure_answer(answer: &str) -> (u32, Vec<BlockBox>) {
+    let (height, boxes) = answer.split_once('|').unwrap_or((answer, ""));
+    (
+        height.parse().unwrap_or(MEASURE_HEIGHT),
+        parse_block_boxes(boxes),
+    )
 }
 
 /// Divide the measured flow into pages, giving every board a page of its own.
@@ -748,26 +840,35 @@ fn fixed_ranges(start: u32, end: u32, height: u32) -> Vec<PageRange> {
     ranges
 }
 
-/// Run both browser passes against `page` inside an already-created `workspace`.
+/// Measure `page` and photograph it whole, from one live [`cdp`] session inside an
+/// already-created `workspace`.
 fn capture_page(
     browser: &Path,
     page: &str,
     options: &ShotOptions,
     workspace: &Path,
 ) -> Result<Shot, String> {
-    let measure_file = workspace.join("measure.html");
-    write(&measure_file, &with_measuring_script(page))?;
-    let height = dump_dom(browser, &measure_file, options.width)
-        .as_deref()
-        .and_then(read_height_attribute)
-        .unwrap_or(MEASURE_HEIGHT);
+    let profile = workspace.join("profile");
+    std::fs::create_dir_all(&profile)
+        .map_err(|error| format!("could not create {}: {error}", profile.display()))?;
+    let mut session = cdp::Cdp::launch(browser, &profile, options.width, MEASURE_HEIGHT)?;
 
     let page_file = workspace.join("page.html");
     write(&page_file, page)?;
-    screenshot(
-        browser,
-        &page_file,
-        &workspace.join("shot.png"),
+    session.open(&file_url(&page_file))?;
+    session.settle(SETTLE_BUDGET_MS)?;
+    set_viewport(&mut session, options.width, MEASURE_HEIGHT, 1)?;
+    let height = measure_body_height(&mut session)
+        .unwrap_or(MEASURE_HEIGHT)
+        .clamp(MIN_HEIGHT, MAX_HEIGHT);
+    set_viewport(
+        &mut session,
+        options.width,
+        height,
+        scale(options) * oversample(options),
+    )?;
+    delivered(
+        stable_screenshot(&mut session)?,
         options.width,
         height,
         options,
@@ -785,100 +886,12 @@ fn oversample(options: &ShotOptions) -> u32 {
     options.oversample.clamp(1, MAX_SCALE / scale(options))
 }
 
-/// Capture one window of `page_file` as a PNG, clamped to a sane height.
-///
-/// `--window-size` is CSS pixels and the image comes out `scale` times larger on each
-/// axis, so the layout is identical at every scale — only the pixel density changes.
-/// An oversampled capture rasterizes `oversample` times denser still and is averaged
-/// back down in linear light ([`png::downsample`]) before it leaves, so [`Shot`]
-/// always reports — and carries — `width × scale` pixels.
-fn screenshot(
-    browser: &Path,
-    page_file: &Path,
-    image_file: &Path,
-    width: u32,
-    height: u32,
-    options: &ShotOptions,
-) -> Result<Shot, String> {
-    let height = height.clamp(MIN_HEIGHT, MAX_HEIGHT);
-    let scale = scale(options);
-    let oversample = oversample(options);
-    let status = browser_command(browser)
-        .arg(format!(
-            "--force-device-scale-factor={}",
-            scale * oversample
-        ))
-        .arg(format!("--screenshot={}", image_file.display()))
-        .arg(format!("--window-size={width},{height}"))
-        .arg(file_url(page_file))
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map_err(|error| format!("could not start the browser: {error}"))?;
-
-    let png = std::fs::read(image_file).map_err(|error| {
-        format!(
-            "the browser did not produce an image ({status}): {error}. \
-             Try setting {} to a different browser.",
-            browser::BROWSER_ENV
-        )
-    })?;
-    let png = png::downsample(&png, oversample)
-        .map_err(|reason| format!("could not resample the capture: {reason}"))?;
-
-    Ok(Shot {
-        png,
-        width: width * scale,
-        height: height * scale,
-    })
-}
-
-/// Load the measuring copy and return the rendered DOM the browser dumped.
-///
-/// Measuring always runs at scale 1: block boxes and the page height are CSS pixels,
-/// and the capture pass applies its own density on top of them.
-fn dump_dom(browser: &Path, page_file: &Path, width: u32) -> Option<String> {
-    let output = browser_command(browser)
-        .arg("--force-device-scale-factor=1")
-        .arg("--dump-dom")
-        .arg(format!("--window-size={width},{MEASURE_HEIGHT}"))
-        .arg(file_url(page_file))
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .output()
-        .ok()?;
-    Some(String::from_utf8_lossy(&output.stdout).into_owned())
-}
-
-/// A copy of `page` scrolled down to `top`, so the browser's window frames that page.
-///
-/// The shift is a style in the throwaway capture copy, not in the document: nothing here
-/// changes the stored bytes or what [`doc_core::render`] produces.
-fn shifted_to(page: &str, top: u32) -> String {
-    if top == 0 {
-        return page.to_string();
-    }
-    let style =
-        format!("<style>html{{overflow:hidden}}body{{position:relative;top:-{top}px}}</style>");
-    match page.rfind("</head>") {
-        Some(index) => format!("{}{style}{}", &page[..index], &page[index..]),
-        None => format!("{style}{page}"),
-    }
-}
-
-/// Extract the measured height from a dumped DOM.
-fn read_height_attribute(dom: &str) -> Option<u32> {
-    read_attribute(dom, HEIGHT_ATTRIBUTE)?.parse().ok()
-}
-
-/// Extract each block's measured box from a dumped DOM, in document order.
+/// Parse each block's measured box out of [`MEASURE_EXPRESSION`]'s `id:top:height;…`
+/// list, in document order.
 ///
 /// A malformed entry is skipped rather than failing the capture: a page that measured
 /// imperfectly should still produce pictures, just with less precise breaks.
-fn read_block_boxes(dom: &str) -> Vec<BlockBox> {
-    let Some(raw) = read_attribute(dom, BLOCKS_ATTRIBUTE) else {
-        return Vec::new();
-    };
+fn parse_block_boxes(raw: &str) -> Vec<BlockBox> {
     raw.split(';')
         .filter(|entry| !entry.is_empty())
         .filter_map(|entry| {
@@ -889,60 +902,6 @@ fn read_block_boxes(dom: &str) -> Vec<BlockBox> {
             Some(BlockBox { id, top, height })
         })
         .collect()
-}
-
-/// Read one attribute value off the dumped `<html>` element.
-fn read_attribute<'a>(dom: &'a str, name: &str) -> Option<&'a str> {
-    let marker = format!("{name}=\"");
-    let start = dom.find(&marker)? + marker.len();
-    let end = start + dom[start..].find('"')?;
-    Some(&dom[start..end])
-}
-
-/// A browser command preloaded with the flags every pass needs.
-fn browser_command(browser: &Path) -> Command {
-    let mut command = Command::new(browser);
-    command.args([
-        "--headless",
-        "--disable-gpu",
-        "--no-sandbox",
-        "--hide-scrollbars",
-        "--no-first-run",
-        "--disable-extensions",
-        "--virtual-time-budget=4000",
-    ]);
-    command
-}
-
-/// Add the one-line script that records the page's real height for the measuring pass.
-///
-/// The height comes from the `<body>` box, not from `documentElement.scrollHeight`: the
-/// latter never reports less than the viewport, which would pad every short document with
-/// a screenful of empty space.
-///
-/// Only blocks **in the page flow** are measured. A board renders a copy of every block it
-/// references inside its own scaled canvas, and each copy carries the block's
-/// `data-block-id`; measuring those used to hand pagination boxes from inside the board's
-/// viewport, which cut strip pages and blank pages around every board and attributed one
-/// block to three pages. The board element itself (it has the class *and* the id) stays
-/// measured — it is the flow.
-fn with_measuring_script(page: &str) -> String {
-    let script = format!(
-        "<script>var b=document.body,r=document.documentElement;\
-         r.setAttribute('{HEIGHT_ATTRIBUTE}', \
-         String(Math.ceil(Math.max(b.scrollHeight, b.getBoundingClientRect().height))));\
-         var f=Array.prototype.filter.call(document.querySelectorAll('[data-block-id]'), \
-         function(e){{var g=e.closest('.dx-board');return !g||g===e;}});\
-         r.setAttribute('{BLOCKS_ATTRIBUTE}', \
-         f.map(function(e){{\
-         var x=e.getBoundingClientRect();\
-         return e.getAttribute('data-block-id')+':'+Math.max(0,Math.round(x.top+window.scrollY))\
-         +':'+Math.ceil(x.height);}}).join(';'));</script>"
-    );
-    match page.rfind("</body>") {
-        Some(index) => format!("{}{script}{}", &page[..index], &page[index..]),
-        None => format!("{page}{script}"),
-    }
 }
 
 /// Create a unique scratch directory for one capture or play session.
@@ -1042,12 +1001,15 @@ mod tests {
     }
 
     #[test]
-    fn the_measuring_script_goes_inside_the_body() {
-        let page = "<html><body><p>x</p></body></html>";
-        let measured = with_measuring_script(page);
-        assert!(measured.contains(HEIGHT_ATTRIBUTE));
-        assert!(measured.ends_with("</body></html>"));
-        assert!(measured.find("<script>").unwrap() < measured.find("</body>").unwrap());
+    fn the_measure_answer_carries_the_height_then_the_boxes() {
+        assert_eq!(
+            parse_measure_answer("1840|intro:0:120;plan:140:300"),
+            (1840, boxes(&[("intro", 0, 120), ("plan", 140, 300)]))
+        );
+        let (height, empty) = parse_measure_answer("640|");
+        assert_eq!((height, empty.len()), (640, 0));
+        let (fallback, none) = parse_measure_answer("not a number");
+        assert_eq!((fallback, none.len()), (MEASURE_HEIGHT, 0));
     }
 
     fn boxes(entries: &[(&str, u32, u32)]) -> Vec<BlockBox> {
@@ -1232,14 +1194,13 @@ mod tests {
         assert!(page.width * height <= VISION_MAX_PIXELS + page.width);
     }
 
-    /// The measuring script only measures the flow: a block copied into a board node
+    /// The measuring question only measures the flow: a block copied into a board node
     /// carries the same `data-block-id`, and measuring the copy was what cut strip pages
     /// and misattributed blocks around every board.
     #[test]
-    fn the_measuring_script_skips_the_copies_inside_a_board() {
-        let measured = with_measuring_script("<html><body>x</body></html>");
-        assert!(measured.contains(".dx-board"), "{measured}");
-        assert!(measured.contains("closest"), "{measured}");
+    fn the_measuring_question_skips_the_copies_inside_a_board() {
+        assert!(MEASURE_EXPRESSION.contains(".dx-board"));
+        assert!(MEASURE_EXPRESSION.contains("closest"));
     }
 
     #[test]
@@ -1253,26 +1214,18 @@ mod tests {
 
     #[test]
     fn block_boxes_survive_an_id_containing_a_colon() {
-        let dom = "<html data-dx-blocks=\"a:b:10:20;c:0:5\"></html>";
         assert_eq!(
-            read_block_boxes(dom),
+            parse_block_boxes("a:b:10:20;c:0:5"),
             boxes(&[("a:b", 10, 20), ("c", 0, 5)])
         );
     }
 
     #[test]
     fn a_malformed_box_entry_is_skipped_not_fatal() {
-        let dom = "<html data-dx-blocks=\"good:0:10;broken;also-bad:x:y\"></html>";
-        assert_eq!(read_block_boxes(dom), boxes(&[("good", 0, 10)]));
-    }
-
-    #[test]
-    fn the_shift_style_lands_in_the_head_and_only_when_needed() {
-        let page = "<html><head><title>t</title></head><body>x</body></html>";
-        assert_eq!(shifted_to(page, 0), page);
-        let shifted = shifted_to(page, 1550);
-        assert!(shifted.contains("top:-1550px"));
-        assert!(shifted.find("<style>").unwrap() < shifted.find("</head>").unwrap());
+        assert_eq!(
+            parse_block_boxes("good:0:10;broken;also-bad:x:y"),
+            boxes(&[("good", 0, 10)])
+        );
     }
 
     #[test]
@@ -1336,8 +1289,15 @@ mod tests {
 
         let board = capture_block(&document, "plan", &ShotOptions::default()).expect("board");
         assert_eq!((board.width, board.height), (448, 248));
+        // An ordinary block is trimmed to the page's own content measure — the picture is
+        // the block, not the block plus the sheet's margins.
         let node = capture_block(&document, "note", &ShotOptions::default()).expect("node");
-        assert_eq!(node.width, DEFAULT_WIDTH);
+        assert_eq!(node.width, 680);
+        assert!(
+            node.height < 200,
+            "a one-line block is a strip, not a sheet: {}px tall",
+            node.height
+        );
 
         let missing = capture_block(&document, "ghost", &ShotOptions::default());
         assert!(
@@ -1386,21 +1346,12 @@ mod tests {
             "the live session delivers the stated size, pixel for pixel"
         );
         assert_eq!(
-            shots[1].width, DEFAULT_WIDTH,
-            "an ordinary block keeps the ordinary column"
+            shots[1].width, 680,
+            "an ordinary block is trimmed to the page's content measure"
         );
         for shot in &shots {
             assert_eq!(&shot.png[1..4], b"PNG");
         }
-    }
-
-    #[test]
-    fn heights_are_read_back_out_of_a_dumped_dom() {
-        assert_eq!(
-            read_height_attribute("<html data-dx-height=\"1840\"><body></body></html>"),
-            Some(1840)
-        );
-        assert_eq!(read_height_attribute("<html></html>"), None);
     }
 
     #[test]

@@ -11,14 +11,47 @@ Last updated: 2026-08-08
 Everything green, everything current, proven mechanically:
 
 - `dx run dev.dx` after this wave's engine edits: **all five gates re-ran and passed** —
-  engine (350+50), lints, both JS surfaces (34/34, parity to the rebuilt wasm), corpus,
+  engine (351+50), lints, both JS surfaces (34/34, parity to the rebuilt wasm), corpus,
   page-contract. Host shell confirmed the same: cargo test (14 binaries, 0 failed),
-  clippy `-D warnings`, fmt, both node suites. `dx setup` installed the new build.
+  clippy `-D warnings`, fmt. `dx setup` installed the new build. **A session's own
+  `dx mcp` process keeps the engine it started with** — reads through MCP reflect an
+  engine fix only after the agent session (and its MCP server) restarts; the CLI
+  reflects it immediately.
 - `examples/example_site_plan.dx` verify: **33 of 33 claims hold**, weight
   **29,978 of 30,000 bytes — 22 in hand**; `site-economics.dx` 4/4 (lean round 18% of
   naive) and `route-economics.dx` 3/3 (ten questions at 43%).
 
-## This wave, part 49: the smear can never ship silently again — and the feature tier landed
+## This wave, part 50: every capture pays one launch, and a frame is photographed only settled
+
+The last per-page browser launch died, and the review loop caught two real regressions
+in my first cut before they could ship:
+
+- **One launch, one load.** `capture_pages`/`capture`/`capture_block` joined the batch
+  route on `doc_shot::cdp`; a paginated read loads the document **once** and scrolls a
+  page-sized window over it (boards keep their own self-sized pages, second pass). The
+  plan document's 12-page read: 22.0s (reload-per-page) → ~13s settled, from one launch —
+  the old route paid **thirteen launches**. `Cdp::open` now closes the previous target,
+  so a long batch cannot pile pages up inside the browser.
+- **A lone-block capture is the block, not the block plus a sheet.** `render::block_page`
+  drops the sheet's margins and takes the page's own content measure (680);
+  `BLOCK_MIN_HEIGHT` (24) replaces the 200px floor. A one-line quote arrives as a
+  680×61 strip — the ~40% dark-margin waste the operator flagged in part 46b is gone.
+- **The reviewer failed my first cut twice, and both failures became engine law.**
+  (1) Clipping past the viewport (`captureBeyondViewport`) delivered nine `::view`
+  frames as empty paper — sandboxed frames only paint inside the viewport — so flow
+  pages scroll instead of clip. (2) Virtual time (`Cdp::settle`, the DevTools form of
+  the `--virtual-time-budget` the rewrite had dropped) was still not enough: the
+  compositor rasters in **real** time, and the first-met frames shipped empty while
+  later ones painted. The fix is `stable_screenshot`: a page is photographed only when
+  two consecutive captures agree (120ms breath, 12-look cap) — "settled" is now a
+  definition, not a hope. Final re-judge: pagination PASS (visit-phone whole on its own
+  page), all nine view frames carrying the real site.
+
+Worklist: the tier past one-launch is a capture session held **across** calls — with the
+design constraint recorded (the session must be owned by a host that drops it; MCP's
+`handle()` is pure by design, and a process-wide static would orphan a Chromium).
+
+## Part 49: the smear can never ship silently again — and the feature tier landed
 
 Two commits. First, the in-flight visual-loop tier (built by the part-46b workflow, green
 in the tree for two sessions) was validated on the host shell and committed: batch
