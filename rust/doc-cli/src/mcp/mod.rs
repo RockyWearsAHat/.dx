@@ -265,7 +265,26 @@ fn initialize() -> Value {
                          producer is called out on the figure. A gallery of hand-managed \
                          images proves nothing and is the smell that you have left the \
                          method; prefer the verdict, and keep any embedded image under \
-                         8MB (capture at scale 1)."
+                         8MB (capture at scale 1).\n\n\
+                         PIXELS IN SUBAGENTS. A page image is the costliest thing a \
+                         context can carry, so frames are judged in a review subagent \
+                         that returns verdicts: the subagent reads the pixels and answers \
+                         with what holds and what fails, and the operator's context \
+                         carries verdicts, never page images. The operator looks at \
+                         pixels only to set design direction — deciding what a page \
+                         should be needs the operator's own eyes; checking that it is \
+                         stays delegated.\n\n\
+                         THE REVIEW BAR IS STANDING. Whenever a session changes a \
+                         rendered surface, it runs a reviewer against the mission bar \
+                         and iterates until PASS before claiming done — a surface change \
+                         nobody reviewed is a claim nobody proved. The document's verify \
+                         block is the mechanical twin of that review: it re-runs by \
+                         staleness, so the bar holds between sessions with no one \
+                         re-invoking it by hand.\n\n\
+                         BATCH EVERY CAPTURE. A capture's cost is the browser launch, \
+                         not the frame, so captures share one launch: name every block \
+                         wanted in one call (comma-separated --block), never one call \
+                         per frame."
     })
 }
 
@@ -421,6 +440,24 @@ mod tests {
         assert!(instructions.contains("for=<run-block-id>"));
         assert!(instructions.contains("`header` param"));
         assert!(instructions.contains("hand-managed images proves nothing"));
+        // The visual loop: frames are judged in a review subagent so the operator's
+        // context holds verdicts rather than page images, pixels reach the operator only
+        // to set direction, every rendered-surface change is reviewed to PASS with the
+        // verify block as its mechanical twin, and captures batch into one browser
+        // launch instead of one call per frame.
+        assert!(instructions.contains("PIXELS IN SUBAGENTS"));
+        assert!(instructions.contains("review subagent"));
+        assert!(instructions.contains("verdicts, never page images"));
+        assert!(instructions.contains("only to set design direction"));
+        assert!(instructions.contains("THE REVIEW BAR IS STANDING"));
+        assert!(instructions.contains("mission bar"));
+        assert!(instructions.contains("until PASS before claiming done"));
+        assert!(instructions.contains("mechanical twin"));
+        assert!(instructions.contains("re-runs by staleness"));
+        assert!(instructions.contains("BATCH EVERY CAPTURE"));
+        assert!(instructions.contains("share one launch"));
+        assert!(instructions.contains("comma-separated --block"));
+        assert!(instructions.contains("never one call per frame"));
     }
 
     #[test]
