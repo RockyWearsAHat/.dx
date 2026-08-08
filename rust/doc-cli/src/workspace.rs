@@ -456,18 +456,19 @@ pub struct Hit {
 #[must_use]
 pub fn search(root: &Path, query: &str, limit: usize) -> Vec<Hit> {
     if let Some(store) = open_existing(root) {
-        if let Ok(summaries) = store.search(query, limit) {
-            let hits: Vec<Hit> = summaries
+        if let Ok(scored) = store.search(query, limit) {
+            let hits: Vec<Hit> = scored
                 .into_iter()
-                .filter_map(|summary| {
-                    let document = store.document(&summary.path).ok()?;
+                .filter_map(|scored| {
+                    let path = scored.summary.path;
+                    let document = store.document(&path).ok()?;
                     Some(Hit {
-                        // Ranking order is the store's; the score is not re-derived here.
-                        score: 1.0,
+                        // The store's own ranking index computed this; never a placeholder.
+                        score: scored.score,
                         block: doc_core::search::best_block_id(&document, query),
                         document: Loaded {
-                            path: root.join(&summary.path),
-                            relative: summary.path,
+                            path: root.join(&path),
+                            relative: path,
                             document,
                         },
                     })

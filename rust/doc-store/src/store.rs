@@ -65,6 +65,18 @@ pub struct Summary {
     pub updated_at: String,
 }
 
+/// A [`Summary`] paired with its relevance score from [`Store::search`]; higher is a better
+/// match. Mirrors [`doc_core::search::ScoredHit`] one layer up, once the store has resolved
+/// the path back to metadata — so a caller can tell a strong match from a weak one instead of
+/// treating every hit as equally confident.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScoredSummary {
+    /// The matching document's metadata.
+    pub summary: Summary,
+    /// Relevance score from the ranking index; higher is a better match.
+    pub score: f64,
+}
+
 /// What a [`Store::save`] actually changed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Saved {
@@ -492,13 +504,14 @@ impl Store {
             .map_err(StoreError::backend)
     }
 
-    /// Search stored documents for `query`, best matches first.
+    /// Search stored documents for `query`, best matches first, each with its relevance score.
     ///
     /// The token table narrows the corpus to documents that contain at least one query token;
     /// only those are reassembled and ranked, through the same [`build_index`] the rest of the
     /// platform uses. Narrowing in SQL keeps the cost proportional to the matches rather than
-    /// to the whole store, and reusing `build_index` keeps one ranking implementation.
-    pub fn search(&self, query: &str, limit: usize) -> Result<Vec<Summary>, StoreError> {
+    /// to the whole store, and reusing `build_index` keeps one ranking implementation — the
+    /// score returned here is that implementation's own, never a placeholder standing in for it.
+    pub fn search(&self, query: &str, limit: usize) -> Result<Vec<ScoredSummary>, StoreError> {
         let tokens = distinct_tokens(query);
         if tokens.is_empty() || limit == 0 {
             return Ok(Vec::new());
@@ -534,7 +547,15 @@ impl Store {
             .search(query)
             .into_iter()
             .take(limit)
-            .filter_map(|hit| summaries.get(&hit.path).cloned())
+            .filter_map(|hit| {
+                summaries
+                    .get(&hit.path)
+                    .cloned()
+                    .map(|summary| ScoredSummary {
+                        summary,
+                        score: hit.score,
+                    })
+            })
             .collect())
     }
 
@@ -1031,13 +1052,46 @@ mod tests {
 
         let hits = store.search("kubernetes", 10).expect("search");
         assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].path, "kubernetes.dx");
+        assert_eq!(hits[0].summary.path, "kubernetes.dx");
+        assert!(hits[0].score > 0.0);
 
         assert!(store
             .search("nothingmatches", 10)
             .expect("empty")
             .is_empty());
         assert!(store.search("", 10).expect("blank").is_empty());
+    }
+
+    #[test]
+    fn search_through_the_database_ranks_the_stronger_match_first_with_a_distinct_score() {
+        // Regression test: `Store::search` once discarded the ranking index's own score and
+        // let the caller stand in a placeholder, so every hit looked equally confident no
+        // matter how well (or poorly) it actually matched. The score returned here must be
+        // the real one, and it must actually separate a strong match from a weak one.
+        let root = scratch("search-scores");
+        let mut store = Store::open(&root).expect("open");
+        store
+            .ingest(
+                "strong.dx",
+                "::paragraph id=p\ncompression compression compression\n::end\n",
+            )
+            .expect("strong");
+        store
+            .ingest(
+                "weak.dx",
+                "::paragraph id=p\na passing compression mention\n::end\n",
+            )
+            .expect("weak");
+
+        let hits = store.search("compression", 10).expect("search");
+        assert_eq!(hits.len(), 2);
+        assert_eq!(hits[0].summary.path, "strong.dx");
+        assert!(
+            hits[0].score > hits[1].score,
+            "strong.dx ({}) should outscore weak.dx ({})",
+            hits[0].score,
+            hits[1].score
+        );
     }
 
     #[test]
