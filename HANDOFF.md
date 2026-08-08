@@ -10,14 +10,38 @@ Last updated: 2026-08-08
 
 Everything green, everything current, proven mechanically:
 
-- `dx run dev.dx` after this wave's edits: engine (347+50), lints, corpus (11 documents),
-  and page-contract re-ran — exactly the gates staled by the examples tree — and passed;
-  the JS surfaces stayed cached at 34/34.
+- `dx run dev.dx` after this wave's edits: corpus (11 documents) and page-contract re-ran
+  — exactly the gates staled by the examples tree — and passed; engine (347+50), lints,
+  and both JS surfaces (34/34) stayed cached.
 - `examples/example_site_plan.dx` verify: **33 of 33 claims hold**, weight
-  **29,978 of 30,000 bytes — 22 in hand** (the verdict now states its balance);
-  `site-economics.dx` 4/4 and `route-economics.dx` 3/3, re-priced after the edits.
+  **29,978 of 30,000 bytes — 22 in hand**; `site-economics.dx` 4/4 (lean round 18% of
+  naive) and `route-economics.dx` 3/3 (ten questions at 43%), re-priced after the edits.
 
-## This wave, part 47: the loop ran again — the reviewer failed the phone, the budget paid honestly
+## This wave, part 48: the viewer caught the smear — the plan board holds only the plan
+
+The user opened the document in DX.app and the canvas was a dark smear. Root cause read
+straight off the board's own body: ten `::view` frames (two of them 6,100px-tall
+whole-page filmstrips) had grown the plan canvas to ~1,410 × 9,100, and the in-flow fit —
+which by design shows the whole arrangement — scaled everything to ~0.1. Not an engine
+bug: a modeling error the engine faithfully rendered.
+
+- **Restructure, through dx surfaces only:** the eleven view frames, the gallery
+  paragraph, and the measure quote dropped `hidden` (via `dx set --header`, bodies
+  passed explicitly — the erase-refusal from part 45b did its job once) and now live in
+  the page flow; the board body was rewritten to the nine plan nodes, desk-bound edges
+  dropped. `lead` and `how` prose updated to tell the true story: plan on the canvas,
+  screens below it.
+- **Re-judged by a reviewer subagent: PASS on all four areas** — board legible at page
+  width (labels, edges, edge-labels all readable), all eleven frames at sensible sizes
+  with clean page breaks, reading order coherent, story lands for a first-time reader.
+  One cosmetic finding filed on the worklist: `h=fit` overestimates a checklist ~100px.
+- **The lesson landed where projects inherit it:** `GETTING_STARTED.dx#method-economy`
+  gained the board law — *a plan board holds the plan and only the plan*; screens and
+  full-height content belong in the flow. Two engine candidates on
+  `index.dx#now-worklist`: a legibility floor `render::board::fit` could name, and the
+  checklist fit-estimate.
+
+## Part 47: the loop ran again — the reviewer failed the phone, the budget paid honestly
 
 The standing request re-ran ("revise the example site to be absolutely incredible"),
 worked entirely through dx surfaces, and this time the loop improved the *method* where
