@@ -75,6 +75,21 @@ const FIT_PADDING: f64 = 24.0;
 /// like the page's type and starts looking like a zoom.
 const FIT_MAX: f64 = 1.5;
 
+/// The smallest fit that still reads. Below a third of drawn size the page's type is
+/// smaller than its own hairlines and the arrangement is a smear — which the render must
+/// say, not silently ship: a board past this floor carries [`fit_notice`], naming the
+/// ratio and the canvas so the reader knows the plan outgrew its frame and what to do
+/// about it. A board only lands here when even its frame ([`flow_height`], or the height
+/// its own line states) cannot reach the floor. Found the hard way, when ten view frames
+/// grew a plan canvas to 9,100px and the fitted board rendered as a dark strip nobody
+/// could read.
+const FIT_LEGIBLE: f64 = 1.0 / 3.0;
+
+/// The tallest frame an unstated board height may take in the flow. Enough for a wide
+/// plan to show whole and legible; short enough that a runaway canvas cannot claim the
+/// page — past this, the fit drops below [`FIT_LEGIBLE`] and the notice says why.
+const FLOW_HEIGHT_MAX: f64 = 1600.0;
+
 /// A side of a node: where an edge leaves it, and where one arrives.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Side {
@@ -533,9 +548,11 @@ const FIT_PAD_Y: f64 = 20.0;
 const FIT_INDENT: f64 = 26.0;
 /// The wider indent of a checklist item: its three-character mono mark plus the gap.
 const FIT_CHECK_INDENT: f64 = 40.0;
-/// The lead each list item adds over its bare lines (`li { margin: 0.3rem 0 }`), sized to
-/// cover the engine with the widest metrics rather than the narrowest.
-const FIT_ITEM_LEAD: f64 = 10.0;
+/// The lead each list item adds over its bare lines. The stylesheet says
+/// `li { margin: 0.3rem 0 }`, but sibling margins collapse: between two items only one
+/// 0.3rem (≈5px) survives, not both. Charging both — 10 per item — is where a sixteen-item
+/// checklist once grew a ~80px band of empty paper under its last line.
+const FIT_ITEM_LEAD: f64 = 6.0;
 /// The narrowest a `w=fit` node may come out: a sliver cannot hold a grip or a sentence.
 const FIT_MIN_WIDTH: u32 = 120;
 /// The shortest an `h=fit` node may come out: one line under the node's own padding.
@@ -815,18 +832,28 @@ pub(super) fn board_html(
     values: &Values,
 ) -> String {
     let height = if block.height > 0 {
-        block.height
+        f64::from(block.height)
     } else {
-        DEFAULT_BOARD_HEIGHT
+        let mut node_list = deduped(nodes(&block.text));
+        resolve_sizes(document, &mut node_list);
+        flow_height(&rects(&node_list))
     };
-    board_html_in(
-        block,
-        document,
-        options,
-        values,
-        STATIC_COLUMN,
-        f64::from(height),
-    )
+    board_html_in(block, document, options, values, STATIC_COLUMN, height)
+}
+
+/// The frame an unstated board height takes in the flow: tall enough to show the whole
+/// canvas at the scale the column's width already forces, so a board that fits sideways
+/// is never squeezed smaller by an arbitrary frame. Clamped between the classic default
+/// (a small board keeps its familiar frame) and [`FLOW_HEIGHT_MAX`] (a filmstrip cannot
+/// claim the page — it gets the notice instead).
+fn flow_height(rects: &[Rect]) -> f64 {
+    let Some((x0, y0, x1, y1)) = extent(rects) else {
+        return f64::from(DEFAULT_BOARD_HEIGHT);
+    };
+    let width_scale = ((STATIC_COLUMN - 2.0 * FIT_PADDING) / (x1 - x0)).min(FIT_MAX);
+    (width_scale * (y1 - y0) + 2.0 * FIT_PADDING)
+        .clamp(f64::from(DEFAULT_BOARD_HEIGHT), FLOW_HEIGHT_MAX)
+        .round()
 }
 
 /// Render a board into an explicit viewport, stated in the wrapper's own style.
@@ -867,7 +894,39 @@ pub(super) fn board_html_in(
     for node in &node_list {
         out.push_str(&node_html(node, document, options, values));
     }
-    out.push_str("</div>\n</div>");
+    out.push_str("</div>\n");
+    if scale < FIT_LEGIBLE {
+        out.push_str(&fit_notice(scale, &rects));
+    }
+    out.push_str("</div>");
+    out
+}
+
+/// The sentence an illegible fit earns: the ratio, the canvas, and the way out.
+///
+/// Drawn inside the board's frame, on the page's own paper, so it survives the smear it
+/// describes. Only a failure is called out — a board that reads carries nothing.
+fn fit_notice(scale: f64, rects: &[Rect]) -> String {
+    let (width, height) = extent(rects).map_or((0.0, 0.0), |(x0, y0, x1, y1)| (x1 - x0, y1 - y0));
+    format!(
+        "<div class=\"dx-board-small\">fitted at 1:{} — a {} × {} canvas is past reading \
+         at page width; move tall content into the page flow, or open the board alone</div>",
+        (1.0 / scale).round(),
+        thousands(width),
+        thousands(height),
+    )
+}
+
+/// A canvas measure with its thousands separated, the way the page states every count.
+fn thousands(value: f64) -> String {
+    let digits = format!("{}", value.round() as u64);
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+    for (index, digit) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(digit);
+    }
     out
 }
 
@@ -1932,6 +1991,75 @@ mod tests {
         );
         // Resolution never leaks into the document: the lines still say the words.
         assert_eq!(node_line(&nodes[0]), "- short x=0 y=0 w=page h=fit");
+    }
+
+    /// A board fitted past reading says so on its own frame: the notice names the ratio
+    /// and the canvas, because the alternative — shipped once, from a plan whose ten view
+    /// frames grew the canvas to 9,100px — is a dark strip nobody can question.
+    #[test]
+    fn an_illegible_fit_is_called_out_on_the_board_itself() {
+        let document = crate::format::parse("::paragraph id=one hidden\nA node.\n::end\n");
+        let block = Block {
+            kind: "board".to_string(),
+            id: "plan".to_string(),
+            text: "- one x=0 y=0 w=400 h=300\n- one-more x=0 y=8800 w=400 h=300".to_string(),
+            ..Block::default()
+        };
+        let html = board_html(&block, &document, &HtmlOptions::default(), &Values::new());
+        assert!(html.contains("dx-board-small"), "{html}");
+        assert!(html.contains("fitted at 1:"), "{html}");
+        assert!(
+            html.contains("9,100 canvas"),
+            "the notice states the canvas it could not fit: {html}"
+        );
+        assert!(
+            html.contains("move tall content into the page flow"),
+            "{html}"
+        );
+    }
+
+    /// A wide board with no stated height takes the frame that shows it whole and
+    /// legible: the column's width already fixes the scale, so an arbitrary short frame
+    /// would only squeeze the canvas below it for nothing.
+    #[test]
+    fn an_unstated_height_grows_the_frame_to_the_width_scale() {
+        let document = crate::format::parse("::paragraph id=one hidden\nA node.\n::end\n");
+        let block = Block {
+            kind: "board".to_string(),
+            id: "plan".to_string(),
+            text: "- one x=0 y=0 w=1400 h=300\n- one-more x=0 y=1300 w=400 h=300".to_string(),
+            ..Block::default()
+        };
+        let html = board_html(&block, &document, &HtmlOptions::default(), &Values::new());
+        assert!(
+            !html.contains("dx-board-small"),
+            "a board that fits sideways is legible, not a smear: {html}"
+        );
+        let height: f64 = html
+            .split("height:")
+            .nth(1)
+            .and_then(|rest| rest.split("px").next())
+            .and_then(|number| number.parse().ok())
+            .expect("the wrapper states its height");
+        assert!(
+            height > f64::from(DEFAULT_BOARD_HEIGHT),
+            "a 1,600px canvas needs more frame than the default: {height}"
+        );
+    }
+
+    /// A board that reads carries no notice — nothing is announced unless it earns the
+    /// space, and a legible fit has nothing to announce.
+    #[test]
+    fn a_legible_fit_carries_no_notice() {
+        let document = crate::format::parse("::paragraph id=one hidden\nA node.\n::end\n");
+        let block = Block {
+            kind: "board".to_string(),
+            id: "plan".to_string(),
+            text: "- one x=0 y=0 w=400 h=300\n- one-more x=0 y=340 w=400 h=300".to_string(),
+            ..Block::default()
+        };
+        let html = board_html(&block, &document, &HtmlOptions::default(), &Values::new());
+        assert!(!html.contains("dx-board-small"), "{html}");
     }
 
     /// A list's words live in its items, not its `text` — a fit that read the text sized

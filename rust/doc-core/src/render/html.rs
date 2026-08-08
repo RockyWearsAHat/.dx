@@ -1219,11 +1219,26 @@ mod tests {
             "1648px of nodes did not scale into the column: {wide}"
         );
 
-        // The axis that used to be ignored: a column of nodes taller than the viewport.
+        // A column of nodes taller than the classic frame takes the frame it needs
+        // (board::flow_height) instead of being squeezed for nothing…
         let tall = fragment("::board id=plan\n- a x=0 y=0\n- b x=0 y=1400\n::end\n");
+        let frame_of = |out: &str| -> f64 {
+            out.split("height:")
+                .nth(1)
+                .and_then(|rest| rest.split("px").next())
+                .expect("a stated frame")
+                .parse()
+                .expect("a number")
+        };
         assert!(
-            scale_of(&tall) < 0.4,
-            "a 1450px column did not scale into a 480px viewport: {tall}"
+            frame_of(&tall) > 480.0,
+            "a 1550px column earns more frame than the default: {tall}"
+        );
+        // …while a filmstrip past the frame cap still scales down until all of it shows.
+        let strip = fragment("::board id=plan\n- a x=0 y=0\n- b x=0 y=4000\n::end\n");
+        assert!(
+            scale_of(&strip) < 0.4,
+            "a 4150px column did not scale into the capped frame: {strip}"
         );
 
         // And a board with room to spare uses it rather than huddling in the middle.

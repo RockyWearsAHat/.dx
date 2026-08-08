@@ -425,6 +425,22 @@ figcaption {
   top: 0;
   transform-origin: 0 0;
 }
+/* The sentence an illegible fit earns (render::board::FIT_LEGIBLE): a board fitted past
+   reading says so, on its own paper along the frame's bottom edge, instead of shipping a
+   smear nobody can question. A board that reads carries no such line. */
+.dx-board-small {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 0.4rem 0.8rem;
+  background: var(--dx-bg);
+  border-top: 1px solid var(--dx-rule);
+  font-family: var(--dx-mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.02em;
+  color: var(--dx-muted);
+}
 /* A node is a frame onto one block, at exactly the box its line states — the same four
    numbers the engine did its geometry against, so nothing has to be measured for the two to
    agree. Content longer than the frame scrolls inside it rather than being lost or spilling
