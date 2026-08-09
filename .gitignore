@@ -1,8 +1,8 @@
 # Local workspace noise
 .DS_Store
 
-# Personal Claude Code overrides
-.claude/settings.local.json
+# Claude Code session state: personal overrides, workflow worktrees, task locks.
+.claude/
 
 # Git-ignored scratch documents
 /.doc/local.dxcp
@@ -34,8 +34,6 @@ editor/github/test/fixture/
 
 # Helpers/GSH workspace-tool artifacts — agent tooling state, not project content.
 /.gsh/
-# dx: the local index is rebuildable from .doc/repo.dxcp
-.doc/index.db
-.doc/index.db-wal
-.doc/index.db-shm
-.doc/local.dxcp
+
+# wasm-pack type declarations: nothing consumes them (the extension is plain JS)
+editor/github/wasm/*.d.ts

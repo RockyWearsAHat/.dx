@@ -5,20 +5,10 @@
 //! `camelCase` field names (`className`, `scriptType`, …) so the JSON is idiomatic on the
 //! JS side and needs no renaming there. Conversions in both
 //! directions are total and lossless: `core -> dto -> core` reproduces the original
-//! document exactly, which is what keeps `parse`/`stringify`/`split` round-trips stable.
+//! document exactly, which is what keeps `parse`/`stringify` round-trips stable.
 
 use doc_core::model::{Block, Document, Item};
 use serde::{Deserialize, Serialize};
-
-/// Serializable mirror of [`doc_core::chunk::Chunk`]: one addressable block of a document.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ChunkDto {
-    /// Lowercase hex SHA-256 of `text` — the chunk's content address.
-    pub hash: String,
-    /// Canonical DOCSRC for exactly one block, with no trailing newline.
-    pub text: String,
-}
 
 /// Serializable mirror of [`doc_core::model::Item`].
 #[derive(Debug, Clone, Serialize, Deserialize)]

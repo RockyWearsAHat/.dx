@@ -728,7 +728,9 @@ impl SizeSpec {
 /// blocks stacked in one place.
 ///
 /// # Errors
-/// Returns a message when `board_id` names no block, or names one that is not a board.
+/// Returns a message when `board_id` names no block, or names one that is not a board —
+/// or when a node new to the board names a block whose kind renders as empty on a canvas
+/// ([`board_invalid_block_type`]); a node already on the board still moves freely.
 pub fn board_place(
     source: &str,
     board_id: &str,
@@ -748,6 +750,20 @@ pub fn board_place(
     };
 
     let mut lines: Vec<String> = body_lines(&document.blocks[index].text);
+    let already_on_board = lines.iter().any(|line| {
+        board::parse_node_line(line).is_some_and(|node| node.id.eq_ignore_ascii_case(&node_id))
+    });
+    if !already_on_board {
+        if let Some(block) = document
+            .blocks
+            .iter()
+            .find(|block| block.id.eq_ignore_ascii_case(&node_id))
+        {
+            if let Some(reason) = board_invalid_block_type(&block.kind) {
+                return Err(reason);
+            }
+        }
+    }
     place_into(&mut lines, &node_id, x, y, w, h, &document);
     settle(&mut lines, std::slice::from_ref(&node_id), &document);
 
@@ -1810,6 +1826,36 @@ mod tests {
 - steps x=380 y=60 w=300 h=200 to=ideas\n::end\n\n\
 ::paragraph id=ideas hidden\nRough ideas.\n::end\n\n\
 ::checklist id=steps hidden\n[ ] build\n::end\n";
+
+    /// A kind that renders as empty on a canvas is refused at placement — but a node
+    /// already on the board keeps moving, so a legacy board never strands one.
+    #[test]
+    fn placing_a_block_that_renders_empty_on_a_canvas_is_refused() {
+        let source = format!("{BOARD}\n::output id=result for=steps\nran\n::end\n");
+        let refused = board_place(
+            &source,
+            "plan",
+            "result",
+            Some(40),
+            Some(300),
+            SizeSpec::Keep,
+            SizeSpec::Keep,
+        );
+        let message = refused.expect_err("an output block is not placeable");
+        assert!(message.contains("output blocks"), "{message}");
+
+        // Moving an existing node of any kind stays allowed.
+        board_place(
+            &source,
+            "plan",
+            "steps",
+            Some(10),
+            Some(10),
+            SizeSpec::Keep,
+            SizeSpec::Keep,
+        )
+        .expect("moving stays allowed");
+    }
 
     #[test]
     fn placing_moves_a_node_and_keeps_what_the_line_already_said() {

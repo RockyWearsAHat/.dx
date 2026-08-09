@@ -276,6 +276,16 @@ fn initialize() -> Value {
                          pixels only to set design direction — deciding what a page \
                          should be needs the operator's own eyes; checking that it is \
                          stays delegated.\n\n\
+                         SUBAGENTS RUN LEAN. Delegation exists to spend fewer \
+                         tokens, so every subagent and every workflow agent takes \
+                         the least-powered model that can carry its task — judging \
+                         frames, sweeping a search, applying a mechanical fix needs \
+                         no frontier model — and it never inherits the operator's \
+                         tier: an operator on a top-tier model still spawns lean \
+                         agents. A stronger model in a subagent is the rare, \
+                         justified exception, reached for only when the subtask \
+                         itself demonstrably needs the reasoning; it is never the \
+                         default.\n\n\
                          THE REVIEW BAR IS STANDING. Whenever a session changes a \
                          rendered surface, it runs a reviewer against the mission bar \
                          and iterates until PASS before claiming done — a surface change \
@@ -451,6 +461,13 @@ mod tests {
         assert!(instructions.contains("review subagent"));
         assert!(instructions.contains("verdicts, never page images"));
         assert!(instructions.contains("only to set design direction"));
+        // Delegation is a savings move: subagents and workflow agents take the
+        // least-powered model that carries the task and never inherit the operator's
+        // tier — a stronger model in a subagent is the justified exception.
+        assert!(instructions.contains("SUBAGENTS RUN LEAN"));
+        assert!(instructions.contains("least-powered model"));
+        assert!(instructions.contains("never inherits the operator's"));
+        assert!(instructions.contains("never the"));
         assert!(instructions.contains("THE REVIEW BAR IS STANDING"));
         assert!(instructions.contains("mission bar"));
         assert!(instructions.contains("until PASS before claiming done"));

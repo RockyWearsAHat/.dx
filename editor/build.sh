@@ -55,6 +55,7 @@ printf "  %-10s %8d bytes  %s\n" "surface" \
 cat <<NEXT
 
 verify   node --test "$here/github/test/*.test.mjs"   (after github/test/fixture.sh)
+         node --test "$here/vscode/test/*.test.mjs"
 
 github   chrome://extensions → Developer mode → Load unpacked → $here/github
          about:debugging → This Firefox → Load Temporary Add-on → $here/github/manifest.json

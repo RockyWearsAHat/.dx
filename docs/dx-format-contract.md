@@ -294,7 +294,10 @@ Contract for `output` blocks:
 - `format` is copied from the code block, and only affects rendering: a failed block always
   renders as text so the error is legible.
 - An `output` block is data, never executable: nothing in the parser, renderer, or
-  screenshotter runs code. Only `dx run` / the `dx_run` tool does.
+  screenshotter runs code. Execution happens on exactly three paths — `dx run` / the
+  `dx_run` tool; an edit to a runnable block through a local editing surface (`dx set`,
+  `dx_edit`, the editor field), where the edit is the review; and the agent read tools
+  (`dx_read`, `dx_source`) refreshing stale output of code this machine already approved.
 
 ## Parsing and Recovery Rules
 
@@ -431,9 +434,9 @@ Two properties follow, and both are tested:
 - **A decoded payload is checked against the length its frame declares.** A payload that
   decodes to the wrong size is an error, never a short read.
 
-Measured on this repository's six examples: 17,381 bytes of canonical source become a
-5,982-byte pack — 34.4%, byte-for-byte recoverable. The previous LZSS-only codec produced
-49.3% of source from the same corpus.
+Measured on this repository's own corpus (2026-08: 12 documents, 81,218 bytes of canonical
+source): a 29,025-byte committed pack — 35.7%, byte-for-byte recoverable. The previous
+LZSS-only codec produced 49.3% of source from an earlier corpus.
 
 A heavier codec (brotli, LZMA) would save a few points more. DEFLATE was chosen because it is
 pure Rust with no `unsafe`, compiles to `wasm32` with the rest of the engine, and keeps the

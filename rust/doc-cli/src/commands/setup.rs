@@ -44,6 +44,7 @@ fn sandbox_status() -> String {
     }
 }
 
+/// `dx doctor` — report what is installed, healthy, and missing on this machine.
 pub fn run_doctor(_args: &Args) -> Result<String, String> {
     let mut out = String::from("dx doctor\n\n");
 
@@ -544,7 +545,10 @@ RUN
   dx run      <file> [--only ID] [--force] [--dry] [--timeout S]
               [--review] [--approve] [--follow-edges]
               Executes code blocks marked `run` and stores their output in the
-              document. Nothing else in dx ever executes code. New or edited
+              document. The only other executions are the two stated elsewhere:
+              an edit to a runnable block runs it (the edit is the review), and
+              the agent read tools refresh stale output of already-approved
+              code. New or edited
               code is blocked until reviewed: --review prints each block's exact
               code and fingerprint without executing; --approve approves the
               current code and runs it (--review with --approve is refused —
