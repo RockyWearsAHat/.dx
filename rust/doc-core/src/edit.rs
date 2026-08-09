@@ -312,6 +312,58 @@ pub fn set_block(source: &str, id: &str, text: &str) -> Result<String, String> {
     Ok(stringify(&document))
 }
 
+/// Replace an exact string inside one block's body, returning the new canonical source and
+/// how many occurrences changed.
+///
+/// This is the change-sized edit. [`set_block`] retypes a whole body to alter one word,
+/// which prices a cross-cutting change — a port number, a renamed term — at the size of
+/// every block it touches; here the caller pays for the characters that changed and
+/// nothing else. The body is matched exactly, never as a pattern, so what was typed is
+/// what is found.
+///
+/// Without `all`, `old` must appear exactly once: replacing "one of several" silently
+/// picks whichever came first, which is how a rename lands on the wrong line. The refusal
+/// names the count so the caller can widen the string to pin one occurrence, or pass
+/// `all` to mean every one.
+///
+/// # Errors
+/// Returns a message when no block carries `id`, when `old` is empty, when `old` does not
+/// appear in the block's body, or when it appears more than once and `all` was not given.
+pub fn replace_in_block(
+    source: &str,
+    id: &str,
+    old: &str,
+    new: &str,
+    all: bool,
+) -> Result<(String, usize), String> {
+    if old.is_empty() {
+        return Err("the text to replace must not be empty".to_string());
+    }
+    let mut document = parse(source);
+    let index = find(&document, id)?;
+    let current = body(&document.blocks[index]);
+    let count = current.matches(old).count();
+    if count == 0 {
+        return Err(format!("`{old}` does not appear in the body of `{id}`"));
+    }
+    if count > 1 && !all {
+        return Err(format!(
+            "`{old}` appears {count} times in `{id}` — pass a longer string to pin one \
+             occurrence, or `all` to change every one"
+        ));
+    }
+    let replaced = if all {
+        current.replace(old, new)
+    } else {
+        current.replacen(old, new, 1)
+    };
+    set_body(&mut document.blocks[index], &replaced);
+    if document.blocks[index].kind == "board" {
+        create_missing_nodes(&mut document, index);
+    }
+    Ok((stringify(&document), count))
+}
+
 /// Tick or untick one item of a checklist, returning the new canonical source and the state
 /// the item now carries.
 ///
@@ -526,12 +578,19 @@ pub fn insert_after(
 
 /// Take one block out, returning the document's canonical source without it.
 ///
+/// Every `::output` record reporting on the removed block (`for=` naming it) goes with
+/// it: the record is the run's residue, and a document keeping output for code it no
+/// longer carries is a document lying about what ran.
+///
 /// # Errors
 /// Returns a message when no block carries `id`.
 pub fn remove_block(source: &str, id: &str) -> Result<String, String> {
     let mut document = parse(source);
     let index = find(&document, id)?;
     document.blocks.remove(index);
+    document
+        .blocks
+        .retain(|block| !(block.kind == "output" && block.for_block == id));
     Ok(stringify(&document))
 }
 
@@ -1232,6 +1291,55 @@ mod tests {
         assert!(after.contains("first"));
     }
 
+    #[test]
+    fn replacing_inside_a_block_changes_the_match_and_nothing_else() {
+        let source = "::paragraph id=note\nThe server listens on port 7431 by default.\n";
+        let (after, count) =
+            replace_in_block(source, "note", "7431", "9142", false).expect("replace");
+        assert_eq!(count, 1);
+        assert!(after.contains("port 9142 by default"));
+        assert!(!after.contains("7431"));
+    }
+
+    /// A rename that matches twice must not silently land on whichever came first.
+    #[test]
+    fn an_ambiguous_replacement_is_refused_with_the_count() {
+        let source = "::paragraph id=note\nport 80 now, port 80 later\n";
+        let refusal =
+            replace_in_block(source, "note", "port 80", "port 81", false).expect_err("refuse");
+        assert!(refusal.contains("2 times"), "{refusal}");
+        assert!(refusal.contains("all"), "{refusal}");
+    }
+
+    #[test]
+    fn all_replaces_every_occurrence_and_reports_the_count() {
+        let source = "::paragraph id=note\nport 80 now, port 80 later\n";
+        let (after, count) =
+            replace_in_block(source, "note", "port 80", "port 81", true).expect("replace");
+        assert_eq!(count, 2);
+        assert!(!after.contains("port 80"));
+    }
+
+    /// The refusal for absent text names the block, so a caller who edited the wrong
+    /// document learns it from the sentence.
+    #[test]
+    fn replacing_text_a_block_does_not_carry_is_refused() {
+        let refusal =
+            replace_in_block(SAMPLE, "intro", "no such words", "x", false).expect_err("refuse");
+        assert!(refusal.contains("intro"), "{refusal}");
+    }
+
+    /// The change-sized edit goes through the same body rules as a whole-body save: a
+    /// checklist's content lives in its items, and a replacement inside one item leaves
+    /// the ticks on every other line exactly as they were.
+    #[test]
+    fn replacing_inside_a_checklist_keeps_every_other_item_and_tick() {
+        let source = "::checklist id=steps\n[x] install the tool\n[ ] open port 7431\n::end\n";
+        let (after, _) = replace_in_block(source, "steps", "7431", "9142", false).expect("replace");
+        assert!(after.contains("[x] install the tool"));
+        assert!(after.contains("[ ] open port 9142"));
+    }
+
     /// The un-marking rule is the parser's rule: one `-`/`*` **followed by whitespace** is
     /// a bullet. Text that merely starts with those characters — a `--flag`, `*emphasis*` —
     /// is content, and an unchanged save must not eat it.
@@ -1451,6 +1559,19 @@ mod tests {
         assert!(!after.contains("The opening line."));
         assert!(after.contains("Guide"));
         assert_eq!(parse(&after).blocks.len(), parse(SAMPLE).blocks.len() - 1);
+    }
+
+    #[test]
+    fn removing_a_code_block_takes_its_output_record_with_it() {
+        let source = "::code id=job lang=sh run\necho hi\n::end\n\n\
+             ::output id=job-output for=job status=ok exit=0\nhi\n::end\n\n\
+             ::paragraph id=after\nStays.\n::end\n";
+        let after = remove_block(source, "job").expect("remove");
+        assert!(!after.contains("::output"), "stranded record: {after}");
+        assert!(after.contains("Stays."));
+        // Removing a block that nothing reports on removes only that block.
+        let untouched = remove_block(source, "after").expect("remove");
+        assert!(untouched.contains("for=job"), "{untouched}");
     }
 
     #[test]

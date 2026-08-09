@@ -3,9 +3,9 @@ id: rust/doc-run/src/toolchain.rs
 title: toolchain.rs
 kind: file-index
 lang: rust
-rank: 0.005021
+rank: 0.005289
 links: [[rust/doc-run/src/plan.rs]] [[editor/github/test/resolve.test.mjs]] [[rust/doc-shot/src/play.rs]] [[rust/doc-cli/src/extension.rs]] [[editor/github/resolve.js]] [[rust/doc-cli/src/commands/setup.rs]] [[editor/github/content.js]]
-generated_at: 2026-08-06T01:13:54.687Z
+generated_at: 2026-08-08T01:43:37.084Z
 ---
 
 # rust/doc-run/src/toolchain.rs  ·  rust  ·  113 LOC
@@ -52,7 +52,7 @@ graph LR
 
 ### Referenced by
 
-- [[rust/doc-run/src/plan.rs]] via `missing_toolchain_message`, `first_available`, `have`
+- [[rust/doc-run/src/plan.rs]] via `have`, `missing_toolchain_message`, `first_available`
 - [[editor/github/test/resolve.test.mjs]] via `locate`
 - [[rust/doc-cli/src/extension.rs]] via `locate`
 - [[rust/doc-cli/src/commands/setup.rs]] via `locate`

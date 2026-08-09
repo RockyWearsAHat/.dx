@@ -483,22 +483,42 @@ fn edit(args: &Value, root: &Path) -> ToolResult {
 /// `header` retypes the whole block through [`doc_core::edit::replace_block`] — the same
 /// operation a reader performs rewriting the tag line above a block — so changing a
 /// block's kind or one attribute (`src=`, `reads=`, `writes=`, `run`) is one call, never
-/// a rewrite of the document.
+/// a rewrite of the document. `replace`+`with` edit an exact string inside the body
+/// through [`doc_core::edit::replace_in_block`], so a one-word change is priced at the
+/// change, not the block.
 fn edit_in(args: &Value, root: &Path, cache_root: PathBuf) -> ToolResult {
     let path = resolve(required(args, "path")?, root);
     let wanted = required(args, "block")?.trim().trim_start_matches('#');
-    let body = required(args, "text")?;
 
-    let (document, focus) = if let Some(header) = string(args, "header") {
+    // The change-sized edit: `replace`+`with` touch an exact string inside the body and
+    // nothing else, so a one-word change is priced at the change, not the block. It
+    // stands alone — combined with `text` there would be two instructions for one body.
+    let (document, focus, replaced) = if let Some(old) = string(args, "replace") {
+        if string(args, "text").is_some() || string(args, "header").is_some() {
+            return Err(
+                "replace edits the body in place — pass it alone, not with text or header"
+                    .to_string(),
+            );
+        }
+        let new = string(args, "with").ok_or_else(|| {
+            "replace needs `with` (an empty string deletes the match)".to_string()
+        })?;
+        let all = boolean_or(args, "all", false);
+        let (updated, count) =
+            doc_core::edit::replace_in_block(&workspace::read(&path)?, wanted, old, new, all)?;
+        (parse(&updated), wanted.to_string(), Some(count))
+    } else if let Some(header) = string(args, "header") {
+        let body = required(args, "text")?;
         let (updated, focus) =
             doc_core::edit::replace_block(&workspace::read(&path)?, wanted, header, body)?;
-        (parse(&updated), focus)
+        (parse(&updated), focus, None)
     } else {
         // The body goes through the engine's own `set_block`, never a direct field
         // write: a list's or checklist's content lives in its items, which only
         // `set_body` knows how to rebuild — assigning `.text` here was a silent no-op
         // for exactly those kinds, and skipped the hidden-node creation a board edit
         // performs.
+        let body = required(args, "text")?;
         let document = parse(&doc_core::edit::set_block(
             &workspace::read(&path)?,
             wanted,
@@ -506,7 +526,7 @@ fn edit_in(args: &Value, root: &Path, cache_root: PathBuf) -> ToolResult {
         )?);
         let index = doc_core::edit::find(&document, wanted)?;
         let focus = document.blocks[index].id.clone();
-        (document, focus)
+        (document, focus, None)
     };
 
     let index = document.blocks.iter().position(|block| block.id == focus);
@@ -514,7 +534,14 @@ fn edit_in(args: &Value, root: &Path, cache_root: PathBuf) -> ToolResult {
         index.is_some_and(|at| document.blocks[at].kind == "code" && document.blocks[at].run);
     workspace::save(&path, &document)?;
 
-    let mut content = vec![text_content(&if focus.eq_ignore_ascii_case(wanted) {
+    let mut content = vec![text_content(&if let Some(count) = replaced {
+        let occurrences = if count == 1 {
+            "1 occurrence".to_string()
+        } else {
+            format!("{count} occurrences")
+        };
+        format!("Replaced {occurrences} in `{focus}` in {}.", path.display())
+    } else if focus.eq_ignore_ascii_case(wanted) {
         format!("Updated `{focus}` in {}.", path.display())
     } else {
         format!(
@@ -743,9 +770,17 @@ fn check(args: &Value, root: &Path) -> ToolResult {
 fn index(args: &Value, root: &Path) -> ToolResult {
     let directory = directory_arg(args, root);
     let scaffold = crate::commands::index::write_scaffold(&directory, boolean(args, "force"))?;
+    let harness = match &scaffold.harness {
+        Some((path, gates)) => format!(
+            " Wrote {} — {gates} verify gate(s) for the detected build system: review \
+             them, then run dev.dx with approve=true to record the first green.",
+            path.display()
+        ),
+        None => String::new(),
+    };
     Ok(vec![text_content(&format!(
-        "Wrote {} — {} area(s), {} file(s), scaffolded from the tree alone. Read the \
-         whole document now and improve it before other work: replace each TODO with \
+        "Wrote {} — {} area(s), {} file(s), ranked from the tree alone.{harness} Read \
+         the whole index now and improve it before other work: replace each TODO with \
          what the area does, and add ::code src= blocks for the load-bearing files so \
          the index shows their current text forever.",
         scaffold.path.display(),
@@ -1088,6 +1123,46 @@ mod tests {
         )
         .expect_err("unknown action");
         assert!(err.contains("teleport"), "{err}");
+    }
+
+    /// The change-sized edit reaches MCP: `replace`+`with` change the match and keep
+    /// every other character, and the answer counts what changed.
+    #[test]
+    fn editing_with_replace_changes_the_match_and_keeps_the_rest() {
+        let root = project("edit-replace");
+        let answer = call(
+            "dx_edit",
+            &json!({ "path": "guide.dx", "block": "setup-body", "replace": "Install", "with": "Download" }),
+            &root,
+        )
+        .expect("edit");
+        assert!(
+            text_of(&answer).contains("Replaced 1 occurrence"),
+            "{answer:?}"
+        );
+        let text =
+            text_of(&call("dx_source", &json!({ "path": "guide.dx" }), &root).expect("read"));
+        assert!(text.contains("Download it first."), "{text}");
+        assert!(text.contains("Then run it."), "{text}");
+    }
+
+    /// Without `all`, a multi-match replace is refused with the count — landing on
+    /// whichever match came first is how a rename hits the wrong line.
+    #[test]
+    fn an_ambiguous_mcp_replace_is_refused_with_the_count() {
+        let root = project("edit-replace-ambiguous");
+        workspace::write_text(
+            &root.join("ports.dx"),
+            "::paragraph id=note\nport 80 now, port 80 later\n::end\n",
+        )
+        .expect("seed");
+        let refusal = call(
+            "dx_edit",
+            &json!({ "path": "ports.dx", "block": "note", "replace": "port 80", "with": "port 81" }),
+            &root,
+        )
+        .expect_err("refuse");
+        assert!(refusal.contains("2 times"), "{refusal}");
     }
 
     #[test]
@@ -1802,7 +1877,7 @@ mod tests {
         std::fs::write(root.join("src/main.rs"), "fn main() {}").expect("file");
 
         let items = call("dx_index", &json!({}), &root).expect("index");
-        assert!(text_of(&items).contains("Read the whole document now"));
+        assert!(text_of(&items).contains("Read the whole index now"));
         let text = workspace::read(&root.join("index.dx")).expect("resolve");
         assert!(text.contains("TODO"), "{text}");
         assert!(text.contains("src/"), "{text}");

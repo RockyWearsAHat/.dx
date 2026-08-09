@@ -3,12 +3,12 @@ id: rust/doc-cli/src/main.rs
 title: main.rs
 kind: file-index
 lang: rust
-rank: 0.013033
+rank: 0.012897
 links: [[rust/doc-cli/src/workspace.rs]] [[rust/doc-cli/src/args.rs]] [[rust/doc-core/src/compress.rs]] [[packaging/build-icons.py]] [[rust/doc-cli/src/commands/mod.rs]] [[rust/doc-cli/src/daemon/engine.rs]] [[rust/doc-cli/src/daemon/http.rs]] [[rust/doc-cli/src/desktop.rs]] [[rust/doc-cli/src/extension.rs]] [[rust/doc-cli/src/home.rs]] [[rust/doc-cli/src/service.rs]] [[rust/doc-core/src/render/board.rs]]
-generated_at: 2026-08-06T01:13:54.684Z
+generated_at: 2026-08-08T01:43:37.080Z
 ---
 
-# rust/doc-cli/src/main.rs  ·  rust  ·  179 LOC
+# rust/doc-cli/src/main.rs  ·  rust  ·  178 LOC
 
 ## Symbols
 
@@ -26,11 +26,11 @@ generated_at: 2026-08-06T01:13:54.684Z
 - `workspace` (module) — L27
 - `main` (function) — L40
 - `emit` (function) — L83
-- `serve_mcp` (function) — L111
-- `serve_documents` (function) — L134
-- `workspace_root` (function) — L157
-- `tests` (module) — L165
-- `the_workspace_root_prefers_the_override_and_otherwise_exists` (method) — L172
+- `serve_mcp` (function) — L112
+- `serve_documents` (function) — L133
+- `workspace_root` (function) — L156
+- `tests` (module) — L164
+- `the_workspace_root_prefers_the_override_and_otherwise_exists` (method) — L171
 
 ## Graph
 
@@ -70,7 +70,7 @@ graph LR
 ### References
 
 - [[rust/doc-cli/src/workspace.rs]] via `workspace_root`
-- [[rust/doc-cli/src/args.rs]] via `present`, `value`
+- [[rust/doc-cli/src/args.rs]] via `value`, `present`
 - [[rust/doc-core/src/compress.rs]] via `emit`
 - [[rust/doc-cli/src/commands/mod.rs]] via `text`
 - [[rust/doc-cli/src/daemon/engine.rs]] via `text`

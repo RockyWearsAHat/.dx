@@ -73,17 +73,17 @@ const MAX_SCALE: u32 = 4;
 /// Window height used for the measuring pass, before the real height is known.
 const MEASURE_HEIGHT: u32 = 900;
 
-/// Virtual milliseconds a capture lets a freshly opened page settle for
-/// ([`cdp::Cdp::settle`]) — the same budget the one-shot route's
-/// `--virtual-time-budget=4000` always carried, without which a `::view`'s sandboxed
-/// frame is photographed before it paints.
-const SETTLE_BUDGET_MS: u32 = 4000;
+/// Real milliseconds a capture lets a freshly opened page settle for
+/// ([`cdp::Cdp::open_settled`]). Real, not virtual: virtual time froze a `::view`'s
+/// sandboxed frame at every stage it was tried, and the local, network-free pages this
+/// crate loads settle in real milliseconds — with `stable_screenshot` holding the page
+/// to its own definition of settled on top.
+const SETTLE_BUDGET_MS: u32 = 500;
 
-/// Virtual milliseconds granted after each scroll of a paginated capture. The opening
-/// settle leaves virtual time paused, so a frame first painted when the window reaches
-/// it gets no life to paint in — the first read shipped its first three view frames
-/// empty and the rest full, exactly the order the window met them.
-const SCROLL_SETTLE_BUDGET_MS: u32 = 800;
+/// Real milliseconds granted after each scroll of a paginated capture, so content the
+/// window just reached — a sandboxed frame paints only inside the viewport — has time
+/// to paint before the stability loop starts looking.
+const SCROLL_SETTLE_BUDGET_MS: u32 = 250;
 
 /// Shortest page captured, so a one-line document still produces a legible image.
 const MIN_HEIGHT: u32 = 200;
@@ -96,6 +96,11 @@ const BLOCK_MIN_HEIGHT: u32 = 24;
 
 /// Tallest page captured, so a runaway document cannot produce a gigantic image.
 const MAX_HEIGHT: u32 = 12_000;
+
+/// Tallest single screenshot a whole-document capture takes, in CSS pixels: a taller
+/// page is photographed as scrolled strips this size and stitched (`png::stack`), so
+/// every `::view` frame passes through the viewport it needs to paint.
+const STRIP_HEIGHT: u32 = 2_000;
 
 /// Largest CSS-pixel edge a self-sized page (a board at its natural size) may open a
 /// window at, unless [`ShotOptions`] tightens it further.
@@ -401,8 +406,7 @@ fn capture_block_pages(
     for (index, page) in pages.iter().enumerate() {
         let page_file = workspace.join(format!("block-{index}.html"));
         write(&page_file, &page.html)?;
-        session.open(&file_url(&page_file))?;
-        session.settle(SETTLE_BUDGET_MS)?;
+        session.open_settled(&file_url(&page_file), SETTLE_BUDGET_MS)?;
         let height = match page.height {
             Some(height) => height,
             None => {
@@ -516,8 +520,7 @@ fn capture_all_pages(
 
     let page_file = workspace.join("measure.html");
     write(&page_file, page)?;
-    session.open(&file_url(&page_file))?;
-    session.settle(SETTLE_BUDGET_MS)?;
+    session.open_settled(&file_url(&page_file), SETTLE_BUDGET_MS)?;
     set_viewport(&mut session, options.width, MEASURE_HEIGHT, 1)?;
     let (total_height, boxes) = measure_page(&mut session);
 
@@ -546,7 +549,7 @@ fn capture_all_pages(
             let height = range.height.clamp(MIN_HEIGHT, MAX_HEIGHT);
             set_viewport(&mut session, options.width, height, scale * oversample)?;
             session.evaluate(&format!("window.scrollTo(0,{})", range.top))?;
-            session.settle(SCROLL_SETTLE_BUDGET_MS)?;
+            session.settle(SCROLL_SETTLE_BUDGET_MS);
             let shot = delivered(
                 stable_screenshot(&mut session)?,
                 options.width,
@@ -565,8 +568,7 @@ fn capture_all_pages(
         if let PlannedPage::Board { id, page: board } = planned {
             let board_file = workspace.join(format!("page-{index}.html"));
             write(&board_file, &board.html)?;
-            session.open(&file_url(&board_file))?;
-            session.settle(SETTLE_BUDGET_MS)?;
+            session.open_settled(&file_url(&board_file), SETTLE_BUDGET_MS)?;
             let height = board
                 .height
                 .unwrap_or_else(|| page_height(options))
@@ -603,7 +605,6 @@ fn stable_screenshot(session: &mut cdp::Cdp) -> Result<Vec<u8>, String> {
     const BREATH: std::time::Duration = std::time::Duration::from_millis(120);
     /// Most looks taken before the page is delivered as it stands.
     const MOST_LOOKS: usize = 12;
-
     let mut last = session.screenshot(None)?;
     for _ in 0..MOST_LOOKS {
         std::thread::sleep(BREATH);
@@ -855,24 +856,47 @@ fn capture_page(
 
     let page_file = workspace.join("page.html");
     write(&page_file, page)?;
-    session.open(&file_url(&page_file))?;
-    session.settle(SETTLE_BUDGET_MS)?;
+    session.open_settled(&file_url(&page_file), SETTLE_BUDGET_MS)?;
     set_viewport(&mut session, options.width, MEASURE_HEIGHT, 1)?;
     let height = measure_body_height(&mut session)
         .unwrap_or(MEASURE_HEIGHT)
         .clamp(MIN_HEIGHT, MAX_HEIGHT);
-    set_viewport(
-        &mut session,
-        options.width,
-        height,
-        scale(options) * oversample(options),
-    )?;
-    delivered(
-        stable_screenshot(&mut session)?,
-        options.width,
-        height,
-        options,
-    )
+    let density = scale(options) * oversample(options);
+
+    if height <= STRIP_HEIGHT {
+        set_viewport(&mut session, options.width, height, density)?;
+        return delivered(
+            stable_screenshot(&mut session)?,
+            options.width,
+            height,
+            options,
+        );
+    }
+
+    // A tall page is photographed as scrolled strips and stitched: a `::view`'s
+    // sandboxed frame only paints inside the viewport, so one full-height viewport
+    // ships every deep frame as empty paper — the same reason the paged route scrolls
+    // a window over the document instead of clipping past it.
+    let mut strips = Vec::new();
+    let mut top = 0;
+    let mut viewport = 0;
+    while top < height {
+        let strip = STRIP_HEIGHT.min(height - top);
+        if strip != viewport {
+            set_viewport(&mut session, options.width, strip, density)?;
+            viewport = strip;
+        }
+        session.evaluate(&format!("window.scrollTo(0,{top})"))?;
+        session.settle(SCROLL_SETTLE_BUDGET_MS);
+        strips.push(
+            png::decode(&stable_screenshot(&mut session)?)
+                .map_err(|reason| format!("could not read a captured strip: {reason}"))?,
+        );
+        top += strip;
+    }
+    let stitched =
+        png::stack(&strips).map_err(|reason| format!("could not stitch the capture: {reason}"))?;
+    delivered(stitched, options.width, height, options)
 }
 
 /// The device scale factor a capture delivers, never zero and never absurd.

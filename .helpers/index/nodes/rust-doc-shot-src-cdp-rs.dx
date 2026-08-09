@@ -3,9 +3,9 @@ id: rust/doc-shot/src/cdp.rs
 title: cdp.rs
 kind: file-index
 lang: rust
-rank: 0.009705
+rank: 0.010891
 links: [[rust/doc-cli/src/daemon/http.rs]] [[editor/github/test/engine.test.mjs]] [[rust/doc-cli/src/commands/mod.rs]] [[rust/doc-shot/src/play.rs]] [[rust/doc-shot/src/lib.rs]] [[rust/doc-cli/src/policies.rs]] [[rust/doc-cli/src/state.rs]] [[rust/doc-cli/src/mcp/handlers.rs]] [[rust/doc-cli/src/workspace.rs]] [[rust/doc-core/src/format/mermaid.rs]] [[editor/github/content.js]] [[rust/doc-cli/src/daemon/mod.rs]]
-generated_at: 2026-08-06T01:13:54.685Z
+generated_at: 2026-08-08T01:43:37.081Z
 ---
 
 # rust/doc-shot/src/cdp.rs  ·  rust  ·  568 LOC
@@ -73,9 +73,9 @@ graph LR
 
 ### References
 
-- [[rust/doc-cli/src/daemon/http.rs]] via `read`, `json`
+- [[rust/doc-cli/src/daemon/http.rs]] via `json`, `read`
 - [[editor/github/test/engine.test.mjs]] via `json`
-- [[rust/doc-cli/src/policies.rs]] via `read`, `remove`
+- [[rust/doc-cli/src/policies.rs]] via `remove`, `read`
 - [[rust/doc-cli/src/state.rs]] via `write_all`
 - [[rust/doc-cli/src/mcp/handlers.rs]] via `read`
 - [[rust/doc-cli/src/workspace.rs]] via `read`
@@ -85,7 +85,7 @@ graph LR
 ### Referenced by
 
 - [[rust/doc-cli/src/commands/mod.rs]] via `dispatch`
-- [[rust/doc-shot/src/play.rs]] via `open`, `screenshot`, `command`, `evaluate`
-- [[rust/doc-shot/src/lib.rs]] via `screenshot`
+- [[rust/doc-shot/src/play.rs]] via `command`, `evaluate`, `screenshot`, `open`
+- [[rust/doc-shot/src/lib.rs]] via `screenshot`, `open`, `command`, `evaluate`
 - [[rust/doc-cli/src/daemon/mod.rs]] via `drop`
 

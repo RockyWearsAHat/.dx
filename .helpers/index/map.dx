@@ -2,134 +2,134 @@
 id: __project_map__
 title: Project Map — DOC
 kind: project-map
-commit: 3cede3d
-generated_at: 2026-08-06T01:13:54.675Z
+commit: 5ebf69a
+generated_at: 2026-08-08T01:43:37.069Z
 ---
 
 # Project Map — DOC
 
-190 files · 2209 symbols · commit 3cede3d
+187 files · 2515 symbols · commit 5ebf69a
 
 ## Top modules (by importance)
 
-1. [[rust/doc-cli/src/daemon/engine.rs]] · rust · 373 LOC — `Outcome`, `call`, `provided_from`, `text`
-2. [[rust/doc-core/src/compress.rs]] · rust · 484 LOC — `hash_at`, `compress`, `frame`, `lzss_compress`
-3. [[rust/doc-cli/src/args.rs]] · rust · 168 LOC — `Args`, `parse`, `positional`, `positionals`
-4. [[rust/doc-cli/src/mcp/handlers.rs]] · rust · 788 LOC — `ToolResult`, `call`, `read`, `read_block`
-5. [[rust/doc-core/src/resolve.rs]] · rust · 811 LOC — `Resolver`, `Nowhere`, `file`, `document`
-6. [[rust/doc-cli/src/daemon/http.rs]] · rust · 473 LOC — `Request`, `header`, `Response`, `json`
-7. [[rust/doc-core/src/render/mod.rs]] · rust · 71 LOC — `board`, `escape`, `field`, `html`
-8. [[rust/doc-run/src/lib.rs]] · rust · 793 LOC — `confine`, `plan`, `process`, `toolchain`
-9. [[rust/doc-store/src/store.rs]] · rust · 1224 LOC — `Summary`, `Saved`, `Stats`, `compaction_percent`
-10. [[rust/doc-core/src/model.rs]] · rust · 153 LOC — `Item`, `Block`, `runner_for_language`, `Document`
+1. [[rust/doc-core/src/compress.rs]] · rust · 484 LOC — `hash_at`, `compress`, `frame`, `lzss_compress`
+2. [[rust/doc-cli/src/daemon/engine.rs]] · rust · 373 LOC — `Outcome`, `call`, `provided_from`, `text`
+3. [[rust/doc-cli/src/args.rs]] · rust · 209 LOC — `Args`, `parse`, `positional`, `positionals`
+4. [[rust/doc-cli/src/mcp/handlers.rs]] · rust · 1592 LOC — `ToolResult`, `call`, `refresh_outputs`, `read`
+5. [[rust/doc-cli/src/daemon/http.rs]] · rust · 473 LOC — `Request`, `header`, `Response`, `json`
+6. [[rust/doc-run/src/lib.rs]] · rust · 2036 LOC — `approvals`, `confine`, `plan`, `process`
+7. [[rust/doc-core/src/resolve.rs]] · rust · 1006 LOC — `Resolver`, `binary`, `files_under`, `Nowhere`
+8. [[rust/doc-core/src/render/mod.rs]] · rust · 72 LOC — `board`, `escape`, `field`, `html`
+9. [[rust/doc-store/src/store.rs]] · rust · 1240 LOC — `Summary`, `Saved`, `Stats`, `compaction_percent`
+10. [[rust/doc-cli/src/workspace.rs]] · rust · 722 LOC — `Loaded`, `title`, `workspace_root`, `relative_of`
 11. [[editor/github/content.js]] · javascript · 704 LOC — `base64`, `send`, `call`, `pack_document`
-12. [[rust/doc-cli/src/workspace.rs]] · rust · 561 LOC — `Loaded`, `title`, `workspace_root`, `relative_of`
+12. [[rust/doc-core/src/render/board.rs]] · rust · 1955 LOC — `Side`, `letter`, `from_letter`, `horizontal_span`
 13. [[rust/doc-core/src/format/util.rs]] · rust · 223 LOC — `js_trim`, `js_trim_end`, `strip_leading_newlines`, `strip_trailing_newlines`
-14. [[rust/doc-core/src/render/html.rs]] · rust · 1480 LOC — `HtmlOptions`, `html`, `page_shell`, `PageBounds`
-15. [[rust/doc-core/src/render/board.rs]] · rust · 1906 LOC — `Side`, `letter`, `from_letter`, `horizontal_span`
-16. [[rust/doc-cli/src/extension.rs]] · rust · 1094 LOC — `Asset`, `assets`, `Target`, `name`
-17. [[rust/doc-cli/src/policies.rs]] · rust · 301 LOC — `policy_file`, `force_install`, `remove`, `installed`
-18. [[rust/doc-cli/src/main.rs]] · rust · 179 LOC — `args`, `commands`, `daemon`, `desktop`
-19. [[editor/github/resolve.js]] · javascript · 295 LOC — `digestIn`, `isDocumentPath`, `locate`, `rawUrl`
-20. [[rust/doc-cli/src/state.rs]] · rust · 164 LOC — `Installed`, `State`, `of`, `label`
-21. [[rust/doc-cli/src/mcp/mod.rs]] · rust · 337 LOC — `handlers`, `tools`, `code`, `serve`
-22. [[rust/doc-core/src/format/mod.rs]] · rust · 488 LOC — `attrs`, `layout`, `legacy`, `lines`
-23. [[rust/doc-core/src/render/escape.rs]] · rust · 996 LOC — `escape_html`, `escape_style`, `is_fetchless_url`, `blank_unsafe_urls`
-24. [[rust/doc-core/src/render/outline.rs]] · rust · 329 LOC — `OutlineEntry`, `outline`, `section`, `carry_presentation`
-25. [[rust/doc-wasm/src/lib.rs]] · rust · 560 LOC — `dto`, `js_err`, `parse`, `stringify`
-26. [[rust/doc-run/src/workdir.rs]] · rust · 218 LOC — `default_cache_root`, `prepare`, `write_file`, `tests`
-27. [[rust/doc-run/src/process.rs]] · rust · 361 LOC — `CommandSpec`, `new`, `with_env`, `display`
-28. [[rust/doc-cli/src/commands/mod.rs]] · rust · 476 LOC — `browser`, `edit`, `exec`, `find`
-29. [[editor/surface/edit.js]] · javascript · 2657 LOC — `attach`, `blockAt`, `kindOf`, `effectiveKind`
-30. [[rust/doc-core/src/format/mermaid.rs]] · rust · 527 LOC — `Direction`, `parse`, `is_horizontal`, `is_forward`
+14. [[rust/doc-core/src/render/html.rs]] · rust · 1559 LOC — `HtmlOptions`, `html`, `page_shell`, `PageBounds`
+15. [[rust/doc-core/src/model.rs]] · rust · 219 LOC — `Item`, `Block`, `runner_for_language`, `Document`
+16. [[rust/doc-cli/src/policies.rs]] · rust · 301 LOC — `policy_file`, `force_install`, `remove`, `installed`
+17. [[rust/doc-cli/src/extension.rs]] · rust · 1094 LOC — `Asset`, `assets`, `Target`, `name`
+18. [[editor/github/resolve.js]] · javascript · 295 LOC — `digestIn`, `isDocumentPath`, `locate`, `rawUrl`
+19. [[rust/doc-cli/src/state.rs]] · rust · 164 LOC — `Installed`, `State`, `of`, `label`
+20. [[rust/doc-cli/src/main.rs]] · rust · 178 LOC — `args`, `commands`, `daemon`, `desktop`
+21. [[rust/doc-core/src/format/mod.rs]] · rust · 532 LOC — `attrs`, `layout`, `legacy`, `lines`
+22. [[rust/doc-cli/src/commands/mod.rs]] · rust · 503 LOC — `browser`, `edit`, `exec`, `find`
+23. [[rust/doc-core/src/render/escape.rs]] · rust · 1003 LOC — `escape_html`, `escape_style`, `is_fetchless_url`, `blank_unsafe_urls`
+24. [[rust/doc-wasm/src/lib.rs]] · rust · 560 LOC — `dto`, `js_err`, `parse`, `stringify`
+25. [[rust/doc-core/src/render/outline.rs]] · rust · 366 LOC — `OutlineEntry`, `outline`, `section`, `carry_presentation`
+26. [[editor/surface/edit.js]] · javascript · 2657 LOC — `attach`, `blockAt`, `kindOf`, `effectiveKind`
+27. [[rust/doc-run/src/workdir.rs]] · rust · 218 LOC — `default_cache_root`, `prepare`, `write_file`, `tests`
+28. [[rust/doc-cli/src/mcp/mod.rs]] · rust · 642 LOC — `handlers`, `tools`, `code`, `serve`
+29. [[rust/doc-run/src/process.rs]] · rust · 361 LOC — `CommandSpec`, `new`, `with_env`, `display`
+30. [[rust/doc-core/src/lib.rs]] · rust · 38 LOC — `base64`, `chunk`, `compress`, `digest`
 
 ## Project graph
 
 ```mermaid
 graph LR
-  n0["engine.rs"]
-  n1["compress.rs"]
+  n0["compress.rs"]
+  n1["engine.rs"]
   n2["args.rs"]
   n3["handlers.rs"]
-  n4["resolve.rs"]
-  n5["http.rs"]
-  n6["mod.rs"]
-  n7["lib.rs"]
+  n4["http.rs"]
+  n5["lib.rs"]
+  n6["resolve.rs"]
+  n7["mod.rs"]
   n8["store.rs"]
-  n9["model.rs"]
+  n9["workspace.rs"]
   n10["content.js"]
-  n11["workspace.rs"]
+  n11["board.rs"]
   n12["util.rs"]
   n13["html.rs"]
-  n14["board.rs"]
-  n15["extension.rs"]
-  n16["policies.rs"]
-  n17["main.rs"]
-  n18["resolve.js"]
-  n19["state.rs"]
+  n14["model.rs"]
+  n15["policies.rs"]
+  n16["extension.rs"]
+  n17["resolve.js"]
+  n18["state.rs"]
+  n19["main.rs"]
   n20["mod.rs"]
   n21["mod.rs"]
   n22["escape.rs"]
-  n23["outline.rs"]
-  n10 --> n18
-  n10 --> n0
-  n10 --> n5
-  n10 --> n15
-  n10 --> n3
-  n10 --> n20
-  n10 --> n6
+  n23["lib.rs"]
+  n10 --> n17
+  n10 --> n21
+  n10 --> n1
   n10 --> n4
+  n10 --> n16
+  n10 --> n3
+  n10 --> n7
+  n10 --> n6
   n10 --> n8
-  n18 --> n10
-  n0 --> n10
-  n0 --> n5
-  n0 --> n3
-  n0 --> n21
-  n0 --> n6
-  n0 --> n4
-  n0 --> n8
-  n5 --> n15
-  n5 --> n3
-  n5 --> n16
-  n5 --> n19
-  n5 --> n11
-  n5 --> n1
-  n5 --> n14
-  n15 --> n18
-  n15 --> n5
-  n15 --> n17
-  n15 --> n3
-  n15 --> n16
-  n15 --> n19
-  n15 --> n1
-  n17 --> n2
-  n17 --> n0
-  n17 --> n5
-  n17 --> n11
-  n17 --> n1
-  n17 --> n14
-  n17 --> n6
+  n10 --> n23
+  n17 --> n10
+  n17 --> n21
+  n17 --> n23
+  n21 --> n2
+  n1 --> n10
+  n1 --> n21
+  n1 --> n4
+  n1 --> n3
+  n1 --> n20
+  n1 --> n7
+  n1 --> n6
+  n1 --> n8
+  n1 --> n23
+  n4 --> n16
+  n4 --> n3
+  n4 --> n15
+  n4 --> n18
+  n4 --> n9
+  n4 --> n0
+  n4 --> n11
+  n16 --> n17
+  n16 --> n4
+  n16 --> n19
+  n16 --> n3
+  n16 --> n15
+  n16 --> n18
+  n16 --> n0
+  n19 --> n2
+  n19 --> n21
+  n19 --> n1
+  n19 --> n4
+  n19 --> n9
+  n19 --> n0
+  n19 --> n11
+  n19 --> n7
   n3 --> n10
   n3 --> n2
-  n3 --> n0
-  n3 --> n5
-  n3 --> n15
-  n3 --> n20
-  n3 --> n16
-  n3 --> n11
   n3 --> n21
-  n3 --> n6
-  n3 --> n23
+  n3 --> n1
+  n3 --> n4
+  n3 --> n16
+  n3 --> n15
+  n3 --> n9
+  n3 --> n20
   n3 --> n7
+  n3 --> n5
   n3 --> n8
-  n20 --> n5
-  n20 --> n3
-  n20 --> n14
-  n16 --> n0
-  n16 --> n5
-  n16 --> n15
-  n16 --> n3
-  n16 --> n19
-  n16 --> n11
+  n15 --> n1
+  n15 --> n4
+  n15 --> n16
 ```
 

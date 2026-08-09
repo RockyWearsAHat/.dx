@@ -3,9 +3,9 @@ id: rust/doc-cli/src/desktop.rs
 title: desktop.rs
 kind: file-index
 lang: rust
-rank: 0.004497
-links: [[rust/doc-store/src/store.rs]] [[rust/doc-cli/src/commands/edit.rs]] [[rust/doc-cli/src/commands/store.rs]] [[rust/doc-cli/src/workspace.rs]] [[rust/doc-cli/src/commands/browser.rs]] [[rust/doc-store/src/pack.rs]] [[rust/doc-cli/src/install.rs]] [[rust/doc-cli/src/policies.rs]] [[rust/doc-run/src/workdir.rs]] [[rust/doc-cli/src/state.rs]] [[editor/surface/edit.js]] [[rust/doc-cli/src/mcp/mod.rs]]
-generated_at: 2026-08-06T01:13:54.687Z
+rank: 0.004774
+links: [[rust/doc-store/src/store.rs]] [[rust/doc-cli/src/commands/edit.rs]] [[rust/doc-cli/src/workspace.rs]] [[rust/doc-cli/src/commands/store.rs]] [[rust/doc-cli/src/commands/browser.rs]] [[rust/doc-store/src/pack.rs]] [[rust/doc-cli/src/install.rs]] [[rust/doc-cli/src/policies.rs]] [[rust/doc-run/src/workdir.rs]] [[rust/doc-cli/src/state.rs]] [[rust/doc-run/src/approvals.rs]] [[editor/surface/edit.js]]
+generated_at: 2026-08-08T01:43:37.084Z
 ---
 
 # rust/doc-cli/src/desktop.rs  ·  rust  ·  609 LOC
@@ -55,10 +55,10 @@ graph LR
   c --> x0
   x1["edit.rs"]
   x1 --> c
-  x2["store.rs"]
-  x2 --> c
-  x3["workspace.rs"]
-  c --> x3
+  x2["workspace.rs"]
+  c --> x2
+  x3["store.rs"]
+  x3 --> c
   x4["browser.rs"]
   x4 --> c
   x5["pack.rs"]
@@ -71,13 +71,13 @@ graph LR
   c --> x8
   x9["state.rs"]
   c --> x9
-  x10["edit.js"]
-  x10 --> c
-  x11["mod.rs"]
-  c --> x11
-  x12["layout.rs"]
+  x10["approvals.rs"]
+  c --> x10
+  x11["edit.js"]
+  x11 --> c
+  x12["mod.rs"]
   c --> x12
-  x13["engine.rs"]
+  x13["layout.rs"]
   c --> x13
 ```
 
@@ -90,6 +90,7 @@ graph LR
 - [[rust/doc-cli/src/policies.rs]] via `scratch`
 - [[rust/doc-run/src/workdir.rs]] via `scratch`
 - [[rust/doc-cli/src/state.rs]] via `scratch`
+- [[rust/doc-run/src/approvals.rs]] via `scratch`
 - [[rust/doc-cli/src/mcp/mod.rs]] via `success`
 - [[rust/doc-core/src/format/layout.rs]] via `place`
 - [[rust/doc-cli/src/daemon/engine.rs]] via `Outcome`
@@ -101,6 +102,6 @@ graph LR
 
 - [[rust/doc-cli/src/commands/edit.rs]] via `scratch`
 - [[rust/doc-cli/src/commands/store.rs]] via `scratch`
-- [[rust/doc-cli/src/commands/browser.rs]] via `scratch`, `status_lines`, `installed`
+- [[rust/doc-cli/src/commands/browser.rs]] via `status_lines`, `installed`, `scratch`
 - [[editor/surface/edit.js]] via `place`
 

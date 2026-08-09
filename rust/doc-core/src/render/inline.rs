@@ -12,29 +12,36 @@
 //!
 //! Two rules keep this predictable. Text is HTML-escaped **before** any mark is
 //! recognized, so the only tags in the output are the ones this module emits. And the line
-//! is split into code spans and prose spans *first*, with marks applied only to prose — so
-//! `` `a *b* c` `` renders literally, the way anyone writing about code expects.
+//! is split into code spans and prose spans *first*, with a code span's interior never
+//! scanned for marks — so `` `a *b* c` `` renders literally, the way anyone writing about
+//! code expects — while emphasis is applied across the assembled line, so a phrase that
+//! *contains* a code span can still be bold end to end.
 
 use super::escape::escape_html;
 
 /// Render one line of prose to HTML: escape it, then apply the inline marks.
+///
+/// Emphasis is applied over the *assembled* line — code spans already rendered to
+/// `<code>` elements, their interiors opaque to the scan — so `**bold `code` bold**`
+/// composes into bold text carrying a code span, instead of leaving literal `**` on the
+/// page because each half of the prose saw an unmatched marker.
 #[must_use]
 pub fn inline_html(text: &str) -> String {
     let escaped = escape_html(text);
-    let mut out = String::with_capacity(escaped.len());
+    let mut line = String::with_capacity(escaped.len());
 
     for span in split_code_spans(&escaped) {
         match span {
             Span::Code(body) => {
-                out.push_str("<code>");
-                out.push_str(body);
-                out.push_str("</code>");
+                line.push_str("<code>");
+                line.push_str(body);
+                line.push_str("</code>");
             }
-            Span::Prose(body) => out.push_str(&apply_emphasis(&apply_links(body))),
+            Span::Prose(body) => line.push_str(&apply_links(body)),
         }
     }
 
-    out
+    apply_emphasis(&line)
 }
 
 /// A run of already-escaped text, tagged by whether marks apply to it.
@@ -156,18 +163,26 @@ fn wrap_delimited(text: &str, marker: &str, tag: &str) -> String {
     out
 }
 
-/// Find `marker` in `text`, skipping any occurrence between `<` and `>`.
+/// Find `marker` in `text`, skipping any occurrence between `<` and `>` — and any
+/// occurrence inside a `<code>…</code>` element, whose body is verbatim source that a
+/// composing emphasis scan must never mistake for a marker.
 /// Walking by character rather than by byte is required, not stylistic: prose contains
 /// em dashes, accents, and emoji, and slicing `text` at a position inside one of those
 /// would panic.
 fn find_outside_tags(text: &str, marker: &str) -> Option<usize> {
     let mut in_tag = false;
+    let mut in_code = false;
 
     for (index, character) in text.char_indices() {
+        if !in_tag && text[index..].starts_with("<code>") {
+            in_code = true;
+        } else if in_code && text[index..].starts_with("</code>") {
+            in_code = false;
+        }
         match character {
             '<' => in_tag = true,
             '>' => in_tag = false,
-            _ if !in_tag && text[index..].starts_with(marker) => return Some(index),
+            _ if !in_tag && !in_code && text[index..].starts_with(marker) => return Some(index),
             _ => {}
         }
     }
@@ -213,6 +228,26 @@ mod tests {
         assert_eq!(inline_html("2 * 3 * 4"), "2 * 3 * 4");
         assert_eq!(inline_html("array[0] then"), "array[0] then");
         assert_eq!(inline_html("[see this] (later)"), "[see this] (later)");
+    }
+
+    #[test]
+    fn emphasis_composes_across_a_code_span() {
+        // The mark spans the whole phrase; the code inside it stays verbatim. Before the
+        // assembled-line scan, each prose half saw an unmatched `**` and the page carried
+        // the markers as literal ink.
+        assert_eq!(
+            inline_html("**bold `code` bold**"),
+            "<strong>bold <code>code</code> bold</strong>"
+        );
+        // A marker *inside* the code span is source, never a delimiter.
+        assert_eq!(
+            inline_html("**a `x**y` b**"),
+            "<strong>a <code>x**y</code> b</strong>"
+        );
+        assert_eq!(
+            inline_html("*it `c` too*"),
+            "<em>it <code>c</code> too</em>"
+        );
     }
 
     #[test]

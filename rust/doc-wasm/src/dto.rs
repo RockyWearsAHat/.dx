@@ -90,6 +90,9 @@ pub struct BlockDto {
     /// Whether a `code` block is executable (the bare `run` attribute).
     #[serde(default)]
     pub run: bool,
+    /// Whether a `code` block's listing starts expanded (the bare `open` attribute).
+    #[serde(default)]
+    pub open: bool,
     /// Libraries an executable `code` block needs.
     #[serde(default)]
     pub deps: String,
@@ -192,6 +195,7 @@ impl From<&Block> for BlockDto {
             label: block.label.clone(),
             items: block.items.iter().map(ItemDto::from).collect(),
             run: block.run,
+            open: block.open,
             deps: block.deps.clone(),
             reads: block.reads.clone(),
             writes: block.writes.clone(),
@@ -226,6 +230,7 @@ impl From<&BlockDto> for Block {
             label: dto.label.clone(),
             items: dto.items.iter().map(Item::from).collect(),
             run: dto.run,
+            open: dto.open,
             deps: dto.deps.clone(),
             reads: dto.reads.clone(),
             writes: dto.writes.clone(),

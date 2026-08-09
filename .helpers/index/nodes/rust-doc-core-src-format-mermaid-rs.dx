@@ -3,9 +3,9 @@ id: rust/doc-core/src/format/mermaid.rs
 title: mermaid.rs
 kind: file-index
 lang: rust
-rank: 0.011088
+rank: 0.010437
 links: [[rust/doc-cli/src/policies.rs]] [[rust/doc-cli/src/workspace.rs]] [[rust/doc-core/src/format/layout.rs]] [[rust/doc-cli/src/daemon/http.rs]] [[rust/doc-cli/src/mcp/handlers.rs]] [[rust/doc-core/src/render/nav.rs]] [[rust/doc-shot/src/cdp.rs]] [[rust/doc-cli/src/service.rs]]
-generated_at: 2026-08-06T01:13:54.685Z
+generated_at: 2026-08-08T01:43:37.081Z
 ---
 
 # rust/doc-core/src/format/mermaid.rs  ·  rust  ·  527 LOC
@@ -81,7 +81,7 @@ graph LR
 
 - [[rust/doc-cli/src/policies.rs]] via `read`
 - [[rust/doc-cli/src/workspace.rs]] via `read`
-- [[rust/doc-core/src/format/layout.rs]] via `is_horizontal`, `sides`, `is_forward`, `read`
+- [[rust/doc-core/src/format/layout.rs]] via `is_forward`, `read`, `is_horizontal`, `sides`
 - [[rust/doc-cli/src/daemon/http.rs]] via `read`
 - [[rust/doc-cli/src/mcp/handlers.rs]] via `read`
 - [[rust/doc-shot/src/cdp.rs]] via `read`

@@ -3,12 +3,12 @@ id: rust/doc-cli/src/commands/view.rs
 title: view.rs
 kind: file-index
 lang: rust
-rank: 0.007262
+rank: 0.007121
 links: [[rust/doc-cli/src/args.rs]] [[editor/surface/edit.js]] [[editor/github/test/resolve.test.mjs]] [[rust/doc-cli/src/mcp/handlers.rs]] [[rust/doc-core/src/render/mod.rs]] [[editor/github/content.js]] [[editor/github/resolve.js]] [[editor/github/wasm/doc_wasm.js]] [[rust/doc-core/src/render/outline.rs]] [[rust/doc-core/src/render/html.rs]] [[rust/doc-cli/src/commands/exec.rs]] [[rust/doc-cli/src/commands/mod.rs]]
-generated_at: 2026-08-06T01:13:54.686Z
+generated_at: 2026-08-08T01:43:37.082Z
 ---
 
-# rust/doc-cli/src/commands/view.rs  ·  rust  ·  481 LOC
+# rust/doc-cli/src/commands/view.rs  ·  rust  ·  702 LOC
 
 ## Symbols
 
@@ -16,34 +16,45 @@ generated_at: 2026-08-06T01:13:54.686Z
 - `run_outline` (function) — L32
 - `marks_for` (function) — L61
 - `run_render` (function) — L80
-- `run_png` (function) — L117
-- `run_png_block` (function) — L152
-- `png_block_name` (function) — L182
-- `export_scale` (function) — L195
-- `run_png_pages` (function) — L203
-- `page_stem` (function) — L248
-- `page_target` (function) — L254
-- `run_open` (function) — L259
-- `open_in_browser` (function) — L276
-- `selected_document` (function) — L294
-- `slice` (function) — L307
-- `document_path` (function) — L322
-- `html_options` (function) — L336
-- `theme_of` (function) — L347
-- `tests` (module) — L352
-- `args` (method) — L361
-- `fixture` (method) — L365
-- `text_renders_the_whole_document_by_default` (method) — L373
-- `one_block_renders_as_the_page_carries_it` (method) — L383
-- `a_body_is_drawn_without_being_written` (method) — L399
-- `a_field_is_decorated_without_reading_any_file` (method) — L412
-- `an_unknown_block_names_the_ones_that_exist` (method) — L419
-- `a_section_narrows_every_view_the_same_way` (method) — L427
-- `an_unknown_section_lists_what_is_available` (method) — L441
-- `outline_marks_runnable_blocks` (method) — L450
-- `render_honors_the_requested_theme` (method) — L459
-- `a_missing_file_argument_is_a_clear_error` (method) — L467
-- `a_page_number_goes_before_the_extension_not_after_the_whole_name` (method) — L472
+- `run_png` (function) — L120
+- `run_png_blocks` (function) — L160
+- `run_png_against` (function) — L209
+- `block_ids` (function) — L245
+- `block_target` (function) — L253
+- `run_png_block` (function) — L259
+- `png_block_name` (function) — L289
+- `export_scale` (function) — L302
+- `run_png_pages` (function) — L310
+- `export_target` (function) — L357
+- `page_stem` (function) — L374
+- `page_target` (function) — L379
+- `run_open` (function) — L384
+- `open_in_browser` (function) — L401
+- `selected_document` (function) — L419
+- `slice` (function) — L432
+- `document_path` (function) — L447
+- `html_options` (function) — L461
+- `theme_of` (function) — L472
+- `tests` (module) — L477
+- `args` (method) — L486
+- `fixture` (method) — L490
+- `text_renders_the_whole_document_by_default` (method) — L498
+- `one_block_renders_as_the_page_carries_it` (method) — L508
+- `a_body_is_drawn_without_being_written` (method) — L524
+- `a_field_is_decorated_without_reading_any_file` (method) — L537
+- `an_unknown_block_names_the_ones_that_exist` (method) — L544
+- `a_section_narrows_every_view_the_same_way` (method) — L552
+- `an_unknown_section_lists_what_is_available` (method) — L566
+- `outline_marks_runnable_blocks` (method) — L575
+- `render_honors_the_requested_theme` (method) — L584
+- `a_missing_file_argument_is_a_clear_error` (method) — L592
+- `a_page_number_goes_before_the_extension_not_after_the_whole_name` (method) — L597
+- `a_block_list_splits_on_commas_dropping_stray_blanks` (method) — L608
+- `against_without_exactly_one_block_is_refused_before_any_file_is_read` (method) — L620
+- `against_refuses_the_flags_that_would_write_files` (method) — L639
+- `an_empty_block_list_is_refused_before_any_file_is_read` (method) — L665
+- `a_batch_export_names_each_file_by_its_block` (method) — L672
+- `an_out_naming_a_directory_keeps_the_default_file_name_inside_it` (method) — L686
 
 ## Graph
 
@@ -82,10 +93,10 @@ graph LR
 
 ### References
 
-- [[rust/doc-cli/src/args.rs]] via `present`, `number`, `value`, `positional`
-- [[rust/doc-cli/src/mcp/handlers.rs]] via `number`
-- [[rust/doc-core/src/render/mod.rs]] via `html`, `text`, `outline`
-- [[rust/doc-core/src/render/outline.rs]] via `section`, `outline`
+- [[rust/doc-cli/src/args.rs]] via `positional`, `number`, `value`, `present`
+- [[rust/doc-cli/src/mcp/handlers.rs]] via `number`, `block_ids`
+- [[rust/doc-core/src/render/mod.rs]] via `outline`, `text`, `html`
+- [[rust/doc-core/src/render/outline.rs]] via `outline`, `section`
 - [[rust/doc-core/src/render/html.rs]] via `html`
 - [[rust/doc-cli/src/commands/mod.rs]] via `text`
 - [[rust/doc-cli/src/daemon/engine.rs]] via `text`

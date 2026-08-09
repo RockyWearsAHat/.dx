@@ -3,70 +3,83 @@ id: rust/doc-cli/src/commands/exec.rs
 title: exec.rs
 kind: file-index
 lang: rust
-rank: 0.003602
-links: [[rust/doc-cli/src/commands/browser.rs]] [[rust/doc-run/src/process.rs]] [[rust/doc-cli/src/service.rs]] [[rust/doc-cli/src/commands/play.rs]] [[rust/doc-cli/src/mcp/handlers.rs]] [[editor/github/content.js]] [[rust/doc-cli/src/args.rs]] [[rust/doc-run/src/lib.rs]] [[editor/surface/edit.js]] [[packaging/build-icons.py]] [[rust/doc-cli/src/commands/view.rs]]
-generated_at: 2026-08-06T01:13:54.688Z
+rank: 0.004924
+links: [[rust/doc-cli/src/mcp/handlers.rs]] [[rust/doc-run/src/plan.rs]] [[rust/doc-cli/src/args.rs]] [[rust/doc-cli/src/commands/browser.rs]] [[rust/doc-run/src/process.rs]] [[rust/doc-cli/src/service.rs]] [[rust/doc-cli/src/commands/play.rs]] [[rust/doc-run/src/lib.rs]] [[editor/github/content.js]] [[editor/surface/edit.js]] [[packaging/build-icons.py]] [[rust/doc-cli/src/commands/view.rs]]
+generated_at: 2026-08-08T01:43:37.084Z
 ---
 
-# rust/doc-cli/src/commands/exec.rs  ·  rust  ·  187 LOC
+# rust/doc-cli/src/commands/exec.rs  ·  rust  ·  441 LOC
 
 ## Symbols
 
-- `run` (function) — L18
-- `summary` (function) — L57
-- `preview` (function) — L98
-- `tests` (module) — L114
-- `args` (method) — L118
-- `seed` (method) — L122
-- `running_writes_the_output_into_the_document` (method) — L131
-- `dry_runs_report_without_touching_the_file` (method) — L143
-- `a_failing_block_is_reported_as_an_error_but_still_recorded` (method) — L152
-- `a_document_with_nothing_to_run_says_so` (method) — L162
-- `the_second_run_of_an_unchanged_document_is_cached` (method) — L169
-- `only_limits_execution_to_one_block` (method) — L178
+- `run` (function) — L35
+- `run_in` (function) — L46
+- `review` (function) — L96
+- `summary` (function) — L112
+- `preview` (function) — L160
+- `tests` (module) — L176
+- `args` (method) — L179
+- `seed` (method) — L184
+- `cache` (method) — L193
+- `running_writes_the_output_into_the_document` (method) — L200
+- `running_a_stored_document_keeps_its_pointer_and_freshens_the_store` (method) — L216
+- `dry_runs_report_without_touching_the_file` (method) — L253
+- `a_failing_block_is_reported_as_an_error_but_still_recorded` (method) — L266
+- `a_document_with_nothing_to_run_says_so` (method) — L280
+- `the_second_run_of_an_unchanged_document_is_cached` (method) — L287
+- `only_limits_execution_to_one_block` (method) — L300
+- `follow_edges_runs_the_boards_order_not_the_documents` (method) — L315
+- `follow_edges_refuses_a_cycle_by_name` (method) — L339
+- `an_unapproved_document_is_refused_with_the_review_sentence` (method) — L358
+- `review_prints_the_code_and_fingerprint_without_executing` (method) — L376
+- `review_with_approve_is_refused_not_swallowed` (method) — L393
+- `a_document_that_ships_its_own_run_record_is_still_refused` (method) — L412
 
 ## Graph
 
 ```mermaid
 graph LR
   c["exec.rs"]
-  x0["browser.rs"]
-  x0 --> c
-  x1["process.rs"]
+  x0["handlers.rs"]
+  c --> x0
+  x1["plan.rs"]
   c --> x1
-  x2["service.rs"]
+  x2["args.rs"]
   c --> x2
-  x3["play.rs"]
-  c --> x3
-  x4["handlers.rs"]
-  c --> x4
-  x5["content.js"]
+  x3["browser.rs"]
+  x3 --> c
+  x4["process.rs"]
+  x4 --> c
+  x5["service.rs"]
   x5 --> c
-  x6["args.rs"]
-  c --> x6
+  x6["play.rs"]
+  x6 --> c
   x7["lib.rs"]
   c --> x7
-  x8["edit.js"]
+  x8["content.js"]
   x8 --> c
-  x9["build-icons.py"]
+  x9["edit.js"]
   x9 --> c
-  x10["view.rs"]
-  c --> x10
+  x10["build-icons.py"]
+  x10 --> c
+  x11["view.rs"]
+  c --> x11
 ```
 
 ### References
 
-- [[rust/doc-run/src/process.rs]] via `run`
-- [[rust/doc-cli/src/service.rs]] via `run`
-- [[rust/doc-cli/src/commands/play.rs]] via `run`
-- [[rust/doc-cli/src/mcp/handlers.rs]] via `number`, `run`
-- [[rust/doc-cli/src/args.rs]] via `value`, `present`, `number`
+- [[rust/doc-cli/src/mcp/handlers.rs]] via `run_in`, `number`, `run`
+- [[rust/doc-run/src/plan.rs]] via `cache`
+- [[rust/doc-cli/src/args.rs]] via `value`, `number`, `present`
 - [[rust/doc-run/src/lib.rs]] via `all_succeeded`, `run_document`
 - [[rust/doc-cli/src/commands/view.rs]] via `document_path`
 
 ### Referenced by
 
 - [[rust/doc-cli/src/commands/browser.rs]] via `summary`, `run`
+- [[rust/doc-run/src/process.rs]] via `run`
+- [[rust/doc-cli/src/service.rs]] via `run`
+- [[rust/doc-cli/src/commands/play.rs]] via `run`
 - [[editor/github/content.js]] via `run`
 - [[editor/surface/edit.js]] via `run`
 - [[packaging/build-icons.py]] via `run`

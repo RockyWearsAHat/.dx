@@ -3,9 +3,9 @@ id: rust/doc-core/src/format/util.rs
 title: util.rs
 kind: file-index
 lang: rust
-rank: 0.015332
+rank: 0.01485
 links: [[rust/doc-core/src/format/parse.rs]] [[rust/doc-core/src/format/normalize.rs]] [[rust/doc-core/src/format/legacy.rs]] [[rust/doc-core/src/format/source.rs]] [[rust/doc-core/src/format/lines.rs]] [[rust/doc-core/src/format/attrs.rs]] [[rust/doc-cli/src/daemon/engine.rs]] [[rust/doc-core/src/edit.rs]] [[rust/doc-core/src/format/stringify.rs]]
-generated_at: 2026-08-06T01:13:54.683Z
+generated_at: 2026-08-08T01:43:37.078Z
 ---
 
 # rust/doc-core/src/format/util.rs  ·  rust  ·  223 LOC
@@ -61,12 +61,12 @@ graph LR
 
 ### Referenced by
 
-- [[rust/doc-core/src/format/parse.rs]] via `strip_leading_newlines`, `normalize_class_name`, `parse_boolean_attribute`, `strip_trailing_newlines`, `js_trim_end`
-- [[rust/doc-core/src/format/normalize.rs]] via `normalize_class_name`, `clamp_heading_level_u8`, `js_trim_end`, `ensure_unique`, `js_trim`
-- [[rust/doc-core/src/format/legacy.rs]] via `strip_leading_inline_ws`, `strip_leading_newlines`, `js_trim_end`, `js_trim`
-- [[rust/doc-core/src/format/source.rs]] via `parse_value`, `js_trim`
-- [[rust/doc-core/src/format/lines.rs]] via `strip_leading_inline_ws`, `js_trim`
+- [[rust/doc-core/src/format/parse.rs]] via `normalize_class_name`, `strip_trailing_newlines`, `strip_leading_newlines`, `clamp_heading_level`, `js_trim`
+- [[rust/doc-core/src/format/normalize.rs]] via `js_trim`, `normalize_class_name`, `js_trim_end`, `clamp_heading_level_u8`, `ensure_unique`
+- [[rust/doc-core/src/format/legacy.rs]] via `strip_leading_newlines`, `js_trim_end`, `strip_leading_inline_ws`, `js_trim`
+- [[rust/doc-core/src/format/source.rs]] via `js_trim`, `parse_value`
+- [[rust/doc-core/src/format/lines.rs]] via `js_trim`, `strip_leading_inline_ws`
 - [[rust/doc-core/src/format/attrs.rs]] via `js_trim`
 - [[rust/doc-core/src/edit.rs]] via `slugify_heading`
-- [[rust/doc-core/src/format/stringify.rs]] via `js_trim`, `normalize_class_name`
+- [[rust/doc-core/src/format/stringify.rs]] via `normalize_class_name`, `js_trim`
 

@@ -1,0 +1,82 @@
+---
+id: rust/doc-shot/src/png.rs
+title: png.rs
+kind: file-index
+lang: rust
+rank: 0.006574
+links: [[rust/doc-core/src/base64.rs]] [[packaging/build-icons.py]] [[editor/github/wasm/doc_wasm.js]] [[rust/doc-core/src/lib.rs]] [[rust/doc-core/src/render/board.rs]] [[rust/doc-core/src/render/html.rs]] [[editor/github/content.js]] [[editor/github/engine.js]] [[editor/github/resolve.js]] [[rust/doc-run/src/lib.rs]]
+generated_at: 2026-08-08T01:43:37.083Z
+---
+
+# rust/doc-shot/src/png.rs  ·  rust  ·  541 LOC
+
+## Symbols
+
+- `Image` (class) — L31
+- `downsample` (function) — L51
+- `shrink` (function) — L60
+- `channels` (function) — L122
+- `decode` (function) — L138
+- `ChunkReader` (class) — L243
+- `Item` (class) — L248
+- `next` (method) — L250
+- `paeth` (function) — L276
+- `encode` (function) — L299
+- `chunk` (function) — L364
+- `crc32` (function) — L374
+- `tests` (module) — L386
+- `image` (method) — L389
+- `an_image_round_trips_through_encode_and_decode` (method) — L398
+- `an_opaque_image_round_trips_through_the_rgb_form` (method) — L413
+- `every_row_filter_decodes` (method) — L422
+- `downsampling_averages_in_linear_light_not_in_srgb` (method) — L433
+- `a_hairline_survives_the_shrink_as_gray_ink` (method) — L453
+- `a_factor_of_one_is_the_identity` (method) — L477
+- `edges_that_fall_short_of_the_factor_are_still_covered` (method) — L484
+- `transparent_pixels_do_not_bleed_their_color_into_the_block` (method) — L497
+- `hostile_lengths_are_refused_not_allocated` (method) — L506
+- `what_this_codec_does_not_speak_is_named_not_misread` (method) — L530
+
+## Graph
+
+```mermaid
+graph LR
+  c["png.rs"]
+  x0["base64.rs"]
+  x0 --> c
+  x1["build-icons.py"]
+  x1 --> c
+  x2["doc_wasm.js"]
+  x2 --> c
+  x3["lib.rs"]
+  c --> x3
+  x4["board.rs"]
+  c --> x4
+  x5["html.rs"]
+  c --> x5
+  x6["content.js"]
+  x6 --> c
+  x7["engine.js"]
+  x7 --> c
+  x8["resolve.js"]
+  x8 --> c
+  x9["lib.rs"]
+  c --> x9
+```
+
+### References
+
+- [[rust/doc-core/src/lib.rs]] via `chunk`
+- [[rust/doc-core/src/render/board.rs]] via `round`
+- [[rust/doc-core/src/render/html.rs]] via `round`
+- [[rust/doc-run/src/lib.rs]] via `truncate`
+
+### Referenced by
+
+- [[rust/doc-core/src/base64.rs]] via `encode`, `decode`
+- [[packaging/build-icons.py]] via `crc32`, `chunk`
+- [[editor/github/wasm/doc_wasm.js]] via `encode`, `decode`
+- [[editor/github/content.js]] via `decode`
+- [[editor/github/engine.js]] via `encode`
+- [[editor/github/resolve.js]] via `encode`
+

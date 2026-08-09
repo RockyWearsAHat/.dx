@@ -37,7 +37,8 @@ pub struct Block {
     pub text: String,
     /// Programming language (only for `code`).
     pub language: String,
-    /// Image source (only for `image`).
+    /// Sibling-file reference: an `image` source, or the `src=` of a `code`, `view`, or
+    /// `style` block whose content is the named file's current text (`resolve::hydrate`).
     pub src: String,
     /// Image alt text (only for `image`).
     pub alt: String,
@@ -52,6 +53,10 @@ pub struct Block {
     pub items: Vec<Item>,
     /// Whether a `code` block is executable (the bare `run` attribute).
     pub run: bool,
+    /// Whether a `code` block's listing starts expanded (the bare `open` attribute).
+    /// The fold is still there — a reader can close it — but the page opens showing the
+    /// listing, for the document whose code *is* the content.
+    pub open: bool,
     /// Libraries an executable `code` block needs (`deps="numpy requests"`).
     pub deps: String,
     /// Comma-separated sibling files an executable `code` block reads at run time

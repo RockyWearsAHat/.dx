@@ -3,9 +3,9 @@ id: rust/doc-core/src/render/nav.rs
 title: nav.rs
 kind: file-index
 lang: rust
-rank: 0.006848
+rank: 0.006496
 links: [[rust/doc-cli/src/extension.rs]] [[rust/doc-core/src/format/mermaid.rs]] [[editor/surface/edit.js]]
-generated_at: 2026-08-06T01:13:54.686Z
+generated_at: 2026-08-08T01:43:37.083Z
 ---
 
 # rust/doc-core/src/render/nav.rs  ·  rust  ·  324 LOC

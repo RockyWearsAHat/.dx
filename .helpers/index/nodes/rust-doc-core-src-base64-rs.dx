@@ -1,0 +1,55 @@
+---
+id: rust/doc-core/src/base64.rs
+title: base64.rs
+kind: file-index
+lang: rust
+rank: 0.00572
+links: [[rust/doc-shot/src/png.rs]] [[editor/github/wasm/doc_wasm.js]] [[editor/github/content.js]] [[editor/github/engine.js]] [[editor/github/resolve.js]] [[rust/doc-cli/src/daemon/engine.rs]]
+generated_at: 2026-08-08T01:43:37.083Z
+---
+
+# rust/doc-core/src/base64.rs  ·  rust  ·  113 LOC
+
+## Symbols
+
+- `encode` (function) — L14
+- `decode` (function) — L39
+- `tests` (module) — L66
+- `encode_matches_the_rfc_4648_test_vectors` (method) — L70
+- `encode_handles_binary_bytes_including_high_values` (method) — L81
+- `encoded_length_is_always_a_multiple_of_four` (method) — L87
+- `decode_reverses_encode_for_every_length` (method) — L95
+- `decode_tolerates_line_breaks_and_padding` (method) — L103
+- `decode_rejects_bytes_outside_the_alphabet` (method) — L109
+
+## Graph
+
+```mermaid
+graph LR
+  c["base64.rs"]
+  x0["png.rs"]
+  c --> x0
+  x1["doc_wasm.js"]
+  x1 --> c
+  x2["content.js"]
+  x2 --> c
+  x3["engine.js"]
+  x3 --> c
+  x4["resolve.js"]
+  x4 --> c
+  x5["engine.rs"]
+  c --> x5
+```
+
+### References
+
+- [[rust/doc-shot/src/png.rs]] via `encode`, `decode`
+- [[rust/doc-cli/src/daemon/engine.rs]] via `bytes`
+
+### Referenced by
+
+- [[editor/github/wasm/doc_wasm.js]] via `encode`, `decode`
+- [[editor/github/content.js]] via `decode`
+- [[editor/github/engine.js]] via `encode`
+- [[editor/github/resolve.js]] via `encode`
+

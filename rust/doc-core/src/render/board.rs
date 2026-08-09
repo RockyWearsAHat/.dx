@@ -736,6 +736,17 @@ impl Rect {
             && y > self.y - slack
             && y < self.y + self.h + slack
     }
+
+    /// How much of `other` this rectangle covers, in square canvas pixels.
+    fn overlap(self, other: Rect) -> f64 {
+        let w = (self.x + self.w).min(other.x + other.w) - self.x.max(other.x);
+        let h = (self.y + self.h).min(other.y + other.h) - self.y.max(other.y);
+        if w > 0.0 && h > 0.0 {
+            w * h
+        } else {
+            0.0
+        }
+    }
 }
 
 /// How far a path keeps away from a box it is not attached to, in canvas pixels.
@@ -843,16 +854,17 @@ pub(super) fn board_html(
 
 /// The frame an unstated board height takes in the flow: tall enough to show the whole
 /// canvas at the scale the column's width already forces, so a board that fits sideways
-/// is never squeezed smaller by an arbitrary frame. Clamped between the classic default
-/// (a small board keeps its familiar frame) and [`FLOW_HEIGHT_MAX`] (a filmstrip cannot
-/// claim the page — it gets the notice instead).
+/// is never squeezed smaller by an arbitrary frame — and no taller, so a canvas shorter
+/// than the classic default gets a frame its own height instead of an empty band beneath
+/// it. Capped at [`FLOW_HEIGHT_MAX`]: a filmstrip cannot claim the page — it gets the
+/// notice instead.
 fn flow_height(rects: &[Rect]) -> f64 {
     let Some((x0, y0, x1, y1)) = extent(rects) else {
         return f64::from(DEFAULT_BOARD_HEIGHT);
     };
     let width_scale = ((STATIC_COLUMN - 2.0 * FIT_PADDING) / (x1 - x0)).min(FIT_MAX);
     (width_scale * (y1 - y0) + 2.0 * FIT_PADDING)
-        .clamp(f64::from(DEFAULT_BOARD_HEIGHT), FLOW_HEIGHT_MAX)
+        .min(FLOW_HEIGHT_MAX)
         .round()
 }
 
@@ -860,8 +872,10 @@ fn flow_height(rects: &[Rect]) -> f64 {
 ///
 /// This is [`board_html`] with the frame chosen by the caller instead of by the page
 /// column — how a board is photographed at its natural size ([`natural_viewport`]) rather
-/// than squeezed into the flow's 680px measure. The width is written into the wrapper only
-/// here: in flow the board spans the column, and a stated width would fight it.
+/// than squeezed into the flow's 680px measure. In flow the frame spans the column only
+/// when the canvas needs it: a smaller canvas gets a frame hugged to its displayed width
+/// and centred, because a small plan floating in a mostly-empty bordered column read as
+/// dead space.
 pub(super) fn board_html_in(
     block: &Block,
     document: &Document,
@@ -874,10 +888,26 @@ pub(super) fn board_html_in(
     resolve_sizes(document, &mut node_list);
 
     let rects = rects(&node_list);
-    let (scale, tx, ty) = fit(&rects, viewport_width, viewport_height);
+    let (mut scale, mut tx, mut ty) = fit(&rects, viewport_width, viewport_height);
 
     let size = if (viewport_width - STATIC_COLUMN).abs() < f64::EPSILON {
-        format!("height:{}px", viewport_height.round())
+        // In flow the frame hugs its canvas: a small arrangement centred in the full
+        // column read as a mostly-empty bordered box. The hug keeps the fit's own scale
+        // (the width constraint at the hugged width is the constraint that chose it) and
+        // re-fits only to centre; within a pixel of the column it is the column, so a
+        // width-constrained board never jitters one pixel narrow off rounding.
+        let hug =
+            extent(&rects).map(|(x0, _, x1, _)| (scale * (x1 - x0) + 2.0 * FIT_PADDING).round());
+        match hug {
+            Some(hug) if hug < viewport_width - 1.0 => {
+                (scale, tx, ty) = fit(&rects, hug, viewport_height);
+                format!(
+                    "width:{hug}px;height:{}px;margin-left:auto;margin-right:auto",
+                    viewport_height.round()
+                )
+            }
+            _ => format!("height:{}px", viewport_height.round()),
+        }
     } else {
         format!(
             "width:{}px;height:{}px",
@@ -890,10 +920,12 @@ pub(super) fn board_html_in(
          style=\"transform:translate({tx}px,{ty}px) scale({scale})\">\n",
         super::html::attributes(block, &["dx-board"]),
     );
-    out.push_str(&edges_svg(&block.id, &node_list, &rects));
+    let (edges, edge_labels) = edges_svg(&block.id, &node_list, &rects, scale);
+    out.push_str(&edges);
     for node in &node_list {
         out.push_str(&node_html(node, document, options, values));
     }
+    out.push_str(&edge_labels);
     out.push_str("</div>\n");
     if scale < FIT_LEGIBLE {
         out.push_str(&fit_notice(scale, &rects));
@@ -905,12 +937,19 @@ pub(super) fn board_html_in(
 /// The sentence an illegible fit earns: the ratio, the canvas, and the way out.
 ///
 /// Drawn inside the board's frame, on the page's own paper, so it survives the smear it
-/// describes. Only a failure is called out — a board that reads carries nothing.
+/// describes. Only a failure is called out — a board that reads carries nothing. The way
+/// out follows the canvas's own shape: a wide smear is a flow drawn sideways, so the
+/// advice is to turn it down the column; a tall one is a plan that outgrew its frame.
 fn fit_notice(scale: f64, rects: &[Rect]) -> String {
     let (width, height) = extent(rects).map_or((0.0, 0.0), |(x0, y0, x1, y1)| (x1 - x0, y1 - y0));
+    let advice = if width > height {
+        "re-orient the flow top-down (flowchart TD)"
+    } else {
+        "move tall content into the page flow"
+    };
     format!(
         "<div class=\"dx-board-small\">fitted at 1:{} — a {} × {} canvas is past reading \
-         at page width; move tall content into the page flow, or open the board alone</div>",
+         at page width; {advice}, or open the board alone</div>",
         (1.0 / scale).round(),
         thousands(width),
         thousands(height),
@@ -1045,7 +1084,12 @@ fn drawn_edges(list: &[Node], rects: &[Rect]) -> Vec<Drawn> {
     let mut drawn: Vec<Drawn> = Vec::new();
     let mut settled: Vec<Run> = Vec::new();
     for (from, node) in list.iter().enumerate() {
-        for edge in &node.to {
+        for (at, edge) in node.to.iter().enumerate() {
+            // A line saying `to=b,b` states one direction twice: drawing both stacked two
+            // arrowheads on one side and read as a second, unlabelled edge. One is drawn.
+            if node.to[..at].contains(edge) {
+                continue;
+            }
             let Some(to) = list
                 .iter()
                 .position(|other| other.id.eq_ignore_ascii_case(&edge.id))
@@ -1222,6 +1266,25 @@ fn anchors(drawn: &[Drawn], rects: &[Rect]) -> Vec<(Anchor, Anchor)> {
 /// that is not curving under it.
 const HEAD_RUN: f64 = 16.0;
 
+/// The smallest an edge label's words may *display*, in page pixels. A fitted board scales
+/// its whole canvas down, labels with it, and a decision's words that render at five pixels
+/// are words nobody read — below this floor the label states its own compensating size.
+const EDGE_LABEL_MIN: f64 = 9.0;
+
+/// What the theme's `0.72rem` label comes to at the browser-default 16px rem, in page
+/// pixels — the size a label displays at scale 1, and the base the floor is judged against.
+const EDGE_LABEL_BASE: f64 = 11.5;
+
+/// The stroke the theme draws an edge at, in canvas pixels (`.dx-board-edges > path`).
+const EDGE_STROKE_BASE: f64 = 1.5;
+
+/// The thinnest an edge may *display*, in page pixels. A fitted board scales its strokes
+/// down with the canvas, and a 1.5px line at a 0.4 fit is a 0.6px wire nobody can follow —
+/// below this floor every path states the compensating canvas-pixel stroke, exactly as
+/// [`EDGE_LABEL_MIN`] does for the words. The arrowhead and tether are `markerUnits`
+/// strokeWidth, so the heads grow back with the line they tip.
+const EDGE_STROKE_MIN: f64 = 1.25;
+
 /// The point the curve hands over to the arrowhead: [`HEAD_RUN`] out from the arrival
 /// anchor, along the arrival side's own normal, shortened on a hop too small to hold it.
 ///
@@ -1386,14 +1449,28 @@ fn cubic_at(from: Anchor, to: Anchor, controls: Run, along: f64) -> (f64, f64) {
 /// and both take their colour from the stroke they sit on (`context-stroke`), so a picked
 /// edge is picked end to end. Their ids carry the board's own id — a page may hold several
 /// boards, and two markers sharing one id is one marker.
-fn edges_svg(board_id: &str, list: &[Node], rects: &[Rect]) -> String {
+///
+/// `scale` is the fit the whole canvas will display at: a label on a board fitted below
+/// [`EDGE_LABEL_MIN`] states its own larger `font-size`, in canvas pixels, so the words on
+/// an edge never display smaller than the floor however far the fit shrank the plan — and
+/// the strokes hold the same law at [`EDGE_STROKE_MIN`], so a fitted plan's edges never
+/// thin into wires.
+fn edges_svg(board_id: &str, list: &[Node], rects: &[Rect], scale: f64) -> (String, String) {
     let drawn = drawn_edges(list, rects);
     if drawn.is_empty() {
-        return String::new();
+        return (String::new(), String::new());
     }
     let anchored = anchors(&drawn, rects);
     let arrow = format!("dx-edge-arrow-{board_id}");
     let tether = format!("dx-edge-tether-{board_id}");
+    // The stroke legibility floor: fitted below it, every path carries the canvas-pixel
+    // stroke that displays at [`EDGE_STROKE_MIN`]; at a legible fit nothing extra is
+    // written and the theme's own weight holds.
+    let stroke = if scale > 0.0 && scale * EDGE_STROKE_BASE < EDGE_STROKE_MIN {
+        format!(" style=\"stroke-width:{:.2}\"", EDGE_STROKE_MIN / scale)
+    } else {
+        String::new()
+    };
     let mut paths = String::new();
     let mut labels = String::new();
     for (edge, (from, to)) in drawn.iter().zip(anchored) {
@@ -1413,7 +1490,7 @@ fn edges_svg(board_id: &str, list: &[Node], rects: &[Rect]) -> String {
         let handover = lead(from, to);
         let bent = controls(from, handover, &obstacles);
         paths.push_str(&format!(
-            "<path data-from=\"{}\" data-to=\"{}\"{}{} marker-start=\"url(#{})\" \
+            "<path data-from=\"{}\" data-to=\"{}\"{}{}{stroke} marker-start=\"url(#{})\" \
              marker-end=\"url(#{})\" d=\"{}\"/>\n",
             escape_html(&list[edge.from].id),
             escape_html(&list[edge.to].id),
@@ -1425,11 +1502,22 @@ fn edges_svg(board_id: &str, list: &[Node], rects: &[Rect]) -> String {
         ));
         let text = edge_label(&list[edge.from], &list[edge.to]);
         if !text.is_empty() {
-            let (x, y) = cubic_at(from, handover, bent, 0.5);
+            // The legibility floor: fitted below it, the label carries the canvas-pixel
+            // size that displays at [`EDGE_LABEL_MIN`]; at a legible fit nothing extra
+            // is written and the theme's own size holds.
+            // For the words, every node is an obstacle — the two the edge joins
+            // included. The curve is attached to them; the label must not sit on them,
+            // which is exactly where a short edge's middle lands.
+            let (x, y, font) = label_layout(from, handover, bent, rects, &text, scale);
+            let floor = if font > EDGE_LABEL_BASE {
+                format!(" style=\"font-size:{font:.1}px\"")
+            } else {
+                String::new()
+            };
             // Named with the pair it belongs to, because only *labelled* edges get a `text`
             // and an editing surface re-placing them cannot count its way to the right one.
             labels.push_str(&format!(
-                "<text class=\"dx-board-edge-label\" data-from=\"{}\" data-to=\"{}\" \
+                "<text class=\"dx-board-edge-label\"{floor} data-from=\"{}\" data-to=\"{}\" \
                  x=\"{}\" y=\"{}\">{}</text>\n",
                 escape_html(&list[edge.from].id),
                 escape_html(&list[edge.to].id),
@@ -1441,7 +1529,7 @@ fn edges_svg(board_id: &str, list: &[Node], rects: &[Rect]) -> String {
     }
     // The head is a dart — swept back and slightly concave — rather than a squat full
     // triangle: it reads as a point on a hairline stroke instead of a wedge sitting on it.
-    format!(
+    let sheet = format!(
         "<svg class=\"dx-board-edges\" width=\"1\" height=\"1\">\n\
          <defs><marker id=\"{}\" viewBox=\"0 0 10 10\" refX=\"8.5\" refY=\"5\" \
          markerWidth=\"9\" markerHeight=\"9\" orient=\"auto-start-reverse\">\
@@ -1450,10 +1538,88 @@ fn edges_svg(board_id: &str, list: &[Node], rects: &[Rect]) -> String {
          <marker id=\"{}\" viewBox=\"0 0 6 6\" refX=\"3\" refY=\"3\" markerWidth=\"5\" \
          markerHeight=\"5\"><circle cx=\"3\" cy=\"3\" r=\"2.4\" fill=\"context-stroke\"/>\
          </marker></defs>\n\
-         {paths}{labels}</svg>\n",
+         {paths}</svg>\n",
         escape_html(&arrow),
         escape_html(&tether),
-    )
+    );
+    // The words ride their own sheet, painted over the nodes: an edge's label is content,
+    // and a label sliced to a fragment by the box it runs against is content lost. The
+    // paper-coloured halo the theme gives each label keeps it readable wherever it lands.
+    let label_sheet = if labels.is_empty() {
+        String::new()
+    } else {
+        format!("<svg class=\"dx-board-edge-labels\" width=\"1\" height=\"1\">\n{labels}</svg>\n")
+    };
+    (sheet, label_sheet)
+}
+
+/// Where along its curve an edge's words sit, in canvas pixels.
+///
+/// The words paint above the nodes (the label sheet), so legibility is guaranteed — this
+/// chooses where to spend that privilege. At a deep fit the compensating `font` makes a
+/// label many canvas pixels wide, and dropped blindly at the curve's middle its halo can
+/// erase a node's own words. From the middle outward, the first sample whose estimated
+/// label box covers no box at all wins; failing that, the sample covering least.
+fn label_spot(
+    from: Anchor,
+    handover: Anchor,
+    bent: Run,
+    obstacles: &[Rect],
+    text: &str,
+    font: f64,
+) -> ((f64, f64), f64) {
+    // A mono glyph runs about 0.62 of its size wide; the halo adds a breath each side.
+    let width = font * 0.62 * text.chars().count() as f64 + font * 0.5;
+    let height = font * 1.3;
+    let mut best = cubic_at(from, handover, bent, 0.5);
+    let mut least = f64::INFINITY;
+    for along in [0.5, 0.42, 0.58, 0.34, 0.66, 0.26, 0.74, 0.18, 0.82] {
+        let (x, y) = cubic_at(from, handover, bent, along);
+        let word = Rect {
+            x: x - width / 2.0,
+            y: y - height / 2.0,
+            w: width,
+            h: height,
+        };
+        let covered: f64 = obstacles.iter().map(|other| word.overlap(*other)).sum();
+        if covered < least {
+            least = covered;
+            best = (x, y);
+        }
+        if covered == 0.0 {
+            break;
+        }
+    }
+    (best, least)
+}
+
+/// Where an edge's words sit and the canvas-pixel size they take: the fit floor first,
+/// yielded when it cannot be honoured.
+///
+/// Fitted below [`EDGE_LABEL_MIN`], the words ask for the compensating font — but the
+/// floor yields before it erases: on a deep fit a floored label can be wider than every
+/// gap its curve crosses, and no slide clears it. The words then scale with the board
+/// like every other stroke — subordinate but never destructive — and the board's own
+/// page, where the floor holds, carries them at full size.
+fn label_layout(
+    from: Anchor,
+    handover: Anchor,
+    bent: Run,
+    obstacles: &[Rect],
+    text: &str,
+    scale: f64,
+) -> (f64, f64, f64) {
+    let font = if scale > 0.0 && scale * EDGE_LABEL_BASE < EDGE_LABEL_MIN {
+        EDGE_LABEL_MIN / scale
+    } else {
+        EDGE_LABEL_BASE
+    };
+    let ((x, y), covered) = label_spot(from, handover, bent, obstacles, text, font);
+    if covered > 0.0 && font > EDGE_LABEL_BASE {
+        let ((x, y), _) = label_spot(from, handover, bent, obstacles, text, EDGE_LABEL_BASE);
+        return (x, y, EDGE_LABEL_BASE);
+    }
+    (x, y, font)
 }
 
 /// The words written on the edge from `from` to `to`, or nothing when it carries none.
@@ -1697,7 +1863,7 @@ mod tests {
             node_at("wall", 330, 0, vec![]),
         ];
         let boxes = rects(&list);
-        let svg = edges_svg("plan", &list, &boxes);
+        let svg = edges_svg("plan", &list, &boxes, 1.0).0;
         // From the edge itself, not the arrowhead in `defs`, which also carries a `d`.
         let path = svg
             .split("<path data-from=")
@@ -1802,9 +1968,9 @@ mod tests {
             parse_node_line(&line).expect("a node"),
             node_at("b", 500, 0, vec![]),
         ];
-        let svg = edges_svg("plan", &list, &rects(&list));
-        assert!(svg.contains("dx-board-edge-label"), "{svg}");
-        assert!(svg.contains(">on failure</text>"), "{svg}");
+        let (_, labels) = edges_svg("plan", &list, &rects(&list), 1.0);
+        assert!(labels.contains("dx-board-edge-label"), "{labels}");
+        assert!(labels.contains(">on failure</text>"), "{labels}");
     }
 
     /// An unpinned edge takes the facing pair on the axis the nodes are furthest apart
@@ -1879,7 +2045,7 @@ mod tests {
             ),
             node_at("b", 0, 400, Vec::new()),
         ];
-        let svg = edges_svg("plan", &list, &rects(&list));
+        let svg = edges_svg("plan", &list, &rects(&list), 1.0).0;
         assert!(svg.contains("<marker id=\"dx-edge-arrow-plan\""), "{svg}");
         assert!(svg.contains("<marker id=\"dx-edge-tether-plan\""), "{svg}");
         assert!(
@@ -1896,7 +2062,8 @@ mod tests {
         assert!(!svg.contains("data-to-side"), "{svg}");
         // An edge whose target is not on the board draws nothing at all.
         let ghost = vec![node_at("a", 0, 0, vec![Edge::unpinned("ghost")])];
-        assert!(edges_svg("plan", &ghost, &rects(&ghost)).is_empty());
+        let (sheet, labels) = edges_svg("plan", &ghost, &rects(&ghost), 1.0);
+        assert!(sheet.is_empty() && labels.is_empty());
     }
 
     /// The fit shows everything: an arrangement taller than the viewport is scaled down on
@@ -2078,6 +2245,230 @@ mod tests {
             nodes[0].h > FIT_MIN_HEIGHT,
             "three items are taller than the floor: {}",
             nodes[0].h
+        );
+    }
+
+    /// A label on a board fitted below [`EDGE_LABEL_MIN`] states its own compensating
+    /// size, so the words on an edge never display smaller than the floor — and a legible
+    /// fit writes nothing extra, because the theme's own size already reads.
+    #[test]
+    fn a_label_fitted_below_the_floor_states_its_own_size() {
+        let labelled = Edge {
+            id: "b".into(),
+            from: Some(Side::Right),
+            to: Some(Side::Left),
+            label: "on failure".into(),
+        };
+        // The gap is wide enough for the floored words to clear both nodes — a narrower
+        // gap is the yield case, pinned separately.
+        let list = vec![
+            node_at("a", 0, 0, vec![labelled]),
+            node_at("b", 900, 0, vec![]),
+        ];
+        let shrunk = edges_svg("plan", &list, &rects(&list), 0.2).1;
+        // 9px displayed at a 1:5 fit is 45 canvas px.
+        assert!(shrunk.contains("style=\"font-size:45.0px\""), "{shrunk}");
+
+        let legible = edges_svg("plan", &list, &rects(&list), 1.0).1;
+        assert!(!legible.contains("font-size"), "{legible}");
+    }
+
+    /// A stroke on a board fitted below [`EDGE_STROKE_MIN`] states its own compensating
+    /// width, so an edge never displays as a sub-pixel wire — and a legible fit writes
+    /// nothing extra, because the theme's own weight already reads.
+    #[test]
+    fn a_stroke_fitted_below_the_floor_states_its_own_width() {
+        let list = vec![
+            node_at("a", 0, 0, vec![Edge::unpinned("b")]),
+            node_at("b", 500, 0, vec![]),
+        ];
+        let shrunk = edges_svg("plan", &list, &rects(&list), 0.25).0;
+        // 1.25px displayed at a 1:4 fit is 5 canvas px.
+        assert!(shrunk.contains("style=\"stroke-width:5.00\""), "{shrunk}");
+
+        let legible = edges_svg("plan", &list, &rects(&list), 1.0).0;
+        assert!(!legible.contains("stroke-width"), "{legible}");
+    }
+
+    /// A line saying `to=b,b` states one direction twice; drawing both stacked a second,
+    /// unlabelled arrowhead on the same side. Exactly one edge reaches the page.
+    #[test]
+    fn a_duplicate_edge_on_one_line_is_drawn_once() {
+        let list = vec![
+            node_at("a", 0, 0, vec![Edge::unpinned("b"), Edge::unpinned("b")]),
+            node_at("b", 500, 0, vec![]),
+        ];
+        let svg = edges_svg("plan", &list, &rects(&list), 1.0).0;
+        assert_eq!(
+            svg.matches("<path data-from=").count(),
+            1,
+            "one stated direction is one arrow: {svg}"
+        );
+    }
+
+    /// The words slide along their curve to the first sample clear of every box —
+    /// painted above the nodes, a label that stayed at the blocked middle would erase a
+    /// node's own words under its halo (the occlusion a reviewer caught at page fit).
+    #[test]
+    fn a_label_slides_along_its_curve_to_clear_a_box() {
+        let from = Anchor {
+            x: 0.0,
+            y: 0.0,
+            dx: 1.0,
+            dy: 0.0,
+        };
+        let to = Anchor {
+            x: 600.0,
+            y: 0.0,
+            dx: -1.0,
+            dy: 0.0,
+        };
+        let handover = lead(from, to);
+        let bent = controls(from, handover, &[]);
+        // A box squarely over the curve's middle; the words must land beside it.
+        let block = Rect {
+            x: 250.0,
+            y: -30.0,
+            w: 100.0,
+            h: 60.0,
+        };
+        let ((x, _), _) = label_spot(from, handover, bent, &[block], "words", EDGE_LABEL_BASE);
+        assert!(
+            !(249.0..=351.0).contains(&x),
+            "label at {x} still sits on the box"
+        );
+        // With nothing in the way the words keep the middle.
+        let ((mx, _), _) = label_spot(from, handover, bent, &[], "words", EDGE_LABEL_BASE);
+        assert!(
+            (mx - 300.0).abs() < 45.0,
+            "unobstructed label strays to {mx}"
+        );
+    }
+
+    /// A floored label wider than every gap on its curve yields the floor instead of
+    /// erasing a node's ink: the words scale with the board, and the board's own page
+    /// carries them at full size.
+    #[test]
+    fn a_floored_label_that_cannot_clear_yields_to_the_boards_own_scale() {
+        let from = Anchor {
+            x: 0.0,
+            y: 0.0,
+            dx: 1.0,
+            dy: 0.0,
+        };
+        let to = Anchor {
+            x: 600.0,
+            y: 0.0,
+            dx: -1.0,
+            dy: 0.0,
+        };
+        let handover = lead(from, to);
+        let bent = controls(from, handover, &[]);
+        // Two long bars leave a 40px channel around the line: the floored box (117px
+        // tall at a 1:10 fit) fits nowhere, the base-size box (15px) fits everywhere.
+        let walls = [
+            Rect {
+                x: -100.0,
+                y: -580.0,
+                w: 900.0,
+                h: 560.0,
+            },
+            Rect {
+                x: -100.0,
+                y: 20.0,
+                w: 900.0,
+                h: 560.0,
+            },
+        ];
+        let (_, _, font) = label_layout(from, handover, bent, &walls, "spelled out", 0.1);
+        assert!(
+            (font - EDGE_LABEL_BASE).abs() < f64::EPSILON,
+            "the floor must yield when it cannot clear, got {font}px"
+        );
+        // With the channel wide open the deep fit keeps its floor.
+        let (_, _, floored) = label_layout(from, handover, bent, &[], "spelled out", 0.1);
+        assert!(floored > EDGE_LABEL_BASE, "an open canvas keeps the floor");
+    }
+
+    /// An edge's words are content: the label sheet is painted after the nodes, so a
+    /// label can never be sliced to a fragment by a box the curve runs against — the
+    /// occlusion a reviewer caught on the site-plan board.
+    #[test]
+    fn edge_labels_paint_above_the_nodes() {
+        let labelled = Edge {
+            id: "b".into(),
+            from: Some(Side::Right),
+            to: Some(Side::Left),
+            label: "on failure".into(),
+        };
+        let list = [
+            node_at("a", 0, 0, vec![labelled]),
+            node_at("b", 500, 0, vec![]),
+        ];
+        let document = crate::format::parse(
+            "::paragraph id=a hidden\nA.\n::end\n\n::paragraph id=b hidden\nB.\n::end\n",
+        );
+        let block = Block {
+            kind: "board".to_string(),
+            id: "plan".to_string(),
+            text: list.iter().map(node_line).collect::<Vec<_>>().join("\n"),
+            ..Block::default()
+        };
+        let html = board_html(&block, &document, &HtmlOptions::default(), &Values::new());
+        let labels_at = html.find("dx-board-edge-labels").expect("label sheet");
+        let last_node = html.rfind("dx-board-node").expect("nodes");
+        assert!(
+            labels_at > last_node,
+            "labels must follow every node: {html}"
+        );
+    }
+
+    /// A small board's in-flow frame hugs its canvas — width stated, centred, and no
+    /// taller than the canvas needs — instead of floating a small drawing in a
+    /// mostly-empty full-column box.
+    #[test]
+    fn a_small_board_frame_hugs_its_canvas() {
+        let document = crate::format::parse("::paragraph id=one hidden\nA node.\n::end\n");
+        let block = Block {
+            kind: "board".to_string(),
+            id: "plan".to_string(),
+            text: "- one x=0 y=0 w=300 h=200".to_string(),
+            ..Block::default()
+        };
+        let html = board_html(&block, &document, &HtmlOptions::default(), &Values::new());
+        assert!(
+            html.contains("width:"),
+            "the frame states its width: {html}"
+        );
+        assert!(
+            html.contains("margin-left:auto;margin-right:auto"),
+            "a hugged frame is centred: {html}"
+        );
+        let height: f64 = html
+            .split("height:")
+            .nth(1)
+            .and_then(|rest| rest.split("px").next())
+            .and_then(|number| number.parse().ok())
+            .expect("the wrapper states its height");
+        assert!(
+            height < f64::from(DEFAULT_BOARD_HEIGHT),
+            "a short canvas keeps no empty band beneath it: {height}"
+        );
+    }
+
+    /// A wide smear's way out is turning the flow down the column; only a tall one is told
+    /// to move content into the page flow.
+    #[test]
+    fn a_wide_smear_advises_reorienting_the_flow() {
+        let wide = fit_notice(0.1, &[rect(0.0, 0.0), rect(6000.0, 0.0)]);
+        assert!(
+            wide.contains("re-orient the flow top-down (flowchart TD)"),
+            "{wide}"
+        );
+        let tall = fit_notice(0.1, &[rect(0.0, 0.0), rect(0.0, 6000.0)]);
+        assert!(
+            tall.contains("move tall content into the page flow"),
+            "{tall}"
         );
     }
 }

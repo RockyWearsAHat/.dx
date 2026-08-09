@@ -3,12 +3,12 @@ id: rust/doc-core/src/render/mod.rs
 title: mod.rs
 kind: file-index
 lang: rust
-rank: 0.019262
-links: [[rust/doc-core/src/render/html.rs]] [[rust/doc-cli/src/daemon/engine.rs]] [[editor/surface/edit.js]] [[rust/doc-core/src/render/outline.rs]] [[rust/doc-shot/src/play.rs]] [[rust/doc-cli/src/commands/view.rs]] [[editor/github/content.js]] [[rust/doc-core/src/render/text.rs]] [[rust/doc-cli/src/commands/mod.rs]] [[rust/doc-cli/src/daemon/http.rs]] [[rust/doc-cli/src/main.rs]] [[rust/doc-cli/src/mcp/handlers.rs]]
-generated_at: 2026-08-06T01:13:54.683Z
+rank: 0.018288
+links: [[rust/doc-core/src/render/html.rs]] [[rust/doc-shot/src/play.rs]] [[rust/doc-cli/src/daemon/engine.rs]] [[editor/surface/edit.js]] [[rust/doc-core/src/render/outline.rs]] [[rust/doc-cli/src/commands/view.rs]] [[rust/doc-core/src/render/text.rs]] [[editor/github/content.js]] [[rust/doc-cli/src/mcp/handlers.rs]] [[rust/doc-cli/src/commands/mod.rs]] [[rust/doc-cli/src/daemon/http.rs]] [[rust/doc-cli/src/main.rs]]
+generated_at: 2026-08-08T01:43:37.078Z
 ---
 
-# rust/doc-core/src/render/mod.rs  ·  rust  ·  71 LOC
+# rust/doc-core/src/render/mod.rs  ·  rust  ·  72 LOC
 
 ## Symbols
 
@@ -22,9 +22,9 @@ generated_at: 2026-08-06T01:13:54.683Z
 - `template` (module) — L26
 - `text` (module) — L27
 - `theme` (module) — L28
-- `tests` (module) — L39
-- `a_section_renders_through_every_view` (method) — L49
-- `rendering_is_deterministic` (method) — L65
+- `tests` (module) — L40
+- `a_section_renders_through_every_view` (method) — L50
+- `rendering_is_deterministic` (method) — L66
 
 ## Graph
 
@@ -33,27 +33,27 @@ graph LR
   c["mod.rs"]
   x0["html.rs"]
   x0 --> c
-  x1["engine.rs"]
+  x1["play.rs"]
   x1 --> c
-  x2["edit.js"]
+  x2["engine.rs"]
   x2 --> c
-  x3["outline.rs"]
-  c --> x3
-  x4["play.rs"]
-  x4 --> c
+  x3["edit.js"]
+  x3 --> c
+  x4["outline.rs"]
+  c --> x4
   x5["view.rs"]
   x5 --> c
-  x6["content.js"]
-  x6 --> c
-  x7["text.rs"]
-  c --> x7
-  x8["mod.rs"]
-  c --> x8
-  x9["http.rs"]
+  x6["text.rs"]
+  c --> x6
+  x7["content.js"]
+  x7 --> c
+  x8["handlers.rs"]
+  x8 --> c
+  x9["mod.rs"]
   c --> x9
-  x10["main.rs"]
-  x10 --> c
-  x11["handlers.rs"]
+  x10["http.rs"]
+  c --> x10
+  x11["main.rs"]
   x11 --> c
   x12["lib.rs"]
   x12 --> c
@@ -63,7 +63,7 @@ graph LR
 
 ### References
 
-- [[rust/doc-core/src/render/outline.rs]] via `section`, `outline`
+- [[rust/doc-core/src/render/outline.rs]] via `outline`, `section`
 - [[rust/doc-core/src/render/text.rs]] via `text`
 - [[rust/doc-cli/src/commands/mod.rs]] via `text`
 - [[rust/doc-cli/src/daemon/http.rs]] via `text`
@@ -71,13 +71,13 @@ graph LR
 ### Referenced by
 
 - [[rust/doc-core/src/render/html.rs]] via `html`
+- [[rust/doc-shot/src/play.rs]] via `field`
 - [[rust/doc-cli/src/daemon/engine.rs]] via `text`
 - [[editor/surface/edit.js]] via `board`, `field`, `escape`
-- [[rust/doc-shot/src/play.rs]] via `field`
-- [[rust/doc-cli/src/commands/view.rs]] via `html`, `text`, `outline`
-- [[editor/github/content.js]] via `text`, `theme`
+- [[rust/doc-cli/src/commands/view.rs]] via `outline`, `text`, `html`
+- [[editor/github/content.js]] via `theme`, `text`
+- [[rust/doc-cli/src/mcp/handlers.rs]] via `outline`, `text`
 - [[rust/doc-cli/src/main.rs]] via `text`
-- [[rust/doc-cli/src/mcp/handlers.rs]] via `outline`
 - [[rust/doc-shot/src/lib.rs]] via `html`
 - [[rust/doc-store/src/store.rs]] via `outline`
 

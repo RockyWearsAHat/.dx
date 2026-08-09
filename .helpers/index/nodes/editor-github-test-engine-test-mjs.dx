@@ -3,9 +3,9 @@ id: editor/github/test/engine.test.mjs
 title: engine.test.mjs
 kind: file-index
 lang: javascript
-rank: 0.003667
-links: [[editor/github/content.js]] [[rust/doc-cli/src/mcp/handlers.rs]] [[rust/doc-cli/src/mcp/mod.rs]] [[rust/doc-cli/src/mcp/tools.rs]] [[rust/doc-shot/src/cdp.rs]] [[rust/doc-shot/src/play.rs]] [[editor/github/engine.js]] [[rust/doc-cli/src/policies.rs]] [[editor/github/test/engine.mjs]] [[editor/github/wasm/doc_wasm.d.ts]] [[editor/github/wasm/doc_wasm.js]] [[rust/doc-wasm/src/lib.rs]]
-generated_at: 2026-08-06T01:13:54.688Z
+rank: 0.003652
+links: [[rust/doc-cli/src/mcp/handlers.rs]] [[editor/github/content.js]] [[rust/doc-cli/src/mcp/mod.rs]] [[rust/doc-cli/src/mcp/tools.rs]] [[rust/doc-shot/src/cdp.rs]] [[rust/doc-shot/src/play.rs]] [[editor/github/engine.js]] [[rust/doc-cli/src/policies.rs]] [[editor/github/test/engine.mjs]] [[editor/github/wasm/doc_wasm.d.ts]] [[editor/github/wasm/doc_wasm.js]] [[rust/doc-wasm/src/lib.rs]]
+generated_at: 2026-08-08T01:43:37.085Z
 ---
 
 # editor/github/test/engine.test.mjs  ·  javascript  ·  378 LOC
@@ -29,10 +29,10 @@ generated_at: 2026-08-06T01:13:54.688Z
 ```mermaid
 graph LR
   c["engine.test.mjs"]
-  x0["content.js"]
-  x0 --> c
-  x1["handlers.rs"]
-  c --> x1
+  x0["handlers.rs"]
+  c --> x0
+  x1["content.js"]
+  x1 --> c
   x2["mod.rs"]
   x2 --> c
   x3["tools.rs"]
@@ -62,10 +62,10 @@ graph LR
 ### References
 
 - [[rust/doc-cli/src/mcp/handlers.rs]] via `resolve`, `json`
-- [[editor/github/test/engine.mjs]] via `loadShippedEngine`, `shippedWasmBytes`, `loadEngine`
-- [[editor/github/wasm/doc_wasm.d.ts]] via `render_html`, `stylesheet`
-- [[editor/github/wasm/doc_wasm.js]] via `render_html`, `stylesheet`
-- [[rust/doc-wasm/src/lib.rs]] via `render_html`, `stylesheet`
+- [[editor/github/test/engine.mjs]] via `shippedWasmBytes`, `loadShippedEngine`, `loadEngine`
+- [[editor/github/wasm/doc_wasm.d.ts]] via `stylesheet`, `render_html`
+- [[editor/github/wasm/doc_wasm.js]] via `stylesheet`, `render_html`
+- [[rust/doc-wasm/src/lib.rs]] via `stylesheet`, `render_html`
 - [[editor/vscode/src/engine.ts]] via `render_html`
 - [[rust/doc-cli/src/commands/mod.rs]] via `exec`
 - [[rust/doc-core/src/lib.rs]] via `resolve`
@@ -73,12 +73,12 @@ graph LR
 
 ### Referenced by
 
-- [[editor/github/content.js]] via `ask`, `render_html`, `stylesheet`
+- [[editor/github/content.js]] via `ask`, `stylesheet`, `render_html`
 - [[rust/doc-cli/src/mcp/mod.rs]] via `json`
 - [[rust/doc-cli/src/mcp/tools.rs]] via `json`
 - [[rust/doc-shot/src/cdp.rs]] via `json`
 - [[rust/doc-shot/src/play.rs]] via `json`
-- [[editor/github/engine.js]] via `addListener`, `json`, `getURL`
+- [[editor/github/engine.js]] via `addListener`, `getURL`, `json`
 - [[rust/doc-cli/src/policies.rs]] via `json`
 - [[rust/doc-cli/src/extension.rs]] via `json`
 - [[rust/doc-cli/src/install.rs]] via `json`

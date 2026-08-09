@@ -3,128 +3,140 @@ id: rust/doc-run/src/lib.rs
 title: lib.rs
 kind: file-index
 lang: rust
-rank: 0.017244
-links: [[rust/doc-store/src/store.rs]] [[rust/doc-core/src/resolve.rs]] [[rust/doc-run/src/process.rs]] [[rust/doc-cli/src/mcp/handlers.rs]] [[rust/doc-cli/src/service.rs]] [[rust/doc-cli/src/workspace.rs]] [[rust/doc-store/src/schema.rs]] [[rust/doc-cli/src/commands/exec.rs]] [[rust/doc-core/tests/pipeline.rs]] [[rust/doc-run/src/confine.rs]] [[rust/doc-run/src/workdir.rs]] [[rust/doc-run/tests/attacks.rs]]
-generated_at: 2026-08-06T01:13:54.683Z
+rank: 0.019401
+links: [[rust/doc-core/src/resolve.rs]] [[rust/doc-store/src/store.rs]] [[rust/doc-run/src/process.rs]] [[rust/doc-cli/src/mcp/handlers.rs]] [[rust/doc-cli/src/workspace.rs]] [[rust/doc-cli/src/service.rs]] [[rust/doc-run/tests/attacks.rs]] [[rust/doc-core/tests/pipeline.rs]] [[rust/doc-run/src/approvals.rs]] [[rust/doc-run/src/confine.rs]] [[rust/doc-store/src/schema.rs]] [[editor/github/content.js]]
+generated_at: 2026-08-08T01:43:37.077Z
 ---
 
-# rust/doc-run/src/lib.rs  ·  rust  ·  793 LOC
+# rust/doc-run/src/lib.rs  ·  rust  ·  2036 LOC
 
 ## Symbols
 
-- `confine` (module) — L43
-- `plan` (module) — L44
-- `process` (module) — L45
-- `toolchain` (module) — L46
-- `workdir` (module) — L48
-- `env_lock` (function) — L57
-- `RunOptions` (class) — L87
-- `default` (method) — L104
-- `BlockRun` (class) — L117
-- `succeeded` (method) — L135
-- `RunReport` (class) — L142
-- `all_succeeded` (method) — L154
-- `executed` (method) — L160
-- `run_document` (function) — L183
-- `runnable_runner` (function) — L282
-- `selected` (function) — L290
-- `existing_output` (function) — L300
-- `declared_reads` (function) — L313
-- `fingerprint` (function) — L341
-- `execute` (function) — L353
-- `home_in_block` (function) — L409
-- `execution_disabled` (function) — L428
-- `blocked` (function) — L433
-- `status_of` (function) — L442
-- `truncate` (function) — L453
-- `output_block` (function) — L465
-- `fold_outputs` (function) — L487
-- `tests` (module) — L510
-- `run_isolated` (method) — L514
-- `a_block_without_run_is_left_alone` (method) — L530
-- `a_language_with_no_runner_is_not_executed` (method) — L539
-- `shell_output_is_captured_into_the_document` (method) — L545
-- `a_failing_block_records_its_exit_code_and_keeps_going` (method) — L559
-- `Folder` (class) — L572
-- `file` (method) — L575
-- `document` (method) — L578
-- `a_listing_whose_file_is_missing_is_blocked_never_executed` (method) — L584
-- `a_listing_runs_its_files_current_text_and_saves_the_reference_not_a_copy` (method) — L598
-- `an_unchanged_block_is_skipped_on_the_second_run` (method) — L621
-- `editing_a_block_invalidates_its_recorded_output` (method) — L634
-- `output_replaces_rather_than_accumulates` (method) — L644
-- `only_runs_the_requested_block` (method) — L652
-- `a_block_that_overruns_its_timeout_is_killed` (method) — L672
-- `blocks_run_in_the_documents_directory` (method) — L680
-- `long_output_is_truncated_with_a_notice` (method) — L697
-- `empty_output_is_recorded_explicitly` (method) — L704
-- `fingerprints_change_with_code_and_dependencies` (method) — L710
-- `fingerprints_change_with_declared_reads` (method) — L722
-- `a_missing_declared_read_blocks_the_run` (method) — L755
-- `a_read_outside_the_folder_blocks_the_run` (method) — L764
-- `editing_a_declared_file_stales_the_recorded_output` (method) — L773
+- `approvals` (module) — L54
+- `confine` (module) — L55
+- `plan` (module) — L56
+- `process` (module) — L57
+- `toolchain` (module) — L58
+- `order` (module) — L60
+- `workdir` (module) — L61
+- `env_lock` (function) — L70
+- `RunOptions` (class) — L107
+- `default` (method) — L145
+- `BlockRun` (class) — L161
+- `succeeded` (method) — L181
+- `RunReport` (class) — L188
+- `all_succeeded` (method) — L201
+- `executed` (method) — L208
+- `run_document` (function) — L243
+- `runnable_runner` (function) — L427
+- `selected` (function) — L435
+- `refuse` (function) — L450
+- `existing_output` (function) — L479
+- `declared_reads` (function) — L496
+- `declared_read_paths` (function) — L528
+- `fingerprint` (function) — L558
+- `approval_fingerprint` (function) — L591
+- `declared_writes` (function) — L616
+- `granted_writes` (function) — L654
+- `review_text` (function) — L697
+- `approve_edited_block` (function) — L736
+- `pending_review` (function) — L757
+- `execute` (function) — L766
+- `sandbox_hint` (function) — L846
+- `home_in_block` (function) — L892
+- `execution_disabled` (function) — L911
+- `blocked` (function) — L916
+- `status_of` (function) — L925
+- `truncate` (function) — L936
+- `output_block` (function) — L948
+- `fold_outputs` (function) — L970
+- `tests` (module) — L993
+- `run_isolated` (method) — L1000
+- `gate_options` (method) — L1018
+- `a_block_without_run_is_left_alone` (method) — L1031
+- `a_language_with_no_runner_is_not_executed` (method) — L1040
+- `shell_output_is_captured_into_the_document` (method) — L1046
+- `a_failure_inside_a_pipeline_is_not_reported_as_success` (method) — L1063
+- `a_failing_block_records_its_exit_code_and_keeps_going` (method) — L1072
+- `Folder` (class) — L1085
+- `file` (method) — L1088
+- `document` (method) — L1091
+- `a_listing_whose_file_is_missing_is_blocked_never_executed` (method) — L1097
+- `a_listing_runs_its_files_current_text_and_saves_the_reference_not_a_copy` (method) — L1111
+- `an_unchanged_block_is_skipped_on_the_second_run` (method) — L1136
+- `editing_a_block_invalidates_its_recorded_output` (method) — L1149
+- `output_replaces_rather_than_accumulates` (method) — L1159
+- `only_runs_the_requested_block` (method) — L1167
+- `follow_edges_runs_the_boards_order_not_the_documents` (method) — L1195
+- `without_follow_edges_a_board_changes_nothing_about_the_order` (method) — L1216
+- `follow_edges_review_lists_blocks_in_the_order_they_would_run` (method) — L1223
+- `review_prints_the_write_grant_beside_the_code_it_widens` (method) — L1234
+- `follow_edges_refuses_a_cycle_with_the_sentence` (method) — L1253
 
 ## Graph
 
 ```mermaid
 graph LR
   c["lib.rs"]
-  x0["store.rs"]
+  x0["resolve.rs"]
   x0 --> c
-  x1["resolve.rs"]
+  x1["store.rs"]
   x1 --> c
   x2["process.rs"]
   c --> x2
   x3["handlers.rs"]
   x3 --> c
-  x4["service.rs"]
+  x4["workspace.rs"]
   x4 --> c
-  x5["workspace.rs"]
+  x5["service.rs"]
   x5 --> c
-  x6["schema.rs"]
+  x6["attacks.rs"]
   x6 --> c
-  x7["exec.rs"]
+  x7["pipeline.rs"]
   x7 --> c
-  x8["pipeline.rs"]
-  x8 --> c
+  x8["approvals.rs"]
+  c --> x8
   x9["confine.rs"]
   x9 --> c
-  x10["workdir.rs"]
+  x10["schema.rs"]
   x10 --> c
-  x11["attacks.rs"]
-  x11 --> c
-  x12["content.js"]
+  x11["content.js"]
+  c --> x11
+  x12["resolve.test.mjs"]
   c --> x12
-  x13["resolve.test.mjs"]
+  x13["doc_wasm.d.ts"]
   c --> x13
 ```
 
 ### References
 
 - [[rust/doc-run/src/process.rs]] via `succeeded`, `with_env`
+- [[rust/doc-run/src/approvals.rs]] via `is_approved`, `approve`
 - [[editor/github/content.js]] via `sha256_hex`
 - [[editor/github/test/resolve.test.mjs]] via `sha256_hex`
 - [[editor/github/wasm/doc_wasm.d.ts]] via `sha256_hex`
 - [[editor/github/wasm/doc_wasm.js]] via `sha256_hex`
 - [[rust/doc-core/src/digest.rs]] via `sha256_hex`
-- [[rust/doc-core/src/model.rs]] via `runner_for_language`
 - [[rust/doc-run/src/plan.rs]] via `parse_deps`
 - [[rust/doc-wasm/src/lib.rs]] via `sha256_hex`
+- [[rust/doc-core/src/model.rs]] via `runner_for_language`
 
 ### Referenced by
 
-- [[rust/doc-store/src/store.rs]] via `execute`, `document`
-- [[rust/doc-core/src/resolve.rs]] via `document`, `file`, `Resolver`, `add_file`
-- [[rust/doc-cli/src/mcp/handlers.rs]] via `run_document`, `selected`
+- [[rust/doc-core/src/resolve.rs]] via `document`, `file`, `files_under`, `Resolver`, `add_file`
+- [[rust/doc-store/src/store.rs]] via `document`, `execute`
+- [[rust/doc-cli/src/mcp/handlers.rs]] via `selected`, `run_document`
+- [[rust/doc-cli/src/workspace.rs]] via `document`, `files_under`, `file`
 - [[rust/doc-cli/src/service.rs]] via `plan`
-- [[rust/doc-cli/src/workspace.rs]] via `document`, `file`
+- [[rust/doc-run/tests/attacks.rs]] via `run_document`
+- [[rust/doc-core/tests/pipeline.rs]] via `document`
+- [[rust/doc-run/src/confine.rs]] via `confine`, `with_network`, `reading`
 - [[rust/doc-store/src/schema.rs]] via `execute`
 - [[rust/doc-cli/src/commands/exec.rs]] via `all_succeeded`, `run_document`
-- [[rust/doc-core/tests/pipeline.rs]] via `document`
-- [[rust/doc-run/src/confine.rs]] via `confine`, `with_network`
 - [[rust/doc-run/src/workdir.rs]] via `succeeded`, `confine`
-- [[rust/doc-run/tests/attacks.rs]] via `run_document`
-- [[rust/doc-cli/src/desktop.rs]] via `truncate`
-- [[rust/doc-core/src/render/html.rs]] via `truncate`
 - [[rust/doc-store/src/pack.rs]] via `document`
+- [[rust/doc-cli/src/desktop.rs]] via `truncate`
+- [[rust/doc-core/src/format/layout.rs]] via `order`
+- [[rust/doc-core/src/render/html.rs]] via `truncate`
+- [[rust/doc-shot/src/png.rs]] via `truncate`
 

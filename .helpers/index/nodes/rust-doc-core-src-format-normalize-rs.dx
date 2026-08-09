@@ -3,18 +3,18 @@ id: rust/doc-core/src/format/normalize.rs
 title: normalize.rs
 kind: file-index
 lang: rust
-rank: 0.003365
+rank: 0.003269
 links: [[rust/doc-core/src/format/util.rs]] [[rust/doc-core/src/format/source.rs]] [[rust/doc-core/src/format/mod.rs]] [[rust/doc-core/src/format/stringify.rs]]
-generated_at: 2026-08-06T01:13:54.688Z
+generated_at: 2026-08-08T01:43:37.085Z
 ---
 
-# rust/doc-core/src/format/normalize.rs  ·  rust  ·  202 LOC
+# rust/doc-core/src/format/normalize.rs  ·  rust  ·  204 LOC
 
 ## Symbols
 
 - `normalize_block` (function) — L13
-- `normalize_list_items` (function) — L159
-- `normalize_blocks` (function) — L184
+- `normalize_list_items` (function) — L161
+- `normalize_blocks` (function) — L186
 
 ## Graph
 
@@ -33,7 +33,7 @@ graph LR
 
 ### References
 
-- [[rust/doc-core/src/format/util.rs]] via `normalize_class_name`, `clamp_heading_level_u8`, `js_trim_end`, `ensure_unique`, `js_trim`
+- [[rust/doc-core/src/format/util.rs]] via `js_trim`, `normalize_class_name`, `js_trim_end`, `clamp_heading_level_u8`, `ensure_unique`
 - [[rust/doc-core/src/format/mod.rs]] via `is_known_block_type`
 
 ### Referenced by

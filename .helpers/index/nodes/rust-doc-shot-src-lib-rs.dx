@@ -3,75 +3,75 @@ id: rust/doc-shot/src/lib.rs
 title: lib.rs
 kind: file-index
 lang: rust
-rank: 0.007839
-links: [[rust/doc-cli/src/policies.rs]] [[packaging/build-icons.py]] [[rust/doc-cli/src/daemon/http.rs]] [[rust/doc-cli/src/extension.rs]] [[rust/doc-cli/src/install.rs]] [[rust/doc-cli/src/mcp/handlers.rs]] [[rust/doc-shot/src/play.rs]] [[rust/doc-shot/src/cdp.rs]] [[rust/doc-store/src/lib.rs]] [[rust/doc-core/src/render/html.rs]] [[editor/github/content.js]] [[rust/doc-core/src/format/layout.rs]]
-generated_at: 2026-08-06T01:13:54.685Z
+rank: 0.007639
+links: [[rust/doc-cli/src/policies.rs]] [[packaging/build-icons.py]] [[rust/doc-cli/src/daemon/http.rs]] [[rust/doc-cli/src/extension.rs]] [[rust/doc-cli/src/install.rs]] [[rust/doc-cli/src/mcp/handlers.rs]] [[rust/doc-shot/src/play.rs]] [[rust/doc-shot/src/cdp.rs]] [[rust/doc-core/src/render/html.rs]] [[rust/doc-store/src/lib.rs]] [[rust/doc-shot/src/diff.rs]] [[editor/github/content.js]]
+generated_at: 2026-08-08T01:43:37.082Z
 ---
 
-# rust/doc-shot/src/lib.rs  ·  rust  ·  1216 LOC
+# rust/doc-shot/src/lib.rs  ·  rust  ·  1464 LOC
 
 ## Symbols
 
 - `base64` (module) — L21
 - `browser` (module) — L22
 - `cdp` (module) — L23
-- `play` (module) — L24
-- `ShotOptions` (class) — L93
-- `default` (method) — L118
-- `for_reading` (method) — L140
-- `page_bounds` (method) — L155
-- `Shot` (class) — L166
-- `Page` (class) — L177
-- `PageRange` (class) — L191
-- `BlockBox` (class) — L202
-- `page_html` (function) — L217
-- `capture` (function) — L232
-- `capture_pages` (function) — L260
-- `capture_block` (function) — L284
-- `capture_block_page` (function) — L304
-- `block_html_options` (function) — L336
-- `PlannedPage` (class) — L345
-- `capture_all_pages` (function) — L358
-- `plan_pages` (function) — L432
-- `page_height` (function) — L493
-- `page_ranges` (function) — L514
-- `packed_ranges` (function) — L526
-- `fixed_ranges` (function) — L594
-- `capture_page` (function) — L616
-- `scale` (function) — L642
-- `screenshot` (function) — L651
-- `dump_dom` (function) — L689
-- `shifted_to` (function) — L706
-- `read_height_attribute` (function) — L719
-- `read_block_boxes` (function) — L727
-- `read_attribute` (function) — L744
-- `browser_command` (function) — L752
-- `with_measuring_script` (function) — L778
-- `scratch_workspace` (function) — L798
-- `write` (function) — L810
-- `file_url` (function) — L816
-- `tests` (module) — L826
-- `reading_pages_fit_a_vision_model_without_downscaling` (method) — L831
-- `a_scaled_capture_reports_image_pixels_not_css_pixels` (method) — L856
-- `the_measuring_script_goes_inside_the_body` (method) — L870
-- `boxes` (method) — L878
-- `a_document_shorter_than_a_page_is_one_page` (method) — L890
-- `a_page_break_falls_between_blocks_never_through_one` (method) — L898
-- `a_block_taller_than_a_page_is_split_and_still_named_on_each_piece` (method) — L923
-- `a_heading_is_never_stranded_at_the_foot_of_a_page` (method) — L935
-- `a_heading_alone_on_a_page_still_gets_printed` (method) — L955
-- `an_unmeasured_document_still_paginates_by_height` (method) — L970
-- `a_board_gets_its_own_natural_page_and_the_flow_resumes_below_it` (method) — L985
-- `a_trailing_board_leaves_no_blank_page_after_it` (method) — L1022
-- `a_reading_boards_page_fits_the_vision_budget` (method) — L1044
-- `the_measuring_script_skips_the_copies_inside_a_board` (method) — L1064
-- `a_zero_height_page_cannot_produce_infinite_pages` (method) — L1071
-- `block_boxes_survive_an_id_containing_a_colon` (method) — L1080
-- `a_malformed_box_entry_is_skipped_not_fatal` (method) — L1089
-- `the_shift_style_lands_in_the_head_and_only_when_needed` (method) — L1095
-- `a_real_browser_captures_one_page_per_screenful` (method) — L1104
-- `a_real_browser_captures_a_board_independently_and_one_block_alone` (method) — L1137
-- `heights_are_read_back_out_of_a_dumped_dom` (method) — L1175
+- `diff` (module) — L24
+- `play` (module) — L25
+- `png` (module) — L26
+- `ShotOptions` (class) — L98
+- `default` (method) — L131
+- `for_reading` (method) — L158
+- `page_bounds` (method) — L174
+- `Shot` (class) — L185
+- `Page` (class) — L196
+- `PageRange` (class) — L210
+- `BlockBox` (class) — L221
+- `page_html` (function) — L236
+- `capture` (function) — L251
+- `capture_pages` (function) — L279
+- `capture_block` (function) — L303
+- `capture_blocks` (function) — L330
+- `capture_block_pages` (function) — L358
+- `set_viewport` (function) — L400
+- `measure_body_height` (function) — L422
+- `capture_block_page` (function) — L440
+- `block_html_options` (function) — L472
+- `PlannedPage` (class) — L481
+- `capture_all_pages` (function) — L494
+- `plan_pages` (function) — L568
+- `page_height` (function) — L629
+- `page_ranges` (function) — L650
+- `packed_ranges` (function) — L662
+- `fixed_ranges` (function) — L730
+- `capture_page` (function) — L752
+- `scale` (function) — L778
+- `oversample` (function) — L784
+- `screenshot` (function) — L795
+- `dump_dom` (function) — L840
+- `shifted_to` (function) — L857
+- `read_height_attribute` (function) — L870
+- `read_block_boxes` (function) — L878
+- `read_attribute` (function) — L895
+- `browser_command` (function) — L903
+- `with_measuring_script` (function) — L929
+- `scratch_workspace` (function) — L949
+- `write` (function) — L961
+- `file_url` (function) — L967
+- `tests` (module) — L977
+- `reading_pages_fit_a_vision_model_without_downscaling` (method) — L982
+- `a_scaled_capture_reports_image_pixels_not_css_pixels` (method) — L1011
+- `oversampling_never_asks_the_browser_past_its_sane_range` (method) — L1025
+- `the_measuring_script_goes_inside_the_body` (method) — L1045
+- `boxes` (method) — L1053
+- `a_document_shorter_than_a_page_is_one_page` (method) — L1065
+- `a_page_break_falls_between_blocks_never_through_one` (method) — L1073
+- `a_block_taller_than_a_page_is_split_and_still_named_on_each_piece` (method) — L1098
+- `a_heading_is_never_stranded_at_the_foot_of_a_page` (method) — L1110
+- `a_heading_alone_on_a_page_still_gets_printed` (method) — L1130
+- `an_unmeasured_document_still_paginates_by_height` (method) — L1145
+- `a_board_gets_its_own_natural_page_and_the_flow_resumes_below_it` (method) — L1160
+- `a_trailing_board_leaves_no_blank_page_after_it` (method) — L1197
+- `a_reading_boards_page_fits_the_vision_budget` (method) — L1219
 
 ## Graph
 
@@ -94,37 +94,39 @@ graph LR
   c --> x6
   x7["cdp.rs"]
   c --> x7
-  x8["lib.rs"]
-  x8 --> c
-  x9["html.rs"]
-  c --> x9
-  x10["content.js"]
+  x8["html.rs"]
+  c --> x8
+  x9["lib.rs"]
+  x9 --> c
+  x10["diff.rs"]
   x10 --> c
-  x11["layout.rs"]
-  c --> x11
-  x12["play.rs"]
-  x12 --> c
-  x13["setup.rs"]
+  x11["content.js"]
+  x11 --> c
+  x12["layout.rs"]
+  c --> x12
+  x13["play.rs"]
   x13 --> c
 ```
 
 ### References
 
 - [[rust/doc-shot/src/play.rs]] via `capture`, `screenshot`, `play`
-- [[rust/doc-shot/src/cdp.rs]] via `screenshot`
-- [[rust/doc-core/src/render/html.rs]] via `block_page`, `html`
+- [[rust/doc-shot/src/cdp.rs]] via `screenshot`, `open`, `command`, `evaluate`
+- [[rust/doc-core/src/render/html.rs]] via `html`, `block_page`
 - [[rust/doc-core/src/format/layout.rs]] via `ids`
 - [[rust/doc-core/src/render/mod.rs]] via `html`
+- [[rust/doc-store/src/store.rs]] via `open`
 
 ### Referenced by
 
 - [[rust/doc-cli/src/policies.rs]] via `file_url`, `write`
-- [[packaging/build-icons.py]] via `write`
+- [[packaging/build-icons.py]] via `write`, `png`
 - [[rust/doc-cli/src/daemon/http.rs]] via `write`
 - [[rust/doc-cli/src/extension.rs]] via `write`
 - [[rust/doc-cli/src/install.rs]] via `write`
-- [[rust/doc-cli/src/mcp/handlers.rs]] via `capture_pages`, `write`
+- [[rust/doc-cli/src/mcp/handlers.rs]] via `write`, `capture_pages`
 - [[rust/doc-store/src/lib.rs]] via `write`
+- [[rust/doc-shot/src/diff.rs]] via `write`
 - [[editor/github/content.js]] via `base64`
 - [[rust/doc-cli/src/commands/play.rs]] via `play`
 - [[rust/doc-cli/src/commands/setup.rs]] via `write`

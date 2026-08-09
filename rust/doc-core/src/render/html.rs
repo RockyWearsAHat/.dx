@@ -239,7 +239,10 @@ fn pick_title(document: &Document, options: &HtmlOptions) -> String {
 ///
 /// Declarations are sanitized ([`escape_style`]) rather than trusted: author CSS may dress a
 /// document, and may not carry a payload out of it. A block naming `media` is wrapped in the
-/// query it names, which is how a document says "this dress is for print".
+/// query it names, which is how a document says "this dress is for print". A `::style src=`
+/// block's CSS arrives in `text` by `resolve::hydrate` and passes through the same
+/// sanitizer — a file is not a trust upgrade — while an unhydrated render (a surface with
+/// no resolver) sees an empty body and emits nothing.
 ///
 /// `@import`s lead, because CSS requires every import to precede the first rule — a
 /// `::stylesheet` written below a `::style` would otherwise be dropped by the browser for
@@ -491,7 +494,9 @@ fn checklist_html(block: &Block, values: &Values) -> String {
 /// Render a code block: what it is, and — once asked for — the verbatim source.
 ///
 /// A document is what it says, not how it was made, so the source starts folded away behind
-/// one faint line naming it: its language, whether it runs, what it needs. What the code
+/// one faint line naming it: its language, whether it runs, what it needs, and how much of
+/// it there is — a closed fold that states its size reads as content put away, never as
+/// content missing. A block marked `open` starts expanded instead. What the code
 /// *produced* is a separate `output` block and stays on the page; the reader sees the result
 /// and can ask for the recipe.
 ///
@@ -539,8 +544,21 @@ fn code_html(block: &Block, text: &str, collapsed: bool) -> String {
     }
 
     classes.push("dx-code-folded");
+    // A folded listing states its size, so a closed fold reads as content put away rather
+    // than content missing — `sql` alone was read as an empty page by people judging a
+    // rendered site, and a label that says `sql · 14 lines` cannot be. The open listing
+    // needs no count: it is right there.
+    let count = text.lines().count();
+    let size = if count == 1 {
+        "1 line".to_string()
+    } else {
+        format!("{count} lines")
+    };
+    // `open` is the author saying the listing is the content: the fold stays — a reader
+    // can still put the code away — but the page arrives showing it.
+    let expanded = if block.open { " open" } else { "" };
     format!(
-        "<details{}>\n<summary>{label}</summary>\n{listing}\n</details>",
+        "<details{}{expanded}>\n<summary>{label} · {size}</summary>\n{listing}\n</details>",
         attributes(block, &classes),
     )
 }
@@ -1372,10 +1390,10 @@ mod tests {
         let out = fragment(
             "::code id=c lang=python run deps=rich\nprint(1)\n::end\n\n::output id=o for=c status=ok\n1\n::end\n",
         );
-        // Language, runnability, and dependencies in one quiet line — no header bar and no
-        // pills in the markup at all.
+        // Language, runnability, dependencies, and size in one quiet line — no header bar
+        // and no pills in the markup at all.
         assert!(
-            out.contains("<summary>python · run · rich</summary>"),
+            out.contains("<summary>python · run · rich · 1 line</summary>"),
             "{out}"
         );
         assert!(!out.contains("dx-badge"), "{out}");
@@ -1395,7 +1413,27 @@ mod tests {
     #[test]
     fn a_plain_code_block_still_says_what_language_it_is() {
         let out = fragment("::code id=c lang=js\nconst x = 1;\n::end\n");
-        assert!(out.contains("<summary>js</summary>"), "{out}");
+        assert!(out.contains("<summary>js · 1 line</summary>"), "{out}");
+    }
+
+    /// The size on the label is what makes a closed fold read as content put away rather
+    /// than content missing — judges of a rendered site read a bare `sql` strip as an
+    /// empty page.
+    #[test]
+    fn a_folded_listing_states_how_many_lines_it_holds() {
+        let out = fragment("::code id=c lang=sql\nselect 1;\nfrom t;\nwhere x;\n::end\n");
+        assert!(out.contains("<summary>sql · 3 lines</summary>"), "{out}");
+    }
+
+    /// `open` starts the listing expanded — for the page where the sample is the point —
+    /// while the fold (and the script-free page) stays.
+    #[test]
+    fn an_open_code_block_arrives_expanded_but_still_foldable() {
+        let out = fragment("::code id=c lang=sql open\nselect 1;\n::end\n");
+        assert!(out.contains("<details"), "{out}");
+        assert!(out.contains(" open>"), "{out}");
+        assert!(out.contains("<summary>"), "the fold stays: {out}");
+        assert!(!out.to_lowercase().contains("<script"), "{out}");
     }
 
     /// A document opens as what it says. The source is behind the label, and — this is the

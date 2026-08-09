@@ -222,7 +222,9 @@ fn initialize() -> Value {
                          building the thing, then loop: edit, read the verdict, fix, \
                          repeat — until every claim holds. dx_edit changes one block by \
                          id — an edited runnable \
-                         block runs at once, output fresh — and its `header` param \
+                         block runs at once, output fresh — its `replace`+`with` params \
+                         change an exact string inside the body so a small edit costs \
+                         the change instead of a retyped block, and its `header` param \
                          retypes the `::kind attrs` line, so changing an attribute never \
                          costs a document rewrite (dx_write is for new documents). \
                          Planning, creation, and verification are one motion, not three \

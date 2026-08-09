@@ -53,30 +53,42 @@ const MIN_HEIGHT: u32 = 64;
 /// only shuffles ties.
 const SWEEPS: usize = 6;
 
-/// A finished arrangement: the board's body, and the viewport height that shows it at
-/// roughly its stated size.
-pub(crate) struct Placed {
-    /// The board's body — one node line per node.
-    pub body: String,
-    /// The viewport height in CSS pixels.
-    pub height: u32,
-}
+/// The widest a horizontal arrangement may run before it is turned down the column
+/// instead: three times the render's legible column budget, `3 × (680 − 2 × 24)` — the
+/// width at which `render::board`'s legibility floor (a third of drawn size) trips and the
+/// fitted chart becomes a smear. A long chain reads the same top-down, and down is the
+/// direction a page already scrolls.
+const REORIENT_WIDTH: i32 = 1896;
 
-/// Arrange `graph` into board node lines.
+/// Arrange `graph` into board node lines — the board's whole body.
 ///
 /// The flow axis follows the chart's direction, so a `flowchart LR` reads left to right on
 /// the board exactly as it did in the source, and every edge is pinned to the pair of sides
 /// that direction implies — an edge that leaves the right and arrives at the left cannot
-/// double back around its own node.
-pub(crate) fn arrange(graph: &Graph, ids: &[String]) -> Placed {
+/// double back around its own node. One exception: a horizontal chart that would run wider
+/// than [`REORIENT_WIDTH`] is turned down the column instead, because the page column
+/// would fit it to an illegible smear — ranks and their crossing order are kept (seats are
+/// direction-independent); only the axis turns.
+///
+/// The board's height is deliberately **not** stated: a stated number is only true for
+/// the arrangement it was computed from, and it stayed on the header while later edits
+/// moved and grew the nodes under it — the part-53 experiment shipped a diagram cramped
+/// to 0.44 fit exactly that way. Unstated, the frame is re-sized from the nodes on every
+/// render (`render::board::flow_height`), so it cannot go stale.
+pub(crate) fn arrange(graph: &Graph, ids: &[String]) -> String {
     let ranks = rank(graph);
     let mut seats = seat(graph, &ranks);
     order(graph, &mut seats);
 
     let sizes: Vec<(u32, u32)> = graph.nodes.iter().map(|node| size(&node.label)).collect();
-    let places = place(&seats, &sizes, graph.direction);
+    let mut effective = graph.direction;
+    let mut places = place(&seats, &sizes, effective);
+    if effective.is_horizontal() && width_of(&places, &sizes) > REORIENT_WIDTH {
+        effective = Direction::Down;
+        places = place(&seats, &sizes, effective);
+    }
 
-    let (from_side, to_side) = graph.direction.sides();
+    let (from_side, to_side) = effective.sides();
     let mut lines = Vec::with_capacity(graph.nodes.len());
     for index in 0..graph.nodes.len() {
         let (x, y) = places[index];
@@ -103,11 +115,19 @@ pub(crate) fn arrange(graph: &Graph, ids: &[String]) -> Placed {
         }));
     }
 
-    let height = viewport_height(&places, &sizes, graph.direction);
-    Placed {
-        body: lines.join("\n"),
-        height,
-    }
+    lines.join("\n")
+}
+
+/// How wide a placed arrangement runs, in canvas pixels — what [`REORIENT_WIDTH`] judges.
+fn width_of(places: &[(i32, i32)], sizes: &[(u32, u32)]) -> i32 {
+    let right = places
+        .iter()
+        .zip(sizes)
+        .map(|((x, _), (w, _))| x + i32::try_from(*w).unwrap_or(0))
+        .max()
+        .unwrap_or(0);
+    let left = places.iter().map(|(x, _)| *x).min().unwrap_or(0);
+    right - left
 }
 
 /// Which rank each node belongs to: one past the deepest node that links into it.
@@ -368,33 +388,6 @@ fn size(label: &str) -> (u32, u32) {
     (width, (PADDING_Y + lines * LINE_HEIGHT).max(MIN_HEIGHT))
 }
 
-/// A viewport tall enough to hold the arrangement at roughly its stated size.
-fn viewport_height(places: &[(i32, i32)], sizes: &[(u32, u32)], direction: Direction) -> u32 {
-    /// Room above and below the arrangement, matching the renderer's own fit padding.
-    const MARGIN: i32 = 48;
-    /// A board is a block on a page, never the whole of one.
-    const TALLEST: u32 = 720;
-    /// Below this a board reads as a stripe rather than a canvas.
-    const SHORTEST: u32 = 220;
-
-    let extent = places
-        .iter()
-        .zip(sizes)
-        .map(|((_, y), (_, h))| y + i32::try_from(*h).unwrap_or(0))
-        .max()
-        .unwrap_or(0);
-    let top = places.iter().map(|(_, y)| *y).min().unwrap_or(0);
-    let tall = u32::try_from(extent - top + MARGIN * 2).unwrap_or(SHORTEST);
-    // A horizontal chart is short and wide; the fit will scale it down to the column, and a
-    // tall viewport under a short chart is a block of blank paper.
-    let wanted = if direction.is_horizontal() {
-        tall.min(480)
-    } else {
-        tall
-    };
-    wanted.clamp(SHORTEST, TALLEST)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -412,7 +405,7 @@ mod tests {
 
     fn placed(source: &str) -> Vec<crate::render::board::Node> {
         let graph = read(source).expect("a flowchart");
-        nodes(&arrange(&graph, &ids("g", &graph)).body)
+        nodes(&arrange(&graph, &ids("g", &graph)))
     }
 
     /// Whether two placed boxes cover any of the same canvas.
@@ -471,6 +464,33 @@ mod tests {
             .find(|node| node.id == "g-d")
             .expect("the `say why` node");
         assert_eq!(from_d.to[0].id, "g-a");
+    }
+
+    /// A horizontal chain long enough to smear at page width turns down the column: the
+    /// page column would fit 2,000-plus pixels to unreadable type, and the same chain
+    /// reads identically top-down.
+    #[test]
+    fn a_long_horizontal_chain_reorients_down_the_column() {
+        let list = placed("flowchart LR\nA-->B\nB-->C\nC-->D\nD-->E\nE-->F\nF-->G\nG-->H\nH-->I");
+        for pair in list.windows(2) {
+            assert!(
+                pair[0].y < pair[1].y,
+                "the chain flows down the column: {list:?}"
+            );
+            assert_eq!(pair[0].x, pair[1].x, "a chain is a straight line");
+        }
+        let edge = &list[0].to[0];
+        assert_eq!(
+            edge.from
+                .map(super::super::super::render::board::Side::letter),
+            Some('b'),
+            "edges pin to the turned direction's sides"
+        );
+        assert_eq!(
+            edge.to
+                .map(super::super::super::render::board::Side::letter),
+            Some('t')
+        );
     }
 
     #[test]

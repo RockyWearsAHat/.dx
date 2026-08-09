@@ -3,9 +3,9 @@ id: rust/doc-cli/src/commands/store.rs
 title: store.rs
 kind: file-index
 lang: rust
-rank: 0.003706
-links: [[rust/doc-store/src/store.rs]] [[rust/doc-cli/src/commands/edit.rs]] [[rust/doc-cli/src/workspace.rs]] [[rust/doc-store/src/pack.rs]] [[rust/doc-cli/src/install.rs]] [[rust/doc-cli/src/policies.rs]] [[rust/doc-cli/src/commands/browser.rs]] [[rust/doc-cli/src/desktop.rs]] [[rust/doc-run/src/workdir.rs]] [[rust/doc-cli/src/state.rs]] [[rust/doc-cli/src/args.rs]] [[rust/doc-cli/src/mcp/mod.rs]]
-generated_at: 2026-08-06T01:13:54.688Z
+rank: 0.004026
+links: [[rust/doc-store/src/store.rs]] [[rust/doc-cli/src/commands/edit.rs]] [[rust/doc-cli/src/workspace.rs]] [[rust/doc-store/src/pack.rs]] [[rust/doc-cli/src/install.rs]] [[rust/doc-cli/src/policies.rs]] [[rust/doc-cli/src/commands/browser.rs]] [[rust/doc-cli/src/desktop.rs]] [[rust/doc-run/src/workdir.rs]] [[rust/doc-cli/src/state.rs]] [[rust/doc-run/src/approvals.rs]] [[rust/doc-cli/src/args.rs]]
+generated_at: 2026-08-08T01:43:37.085Z
 ---
 
 # rust/doc-cli/src/commands/store.rs  ·  rust  ·  444 LOC
@@ -64,15 +64,17 @@ graph LR
   c --> x8
   x9["state.rs"]
   c --> x9
-  x10["args.rs"]
+  x10["approvals.rs"]
   c --> x10
-  x11["mod.rs"]
+  x11["args.rs"]
   c --> x11
+  x12["mod.rs"]
+  c --> x12
 ```
 
 ### References
 
-- [[rust/doc-store/src/store.rs]] via `compaction_percent`, `is_clean`, `scratch`
+- [[rust/doc-store/src/store.rs]] via `scratch`, `is_clean`, `compaction_percent`
 - [[rust/doc-cli/src/workspace.rs]] via `scratch`
 - [[rust/doc-store/src/pack.rs]] via `scratch`
 - [[rust/doc-cli/src/install.rs]] via `scratch`
@@ -80,7 +82,8 @@ graph LR
 - [[rust/doc-cli/src/desktop.rs]] via `scratch`
 - [[rust/doc-run/src/workdir.rs]] via `scratch`
 - [[rust/doc-cli/src/state.rs]] via `scratch`
-- [[rust/doc-cli/src/args.rs]] via `value`, `positional`
+- [[rust/doc-run/src/approvals.rs]] via `scratch`
+- [[rust/doc-cli/src/args.rs]] via `positional`, `value`
 - [[rust/doc-cli/src/mcp/mod.rs]] via `success`
 
 ### Referenced by

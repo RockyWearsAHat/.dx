@@ -3,9 +3,9 @@ id: editor/github/resolve.js
 title: resolve.js
 kind: file-index
 lang: javascript
-rank: 0.012718
+rank: 0.013729
 links: [[editor/github/test/resolve.test.mjs]] [[editor/github/content.js]] [[rust/doc-run/src/confine.rs]] [[rust/doc-wasm/src/dto.rs]] [[editor/github/wasm/doc_wasm.d.ts]] [[editor/github/wasm/doc_wasm.js]] [[rust/doc-cli/src/commands/view.rs]] [[rust/doc-run/src/toolchain.rs]] [[rust/doc-shot/src/play.rs]] [[rust/doc-wasm/src/lib.rs]] [[rust/doc-cli/src/commands/setup.rs]] [[editor/surface/edit.js]]
-generated_at: 2026-08-06T01:13:54.684Z
+generated_at: 2026-08-08T01:43:37.079Z
 ---
 
 # editor/github/resolve.js  ·  javascript  ·  295 LOC
@@ -58,7 +58,7 @@ graph LR
 
 ### References
 
-- [[editor/github/test/resolve.test.mjs]] via `pack_document`, `sha256_hex`, `pack_paths`, `fetchPack`, `rawUrl`
+- [[editor/github/test/resolve.test.mjs]] via `pack_document`, `sha256_hex`, `pack_paths`, `fetchPack`, `diffLines`
 - [[rust/doc-run/src/confine.rs]] via `resolved`
 - [[rust/doc-wasm/src/dto.rs]] via `from`
 - [[editor/github/wasm/doc_wasm.d.ts]] via `pack_document`, `sha256_hex`, `pack_paths`
@@ -67,12 +67,13 @@ graph LR
 - [[rust/doc-wasm/src/lib.rs]] via `pack_document`, `sha256_hex`, `pack_paths`
 - [[editor/vscode/src/engine.ts]] via `pack_document`
 - [[rust/doc-cli/src/commands/mod.rs]] via `exec`
+- [[rust/doc-core/src/base64.rs]] via `encode`
 - [[rust/doc-core/src/digest.rs]] via `sha256_hex`
-- [[rust/doc-shot/src/base64.rs]] via `encode`
+- [[rust/doc-shot/src/png.rs]] via `encode`
 
 ### Referenced by
 
-- [[editor/github/content.js]] via `collapse`, `diffLines`, `resolveDocument`, `rawUrl`, `isDocumentPath`
+- [[editor/github/content.js]] via `rawUrl`, `isDocumentPath`, `resolveDocument`, `diffLines`, `locate`
 - [[rust/doc-run/src/toolchain.rs]] via `locate`
 - [[rust/doc-shot/src/play.rs]] via `locate`
 - [[rust/doc-cli/src/commands/setup.rs]] via `locate`

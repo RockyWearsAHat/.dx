@@ -3,38 +3,39 @@ id: rust/doc-cli/src/install.rs
 title: install.rs
 kind: file-index
 lang: rust
-rank: 0.006578
-links: [[rust/doc-store/src/store.rs]] [[rust/doc-cli/src/commands/edit.rs]] [[rust/doc-cli/src/commands/store.rs]] [[rust/doc-cli/src/workspace.rs]] [[rust/doc-cli/src/policies.rs]] [[rust/doc-store/src/pack.rs]] [[rust/doc-cli/src/commands/browser.rs]] [[rust/doc-cli/src/desktop.rs]] [[rust/doc-run/src/workdir.rs]] [[rust/doc-shot/src/lib.rs]] [[rust/doc-cli/src/state.rs]] [[rust/doc-cli/src/daemon/http.rs]]
-generated_at: 2026-08-06T01:13:54.686Z
+rank: 0.006917
+links: [[rust/doc-store/src/store.rs]] [[rust/doc-cli/src/commands/edit.rs]] [[rust/doc-cli/src/workspace.rs]] [[rust/doc-cli/src/commands/store.rs]] [[rust/doc-cli/src/policies.rs]] [[rust/doc-store/src/pack.rs]] [[rust/doc-shot/src/lib.rs]] [[rust/doc-cli/src/commands/browser.rs]] [[rust/doc-cli/src/desktop.rs]] [[rust/doc-run/src/workdir.rs]] [[rust/doc-cli/src/state.rs]] [[rust/doc-run/src/approvals.rs]]
+generated_at: 2026-08-08T01:43:37.082Z
 ---
 
-# rust/doc-cli/src/install.rs  ·  rust  ·  369 LOC
+# rust/doc-cli/src/install.rs  ·  rust  ·  392 LOC
 
 ## Symbols
 
-- `Shape` (class) — L34
-- `Registration` (class) — L45
-- `config_exists` (method) — L59
-- `is_registered` (method) — L65
-- `write` (method) — L81
-- `json_key` (method) — L93
-- `write_json` (method) — L101
-- `write_toml` (method) — L133
-- `server_entry` (function) — L151
-- `registrations` (function) — L157
-- `vscode_user_dir` (function) — L206
-- `default_bin_dir` (function) — L226
-- `manual_instructions` (function) — L240
-- `tests` (module) — L257
-- `scratch` (method) — L260
-- `registration` (method) — L267
-- `registering_into_json_preserves_other_servers_and_keys` (method) — L277
-- `registering_is_idempotent` (method) — L298
-- `vscode_uses_its_own_servers_key` (method) — L307
-- `codex_gets_a_toml_table_appended_after_existing_content` (method) — L319
-- `a_corrupt_json_config_is_reported_not_overwritten` (method) — L336
-- `the_known_assistants_all_have_distinct_configs` (method) — L350
-- `manual_instructions_cover_both_mcp_and_plain_shell_agents` (method) — L363
+- `Shape` (class) — L45
+- `Registration` (class) — L56
+- `config_exists` (method) — L70
+- `is_registered` (method) — L76
+- `write` (method) — L92
+- `json_key` (method) — L104
+- `write_json` (method) — L112
+- `write_toml` (method) — L144
+- `server_entry` (function) — L162
+- `registrations` (function) — L168
+- `vscode_user_dir` (function) — L217
+- `default_bin_dir` (function) — L237
+- `manual_instructions` (function) — L251
+- `tests` (module) — L268
+- `scratch` (method) — L271
+- `registration` (method) — L278
+- `the_typescript_probe_requires_npm_as_well_as_node` (method) — L288
+- `registering_into_json_preserves_other_servers_and_keys` (method) — L300
+- `registering_is_idempotent` (method) — L321
+- `vscode_uses_its_own_servers_key` (method) — L330
+- `codex_gets_a_toml_table_appended_after_existing_content` (method) — L342
+- `a_corrupt_json_config_is_reported_not_overwritten` (method) — L359
+- `the_known_assistants_all_have_distinct_configs` (method) — L373
+- `manual_instructions_cover_both_mcp_and_plain_shell_agents` (method) — L386
 
 ## Graph
 
@@ -45,29 +46,29 @@ graph LR
   c --> x0
   x1["edit.rs"]
   x1 --> c
-  x2["store.rs"]
-  x2 --> c
-  x3["workspace.rs"]
-  c --> x3
+  x2["workspace.rs"]
+  c --> x2
+  x3["store.rs"]
+  x3 --> c
   x4["policies.rs"]
   c --> x4
   x5["pack.rs"]
   c --> x5
-  x6["browser.rs"]
-  x6 --> c
-  x7["desktop.rs"]
+  x6["lib.rs"]
+  c --> x6
+  x7["browser.rs"]
   x7 --> c
-  x8["workdir.rs"]
-  c --> x8
-  x9["lib.rs"]
+  x8["desktop.rs"]
+  x8 --> c
+  x9["workdir.rs"]
   c --> x9
   x10["state.rs"]
   c --> x10
-  x11["http.rs"]
-  x11 --> c
-  x12["build-icons.py"]
+  x11["approvals.rs"]
+  c --> x11
+  x12["http.rs"]
   x12 --> c
-  x13["setup.rs"]
+  x13["build-icons.py"]
   x13 --> c
 ```
 
@@ -75,11 +76,12 @@ graph LR
 
 - [[rust/doc-store/src/store.rs]] via `scratch`
 - [[rust/doc-cli/src/workspace.rs]] via `scratch`
-- [[rust/doc-cli/src/policies.rs]] via `scratch`, `write`
+- [[rust/doc-cli/src/policies.rs]] via `write`, `scratch`
 - [[rust/doc-store/src/pack.rs]] via `scratch`
-- [[rust/doc-run/src/workdir.rs]] via `scratch`
 - [[rust/doc-shot/src/lib.rs]] via `write`
+- [[rust/doc-run/src/workdir.rs]] via `scratch`
 - [[rust/doc-cli/src/state.rs]] via `scratch`
+- [[rust/doc-run/src/approvals.rs]] via `scratch`
 - [[rust/doc-cli/src/mcp/handlers.rs]] via `write`
 - [[editor/github/test/engine.test.mjs]] via `json`
 - [[rust/doc-core/src/compress.rs]] via `insert`
@@ -93,8 +95,9 @@ graph LR
 - [[rust/doc-cli/src/desktop.rs]] via `scratch`
 - [[rust/doc-cli/src/daemon/http.rs]] via `write`, `json`
 - [[packaging/build-icons.py]] via `write`
-- [[rust/doc-cli/src/commands/setup.rs]] via `write`, `config_exists`, `is_registered`
+- [[rust/doc-cli/src/commands/setup.rs]] via `is_registered`, `write`, `config_exists`
 - [[rust/doc-cli/src/extension.rs]] via `write`
 - [[rust/doc-store/src/lib.rs]] via `write`
+- [[rust/doc-shot/src/diff.rs]] via `write`
 - [[rust/doc-core/src/chunk.rs]] via `write`
 

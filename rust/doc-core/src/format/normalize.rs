@@ -96,6 +96,7 @@ fn normalize_block(block: &Block, index: usize, registry: &mut IdRegistry) -> Bl
         }
         "style" => {
             normalized.text = js_trim_end(&block.text).to_string();
+            normalized.src = js_trim(&block.src).to_string();
             normalized.media = js_trim(&block.media).to_string();
         }
         // Board: the node lines verbatim, plus the one attribute the viewport carries.
@@ -130,6 +131,7 @@ fn normalize_block(block: &Block, index: usize, registry: &mut IdRegistry) -> Bl
             normalized.language = js_trim(&block.language).to_string();
             normalized.src = js_trim(&block.src).to_string();
             normalized.run = block.run;
+            normalized.open = block.open;
             normalized.deps = js_trim(&block.deps).to_string();
             normalized.reads = js_trim(&block.reads).to_string();
             normalized.writes = js_trim(&block.writes).to_string();

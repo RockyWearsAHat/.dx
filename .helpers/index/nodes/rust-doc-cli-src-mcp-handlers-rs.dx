@@ -3,66 +3,75 @@ id: rust/doc-cli/src/mcp/handlers.rs
 title: handlers.rs
 kind: file-index
 lang: rust
-rank: 0.024418
-links: [[rust/doc-cli/src/daemon/http.rs]] [[rust/doc-cli/src/mcp/mod.rs]] [[editor/github/content.js]] [[rust/doc-cli/src/daemon/engine.rs]] [[editor/github/test/engine.test.mjs]] [[rust/doc-cli/src/commands/find.rs]] [[rust/doc-core/src/chunk.rs]] [[rust/doc-cli/src/workspace.rs]] [[rust/doc-store/src/store.rs]] [[rust/doc-cli/src/policies.rs]] [[editor/surface/edit.js]] [[rust/doc-cli/src/commands/exec.rs]]
-generated_at: 2026-08-06T01:13:54.682Z
+rank: 0.02652
+links: [[rust/doc-cli/src/daemon/http.rs]] [[editor/github/test/engine.test.mjs]] [[editor/github/content.js]] [[rust/doc-cli/src/mcp/mod.rs]] [[rust/doc-cli/src/commands/find.rs]] [[rust/doc-cli/src/commands/index.rs]] [[rust/doc-cli/src/daemon/engine.rs]] [[rust/doc-cli/src/commands/exec.rs]] [[rust/doc-core/src/chunk.rs]] [[rust/doc-core/src/render/field.rs]] [[rust/doc-cli/src/workspace.rs]] [[editor/surface/edit.js]]
+generated_at: 2026-08-08T01:43:37.077Z
 ---
 
-# rust/doc-cli/src/mcp/handlers.rs  ·  rust  ·  788 LOC
+# rust/doc-cli/src/mcp/handlers.rs  ·  rust  ·  1592 LOC
 
 ## Symbols
 
 - `ToolResult` (class) — L28
 - `call` (function) — L31
-- `read` (function) — L57
-- `read_block` (function) — L107
-- `opening_line` (function) — L130
-- `fallback_text` (function) — L143
-- `play_frames` (function) — L157
-- `frame_sample` (function) — L209
-- `every_nth` (function) — L236
-- `source` (function) — L246
-- `outline_of` (function) — L258
-- `list` (function) — L277
-- `search` (function) — L293
-- `render` (function) — L312
-- `write` (function) — L324
-- `edit` (function) — L338
-- `run` (function) — L365
-- `selected` (function) — L409
-- `document_at` (function) — L428
-- `block_ids` (function) — L436
-- `resolve` (function) — L446
-- `directory_arg` (function) — L456
-- `required` (function) — L461
-- `string` (function) — L468
-- `number` (function) — L473
-- `boolean` (function) — L480
-- `text_content` (function) — L485
-- `json_content` (function) — L490
-- `tests` (module) — L495
-- `project` (method) — L498
-- `text_of` (method) — L513
-- `source_returns_the_document_as_markdown` (method) — L523
-- `a_section_narrows_the_result` (method) — L532
-- `reading_returns_pages_labelled_with_what_is_on_them` (method) — L547
-- `a_read_of_one_section_renders_only_that_section` (method) — L570
-- `an_unknown_section_lists_the_real_ids` (method) — L586
-- `outline_reports_ids_and_runnability` (method) — L599
-- `write_stores_a_document_and_reports_its_ids` (method) — L610
-- `edit_changes_one_block_and_leaves_the_rest_alone` (method) — L630
-- `edit_of_a_missing_block_names_the_ones_that_exist` (method) — L645
-- `list_and_search_find_documents_in_the_project` (method) — L658
-- `run_executes_a_block_and_stores_the_result` (method) — L668
-- `wait_frame` (method) — L685
-- `a_short_play_returns_every_frame_in_order` (method) — L696
-- `thinning_keeps_every_action_frame_and_the_run_endpoints` (method) — L702
-- `a_run_with_more_actions_than_budget_still_spans_first_to_last` (method) — L719
-- `play_requires_a_script_and_refuses_a_bad_one_by_name` (method) — L728
-- `play_returns_annotated_frames_from_a_real_browser` (method) — L743
-- `a_missing_required_argument_is_a_clear_error` (method) — L764
-- `an_unknown_tool_is_rejected_by_name` (method) — L775
-- `relative_paths_resolve_against_the_workspace_root` (method) — L783
+- `refresh_outputs` (function) — L61
+- `read` (function) — L125
+- `read_in` (function) — L131
+- `read_block` (function) — L192
+- `opening_line` (function) — L215
+- `fallback_text` (function) — L228
+- `play_frames` (function) — L242
+- `frame_sample` (function) — L294
+- `every_nth` (function) — L321
+- `source` (function) — L334
+- `source_in` (function) — L339
+- `outline_of` (function) — L358
+- `list` (function) — L377
+- `search` (function) — L397
+- `excerpt` (function) — L427
+- `render` (function) — L440
+- `write` (function) — L452
+- `edit` (function) — L470
+- `edit_in` (function) — L486
+- `append` (function) — L564
+- `check` (function) — L631
+- `index` (function) — L649
+- `run` (function) — L666
+- `run_in` (function) — L672
+- `selected` (function) — L725
+- `document_at` (function) — L746
+- `block_ids` (function) — L754
+- `resolve` (function) — L764
+- `directory_arg` (function) — L774
+- `required` (function) — L779
+- `string` (function) — L786
+- `number` (function) — L791
+- `boolean` (function) — L798
+- `boolean_or` (function) — L803
+- `text_content` (function) — L808
+- `json_content` (function) — L813
+- `tests` (module) — L818
+- `project` (method) — L821
+- `text_of` (method) — L836
+- `appending_to_a_block_costs_only_the_new_lines` (method) — L846
+- `appending_inserts_a_new_block_after_an_id_or_at_the_end` (method) — L866
+- `a_checkbox_ticks_by_position_and_everything_else_is_untouched` (method) — L908
+- `editing_a_checklist_body_through_dx_edit_actually_changes_it` (method) — L931
+- `source_returns_the_document_as_markdown` (method) — L950
+- `a_section_narrows_the_result` (method) — L959
+- `reading_returns_pages_labelled_with_what_is_on_them` (method) — L974
+- `a_read_of_one_section_renders_only_that_section` (method) — L997
+- `an_unknown_section_lists_the_real_ids` (method) — L1013
+- `outline_reports_ids_and_runnability` (method) — L1026
+- `write_stores_a_document_and_reports_its_ids` (method) — L1037
+- `edit_changes_one_block_and_leaves_the_rest_alone` (method) — L1057
+- `saving_an_oversized_image_warns_at_write_time` (method) — L1072
+- `edit_with_header_retypes_the_block_in_one_call` (method) — L1088
+- `edit_of_a_missing_block_names_the_ones_that_exist` (method) — L1109
+- `list_and_search_find_documents_in_the_project` (method) — L1122
+- `a_long_search_answer_is_capped_on_a_character_boundary` (method) — L1139
+- `run_executes_a_block_and_stores_the_result` (method) — L1148
+- `run_refuses_unapproved_code_pending_review` (method) — L1173
 
 ## Graph
 
@@ -71,31 +80,31 @@ graph LR
   c["handlers.rs"]
   x0["http.rs"]
   x0 --> c
-  x1["mod.rs"]
-  c --> x1
+  x1["engine.test.mjs"]
+  x1 --> c
   x2["content.js"]
   x2 --> c
-  x3["engine.rs"]
-  x3 --> c
-  x4["engine.test.mjs"]
+  x3["mod.rs"]
+  c --> x3
+  x4["find.rs"]
   x4 --> c
-  x5["find.rs"]
+  x5["index.rs"]
   x5 --> c
-  x6["chunk.rs"]
-  c --> x6
-  x7["workspace.rs"]
-  c --> x7
-  x8["store.rs"]
+  x6["engine.rs"]
+  x6 --> c
+  x7["exec.rs"]
+  x7 --> c
+  x8["chunk.rs"]
   c --> x8
-  x9["policies.rs"]
+  x9["field.rs"]
   c --> x9
-  x10["edit.js"]
-  x10 --> c
-  x11["exec.rs"]
+  x10["workspace.rs"]
+  c --> x10
+  x11["edit.js"]
   x11 --> c
-  x12["field.rs"]
+  x12["lib.rs"]
   c --> x12
-  x13["lib.rs"]
+  x13["store.rs"]
   c --> x13
 ```
 
@@ -103,46 +112,48 @@ graph LR
 
 - [[rust/doc-cli/src/mcp/mod.rs]] via `project`
 - [[rust/doc-core/src/chunk.rs]] via `string`, `source`, `write`
-- [[rust/doc-cli/src/workspace.rs]] via `search`, `read`, `source`, `list`
+- [[rust/doc-core/src/render/field.rs]] via `text_of`
+- [[rust/doc-cli/src/workspace.rs]] via `search`, `read`, `list`, `source`
+- [[rust/doc-core/src/lib.rs]] via `search`, `edit`, `resolve`, `render`
 - [[rust/doc-store/src/store.rs]] via `search`, `list`, `source`
 - [[rust/doc-cli/src/policies.rs]] via `write`, `read`
-- [[rust/doc-core/src/render/field.rs]] via `text_of`
-- [[rust/doc-shot/src/lib.rs]] via `capture_pages`, `write`
-- [[rust/doc-core/src/lib.rs]] via `render`, `search`, `edit`, `resolve`
-- [[rust/doc-core/src/render/text.rs]] via `render`
+- [[rust/doc-core/src/render/text.rs]] via `render`, `text`
+- [[rust/doc-shot/src/lib.rs]] via `write`, `capture_pages`
+- [[rust/doc-run/src/lib.rs]] via `selected`, `run_document`
 - [[rust/doc-cli/src/service.rs]] via `run`, `read`
-- [[rust/doc-run/src/lib.rs]] via `run_document`, `selected`
 - [[rust/doc-run/src/process.rs]] via `run`
 - [[rust/doc-cli/src/args.rs]] via `number`
+- [[rust/doc-cli/src/commands/mod.rs]] via `edit`, `index`, `text`
 - [[rust/doc-core/src/search.rs]] via `search`
 - [[rust/doc-core/src/format/mermaid.rs]] via `read`
-- [[rust/doc-store/src/pack.rs]] via `source`, `list`
 - [[rust/doc-core/src/render/outline.rs]] via `outline`, `section`
+- [[rust/doc-store/src/pack.rs]] via `source`, `list`
+- [[rust/doc-core/src/render/mod.rs]] via `outline`, `text`
 - [[rust/doc-store/src/stub.rs]] via `render`
-- [[rust/doc-cli/src/commands/mod.rs]] via `edit`
 - [[rust/doc-core/src/format/mod.rs]] via `source`
-- [[rust/doc-core/src/render/mod.rs]] via `outline`
 
 ### Referenced by
 
-- [[rust/doc-cli/src/daemon/http.rs]] via `write`, `read`, `json`
-- [[editor/github/content.js]] via `run`, `resolve`, `call`
-- [[rust/doc-cli/src/daemon/engine.rs]] via `call`, `source`
+- [[rust/doc-cli/src/daemon/http.rs]] via `write`, `read`, `text`, `json`
 - [[editor/github/test/engine.test.mjs]] via `resolve`, `json`
+- [[editor/github/content.js]] via `append`, `run`, `call`, `resolve`
 - [[rust/doc-cli/src/commands/find.rs]] via `number`, `project`
-- [[editor/surface/edit.js]] via `edit`, `call`, `run`, `resolve`, `source`
-- [[rust/doc-cli/src/commands/exec.rs]] via `number`, `run`
-- [[packaging/build-icons.py]] via `render`, `search`, `write`, `resolve`, `run`
+- [[rust/doc-cli/src/commands/index.rs]] via `project`, `run`
+- [[rust/doc-cli/src/daemon/engine.rs]] via `source`, `call`, `text`
+- [[rust/doc-cli/src/commands/exec.rs]] via `run_in`, `number`, `run`
+- [[editor/surface/edit.js]] via `run`, `call`, `edit`, `check`, `source`
+- [[packaging/build-icons.py]] via `write`, `run`, `resolve`, `append`, `render`
+- [[rust/doc-cli/src/commands/view.rs]] via `number`, `block_ids`
 - [[rust/doc-cli/src/commands/browser.rs]] via `run`
-- [[rust/doc-cli/src/commands/play.rs]] via `run`, `number`
-- [[rust/doc-cli/src/commands/view.rs]] via `number`
+- [[rust/doc-cli/src/commands/play.rs]] via `number`, `run`
 - [[rust/doc-store/src/lib.rs]] via `write`
 - [[rust/doc-cli/src/commands/edit.rs]] via `number`
 - [[rust/doc-cli/src/extension.rs]] via `write`
 - [[rust/doc-cli/src/install.rs]] via `write`
+- [[rust/doc-shot/src/diff.rs]] via `write`
 - [[rust/doc-core/src/edit.rs]] via `number`
 - [[rust/doc-shot/src/cdp.rs]] via `read`
-- [[rust/doc-wasm/src/lib.rs]] via `search`, `source`
+- [[rust/doc-wasm/src/lib.rs]] via `source`, `search`
 - [[rust/doc-cli/src/commands/setup.rs]] via `write`
 - [[rust/doc-cli/src/daemon/packs.rs]] via `source`
 - [[rust/doc-core/examples/bench.rs]] via `search`

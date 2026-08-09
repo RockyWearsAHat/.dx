@@ -3,9 +3,9 @@ id: rust/doc-core/src/render/field.rs
 title: field.rs
 kind: file-index
 lang: rust
-rank: 0.003776
+rank: 0.003766
 links: [[rust/doc-cli/src/mcp/handlers.rs]] [[editor/github/wasm/doc_wasm.js]] [[editor/github/wasm/doc_wasm.d.ts]] [[editor/vscode/src/engine.ts]] [[rust/doc-wasm/src/lib.rs]] [[rust/doc-core/src/render/escape.rs]] [[rust/doc-core/src/render/inline.rs]] [[editor/vscode/test/editing.test.mjs]]
-generated_at: 2026-08-06T01:13:54.687Z
+generated_at: 2026-08-08T01:43:37.085Z
 ---
 
 # rust/doc-core/src/render/field.rs  ·  rust  ·  292 LOC

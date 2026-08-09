@@ -37,6 +37,10 @@ pub(crate) fn block_header(block: &Block) -> String {
             if block.run {
                 attributes.push("run".to_string());
             }
+            // Unset `open` adds nothing, so no existing `::code` reformats on its next save.
+            if block.open {
+                attributes.push("open".to_string());
+            }
             if !block.deps.is_empty() {
                 attributes.push(format!("deps={}", format_attribute_value(&block.deps)));
             }
@@ -88,8 +92,11 @@ pub(crate) fn block_header(block: &Block) -> String {
             }
             format!("::image {}", attributes.join(" "))
         }
-        // Unset `media` adds nothing, so no existing `::style` reformats on its next save.
+        // Unset `src` and `media` add nothing, so no existing `::style` reformats on save.
         "style" => {
+            if !block.src.is_empty() {
+                attributes.push(format!("src={}", format_attribute_value(&block.src)));
+            }
             if !block.media.is_empty() {
                 attributes.push(format!("media={}", format_attribute_value(&block.media)));
             }

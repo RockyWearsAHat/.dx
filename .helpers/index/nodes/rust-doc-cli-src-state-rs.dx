@@ -3,9 +3,9 @@ id: rust/doc-cli/src/state.rs
 title: state.rs
 kind: file-index
 lang: rust
-rank: 0.012586
-links: [[rust/doc-store/src/store.rs]] [[rust/doc-cli/src/commands/edit.rs]] [[rust/doc-cli/src/commands/store.rs]] [[rust/doc-cli/src/workspace.rs]] [[rust/doc-run/src/workdir.rs]] [[rust/doc-store/src/pack.rs]] [[rust/doc-cli/src/install.rs]] [[rust/doc-cli/src/policies.rs]] [[rust/doc-cli/src/commands/browser.rs]] [[rust/doc-cli/src/desktop.rs]] [[rust/doc-cli/src/extension.rs]] [[rust/doc-cli/src/service.rs]]
-generated_at: 2026-08-06T01:13:54.684Z
+rank: 0.012935
+links: [[rust/doc-store/src/store.rs]] [[rust/doc-cli/src/commands/edit.rs]] [[rust/doc-cli/src/workspace.rs]] [[rust/doc-cli/src/commands/store.rs]] [[rust/doc-run/src/workdir.rs]] [[rust/doc-store/src/pack.rs]] [[rust/doc-cli/src/install.rs]] [[rust/doc-cli/src/policies.rs]] [[rust/doc-cli/src/commands/browser.rs]] [[rust/doc-cli/src/desktop.rs]] [[rust/doc-run/src/approvals.rs]] [[rust/doc-cli/src/extension.rs]]
+generated_at: 2026-08-08T01:43:37.080Z
 ---
 
 # rust/doc-cli/src/state.rs  ·  rust  ·  164 LOC
@@ -36,10 +36,10 @@ graph LR
   c --> x0
   x1["edit.rs"]
   x1 --> c
-  x2["store.rs"]
-  x2 --> c
-  x3["workspace.rs"]
-  c --> x3
+  x2["workspace.rs"]
+  c --> x2
+  x3["store.rs"]
+  x3 --> c
   x4["workdir.rs"]
   c --> x4
   x5["pack.rs"]
@@ -52,13 +52,13 @@ graph LR
   x8 --> c
   x9["desktop.rs"]
   x9 --> c
-  x10["extension.rs"]
-  x10 --> c
-  x11["service.rs"]
+  x10["approvals.rs"]
+  c --> x10
+  x11["extension.rs"]
   x11 --> c
-  x12["cdp.rs"]
+  x12["service.rs"]
   x12 --> c
-  x13["http.rs"]
+  x13["cdp.rs"]
   x13 --> c
 ```
 
@@ -68,6 +68,7 @@ graph LR
 - [[rust/doc-cli/src/workspace.rs]] via `scratch`
 - [[rust/doc-run/src/workdir.rs]] via `write_file`, `scratch`
 - [[rust/doc-store/src/pack.rs]] via `scratch`
+- [[rust/doc-run/src/approvals.rs]] via `scratch`
 - [[rust/doc-core/src/format/layout.rs]] via `State`
 
 ### Referenced by

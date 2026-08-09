@@ -3,9 +3,9 @@ id: rust/doc-cli/src/extension.rs
 title: extension.rs
 kind: file-index
 lang: rust
-rank: 0.014003
-links: [[rust/doc-cli/src/commands/browser.rs]] [[editor/github/test/resolve.test.mjs]] [[rust/doc-shot/src/lib.rs]] [[rust/doc-cli/src/daemon/http.rs]] [[rust/doc-cli/src/state.rs]] [[rust/doc-shot/src/play.rs]] [[packaging/build-icons.py]] [[rust/doc-cli/src/commands/setup.rs]] [[rust/doc-cli/src/install.rs]] [[rust/doc-cli/src/policies.rs]] [[rust/doc-run/src/toolchain.rs]] [[rust/doc-store/src/lib.rs]]
-generated_at: 2026-08-06T01:13:54.683Z
+rank: 0.014152
+links: [[rust/doc-cli/src/commands/browser.rs]] [[rust/doc-shot/src/lib.rs]] [[editor/github/test/resolve.test.mjs]] [[rust/doc-cli/src/daemon/http.rs]] [[rust/doc-cli/src/state.rs]] [[rust/doc-run/src/plan.rs]] [[rust/doc-shot/src/play.rs]] [[packaging/build-icons.py]] [[rust/doc-cli/src/commands/setup.rs]] [[rust/doc-cli/src/install.rs]] [[rust/doc-cli/src/policies.rs]] [[rust/doc-run/src/toolchain.rs]]
+generated_at: 2026-08-08T01:43:37.079Z
 ---
 
 # rust/doc-cli/src/extension.rs  ·  rust  ·  1094 LOC
@@ -71,31 +71,31 @@ graph LR
   c["extension.rs"]
   x0["browser.rs"]
   x0 --> c
-  x1["resolve.test.mjs"]
-  x1 --> c
-  x2["lib.rs"]
-  c --> x2
+  x1["lib.rs"]
+  c --> x1
+  x2["resolve.test.mjs"]
+  x2 --> c
   x3["http.rs"]
   x3 --> c
   x4["state.rs"]
   c --> x4
-  x5["play.rs"]
+  x5["plan.rs"]
   c --> x5
-  x6["build-icons.py"]
-  x6 --> c
-  x7["setup.rs"]
+  x6["play.rs"]
+  c --> x6
+  x7["build-icons.py"]
   x7 --> c
-  x8["install.rs"]
-  c --> x8
-  x9["policies.rs"]
+  x8["setup.rs"]
+  x8 --> c
+  x9["install.rs"]
   c --> x9
-  x10["toolchain.rs"]
+  x10["policies.rs"]
   c --> x10
-  x11["lib.rs"]
-  x11 --> c
-  x12["handlers.rs"]
-  c --> x12
-  x13["engine.test.mjs"]
+  x11["toolchain.rs"]
+  c --> x11
+  x12["lib.rs"]
+  x12 --> c
+  x13["handlers.rs"]
   c --> x13
 ```
 
@@ -103,6 +103,7 @@ graph LR
 
 - [[rust/doc-shot/src/lib.rs]] via `write`
 - [[rust/doc-cli/src/state.rs]] via `files`
+- [[rust/doc-run/src/plan.rs]] via `name`
 - [[rust/doc-shot/src/play.rs]] via `locate`, `Target`
 - [[rust/doc-cli/src/install.rs]] via `write`
 - [[rust/doc-cli/src/policies.rs]] via `write`
@@ -117,12 +118,13 @@ graph LR
 
 ### Referenced by
 
-- [[rust/doc-cli/src/commands/browser.rs]] via `steps`, `repo_source`, `target`
+- [[rust/doc-cli/src/commands/browser.rs]] via `repo_source`, `steps`, `target`
 - [[editor/github/test/resolve.test.mjs]] via `locate`
 - [[rust/doc-cli/src/daemon/http.rs]] via `write`, `json`
 - [[packaging/build-icons.py]] via `write`
-- [[rust/doc-cli/src/commands/setup.rs]] via `write`, `locate`, `steps`
+- [[rust/doc-cli/src/commands/setup.rs]] via `locate`, `write`, `steps`
 - [[rust/doc-store/src/lib.rs]] via `write`
+- [[rust/doc-shot/src/diff.rs]] via `write`
 - [[editor/github/content.js]] via `locate`
 - [[rust/doc-cli/src/service.rs]] via `state`
 - [[rust/doc-core/src/chunk.rs]] via `write`

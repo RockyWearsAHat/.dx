@@ -3,9 +3,9 @@ id: rust/doc-store/src/lib.rs
 title: lib.rs
 kind: file-index
 lang: rust
-rank: 0.006723
+rank: 0.00616
 links: [[rust/doc-cli/src/daemon/packs.rs]] [[packaging/build-icons.py]] [[rust/doc-cli/src/daemon/engine.rs]] [[rust/doc-cli/src/daemon/http.rs]] [[rust/doc-cli/src/extension.rs]] [[rust/doc-cli/src/install.rs]] [[rust/doc-cli/src/mcp/handlers.rs]] [[rust/doc-cli/src/policies.rs]] [[rust/doc-shot/src/lib.rs]] [[rust/doc-cli/src/daemon/mod.rs]]
-generated_at: 2026-08-06T01:13:54.686Z
+generated_at: 2026-08-08T01:43:37.083Z
 ---
 
 # rust/doc-store/src/lib.rs  ·  rust  ·  85 LOC

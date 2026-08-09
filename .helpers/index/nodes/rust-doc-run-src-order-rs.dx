@@ -1,0 +1,54 @@
+---
+id: rust/doc-run/src/order.rs
+title: order.rs
+kind: file-index
+lang: rust
+rank: 0.003602
+links: [[rust/doc-core/src/compress.rs]] [[rust/doc-cli/src/policies.rs]] [[rust/doc-core/src/render/board.rs]] [[rust/doc-run/src/process.rs]]
+generated_at: 2026-08-08T01:43:37.085Z
+---
+
+# rust/doc-run/src/order.rs  ·  rust  ·  311 LOC
+
+## Symbols
+
+- `edge_order` (function) — L29
+- `constraints` (function) — L39
+- `topological` (function) — L77
+- `cycle_sentence` (function) — L126
+- `tests` (module) — L173
+- `runnable` (method) — L178
+- `code` (method) — L188
+- `edges_order_execution_against_document_order` (method) — L193
+- `an_unconstrained_block_runs_at_its_earliest_ready_moment` (method) — L212
+- `a_deferred_block_is_overtaken_by_later_blocks_on_no_board` (method) — L231
+- `independent_chains_tie_break_by_document_order` (method) — L252
+- `a_cycle_is_an_error_sentence_naming_its_blocks` (method) — L275
+- `an_edge_naming_a_missing_block_is_ignored` (method) — L290
+- `a_cycle_among_non_runnable_nodes_neither_hangs_nor_errors` (method) — L301
+
+## Graph
+
+```mermaid
+graph LR
+  c["order.rs"]
+  x0["compress.rs"]
+  c --> x0
+  x1["policies.rs"]
+  c --> x1
+  x2["board.rs"]
+  c --> x2
+  x3["process.rs"]
+  x3 --> c
+```
+
+### References
+
+- [[rust/doc-core/src/compress.rs]] via `insert`
+- [[rust/doc-cli/src/policies.rs]] via `remove`
+- [[rust/doc-core/src/render/board.rs]] via `board_edges`
+
+### Referenced by
+
+- [[rust/doc-run/src/process.rs]] via `code`
+

@@ -1,0 +1,75 @@
+---
+id: rust/doc-cli/src/commands/index.rs
+title: index.rs
+kind: file-index
+lang: rust
+rank: 0.005193
+links: [[rust/doc-cli/src/mcp/handlers.rs]] [[rust/doc-cli/src/mcp/mod.rs]] [[rust/doc-cli/src/commands/browser.rs]] [[rust/doc-run/src/process.rs]] [[rust/doc-cli/src/commands/find.rs]] [[rust/doc-cli/src/service.rs]] [[rust/doc-cli/src/args.rs]] [[rust/doc-cli/src/commands/play.rs]] [[editor/github/content.js]] [[editor/surface/edit.js]] [[packaging/build-icons.py]]
+generated_at: 2026-08-08T01:43:37.084Z
+---
+
+# rust/doc-cli/src/commands/index.rs  ·  rust  ·  308 LOC
+
+## Symbols
+
+- `Scaffold` (class) — L38
+- `run` (function) — L48
+- `write_scaffold` (function) — L65
+- `scaffold_source` (function) — L85
+- `listing` (function) — L175
+- `listed` (function) — L196
+- `file_count` (function) — L216
+- `unique_slug` (function) — L224
+- `tests` (module) — L248
+- `project` (method) — L251
+- `the_scaffold_maps_areas_and_skips_build_junk` (method) — L264
+- `an_existing_index_is_kept_unless_forced` (method) — L287
+- `slugs_are_id_safe_and_unique` (method) — L296
+- `a_missing_directory_is_a_clear_error` (method) — L304
+
+## Graph
+
+```mermaid
+graph LR
+  c["index.rs"]
+  x0["handlers.rs"]
+  c --> x0
+  x1["mod.rs"]
+  c --> x1
+  x2["browser.rs"]
+  x2 --> c
+  x3["process.rs"]
+  c --> x3
+  x4["find.rs"]
+  x4 --> c
+  x5["service.rs"]
+  x5 --> c
+  x6["args.rs"]
+  c --> x6
+  x7["play.rs"]
+  x7 --> c
+  x8["content.js"]
+  x8 --> c
+  x9["edit.js"]
+  x9 --> c
+  x10["build-icons.py"]
+  x10 --> c
+```
+
+### References
+
+- [[rust/doc-cli/src/mcp/handlers.rs]] via `project`, `run`
+- [[rust/doc-cli/src/mcp/mod.rs]] via `project`
+- [[rust/doc-run/src/process.rs]] via `display`, `run`
+- [[rust/doc-cli/src/args.rs]] via `present`, `positional`
+
+### Referenced by
+
+- [[rust/doc-cli/src/commands/browser.rs]] via `run`
+- [[rust/doc-cli/src/commands/find.rs]] via `project`
+- [[rust/doc-cli/src/service.rs]] via `run`
+- [[rust/doc-cli/src/commands/play.rs]] via `run`
+- [[editor/github/content.js]] via `run`
+- [[editor/surface/edit.js]] via `run`
+- [[packaging/build-icons.py]] via `run`
+

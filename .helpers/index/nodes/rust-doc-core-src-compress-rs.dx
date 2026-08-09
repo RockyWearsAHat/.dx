@@ -3,9 +3,9 @@ id: rust/doc-core/src/compress.rs
 title: compress.rs
 kind: file-index
 lang: rust
-rank: 0.028778
-links: [[rust/doc-core/src/format/mod.rs]] [[editor/github/wasm/doc_wasm.js]] [[rust/doc-cli/src/daemon/mod.rs]] [[rust/doc-cli/src/main.rs]] [[rust/doc-core/src/digest.rs]] [[editor/github/wasm/doc_wasm.d.ts]] [[rust/doc-cli/src/extension.rs]] [[rust/doc-core/src/chunk.rs]] [[rust/doc-core/src/edit.rs]] [[rust/doc-core/src/lib.rs]] [[rust/doc-store/src/store.rs]] [[rust/doc-wasm/src/lib.rs]]
-generated_at: 2026-08-06T01:13:54.682Z
+rank: 0.029251
+links: [[rust/doc-core/src/format/mod.rs]] [[editor/github/wasm/doc_wasm.js]] [[rust/doc-cli/src/daemon/mod.rs]] [[rust/doc-cli/src/main.rs]] [[rust/doc-core/src/digest.rs]] [[rust/doc-run/src/order.rs]] [[editor/github/wasm/doc_wasm.d.ts]] [[rust/doc-cli/src/extension.rs]] [[rust/doc-core/src/chunk.rs]] [[rust/doc-core/src/edit.rs]] [[rust/doc-core/src/lib.rs]] [[rust/doc-store/src/store.rs]]
+generated_at: 2026-08-08T01:43:37.077Z
 ---
 
 # rust/doc-core/src/compress.rs  ·  rust  ·  484 LOC
@@ -50,23 +50,23 @@ graph LR
   x3 --> c
   x4["digest.rs"]
   c --> x4
-  x5["doc_wasm.d.ts"]
-  c --> x5
-  x6["extension.rs"]
-  x6 --> c
-  x7["chunk.rs"]
+  x5["order.rs"]
+  x5 --> c
+  x6["doc_wasm.d.ts"]
+  c --> x6
+  x7["extension.rs"]
   x7 --> c
-  x8["edit.rs"]
+  x8["chunk.rs"]
   x8 --> c
-  x9["lib.rs"]
-  c --> x9
-  x10["store.rs"]
-  x10 --> c
-  x11["lib.rs"]
-  c --> x11
-  x12["build-icons.py"]
-  x12 --> c
-  x13["http.rs"]
+  x9["edit.rs"]
+  x9 --> c
+  x10["lib.rs"]
+  c --> x10
+  x11["store.rs"]
+  x11 --> c
+  x12["lib.rs"]
+  c --> x12
+  x13["build-icons.py"]
   x13 --> c
 ```
 
@@ -83,10 +83,11 @@ graph LR
 - [[editor/github/wasm/doc_wasm.js]] via `decompress`, `compress`
 - [[rust/doc-cli/src/daemon/mod.rs]] via `insert`
 - [[rust/doc-cli/src/main.rs]] via `emit`
+- [[rust/doc-run/src/order.rs]] via `insert`
 - [[rust/doc-cli/src/extension.rs]] via `insert`
-- [[rust/doc-core/src/chunk.rs]] via `decompress`, `compress`
+- [[rust/doc-core/src/chunk.rs]] via `compress`, `decompress`
 - [[rust/doc-core/src/edit.rs]] via `insert`
-- [[rust/doc-store/src/store.rs]] via `decompress`, `compress`
+- [[rust/doc-store/src/store.rs]] via `compress`, `decompress`
 - [[packaging/build-icons.py]] via `compress`
 - [[rust/doc-cli/src/daemon/http.rs]] via `insert`
 - [[rust/doc-cli/src/daemon/packs.rs]] via `insert`

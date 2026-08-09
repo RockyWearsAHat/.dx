@@ -3,9 +3,9 @@ id: rust/doc-core/src/format/layout.rs
 title: layout.rs
 kind: file-index
 lang: rust
-rank: 0.008968
+rank: 0.008442
 links: [[editor/surface/edit.js]] [[rust/doc-core/src/format/mermaid.rs]] [[rust/doc-cli/src/commands/edit.rs]] [[rust/doc-cli/src/desktop.rs]] [[rust/doc-core/src/edit.rs]] [[rust/doc-core/src/render/board.rs]] [[rust/doc-shot/src/lib.rs]] [[rust/doc-wasm/src/lib.rs]] [[rust/doc-cli/src/daemon/http.rs]] [[rust/doc-cli/src/mcp/handlers.rs]] [[rust/doc-cli/src/policies.rs]] [[rust/doc-cli/src/state.rs]]
-generated_at: 2026-08-06T01:13:54.685Z
+generated_at: 2026-08-08T01:43:37.082Z
 ---
 
 # rust/doc-core/src/format/layout.rs  ·  rust  ·  548 LOC
@@ -68,16 +68,19 @@ graph LR
   x11 --> c
   x12["workspace.rs"]
   c --> x12
+  x13["lib.rs"]
+  c --> x13
 ```
 
 ### References
 
-- [[rust/doc-core/src/format/mermaid.rs]] via `is_horizontal`, `sides`, `is_forward`, `read`
+- [[rust/doc-core/src/format/mermaid.rs]] via `is_forward`, `read`, `is_horizontal`, `sides`
 - [[rust/doc-core/src/render/board.rs]] via `nodes`, `node_line`
 - [[rust/doc-cli/src/daemon/http.rs]] via `read`
 - [[rust/doc-cli/src/mcp/handlers.rs]] via `read`
 - [[rust/doc-cli/src/policies.rs]] via `read`
 - [[rust/doc-cli/src/workspace.rs]] via `read`
+- [[rust/doc-run/src/lib.rs]] via `order`
 
 ### Referenced by
 

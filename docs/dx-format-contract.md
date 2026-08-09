@@ -51,13 +51,15 @@ Every block accepts `id` and `class`; the attributes below are what each adds.
 - `bulleted-list` attrs: none
 - `numbered-list` attrs: none
 - `checklist` attrs: none — one `[x] text` / `[ ] text` line per item
-- `code` attrs: `lang` or `language`, `src`, `run`, `deps`, `reads`, `writes`, `timeout`,
-  `format` — `src` names a sibling file whose **current text is the listing** (see
-  References below); the stored body stays as written and unset `src` serializes to
-  nothing. `reads` is a comma-separated list of sibling files the block's code reads at
-  run time, and `writes` a comma-separated list of folders inside the document's folder
-  the block may write; each is held to the path law, and unset either serializes to
-  nothing
+- `code` attrs: `lang` or `language`, `src`, `run`, `open`, `deps`, `reads`, `writes`,
+  `timeout`, `format` — `src` names a sibling file whose **current text is the listing**
+  (see References below); the stored body stays as written and unset `src` serializes to
+  nothing. `open` starts the listing expanded on a render that folds code — the fold
+  stays, the page just arrives showing the listing, for the document where the code is
+  the content; unset it serializes to nothing. `reads` is a comma-separated list of
+  sibling files the block's code reads at run time, and `writes` a comma-separated list
+  of folders inside the document's folder the block may write; each is held to the path
+  law, and unset either serializes to nothing
 - `output` attrs: `for`, `status`, `exit`, `hash`, `format`
 - `image` attrs: `src`, `for` — `for` names the runnable block whose run produces the
   pictured file; the render vouches for the picture only while that block's recorded
@@ -109,7 +111,9 @@ Every block accepts `id` and `class`; the attributes below are what each adds.
   ever *shown*: nothing in it runs, submits, navigates, or reads the document's page. A
   view may also carry an inline body instead of `src`: the body is framed the same way.
 - `script` attrs: `type`, `src`, `module`
-- `style` attrs: `media` — wraps the block's CSS in that media query
+- `style` attrs: `src`, `media` — `src` names a sibling stylesheet whose current text is
+  the block's CSS (see References below); the stored body stays as written, unset `src`
+  serializes to nothing, and `media` wraps the block's CSS in that media query
 - `stylesheet` attrs: `href`, `media` — imported ahead of every `::style` rule
 
 An unrecognized `::type` folds to `paragraph` and keeps its text, so a document written by a
@@ -173,7 +177,7 @@ wasm has no filesystem to consult, so there is nothing to disagree about.
 
 ## References — one source of truth, shown current everywhere
 
-A document may name four things it does not itself carry, so content lives once and every
+A document may name five things it does not itself carry, so content lives once and every
 page showing it stays current:
 
 - **A sibling file**: `::code id=listing src=src/lib.rs lang=rust` renders the file's
@@ -192,6 +196,13 @@ page showing it stays current:
   sandboxed frame has no URL to scroll, and no render may need a script.
 - **One block of a sibling document**: a board node line `- plan.dx#step-one x= y=`
   draws that block on this board, resolved fresh at every render.
+- **A sibling stylesheet**: `::style id=dress src=theme/site.css` takes the file's
+  current text as its CSS, so one sheet dresses every page of a site instead of being
+  pasted into each. The path law applies, hydration fills the body and is never saved
+  (the stored form is the reference and an empty body), and `escape_style` applies to
+  the fetched text exactly as to an inline body. A file that cannot be read leaves the
+  block's CSS empty — the page renders undressed and the report names the path —
+  because a sentence injected into a style body would be parsed as broken CSS.
 - **A sibling picture**: `::image id=shot src=shots/frame.png` embeds the file's current
   bytes as a `data:` URI at hydration, so the rendered page carries its own artwork
   wherever it is shown — a capture made from a scratch directory, an editor webview, a
@@ -343,7 +354,8 @@ What CSS may do is bounded, because a `.dx` is something you were handed:
 
 Neutralized, not deleted: a mangled property is a rule the browser ignores, so the
 surrounding stylesheet still parses and the author sees one thing not work rather than their
-whole dress falling off at the first bad line.
+whole dress falling off at the first bad line. A sheet a `::style src=` fetched passes
+through `escape_style` exactly like an inline body — a file is not a trust upgrade.
 
 A `::stylesheet` block is the one deliberate exception to "may not fetch" — requesting a
 remote sheet is the block's entire stated purpose, so an author who writes one gets one. Its

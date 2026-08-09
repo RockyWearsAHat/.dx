@@ -3,9 +3,9 @@ id: rust/doc-cli/src/daemon/http.rs
 title: http.rs
 kind: file-index
 lang: rust
-rank: 0.020199
-links: [[rust/doc-cli/src/mcp/handlers.rs]] [[rust/doc-cli/src/mcp/mod.rs]] [[rust/doc-cli/src/policies.rs]] [[rust/doc-cli/src/mcp/tools.rs]] [[rust/doc-shot/src/cdp.rs]] [[rust/doc-shot/src/lib.rs]] [[rust/doc-cli/src/workspace.rs]] [[rust/doc-cli/src/daemon/engine.rs]] [[rust/doc-cli/src/extension.rs]] [[rust/doc-shot/src/play.rs]] [[rust/doc-cli/src/install.rs]] [[packaging/build-icons.py]]
-generated_at: 2026-08-06T01:13:54.683Z
+rank: 0.019725
+links: [[rust/doc-cli/src/mcp/handlers.rs]] [[rust/doc-cli/src/mcp/mod.rs]] [[rust/doc-cli/src/mcp/tools.rs]] [[rust/doc-cli/src/policies.rs]] [[rust/doc-shot/src/cdp.rs]] [[rust/doc-shot/src/lib.rs]] [[rust/doc-cli/src/workspace.rs]] [[rust/doc-cli/src/daemon/engine.rs]] [[rust/doc-cli/src/extension.rs]] [[rust/doc-shot/src/play.rs]] [[rust/doc-cli/src/install.rs]] [[packaging/build-icons.py]]
+generated_at: 2026-08-08T01:43:37.077Z
 ---
 
 # rust/doc-cli/src/daemon/http.rs  ·  rust  ·  473 LOC
@@ -50,10 +50,10 @@ graph LR
   c --> x0
   x1["mod.rs"]
   x1 --> c
-  x2["policies.rs"]
-  c --> x2
-  x3["tools.rs"]
-  x3 --> c
+  x2["tools.rs"]
+  x2 --> c
+  x3["policies.rs"]
+  c --> x3
   x4["cdp.rs"]
   x4 --> c
   x5["lib.rs"]
@@ -78,7 +78,7 @@ graph LR
 
 ### References
 
-- [[rust/doc-cli/src/mcp/handlers.rs]] via `write`, `read`, `json`
+- [[rust/doc-cli/src/mcp/handlers.rs]] via `write`, `read`, `text`, `json`
 - [[rust/doc-cli/src/policies.rs]] via `write`, `read`, `json`
 - [[rust/doc-shot/src/lib.rs]] via `write`
 - [[rust/doc-cli/src/workspace.rs]] via `read`
@@ -93,15 +93,16 @@ graph LR
 
 - [[rust/doc-cli/src/mcp/mod.rs]] via `json`
 - [[rust/doc-cli/src/mcp/tools.rs]] via `json`
-- [[rust/doc-shot/src/cdp.rs]] via `read`, `json`
+- [[rust/doc-shot/src/cdp.rs]] via `json`, `read`
 - [[rust/doc-cli/src/daemon/engine.rs]] via `text`
 - [[rust/doc-shot/src/play.rs]] via `json`
 - [[packaging/build-icons.py]] via `write`
 - [[rust/doc-cli/src/daemon/mod.rs]] via `header`
+- [[rust/doc-core/src/render/text.rs]] via `text`
 - [[rust/doc-store/src/lib.rs]] via `write`
 - [[editor/github/content.js]] via `text`
 - [[editor/github/engine.js]] via `json`
-- [[rust/doc-core/src/render/text.rs]] via `text`
+- [[rust/doc-shot/src/diff.rs]] via `write`
 - [[rust/doc-cli/src/commands/setup.rs]] via `write`
 - [[rust/doc-cli/src/commands/view.rs]] via `text`
 - [[rust/doc-cli/src/main.rs]] via `text`

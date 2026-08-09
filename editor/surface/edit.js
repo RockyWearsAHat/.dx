@@ -138,7 +138,7 @@
   /** The attributes each kind's header may carry, beyond the universal `id`/`class`/`hidden`. */
   const ATTRS = {
     heading: ['level'],
-    code: ['lang', 'src', 'run', 'deps', 'reads', 'writes', 'timeout', 'format'],
+    code: ['lang', 'src', 'run', 'open', 'deps', 'reads', 'writes', 'timeout', 'format'],
     image: ['src'],
     stylesheet: ['href', 'media'],
     script: ['type', 'src', 'module'],
@@ -148,7 +148,7 @@
   };
 
   /** Attributes that are flags: present or absent, never `key=value`. */
-  const BARE_ATTRS = ['run', 'hidden', 'module'];
+  const BARE_ATTRS = ['run', 'open', 'hidden', 'module'];
 
   /** Seed values for attribute completion; remembered values join them. */
   const VALUES = {
@@ -2260,19 +2260,60 @@
     drawn.forEach((edge, index) => {
       const [from, to] = ends[index];
       edge.path.setAttribute('d', curveBetween(from, to, edge.between));
-      // A label rides the middle of the curve it belongs to. Only labelled edges carry one,
-      // so it is found by the pair it names rather than by counting.
-      const label = svg.querySelector(
+      // A label rides the clearest point of the curve it belongs to. Only labelled edges
+      // carry one, so it is found by the pair it names rather than by counting — on the
+      // canvas, not the edge sheet: labels live on their own sheet painted above the
+      // nodes, so a box the curve runs against can never slice the words, and the spot
+      // search (mirroring render::board::label_spot) keeps the words off a node's own ink.
+      const label = canvas.querySelector(
         `.dx-board-edge-label[data-from="${cssEscape(edge.ids[0])}"]` +
           `[data-to="${cssEscape(edge.ids[1])}"]`
       );
       if (label) {
         const lead = leadOf(from, to);
-        const middle = cubicAt(from, lead, controlsFor(from, lead, edge.between), 0.5);
-        label.setAttribute('x', String(middle.x));
-        label.setAttribute('y', String(middle.y));
+        // For the words every node is an obstacle, the edge's own two included — the
+        // curve is attached to them, the label must not sit on them.
+        const spot = labelSpot(
+          from,
+          lead,
+          controlsFor(from, lead, edge.between),
+          [...edge.boxes, ...edge.between],
+          label
+        );
+        label.setAttribute('x', String(spot.x));
+        label.setAttribute('y', String(spot.y));
       }
     });
+  }
+
+  /**
+   * Where along its curve an edge's words sit — `render::board::label_spot`, same
+   * numbers: from the middle outward, the first sample whose estimated label box covers
+   * none of the boxes it paints over wins (labels ride above the nodes), else the sample
+   * covering least.
+   */
+  function labelSpot(from, lead, run, boxes, label) {
+    const font = parseFloat(label.style.fontSize) || 11.5;
+    const text = label.textContent || '';
+    const width = font * 0.62 * text.length + font * 0.5;
+    const height = font * 1.3;
+    let best = cubicAt(from, lead, run, 0.5);
+    let least = Infinity;
+    for (const along of [0.5, 0.42, 0.58, 0.34, 0.66, 0.26, 0.74, 0.18, 0.82]) {
+      const point = cubicAt(from, lead, run, along);
+      let covered = 0;
+      for (const box of boxes) {
+        const w = Math.min(point.x + width / 2, box.x + box.w) - Math.max(point.x - width / 2, box.x);
+        const h = Math.min(point.y + height / 2, box.y + box.h) - Math.max(point.y - height / 2, box.y);
+        if (w > 0 && h > 0) covered += w * h;
+      }
+      if (covered < least) {
+        least = covered;
+        best = point;
+      }
+      if (!covered) break;
+    }
+    return best;
   }
 
   /** The node element showing `id` on this canvas, if it is there. */
