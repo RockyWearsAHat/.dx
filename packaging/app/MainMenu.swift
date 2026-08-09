@@ -3,9 +3,10 @@ import AppKit
 /// The menu bar, built in code because the app has no nib.
 ///
 /// It is the shortest menu that still behaves like a Mac application: the keystrokes a reader
-/// will reach for without thinking (⌘Q, ⌘W, ⌘O, ⌘R, ⌘C, ⌘A) and nothing invented on top. Every
-/// item's target is `nil`, so it travels the responder chain — which is how View ▸ Reload
-/// reaches the window's own ``DocumentViewer`` and File ▸ Open… reaches the ``AppDelegate``.
+/// — and now a writer — will reach for without thinking (⌘Q, ⌘W, ⌘O, ⌘R, and the whole editing
+/// set) and nothing invented on top. Every item's target is `nil`, so it travels the responder
+/// chain — which is how View ▸ Reload reaches the window's own ``DocumentViewer`` and
+/// File ▸ Open… reaches the ``AppDelegate``.
 enum MainMenu {
     /// The application's whole menu bar.
     static func build() -> NSMenu {
@@ -34,9 +35,19 @@ enum MainMenu {
         ]
     }
 
+    /// The full editing set, because the viewer became an editor. A keystroke only reaches
+    /// the `WKWebView` through a menu key equivalent, so a missing Paste item is a ⌘V that
+    /// does nothing at all — this menu held Copy and Select All from the read-only days.
+    /// Undo/Redo are named by string: `NSResponder` has no typed selector for them, and the
+    /// web view (and any field editor) answers both on the responder chain.
     private static func editItems() -> [NSMenuItem] {
         [
+            item("Undo", Selector(("undo:")), "z"),
+            item("Redo", Selector(("redo:")), "Z"),
+            .separator(),
+            item("Cut", #selector(NSText.cut(_:)), "x"),
             item("Copy", #selector(NSText.copy(_:)), "c"),
+            item("Paste", #selector(NSText.paste(_:)), "v"),
             item("Select All", #selector(NSText.selectAll(_:)), "a"),
         ]
     }

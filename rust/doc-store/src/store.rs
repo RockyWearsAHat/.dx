@@ -174,6 +174,45 @@ impl Store {
         Ok(Self { root, connection })
     }
 
+    /// Open an existing store without the ability to write.
+    ///
+    /// This is the read path for a store on a medium this process cannot write — a
+    /// read-only checkout, a build sandbox, mounted media. Nothing is created and no
+    /// schema is applied; the database must already exist. The database is in WAL mode
+    /// ([`schema::apply`]), and a read-only filesystem also refuses the `-shm` file WAL
+    /// readers need — so a plain read-only open is probed with a real read and, when the
+    /// medium refuses even that, the store is opened `immutable`. Immutable is sound
+    /// exactly here: on a medium nothing can write, there is no writer to race.
+    pub fn open_read_only(root: &Path) -> Result<Self, StoreError> {
+        let path = root.join(DB_RELATIVE);
+        let flags = rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY;
+
+        if let Ok(connection) = Connection::open_with_flags(&path, flags) {
+            let probe: Result<i64, _> =
+                connection.query_row("SELECT count(*) FROM documents", [], |row| row.get(0));
+            if probe.is_ok() {
+                return Ok(Self {
+                    root: root.to_path_buf(),
+                    connection,
+                });
+            }
+        }
+
+        let uri = format!(
+            "file:{}?immutable=1",
+            path.to_string_lossy()
+                .replace('?', "%3F")
+                .replace('#', "%23")
+        );
+        let connection =
+            Connection::open_with_flags(uri, flags | rusqlite::OpenFlags::SQLITE_OPEN_URI)
+                .map_err(StoreError::backend)?;
+        Ok(Self {
+            root: root.to_path_buf(),
+            connection,
+        })
+    }
+
     /// Open a store held entirely in memory, for tests and one-shot rendering.
     pub fn open_in_memory(root: &Path) -> Result<Self, StoreError> {
         let connection = Connection::open_in_memory().map_err(StoreError::backend)?;

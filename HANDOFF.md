@@ -4,7 +4,29 @@ _Resume point after `/compact` or `/clear`. Update after every task or wave (see
 The full wave-by-wave history (parts 1–55) lives in this file's own git history —
 `git log -p HANDOFF.md` — and each part's summary is its commit message._
 
-Last updated: 2026-08-09 (part 57 — the resolver stopped swallowing, and deletion got its door)
+Last updated: 2026-08-09 (part 58 — a read-only medium still answers, and the catalog wears its own kinds)
+
+## Part 58 (same day, after part 57)
+
+- **The part-57 error channel met the sandbox, and both got fixed.** The dev.dx sandbox
+  mounts the repository read-only; `Store::open` wants write access; part 56's `.ok()`
+  had silently fallen to the packs, and part 57's error channel turned every sandboxed
+  read into a hard failure (`dx ls` answered nothing, showcase refused to render).
+  Neither was right: `Store::open_read_only` (plain read-only open probed with a real
+  read, `immutable=1` URI fallback for WAL on media that refuse the `-shm` file) and
+  `open_existing` falls back to it, so a read-only checkout reads and a genuinely broken
+  store still errors. `documents_still_resolve_when_the_medium_is_read_only` pins it.
+  The corpus gate had passed on `ok - 0 documents` — it now refuses fewer than 10.
+- **block-reference.dx wears the kinds it catalogs**: table rows for `view` and
+  `mermaid / graph`, and a real `::rule`, `::image` (figures/block-anatomy.png, exported
+  by `dx png --block` from the page's own anatomy SVG), `::view` of site/index.html, and
+  `::style` (small-caps on the table header) — all rendered and eyeballed. welcome.dx's
+  fabricated readiness percentages are gone. Fixtures refreshed as the deliberate
+  two-file change; round-trip + drift guard green.
+- **DX.app has a real Edit menu**: Undo/Redo/Cut/Copy/Paste/Select All on the responder
+  chain — a keystroke only reaches the WKWebView through a menu key equivalent, so the
+  read-only-era menu (Copy, Select All) was a dead ⌘V. App rebuilt, ad-hoc signed,
+  installed; doctor green.
 
 ## Current state
 

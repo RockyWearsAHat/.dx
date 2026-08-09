@@ -51,35 +51,6 @@ How a document reaches a reader
 </svg>
 ::end
 
-::heading level=2 id=readiness-chart
-Where the work stands
-::end
-
-::svg id=welcome-readiness
-<svg viewBox="0 0 720 180" role="img" aria-label="Bar chart: typed blocks 96 percent, render parity 92 percent, storage integrity 94 percent, tooling 87 percent">
-	<g font-family="monospace" font-size="12" fill="currentColor">
-		<text x="0" y="20" fill-opacity="0.55">capability readiness (%)</text>
-		<text x="0" y="58">typed blocks</text>
-		<text x="0" y="90">render parity</text>
-		<text x="0" y="122">storage integrity</text>
-		<text x="0" y="154">tooling</text>
-	</g>
-	<g fill="currentColor" fill-opacity="0.22">
-		<rect x="170" y="46" width="480" height="12"/>
-		<rect x="170" y="78" width="460" height="12"/>
-		<rect x="170" y="110" width="470" height="12"/>
-		<rect x="170" y="142" width="435" height="12"/>
-	</g>
-	<g font-family="monospace" font-size="12" fill="currentColor" fill-opacity="0.55">
-		<text x="662" y="57">96</text>
-		<text x="662" y="89">92</text>
-		<text x="662" y="121">94</text>
-		<text x="662" y="153">87</text>
-	</g>
-	<line x1="170" y1="166" x2="670" y2="166" stroke="currentColor" stroke-width="1" stroke-opacity="0.25"/>
-</svg>
-::end
-
 ::heading level=2 id=quick-checklist
 Quick checklist
 ::end

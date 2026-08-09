@@ -102,18 +102,22 @@ pub fn open_store(root: &Path) -> Result<Store, String> {
 
 /// Open the store only if it has already been built, so reads create nothing.
 ///
-/// A store that exists but will not open is an error, never "no store" — falling through
-/// to the packs would quietly answer from a stale copy while the true store sits broken.
+/// A store on a medium this process cannot write — a read-only checkout, a build
+/// sandbox — still answers: it opens without the ability to write. A store that will not
+/// open either way is an error, never "no store" — falling through to the packs would
+/// quietly answer from a stale copy while the true store sits broken.
 fn open_existing(root: &Path) -> Result<Option<Store>, String> {
-    if root.join(".doc").join("index.db").exists() {
-        Store::open(root).map(Some).map_err(|error| {
+    if !root.join(".doc").join("index.db").exists() {
+        return Ok(None);
+    }
+    match Store::open(root) {
+        Ok(store) => Ok(Some(store)),
+        Err(writable_error) => Store::open_read_only(root).map(Some).map_err(|_| {
             format!(
-                "the store at {} exists but would not open: {error}",
+                "the store at {} exists but would not open: {writable_error}",
                 root.join(".doc").display()
             )
-        })
-    } else {
-        Ok(None)
+        }),
     }
 }
 
@@ -805,6 +809,42 @@ mod tests {
         fs::write(root.join("a.dx"), NOTES).expect("write");
         let hits = search(&root, "kubernetes", 10).expect("search");
         assert_eq!(hits.len(), 1);
+    }
+
+    #[test]
+    fn documents_still_resolve_when_the_medium_is_read_only() {
+        // The dev.dx sandbox mounts the repository read-only; so does a checkout on
+        // mounted media. A store that cannot be *written* must still answer reads —
+        // this once fell through to the packs silently, then (part 57) errored instead;
+        // both were wrong.
+        use std::os::unix::fs::PermissionsExt;
+        let root = scratch("read-only-medium");
+        let path = root.join("notes.dx");
+        save(&path, &parse(NOTES)).expect("save");
+
+        let mut locked = Vec::new();
+        for entry in [root.join(".doc"), root.join(".doc/index.db")] {
+            let mut permissions = fs::metadata(&entry).expect("meta").permissions();
+            permissions.set_mode(if entry.is_dir() { 0o555 } else { 0o444 });
+            fs::set_permissions(&entry, permissions).expect("lock");
+            locked.push(entry);
+        }
+
+        let resolved = read(&path);
+        let listed = load_all(&root);
+
+        // Unlock before asserting so a failure does not leave scratch undeletable.
+        for entry in locked {
+            let mut permissions = fs::metadata(&entry).expect("meta").permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(&entry, permissions).expect("unlock");
+        }
+
+        assert_eq!(resolved.expect("a read-only store still answers"), NOTES);
+        assert_eq!(
+            listed.expect("a read-only listing works").documents.len(),
+            1
+        );
     }
 
     #[test]
