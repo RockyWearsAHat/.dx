@@ -280,74 +280,6 @@ let wasm_bindgen = (function(exports) {
     exports.board_place = board_place;
 
     /**
-     * Build a search index over a set of documents and run a query in one call.
-     *
-     * `docs_json` is a JSON array of `[path, document]` pairs, where each `document` is a
-     * [`dto::DocumentDto`]. `query` is the search string. The result is a JSON array of
-     * `{ "path": string, "score": number }` hits, sorted by descending score with ascending
-     * path as a stable tie-break (exactly [`doc_core::search::SearchIndex::search`]). An empty
-     * query yields an empty array. Returns an error if `docs_json` is malformed.
-     * @param {string} docs_json
-     * @param {string} query
-     * @returns {string}
-     */
-    function build_index_and_search(docs_json, query) {
-        let deferred4_0;
-        let deferred4_1;
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            const ptr0 = passStringToWasm0(docs_json, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-            const len0 = WASM_VECTOR_LEN;
-            const ptr1 = passStringToWasm0(query, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-            const len1 = WASM_VECTOR_LEN;
-            wasm.build_index_and_search(retptr, ptr0, len0, ptr1, len1);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
-            var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
-            var ptr3 = r0;
-            var len3 = r1;
-            if (r3) {
-                ptr3 = 0; len3 = 0;
-                throw takeObject(r2);
-            }
-            deferred4_0 = ptr3;
-            deferred4_1 = len3;
-            return getStringFromWasm0(ptr3, len3);
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-            wasm.__wbindgen_export3(deferred4_0, deferred4_1, 1);
-        }
-    }
-    exports.build_index_and_search = build_index_and_search;
-
-    /**
-     * Compress bytes into a `dxz` frame, the store's framed format.
-     *
-     * `doc_core::compress` chooses the smallest encoding (currently DEFLATE, or stored when
-     * nothing beats it) and names the codec in the frame's four magic bytes. Infallible; it
-     * returns the frame as a `Uint8Array`.
-     * @param {Uint8Array} input
-     * @returns {Uint8Array}
-     */
-    function compress(input) {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_export);
-            const len0 = WASM_VECTOR_LEN;
-            wasm.compress(retptr, ptr0, len0);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            var v2 = getArrayU8FromWasm0(r0, r1).slice();
-            wasm.__wbindgen_export3(r0, r1 * 1, 1);
-            return v2;
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    exports.compress = compress;
-
-    /**
      * Decompress any `dxz` frame, whichever codec its magic names — including `DXZ1` (LZSS),
      * which is no longer written but is decoded forever.
      *
@@ -486,42 +418,6 @@ let wasm_bindgen = (function(exports) {
         }
     }
     exports.insert_block = insert_block;
-
-    /**
-     * Rebuild canonical `.dx` source from ordered per-block chunk texts (a JSON array of
-     * strings), the inverse of [`split_chunks`].
-     *
-     * Returns an error if `texts_json` is not a JSON array of strings.
-     * @param {string} texts_json
-     * @returns {string}
-     */
-    function join_chunks(texts_json) {
-        let deferred3_0;
-        let deferred3_1;
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            const ptr0 = passStringToWasm0(texts_json, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-            const len0 = WASM_VECTOR_LEN;
-            wasm.join_chunks(retptr, ptr0, len0);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
-            var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
-            var ptr2 = r0;
-            var len2 = r1;
-            if (r3) {
-                ptr2 = 0; len2 = 0;
-                throw takeObject(r2);
-            }
-            deferred3_0 = ptr2;
-            deferred3_1 = len2;
-            return getStringFromWasm0(ptr2, len2);
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-            wasm.__wbindgen_export3(deferred3_0, deferred3_1, 1);
-        }
-    }
-    exports.join_chunks = join_chunks;
 
     /**
      * The canonical `.dx` source of one document held in a `DXCP1` pack.
@@ -832,37 +728,6 @@ let wasm_bindgen = (function(exports) {
     exports.render_outline = render_outline;
 
     /**
-     * Slice one section out of `.dx` source, returning canonical DOCSRC for that part.
-     *
-     * `selector` is a block id: a heading id yields that whole section, any other id yields
-     * that block plus its captured output. Returns an empty string when nothing matches.
-     * @param {string} text
-     * @param {string} selector
-     * @returns {string}
-     */
-    function render_section(text, selector) {
-        let deferred3_0;
-        let deferred3_1;
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            const ptr0 = passStringToWasm0(text, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-            const len0 = WASM_VECTOR_LEN;
-            const ptr1 = passStringToWasm0(selector, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-            const len1 = WASM_VECTOR_LEN;
-            wasm.render_section(retptr, ptr0, len0, ptr1, len1);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            deferred3_0 = r0;
-            deferred3_1 = r1;
-            return getStringFromWasm0(r0, r1);
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-            wasm.__wbindgen_export3(deferred3_0, deferred3_1, 1);
-        }
-    }
-    exports.render_section = render_section;
-
-    /**
      * Render `.dx` source to Markdown, the text view an agent or a diff reads.
      *
      * `include_ids` prefixes each block with a `<!-- block:<id> <kind> -->` marker.
@@ -985,31 +850,6 @@ let wasm_bindgen = (function(exports) {
     exports.set_block = set_block;
 
     /**
-     * Compute the lowercase hex SHA-1 digest of `input`, byte-identical to the reference.
-     * @param {Uint8Array} input
-     * @returns {string}
-     */
-    function sha1_hex(input) {
-        let deferred2_0;
-        let deferred2_1;
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            const ptr0 = passArray8ToWasm0(input, wasm.__wbindgen_export);
-            const len0 = WASM_VECTOR_LEN;
-            wasm.sha1_hex(retptr, ptr0, len0);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            deferred2_0 = r0;
-            deferred2_1 = r1;
-            return getStringFromWasm0(r0, r1);
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-            wasm.__wbindgen_export3(deferred2_0, deferred2_1, 1);
-        }
-    }
-    exports.sha1_hex = sha1_hex;
-
-    /**
      * Compute the lowercase hex SHA-256 digest of `input`, byte-identical to the reference.
      * @param {Uint8Array} input
      * @returns {string}
@@ -1033,43 +873,6 @@ let wasm_bindgen = (function(exports) {
         }
     }
     exports.sha256_hex = sha256_hex;
-
-    /**
-     * Split a document (JSON, [`dto::DocumentDto`] shape) into its content-addressed chunks,
-     * returned as JSON: `[{"hash": "<sha256 hex>", "text": "<canonical block source>"}, …]`.
-     *
-     * This is the same split the native store uses, so an editor and the CLI address a block
-     * identically. Returns an error if `doc_json` is not valid JSON of the expected shape.
-     * @param {string} doc_json
-     * @returns {string}
-     */
-    function split_chunks(doc_json) {
-        let deferred3_0;
-        let deferred3_1;
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            const ptr0 = passStringToWasm0(doc_json, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-            const len0 = WASM_VECTOR_LEN;
-            wasm.split_chunks(retptr, ptr0, len0);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
-            var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
-            var ptr2 = r0;
-            var len2 = r1;
-            if (r3) {
-                ptr2 = 0; len2 = 0;
-                throw takeObject(r2);
-            }
-            deferred3_0 = ptr2;
-            deferred3_1 = len2;
-            return getStringFromWasm0(ptr2, len2);
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-            wasm.__wbindgen_export3(deferred3_0, deferred3_1, 1);
-        }
-    }
-    exports.split_chunks = split_chunks;
 
     /**
      * Render a document (JSON, [`dto::DocumentDto`] shape) back to canonical DOCSRC text.

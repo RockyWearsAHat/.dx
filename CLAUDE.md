@@ -259,9 +259,9 @@ browser by that browser's own route (`extension::Channel`). Adding a surface mea
 channel, not a command: a second install step is a machine that is half set up.
 
 **The extension is not in the binary.** Its files — page adapter, resolver, stylesheet, icons,
-and the ~313 KB wasm engine — are read from a directory, never `include_bytes!`. A `dx` on a
+and the ~420 KB wasm engine — are read from a directory, never `include_bytes!`. A `dx` on a
 build server, in a container, or in an agent's sandbox has no browser and no use for ~0.4 MB of
-one; carrying it there cost every install 19% of the binary for a file nothing would open. So:
+one; carrying it there would cost every install ~21% of the binary for a file nothing would open. So:
 
 - `editor/github` is the **one source**, and `dx browser --from <dir>` is the **one builder**.
   `DX.app`'s copy, the Chrome Web Store archive, and the add-on Mozilla signs are all that
@@ -341,7 +341,9 @@ example is a deliberate two-file change.
   including the blocks it would have to refuse — and folds no `::output` into the document
   and writes no file, because a review that left a record behind would be a read with a
   side effect.
-  Only `dx run` and the `dx_run` tool execute code — with one stated exception: the agent
+  Only `dx run` and the `dx_run` tool execute code — with two stated exceptions: an edit
+  to a runnable block through a local editing surface (`dx set`/`dx_edit`, the editor
+  field) runs it at once, the edit being the review; and the agent
   read tools (`dx_read`, `dx_source` over MCP) refresh before answering, re-running code
   whose exact fingerprint *this machine already approved* when its recorded output has gone
   stale, so an agent never reads dead output and never spends a `dx_run` just to look.

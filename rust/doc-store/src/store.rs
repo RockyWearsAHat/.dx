@@ -126,12 +126,14 @@ impl Stats {
 pub struct SyncReport {
     /// Plain-text `.dx` files adopted into the store.
     pub ingested: Vec<String>,
-    /// Documents whose stub was missing or stale and has been rewritten.
+    /// Documents whose stub had drifted from the stored content and has been rewritten.
     pub stubs_written: Vec<String>,
     /// Documents recovered from a pack because the database did not have them.
     pub restored: Vec<String>,
     /// Stubs that could not be resolved from any source.
     pub unresolved: Vec<String>,
+    /// Index rows dropped because their `.dx` file was deleted from the tree.
+    pub pruned: Vec<String>,
     /// Chunks deleted because nothing referenced them.
     pub chunks_collected: usize,
 }
@@ -144,6 +146,7 @@ impl SyncReport {
             && self.stubs_written.is_empty()
             && self.restored.is_empty()
             && self.unresolved.is_empty()
+            && self.pruned.is_empty()
             && self.chunks_collected == 0
     }
 }
@@ -587,7 +590,12 @@ impl Store {
         Ok(row)
     }
 
-    /// Delete every chunk no document references, returning how many went.
+    /// Delete every chunk no manifest references, returning how many went.
+    ///
+    /// Manifests are deliberately kept even when no current document references them:
+    /// they are the version history [`Store::source_of_version`] answers from, which is
+    /// what lets `git log -p` and `git show` still render a document at an old revision
+    /// after an edit — or after the document itself is deleted.
     pub fn collect_garbage(&self) -> Result<usize, StoreError> {
         let removed = self
             .connection
@@ -615,6 +623,12 @@ impl Store {
     ///    case, where the database does not exist yet.
     /// 4. A stub nothing can resolve is reported in [`SyncReport::unresolved`] rather than
     ///    deleted or blanked.
+    /// 5. An index row whose `.dx` file is **gone** is pruned and the packs rewritten
+    ///    without it. The file is how a document exists in a workspace and the index is a
+    ///    rebuildable cache over the tree, so the tree wins — a row that outlives its file
+    ///    is a ghost that keeps resolving a document nobody can see. This never fires on a
+    ///    fresh clone: a new database has no rows, so every pack document is restored, not
+    ///    pruned, and the deleted document's bytes stay reachable in the pack's git history.
     pub fn sync(&mut self) -> Result<SyncReport, StoreError> {
         let mut report = SyncReport::default();
         let available = pack::load_all(&self.root)?;
@@ -655,10 +669,33 @@ impl Store {
             }
         }
 
-        // Documents present in a pack but with no file yet (a fresh clone that has the pack
-        // committed but whose stubs are also committed) are covered above; anything left in
-        // the packs with no stub is materialized so it is reachable.
+        // A row whose file is gone records a deletion made in the tree (rule 5 above):
+        // prune it, then rewrite the packs so the deletion sticks instead of being
+        // restored by the next sync.
+        for summary in self.list()? {
+            if self.stub_path(&summary.path).exists() {
+                continue;
+            }
+            self.connection
+                .execute(
+                    "DELETE FROM documents WHERE path = ?1",
+                    params![summary.path],
+                )
+                .map_err(StoreError::backend)?;
+            report.pruned.push(summary.path);
+        }
+        if !report.pruned.is_empty() {
+            self.export_packs()?;
+        }
+
+        // Anything left in the packs that the database does not know is materialized —
+        // row, stub file and all — so a pack document is always reachable. Skipping what
+        // was just pruned matters: the pack copy loaded before the prune is the ghost
+        // itself, and materializing it would resurrect the deleted file.
         for (relative, source) in &available {
+            if report.pruned.contains(relative) {
+                continue;
+            }
             if self.document_id(relative)?.is_none() {
                 self.ingest(relative, source)?;
                 report.restored.push(relative.clone());
@@ -1142,6 +1179,34 @@ mod tests {
         assert!(stub::is_stub(
             &fs::read_to_string(root.join("orphan.dx")).expect("read")
         ));
+    }
+
+    #[test]
+    fn sync_prunes_a_row_whose_file_was_deleted_and_the_deletion_sticks() {
+        // Deleting the .dx file is deleting the document: the tree wins over the index,
+        // and the pack rewrite keeps the next sync from resurrecting the ghost.
+        let root = scratch("prune-ghost");
+        let mut store = Store::open(&root).expect("open");
+        let saved = store.ingest("notes.dx", NOTES).expect("ingest");
+        store.ingest("kept.dx", "# Kept\n").expect("ingest kept");
+        fs::remove_file(root.join("notes.dx")).expect("delete the file");
+
+        let report = store.sync().expect("sync");
+        assert_eq!(report.pruned, vec!["notes.dx".to_string()]);
+        assert!(store.source("notes.dx").is_err(), "the row is gone");
+        assert!(store.source("kept.dx").is_ok(), "other documents stay");
+        // History survives the prune, exactly as it survives Store::delete: an old
+        // commit still diffs.
+        assert_eq!(
+            store
+                .source_of_version(&saved.digest)
+                .expect("version lookup"),
+            Some(NOTES.to_string())
+        );
+
+        let settled = store.sync().expect("second sync");
+        assert!(settled.is_clean(), "the deletion settles: {settled:?}");
+        assert!(!root.join("notes.dx").exists(), "the file stays deleted");
     }
 
     #[test]

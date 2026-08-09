@@ -28,8 +28,12 @@ it was asked to open:
 The viewer is `packaging/app` — seven Swift files, AppKit and `WKWebView`, built into
 `Contents/MacOS/dx-app`. It renders nothing itself: it runs `Contents/MacOS/dx render` — the
 binary in its *own* bundle, never one found on `PATH` — and shows the page that comes back. The
-window is a title bar and the page, because the page already carries the whole look. Reading
-never executes and never writes; the document has no script (`render::escape` allows none), the
+window is a title bar and the page, because the page already carries the whole look. The page is
+also the editing surface (`editor/surface`, copied in at build time): clicking a block opens its
+field, every save lands on the bundled `dx`'s own `edit` operations — the same calls every other
+surface makes — and the run control beside a code block executes that one block through
+`dx run --only … --approve`, the click being the review. A plain read stays a read: rendering
+executes nothing and writes nothing, the document has no script (`render::escape` allows none), the
 page is loaded under `script-src 'none'` so the *document's* scripts could never run anyway,
 and the editing surface runs in its own `WKContentWorld` the page cannot reach (`Editor.swift`
 explains the arrangement). Opening a pointer creates no index.

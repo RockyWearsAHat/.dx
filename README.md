@@ -114,6 +114,8 @@ line — which is why this README carries pictures.
 | [`docs/github.md`](docs/github.md) | The browser extension and how github.com pages resolve |
 | [`docs/grill-me.md`](docs/grill-me.md) | The review checklist for parser, renderer, and save-path changes |
 | [`packaging/README.md`](packaging/README.md) | Building and publishing `DX.app` and the browser extensions |
+| [`rust/README.md`](rust/README.md) | The workspace: what each crate is responsible for |
+| [`rust/ANALYSIS.md`](rust/ANALYSIS.md) | Complexity and measured timings of the `doc-core` operations |
 | [`.doc/README.md`](.doc/README.md) | The store: packs, chunks, and what to commit |
 
 ## For AI agents

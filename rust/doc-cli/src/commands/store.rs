@@ -38,10 +38,11 @@ pub fn run_sync(args: &Args) -> Result<String, String> {
         return Ok(out);
     }
 
-    let sections: [(&str, &Vec<String>); 4] = [
+    let sections: [(&str, &Vec<String>); 5] = [
         ("adopted from plain text", &report.ingested),
         ("restored from a pack", &report.restored),
         ("pointer rewritten", &report.stubs_written),
+        ("pruned (file deleted from the tree)", &report.pruned),
         ("UNRESOLVED", &report.unresolved),
     ];
     for (label, paths) in sections {
@@ -85,8 +86,19 @@ pub fn run_stats(args: &Args) -> Result<String, String> {
         "  blocks           {} ({} distinct)\n",
         stats.chunk_references, stats.chunks
     ));
-    let shared = stats.chunk_references.saturating_sub(stats.chunks);
-    out.push_str(&format!("  blocks shared    {shared}\n"));
+    // More distinct chunks than current references is version history — chunks kept so
+    // old revisions still diff. Name it as what it is, never round it to "shared 0".
+    if stats.chunks > stats.chunk_references {
+        out.push_str(&format!(
+            "  blocks in history {} (older versions, kept for git diff)\n",
+            stats.chunks - stats.chunk_references
+        ));
+    } else {
+        out.push_str(&format!(
+            "  blocks shared    {}\n",
+            stats.chunk_references - stats.chunks
+        ));
+    }
     out.push_str(&format!("  source bytes     {}\n", stats.source_bytes));
     out.push_str(&format!("  stored bytes     {}\n", stats.stored_bytes));
     if let Some(percent) = stats.compaction_percent() {
