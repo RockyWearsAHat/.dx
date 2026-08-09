@@ -374,10 +374,12 @@ fn outline_of(args: &Value, root: &Path) -> ToolResult {
     Ok(vec![json_content(&json!({ "blocks": rows }))])
 }
 
-/// `dx_list` — every document in a directory.
+/// `dx_list` — every document in a directory, unresolvable ones named rather than hidden.
 fn list(args: &Value, root: &Path) -> ToolResult {
     let directory = directory_arg(args, root);
-    let documents: Vec<Value> = workspace::load_all(&directory)
+    let listing = workspace::load_all(&directory)?;
+    let documents: Vec<Value> = listing
+        .documents
         .into_iter()
         .map(|loaded| {
             json!({
@@ -387,7 +389,15 @@ fn list(args: &Value, root: &Path) -> ToolResult {
             })
         })
         .collect();
-    Ok(vec![json_content(&json!({ "documents": documents }))])
+    let mut answer = json!({ "documents": documents });
+    if !listing.unresolved.is_empty() {
+        answer["unresolved"] = listing
+            .unresolved
+            .into_iter()
+            .map(|(path, error)| json!({ "path": path, "error": error }))
+            .collect();
+    }
+    Ok(vec![json_content(&answer)])
 }
 
 /// `dx_search` — documents matching a query, each hit carrying its answer.
@@ -400,7 +410,7 @@ fn search(args: &Value, root: &Path) -> ToolResult {
     let directory = directory_arg(args, root);
     let limit = number(args, "limit").map_or(DEFAULT_SEARCH_LIMIT, |limit| limit as usize);
 
-    let hits: Vec<Value> = workspace::search(&directory, query, limit)
+    let hits: Vec<Value> = workspace::search(&directory, query, limit)?
         .into_iter()
         .map(|hit| {
             let mut item = json!({

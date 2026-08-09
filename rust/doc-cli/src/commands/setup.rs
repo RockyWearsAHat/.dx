@@ -520,7 +520,7 @@ WRITE
   dx insert   <file> --after ID [--type T]      add a block after another
               [--id ID] [--level N]             name it, or set a heading's level
               [--lang L] [--run] [--deps D]     a runnable one, with --type code
-  dx remove   <file> <block-id>                 take a block out
+  dx remove   <file> [block-id]                 take a block out; no id: the document
   dx check    <file> <checklist-id> --item N    tick or untick one box, by its
                                                 position, counting from zero
   dx board    <file> <board-id>                 arrange a ::board's nodes
@@ -538,6 +538,7 @@ STORE
   store (.doc/). Every dx read resolves the pointer to the real document.
   dx sync     [dir]                             adopt, restore, and repair pointers
   dx stats    [dir]                             documents, block sharing, compaction
+  dx rm       <file>                            delete a document; history survives
   dx textconv <file>                            print what a pointer stands for
   dx git-setup [dir]                            make git diff .dx as documents
 

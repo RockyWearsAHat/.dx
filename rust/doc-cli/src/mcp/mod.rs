@@ -38,6 +38,8 @@ mod code {
     pub const METHOD_NOT_FOUND: i64 = -32601;
     /// The arguments were missing or wrong.
     pub const INVALID_PARAMS: i64 = -32602;
+    /// The server itself failed — a store that would not open, a listing that errored.
+    pub const INTERNAL_ERROR: i64 = -32603;
 }
 
 /// Serve MCP over this process's stdio until the client disconnects, re-execing in place
@@ -162,7 +164,10 @@ pub fn handle(request: &Value, root: &Path) -> Option<Value> {
         "initialize" => success(id, initialize()),
         "tools/list" => success(id, json!({ "tools": tools::catalogue() })),
         "tools/call" => tool_call(id, &params, root),
-        "resources/list" => success(id, resources(root)),
+        "resources/list" => match resources(root) {
+            Ok(listing) => success(id, listing),
+            Err(message) => error(id, code::INTERNAL_ERROR, &message),
+        },
         "resources/read" => resource_read(id, &params, root),
         "ping" => success(id, json!({})),
         _ => error(id, code::METHOD_NOT_FOUND, "Method not found"),
@@ -321,8 +326,12 @@ fn tool_call(id: Value, params: &Value, root: &Path) -> Value {
 }
 
 /// Every document in the workspace, as MCP resources.
-fn resources(root: &Path) -> Value {
-    let entries: Vec<Value> = crate::workspace::load_all(root)
+///
+/// Only resolved documents are resources — a resource must be readable — but an
+/// unresolvable one still surfaces through `dx_list`, which names it with its error.
+fn resources(root: &Path) -> Result<Value, String> {
+    let entries: Vec<Value> = crate::workspace::load_all(root)?
+        .documents
         .into_iter()
         .map(|loaded| {
             json!({
@@ -333,7 +342,7 @@ fn resources(root: &Path) -> Value {
             })
         })
         .collect();
-    json!({ "resources": entries })
+    Ok(json!({ "resources": entries }))
 }
 
 /// Read one document resource as Markdown.

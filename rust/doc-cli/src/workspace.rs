@@ -42,22 +42,10 @@ pub struct Loaded {
 }
 
 impl Loaded {
-    /// The document's display title: its metadata title, else its first heading, else its
-    /// file name.
+    /// The document's display title — the one derivation in [`Document::display_title`].
     #[must_use]
     pub fn title(&self) -> String {
-        for candidate in [
-            self.document.title.trim(),
-            self.document.first_heading_text().trim(),
-        ] {
-            if !candidate.is_empty() {
-                return candidate.to_string();
-            }
-        }
-        self.path
-            .file_stem()
-            .map(|stem| stem.to_string_lossy().into_owned())
-            .unwrap_or_else(|| self.relative.clone())
+        self.document.display_title(&self.relative)
     }
 }
 
@@ -113,11 +101,19 @@ pub fn open_store(root: &Path) -> Result<Store, String> {
 }
 
 /// Open the store only if it has already been built, so reads create nothing.
-fn open_existing(root: &Path) -> Option<Store> {
+///
+/// A store that exists but will not open is an error, never "no store" — falling through
+/// to the packs would quietly answer from a stale copy while the true store sits broken.
+fn open_existing(root: &Path) -> Result<Option<Store>, String> {
     if root.join(".doc").join("index.db").exists() {
-        Store::open(root).ok()
+        Store::open(root).map(Some).map_err(|error| {
+            format!(
+                "the store at {} exists but would not open: {error}",
+                root.join(".doc").display()
+            )
+        })
     } else {
-        None
+        Ok(None)
     }
 }
 
@@ -151,7 +147,7 @@ pub fn read(path: &Path) -> Result<String, String> {
     let root = workspace_root(path);
     let relative = relative_of(&root, path);
 
-    if let Some(store) = open_existing(&root) {
+    if let Some(store) = open_existing(&root)? {
         match store.source(&relative) {
             Ok(source) => return Ok(source),
             // Not in the index yet: fall through to the packs.
@@ -187,7 +183,7 @@ pub fn resolve_contents(text: &str, search_from: &Path) -> Result<String, String
     };
 
     let root = workspace_root(search_from);
-    if let Some(store) = open_existing(&root) {
+    if let Some(store) = open_existing(&root)? {
         if let Some(source) = store
             .source_of_version(&digest)
             .map_err(|error| error.to_string())?
@@ -395,9 +391,73 @@ pub fn sync(root: &Path) -> Result<SyncReport, String> {
     open_store(root)?.sync().map_err(|error| error.to_string())
 }
 
+/// What [`remove`] deleted, for the caller's report.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Removed {
+    /// The store forgot the document: its row and stub went, chunks it no longer shares
+    /// were collected, and the packs were rewritten so the deletion sticks.
+    pub stored: bool,
+    /// A file still on disk (a plain-text document nothing had adopted) was deleted.
+    pub file: bool,
+}
+
+/// Delete the document at `path`, deliberately.
+///
+/// Deleting the pointer file and running `dx sync` prunes too, but that route reads as
+/// repair; this one names the intent. The store forgets the document when it holds it, and
+/// whatever file remains on disk is deleted either way. Version history (the manifests)
+/// deliberately survives, exactly as a sync prune leaves it, so `git show` on an old commit
+/// still renders the document; `git checkout` + `dx sync` restores it whole.
+///
+/// # Errors
+/// Returns a sentence when there is nothing at `path` to remove, or when the store refuses.
+pub fn remove(path: &Path) -> Result<Removed, String> {
+    let root = workspace_root(path);
+    let relative = relative_of(&root, path);
+
+    let mut removed = Removed {
+        stored: false,
+        file: false,
+    };
+    if let Some(mut store) = open_existing(&root)? {
+        match store.delete(&relative) {
+            Ok(()) => removed.stored = true,
+            Err(StoreError::NotFound(_)) => {}
+            Err(error) => return Err(error.to_string()),
+        }
+    } else if pack::source(&root, &relative)
+        .map_err(|error| error.to_string())?
+        .is_some()
+    {
+        // A fresh clone: stubs and packs, no index. Deleting only the file would let the
+        // next `dx sync` restore the document from the pack — build the store first so
+        // the deletion registers there and the packs are rewritten without it.
+        let mut store = open_store(&root)?;
+        store.sync().map_err(|error| error.to_string())?;
+        store.delete(&relative).map_err(|error| error.to_string())?;
+        removed.stored = true;
+    }
+    // The store deletes the stub it wrote; anything still here is a plain-text document
+    // (or a stub in a workspace with no index), and `rm` means: gone.
+    if path.is_file() {
+        fs::remove_file(path)
+            .map_err(|error| format!("could not delete {}: {error}", path.display()))?;
+        removed.file = true;
+    }
+
+    if removed.stored || removed.file {
+        Ok(removed)
+    } else {
+        Err(format!(
+            "nothing to remove: {} is not on disk and not in this workspace's store",
+            path.display()
+        ))
+    }
+}
+
 /// Storage totals for the workspace at `root`.
 pub fn stats(root: &Path) -> Result<Stats, String> {
-    match open_existing(root) {
+    match open_existing(root)? {
         Some(store) => store.stats().map_err(|error| error.to_string()),
         None => Ok(Stats::default()),
     }
@@ -409,39 +469,91 @@ pub fn discover(root: &Path) -> Vec<PathBuf> {
     doc_store::discover_documents(root)
 }
 
-/// Resolve every document under `root`, skipping any that cannot be read.
+/// Every document a directory holds — and every one it holds that would not resolve.
 ///
-/// Documents are found from the store when it has them and from disk otherwise, so a listing
-/// covers both what has been stored and what has only just been written by something else.
-#[must_use]
-pub fn load_all(root: &Path) -> Vec<Loaded> {
-    let mut loaded: Vec<Loaded> = Vec::new();
-    for path in discover(root) {
-        if let Ok(document) = load(&path) {
-            loaded.push(document);
+/// The resolver's contract is "the caller gets the true document, always"; when it cannot,
+/// the failure is part of the answer. A listing that silently dropped an unresolvable
+/// document would hide exactly the thing its caller needs to hear about.
+#[derive(Debug, Default)]
+pub struct Listing {
+    /// The resolved documents, sorted by workspace-relative path.
+    pub documents: Vec<Loaded>,
+    /// Documents that exist but did not resolve: each path with the error saying what to run.
+    pub unresolved: Vec<(String, String)>,
+}
+
+/// The workspace-relative form of `directory`, `""` when it is the workspace root itself.
+///
+/// Not [`relative_of`]: that one keys *documents* and appends `.dx` to anything unnamed,
+/// which would turn the scope `docs` into `docs.dx` and match nothing.
+fn scope_of(root: &Path, directory: &Path) -> String {
+    let absolute = fs::canonicalize(directory).unwrap_or_else(|_| directory.to_path_buf());
+    absolute
+        .strip_prefix(root)
+        .map(|scoped| scoped.to_string_lossy().replace('\\', "/"))
+        .unwrap_or_default()
+}
+
+/// Whether the workspace-relative `path` sits under the workspace-relative `scope`
+/// (`""` is the root: everything is in scope).
+fn in_scope(path: &str, scope: &str) -> bool {
+    scope.is_empty()
+        || path == scope
+        || path
+            .strip_prefix(scope)
+            .is_some_and(|rest| rest.starts_with('/'))
+}
+
+/// Resolve every document under `directory`.
+///
+/// Documents are found from the tree and from the workspace store, so a listing covers both
+/// what has been stored and what has only just been written by something else. The store
+/// lives at the *workspace root* even when `directory` is a subdirectory, so a scoped
+/// listing still sees stored documents whose stub is absent. A document that will not
+/// resolve is reported in [`Listing::unresolved`], never silently dropped; a store that
+/// will not open is an error.
+pub fn load_all(directory: &Path) -> Result<Listing, String> {
+    let root = workspace_root(directory);
+    let scope = scope_of(&root, directory);
+
+    let mut listing = Listing::default();
+    for path in discover(directory) {
+        match load(&path) {
+            Ok(document) => listing.documents.push(document),
+            Err(error) => listing.unresolved.push((relative_of(&root, &path), error)),
         }
     }
 
     // Include stored documents whose stub is absent, so nothing stored is invisible.
-    if let Some(store) = open_existing(root) {
-        if let Ok(summaries) = store.list() {
-            for summary in summaries {
-                if loaded.iter().any(|entry| entry.relative == summary.path) {
-                    continue;
-                }
-                if let Ok(document) = store.document(&summary.path) {
-                    loaded.push(Loaded {
-                        path: root.join(&summary.path),
-                        relative: summary.path,
-                        document,
-                    });
-                }
+    if let Some(store) = open_existing(&root)? {
+        for summary in store.list().map_err(|error| error.to_string())? {
+            let seen = listing
+                .documents
+                .iter()
+                .any(|entry| entry.relative == summary.path)
+                || listing
+                    .unresolved
+                    .iter()
+                    .any(|(path, _)| *path == summary.path);
+            if seen || !in_scope(&summary.path, &scope) {
+                continue;
+            }
+            match store.document(&summary.path) {
+                Ok(document) => listing.documents.push(Loaded {
+                    path: root.join(&summary.path),
+                    relative: summary.path,
+                    document,
+                }),
+                Err(error) => listing.unresolved.push((summary.path, error.to_string())),
             }
         }
     }
 
-    loaded.sort_by(|a, b| a.relative.cmp(&b.relative));
-    loaded
+    listing
+        .documents
+        .sort_by(|a, b| a.relative.cmp(&b.relative));
+    listing.unresolved.sort();
+    Ok(listing)
 }
 
 /// One search hit: a document, why it matched, and where the answer is.
@@ -456,46 +568,60 @@ pub struct Hit {
     pub block: Option<String>,
 }
 
-/// Search every document under `root` for `query`, best matches first.
+/// Search every document under `directory` for `query`, best matches first.
 ///
 /// The store answers when it has been built — it narrows candidates in SQL before ranking, so
 /// the cost tracks matches rather than corpus size. Otherwise the documents are resolved and
-/// ranked in memory, which keeps search working in a workspace with no index yet.
-#[must_use]
-pub fn search(root: &Path, query: &str, limit: usize) -> Vec<Hit> {
-    if let Some(store) = open_existing(root) {
-        if let Ok(scored) = store.search(query, limit) {
-            let hits: Vec<Hit> = scored
-                .into_iter()
-                .filter_map(|scored| {
-                    let path = scored.summary.path;
-                    let document = store.document(&path).ok()?;
-                    Some(Hit {
-                        // The store's own ranking index computed this; never a placeholder.
-                        score: scored.score,
-                        block: doc_core::search::best_block_id(&document, query),
-                        document: Loaded {
-                            path: root.join(&path),
-                            relative: path,
-                            document,
-                        },
-                    })
-                })
-                .collect();
-            if !hits.is_empty() {
-                return hits;
+/// ranked in memory, which keeps search working in a workspace with no index yet. The store
+/// lives at the workspace root even when `directory` is a subdirectory; a scoped search asks
+/// it wide and keeps only hits under the scope, so the limit still means "best `limit` here".
+pub fn search(directory: &Path, query: &str, limit: usize) -> Result<Vec<Hit>, String> {
+    let root = workspace_root(directory);
+    let scope = scope_of(&root, directory);
+
+    if let Some(store) = open_existing(&root)? {
+        let fetch = if scope.is_empty() { limit } else { usize::MAX };
+        let mut hits = Vec::new();
+        for scored in store
+            .search(query, fetch)
+            .map_err(|error| error.to_string())?
+        {
+            let path = scored.summary.path;
+            if !in_scope(&path, &scope) {
+                continue;
             }
+            let document = store
+                .document(&path)
+                .map_err(|error| format!("{path}: {error}"))?;
+            hits.push(Hit {
+                // The store's own ranking index computed this; never a placeholder.
+                score: scored.score,
+                block: doc_core::search::best_block_id(&document, query),
+                document: Loaded {
+                    path: root.join(&path),
+                    relative: path,
+                    document,
+                },
+            });
+            if hits.len() == limit {
+                break;
+            }
+        }
+        if !hits.is_empty() {
+            return Ok(hits);
         }
     }
 
-    let documents = load_all(root);
+    // No index yet, or nothing stored matched: resolve and rank in memory, which also
+    // covers plain-text documents nothing has adopted.
+    let documents = load_all(directory)?.documents;
     let indexed: Vec<(String, Document)> = documents
         .iter()
         .map(|loaded| (loaded.relative.clone(), loaded.document.clone()))
         .collect();
     let index = doc_core::search::build_index(&indexed);
 
-    index
+    Ok(index
         .search(query)
         .into_iter()
         .take(limit)
@@ -509,7 +635,7 @@ pub fn search(root: &Path, query: &str, limit: usize) -> Vec<Hit> {
                     score: result.score,
                 })
         })
-        .collect()
+        .collect())
 }
 
 #[cfg(test)]
@@ -663,11 +789,12 @@ mod tests {
         )
         .expect("r");
 
-        let listed = load_all(&root);
-        assert_eq!(listed.len(), 2);
-        assert_eq!(listed[0].relative, "kubernetes.dx");
+        let listed = load_all(&root).expect("list");
+        assert_eq!(listed.documents.len(), 2);
+        assert!(listed.unresolved.is_empty());
+        assert_eq!(listed.documents[0].relative, "kubernetes.dx");
 
-        let hits = search(&root, "kubernetes", 10);
+        let hits = search(&root, "kubernetes", 10).expect("search");
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].document.relative, "kubernetes.dx");
     }
@@ -676,8 +803,118 @@ mod tests {
     fn search_works_before_any_index_exists() {
         let root = scratch("search-no-index");
         fs::write(root.join("a.dx"), NOTES).expect("write");
-        let hits = search(&root, "kubernetes", 10);
+        let hits = search(&root, "kubernetes", 10).expect("search");
         assert_eq!(hits.len(), 1);
+    }
+
+    #[test]
+    fn remove_forgets_a_stored_document_and_sync_does_not_bring_it_back() {
+        let root = scratch("rm-stored");
+        let path = root.join("notes.dx");
+        save(&path, &parse(NOTES)).expect("save");
+
+        let removed = remove(&path).expect("remove");
+        assert!(removed.stored, "the store held it");
+        assert!(!path.exists(), "the stub went with it");
+        assert!(read(&path).is_err(), "nothing resolves any more");
+
+        let report = sync(&root).expect("sync");
+        assert!(report.restored.is_empty(), "a deliberate delete sticks");
+        assert!(load_all(&root).expect("list").documents.is_empty());
+    }
+
+    #[test]
+    fn remove_deletes_a_plain_file_nothing_adopted() {
+        let root = scratch("rm-plain");
+        let path = root.join("loose.dx");
+        fs::write(&path, NOTES).expect("write");
+
+        let removed = remove(&path).expect("remove");
+        assert!(!removed.stored);
+        assert!(removed.file);
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn remove_of_nothing_says_there_is_nothing() {
+        let root = scratch("rm-nothing");
+        let error = remove(&root.join("ghost.dx")).expect_err("nothing there");
+        assert!(error.contains("nothing to remove"), "{error}");
+    }
+
+    #[test]
+    fn remove_in_a_fresh_clone_deletes_from_the_packs_too() {
+        // Stubs and packs committed, index.db absent: rm must register the deletion in
+        // the store it builds, or the next sync would restore the document.
+        let root = scratch("rm-fresh-clone");
+        let path = root.join("notes.dx");
+        save(&path, &parse(NOTES)).expect("save");
+        fs::remove_file(root.join(".doc/index.db")).expect("drop index");
+
+        let removed = remove(&path).expect("remove");
+        assert!(removed.stored, "the packs held it");
+        assert!(!path.exists());
+
+        let report = sync(&root).expect("sync");
+        assert!(report.restored.is_empty(), "the deletion held through sync");
+        assert!(load_all(&root).expect("list").documents.is_empty());
+    }
+
+    #[test]
+    fn a_listing_reports_what_it_cannot_resolve_instead_of_hiding_it() {
+        let root = scratch("listing-unresolved");
+        save(&root.join("good.dx"), &parse(NOTES)).expect("save");
+        // A pointer whose content is in no store or pack: the ghost a silent skip hides.
+        fs::write(
+            root.join("orphan.dx"),
+            stub::render("::paragraph id=p\nelsewhere\n::end\n"),
+        )
+        .expect("write stub");
+
+        let listing = load_all(&root).expect("list");
+        assert_eq!(listing.documents.len(), 1);
+        assert_eq!(listing.documents[0].relative, "good.dx");
+        assert_eq!(listing.unresolved.len(), 1);
+        assert_eq!(listing.unresolved[0].0, "orphan.dx");
+        assert!(
+            listing.unresolved[0].1.contains("dx sync"),
+            "the error says what to run"
+        );
+    }
+
+    #[test]
+    fn a_subdirectory_listing_still_answers_from_the_workspace_store() {
+        let root = scratch("scoped-listing");
+        save(&root.join("docs/inside.dx"), &parse(NOTES)).expect("save");
+        save(&root.join("outside.dx"), &parse(NOTES)).expect("save");
+        // Drop the stub: only the workspace store at the root knows this document now.
+        fs::remove_file(root.join("docs/inside.dx")).expect("drop stub");
+
+        let listing = load_all(&root.join("docs")).expect("list");
+        let paths: Vec<&str> = listing
+            .documents
+            .iter()
+            .map(|entry| entry.relative.as_str())
+            .collect();
+        assert_eq!(
+            paths,
+            ["docs/inside.dx"],
+            "the store answers, the scope holds"
+        );
+    }
+
+    #[test]
+    fn a_subdirectory_search_scopes_the_store_answer() {
+        let root = scratch("scoped-search");
+        save(&root.join("docs/inside.dx"), &parse(NOTES)).expect("save");
+        save(&root.join("outside.dx"), &parse(NOTES)).expect("save");
+
+        let hits = search(&root.join("docs"), "kubernetes", 10).expect("search");
+        let paths: Vec<&str> = hits
+            .iter()
+            .map(|hit| hit.document.relative.as_str())
+            .collect();
+        assert_eq!(paths, ["docs/inside.dx"]);
     }
 
     #[test]

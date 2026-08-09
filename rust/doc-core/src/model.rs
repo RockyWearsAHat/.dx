@@ -183,11 +183,54 @@ impl Document {
         }
         ""
     }
+
+    /// The document's display title: its metadata title, else its first heading, else the
+    /// file stem of `relative` (the caller's path for it — pass `""` to get `""` back and
+    /// supply your own last resort).
+    ///
+    /// This is the one derivation every surface shares — the store's summaries, the CLI's
+    /// listings, the rendered page's `<title>`. It lives here so the same document cannot
+    /// carry different names depending on which surface said them.
+    #[must_use]
+    pub fn display_title(&self, relative: &str) -> String {
+        for candidate in [self.title.trim(), self.first_heading_text().trim()] {
+            if !candidate.is_empty() {
+                return candidate.to_string();
+            }
+        }
+        std::path::Path::new(relative).file_stem().map_or_else(
+            || relative.to_string(),
+            |stem| stem.to_string_lossy().into_owned(),
+        )
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn display_titles_fall_back_from_metadata_to_heading_to_file_stem() {
+        let titled = Document {
+            title: "Stated".to_string(),
+            ..Document::default()
+        };
+        assert_eq!(titled.display_title("a/b.dx"), "Stated");
+
+        let heading = Document {
+            blocks: vec![Block {
+                kind: "heading".to_string(),
+                text: "First Heading".to_string(),
+                ..Block::default()
+            }],
+            ..Document::default()
+        };
+        assert_eq!(heading.display_title("a/b.dx"), "First Heading");
+
+        let bare = Document::default();
+        assert_eq!(bare.display_title("a/plain-name.dx"), "plain-name");
+        assert_eq!(bare.display_title(""), "", "no path, no invented name");
+    }
 
     #[test]
     fn typescript_routes_to_the_node_toolchain_and_deno_stays_explicit() {

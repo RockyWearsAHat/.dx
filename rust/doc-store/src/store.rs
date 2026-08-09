@@ -317,8 +317,19 @@ impl Store {
     ///
     /// The canonical source is derived from `document`, so a save always lands the document
     /// in canonical form — the property that stops two editors from fighting over formatting.
+    ///
+    /// A path under a directory [`walk`] never enters is refused
+    /// ([`StoreError::Unlistable`]): the row would be stored but no listing could ever
+    /// re-find it, which is the ghost-document symptom by another door.
     pub fn save(&mut self, path: &str, document: &Document) -> Result<Saved, StoreError> {
         let relative = Self::require_path(path)?;
+        if let Some(directory) = unwalked_directory(&relative) {
+            let directory = directory.to_string();
+            return Err(StoreError::Unlistable {
+                path: relative,
+                directory,
+            });
+        }
         let source = stringify(document);
         let chunks = chunk::split(document);
         let route = git::route(&self.root, &relative);
@@ -339,7 +350,7 @@ impl Store {
         route: Route,
     ) -> Result<Saved, StoreError> {
         let digest = stub::digest_of(source);
-        let title = display_title(document, relative);
+        let title = document.display_title(relative);
         let now = timestamp();
 
         let transaction = self.connection.transaction().map_err(StoreError::backend)?;
@@ -727,19 +738,6 @@ fn encode_chunk(text: &str) -> (Vec<u8>, bool) {
     }
 }
 
-/// A document's display title: its metadata title, else its first heading, else its file stem.
-fn display_title(document: &Document, relative: &str) -> String {
-    for candidate in [document.title.trim(), document.first_heading_text().trim()] {
-        if !candidate.is_empty() {
-            return candidate.to_string();
-        }
-    }
-    Path::new(relative).file_stem().map_or_else(
-        || relative.to_string(),
-        |stem| stem.to_string_lossy().into_owned(),
-    )
-}
-
 /// Rebuild the derived section and token rows for document `id`.
 ///
 /// Both are caches over the chunks, so they are deleted and rewritten wholesale rather than
@@ -842,6 +840,15 @@ pub fn discover(root: &Path) -> Vec<PathBuf> {
     found
 }
 
+/// The first directory segment of `relative` that [`walk`] would never enter — a dotted
+/// name or one of [`SKIPPED_DIRECTORIES`] — or `None` when every segment is walkable.
+/// The file's own name is exempt: discovery matches files by their `.dx` extension alone.
+fn unwalked_directory(relative: &str) -> Option<&str> {
+    let mut segments = relative.split('/');
+    let _file = segments.next_back();
+    segments.find(|segment| segment.starts_with('.') || SKIPPED_DIRECTORIES.contains(segment))
+}
+
 /// Recursively collect `.dx` files, skipping build output and the store itself.
 fn walk(directory: &Path, found: &mut Vec<PathBuf>) {
     let Ok(entries) = fs::read_dir(directory) else {
@@ -875,6 +882,23 @@ mod tests {
     }
 
     const NOTES: &str = "::heading level=1 id=notes\nNotes\n::end\n\n::paragraph id=p\nA line of prose about kubernetes.\n::end\n";
+
+    #[test]
+    fn a_save_into_a_directory_discovery_never_walks_is_refused_with_the_rule() {
+        // Storing under `build/` or `fixtures/` creates a row no listing can re-find —
+        // the ghost-document symptom by another door — so the save itself refuses.
+        let root = scratch("unlistable-save");
+        let mut store = Store::open(&root).expect("open");
+        for path in ["build/notes.dx", "fixtures/deep/case.dx", ".cache/notes.dx"] {
+            let error = store.ingest(path, NOTES).expect_err(path);
+            let sentence = error.to_string();
+            assert!(sentence.contains("never appear in a listing"), "{sentence}");
+        }
+        // The rule names directories, never the file itself: a dotted or oddly named
+        // *file* is still discovered by its extension.
+        store.ingest("build-notes.dx", NOTES).expect("plain save");
+        assert_eq!(store.list().expect("list").len(), 1);
+    }
 
     #[test]
     fn a_saved_document_leaves_a_stub_on_disk_and_reads_back_whole() {
@@ -1349,11 +1373,10 @@ mod tests {
     }
 
     #[test]
-    fn titles_fall_back_from_metadata_to_heading_to_file_name() {
-        let with_heading = parse("::heading level=1 id=h\nReal Title\n::end\n");
-        assert_eq!(display_title(&with_heading, "a/b.dx"), "Real Title");
-
+    fn summaries_carry_the_shared_title_derivation() {
+        // The rule itself lives (and is pinned) in `Document::display_title`; this holds
+        // the store's summaries to it.
         let bare = parse("::paragraph id=p\nbody\n::end\n");
-        assert_eq!(display_title(&bare, "a/plain-name.dx"), "plain-name");
+        assert_eq!(bare.display_title("a/plain-name.dx"), "plain-name");
     }
 }
