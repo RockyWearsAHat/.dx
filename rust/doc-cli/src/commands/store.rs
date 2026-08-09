@@ -1,9 +1,10 @@
-//! Store commands: `sync`, `stats`, `textconv`, and `git-setup`.
+//! Store commands: `sync`, `stats`, `rm`, `textconv`, and `git-setup`.
 //!
 //! These are the commands that exist because content lives in the store rather than in the
 //! `.dx` files. [`run_sync`] repairs a workspace, [`run_stats`] reports what storage bought,
-//! and [`run_textconv`] plus [`run_git_setup`] are what make git behave normally against a
-//! workspace of pointers — `git diff` shows the document, not the digest.
+//! [`run_rm`] deletes a document deliberately, and [`run_textconv`] plus [`run_git_setup`]
+//! are what make git behave normally against a workspace of pointers — `git diff` shows the
+//! document, not the digest.
 
 use std::path::{Path, PathBuf};
 
@@ -68,6 +69,31 @@ pub fn run_sync(args: &Args) -> Result<String, String> {
         );
     }
     Ok(out)
+}
+
+/// `dx rm <file>` — delete one document, deliberately.
+///
+/// Deleting the pointer file by hand and running `dx sync` prunes too, but that route reads
+/// as repair. This command names the intent: the store forgets the document, the packs are
+/// rewritten so the deletion sticks, and the file goes with it. Version history survives —
+/// `git checkout` + `dx sync` restores an old revision whole.
+pub fn run_rm(args: &Args) -> Result<String, String> {
+    let path = args.positional(0).map(PathBuf::from).ok_or_else(|| {
+        "dx rm deletes one document — name its .dx file: dx rm notes.dx".to_string()
+    })?;
+    let removed = workspace::remove(&path)?;
+    Ok(if removed.stored {
+        format!(
+            "removed {} — the store forgot it and the packs were rewritten; version \
+             history stays (`git checkout` + `dx sync` restores)\n",
+            path.display()
+        )
+    } else {
+        format!(
+            "removed {} — a plain file nothing had adopted; the store never held it\n",
+            path.display()
+        )
+    })
 }
 
 /// `dx stats` — what the store holds, and what sharing and compression saved.

@@ -221,18 +221,19 @@ fn blocks_html(document: &Document, options: &HtmlOptions, values: &Values) -> S
     out
 }
 
-/// The page title: the caller's override, the document title, then the first heading.
+/// The page title: the caller's override, else the one derivation in
+/// [`Document::display_title`], else the literal a page cannot go without.
 fn pick_title(document: &Document, options: &HtmlOptions) -> String {
-    for candidate in [
-        options.title.trim(),
-        document.title.trim(),
-        document.first_heading_text().trim(),
-    ] {
-        if !candidate.is_empty() {
-            return candidate.to_string();
-        }
+    let override_title = options.title.trim();
+    if !override_title.is_empty() {
+        return override_title.to_string();
     }
-    "Document".to_string()
+    let derived = document.display_title("");
+    if derived.is_empty() {
+        "Document".to_string()
+    } else {
+        derived
+    }
 }
 
 /// Collect the document's own CSS into a `<style>` element, or nothing when it declares none.

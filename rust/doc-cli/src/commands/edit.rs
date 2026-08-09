@@ -475,13 +475,17 @@ pub fn run_check(args: &Args) -> Result<String, String> {
     ))
 }
 
-/// `dx remove <file> <block-id>` — take one block out of a document.
+/// `dx remove <file> [block-id]` — take one block out of a document; with no block named,
+/// delete the document itself.
+///
+/// The two scopes share one command the way `rm` has always meant "this path, gone": the
+/// argument names what goes. Document deletion is [`crate::commands::store::run_rm`] — the
+/// store forgets it, the packs are rewritten, and version history survives.
 pub fn run_remove(args: &Args) -> Result<String, String> {
     let path = path_argument(args, 0, "a .dx file is required")?;
-    let id = args
-        .value("block")
-        .or_else(|| args.positional(1))
-        .ok_or_else(|| "a block id is required — see `dx outline <file>`".to_string())?;
+    let Some(id) = args.value("block").or_else(|| args.positional(1)) else {
+        return super::store::run_rm(args);
+    };
 
     let updated = edit::remove_block(&workspace::read(&path)?, id)?;
     workspace::save(&path, &parse(&updated))?;

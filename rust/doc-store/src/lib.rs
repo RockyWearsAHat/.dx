@@ -50,6 +50,15 @@ pub enum StoreError {
     NotFound(String),
     /// The supplied path was empty or tried to escape the workspace.
     InvalidPath(String),
+    /// The path enters a directory document discovery never walks (`build`, `fixtures`,
+    /// a dotted name, …), so a document stored there would exist but never be listed —
+    /// the ghost-document symptom by another door.
+    Unlistable {
+        /// The refused document path.
+        path: String,
+        /// The path segment discovery would never walk into.
+        directory: String,
+    },
     /// A document's chunks are missing or do not match the digest recorded for it.
     Corrupt(String),
     /// The database or filesystem refused an operation.
@@ -72,6 +81,12 @@ impl fmt::Display for StoreError {
             Self::InvalidPath(path) => write!(
                 f,
                 "{path} is not a usable document path; give a path inside the workspace"
+            ),
+            Self::Unlistable { path, directory } => write!(
+                f,
+                "{path} sits under `{directory}/`, which document discovery never walks — \
+                 stored there it would never appear in a listing again; save it outside \
+                 `{directory}/`"
             ),
             Self::Corrupt(detail) => write!(
                 f,

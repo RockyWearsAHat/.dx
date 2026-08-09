@@ -128,7 +128,12 @@ fn run_render_all(args: &Args) -> Result<String, String> {
         "dx render --all writes one page per document — say where with --out <dir>".to_string()
     })?);
 
-    let documents = workspace::load_all(&root);
+    let listing = workspace::load_all(&root)?;
+    // An export that silently skipped a page would drift from its source — refuse instead.
+    if let Some((path, error)) = listing.unresolved.first() {
+        return Err(format!("{path} did not resolve: {error}"));
+    }
+    let documents = listing.documents;
     if documents.is_empty() {
         return Err(format!("no .dx documents under {}", root.display()));
     }

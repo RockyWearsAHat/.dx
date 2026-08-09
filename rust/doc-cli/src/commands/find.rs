@@ -13,20 +13,24 @@ use crate::workspace;
 const DEFAULT_SEARCH_LIMIT: usize = 20;
 
 /// `dx ls [dir]` — every document under a directory, with its title and size.
+///
+/// A document that exists but will not resolve is listed with its error rather than
+/// hidden: an invisible document is the failure mode this resolver exists to prevent.
 pub fn run_ls(args: &Args) -> Result<String, String> {
     let root = root_of(args, 0);
-    let documents = workspace::load_all(&root);
-    if documents.is_empty() {
+    let listing = workspace::load_all(&root)?;
+    if listing.documents.is_empty() && listing.unresolved.is_empty() {
         return Ok(format!("no .dx documents under {}\n", root.display()));
     }
 
-    let width = documents
+    let width = listing
+        .documents
         .iter()
         .map(|loaded| loaded.relative.len())
         .max()
         .unwrap_or(4);
     let mut out = String::new();
-    for loaded in &documents {
+    for loaded in &listing.documents {
         out.push_str(&format!(
             "{:<width$}  {}  ({} blocks)\n",
             loaded.relative,
@@ -34,6 +38,9 @@ pub fn run_ls(args: &Args) -> Result<String, String> {
             loaded.document.blocks.len(),
             width = width
         ));
+    }
+    for (path, error) in &listing.unresolved {
+        out.push_str(&format!("{path}  — did not resolve: {error}\n"));
     }
     Ok(out)
 }
@@ -48,7 +55,7 @@ pub fn run_search(args: &Args) -> Result<String, String> {
         .number("limit")
         .map_or(DEFAULT_SEARCH_LIMIT, |limit| limit as usize);
 
-    let hits = workspace::search(&root, query, limit);
+    let hits = workspace::search(&root, query, limit)?;
     if hits.is_empty() {
         return Ok(format!("no documents match `{query}`\n"));
     }
