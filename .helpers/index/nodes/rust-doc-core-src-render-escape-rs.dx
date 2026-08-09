@@ -3,49 +3,49 @@ id: rust/doc-core/src/render/escape.rs
 title: escape.rs
 kind: file-index
 lang: rust
-rank: 0.012278
+rank: 0.012155
 links: [[rust/doc-core/src/render/html.rs]] [[rust/doc-core/src/render/field.rs]] [[rust/doc-core/src/render/inline.rs]]
-generated_at: 2026-08-06T01:13:54.684Z
+generated_at: 2026-08-08T01:43:37.080Z
 ---
 
-# rust/doc-core/src/render/escape.rs  ·  rust  ·  996 LOC
+# rust/doc-core/src/render/escape.rs  ·  rust  ·  1003 LOC
 
 ## Symbols
 
 - `escape_html` (function) — L273
 - `escape_style` (function) — L307
-- `is_fetchless_url` (function) — L321
-- `blank_unsafe_urls` (function) — L343
-- `sanitize_markup` (function) — L370
-- `extract_svg` (function) — L429
-- `Tag` (class) — L442
-- `read_tag` (function) — L465
-- `read_attribute_value` (function) — L570
-- `skip_element_content` (function) — L600
-- `render_tag` (function) — L619
-- `is_allowed_attribute` (function) — L644
-- `is_safe_url` (function) — L666
-- `is_safe_style` (function) — L698
-- `decode_entities` (function) — L728
-- `replace_case_insensitive` (function) — L774
-- `char_len_at` (function) — L796
-- `tests` (module) — L801
-- `escapes_every_significant_character` (method) — L805
-- `presentation_markup_survives` (method) — L813
-- `svg_drawings_survive` (method) — L825
-- `links_and_images_survive` (method) — L833
-- `the_payloads_that_defeated_the_deny_list_do_not_survive` (method) — L846
-- `a_dropped_element_takes_its_program_text_with_it` (method) — L896
-- `an_unknown_element_is_unwrapped_so_prose_is_never_lost` (method) — L905
-- `an_attribute_value_may_hold_the_tag_delimiter` (method) — L911
-- `a_bare_less_than_stays_text_and_cannot_form_a_tag` (method) — L920
-- `comments_are_dropped_so_they_cannot_hide_an_unbalanced_quote` (method) — L925
-- `safe_data_images_survive_and_scriptable_ones_do_not` (method) — L930
-- `accessibility_and_namespaces_survive_the_allow_list` (method) — L941
-- `a_style_attribute_that_only_lays_out_survives` (method) — L957
-- `entities_are_decoded_the_way_a_browser_decodes_them` (method) — L966
-- `an_unterminated_numeric_entity_cannot_smuggle_a_scheme` (method) — L980
-- `extracts_only_the_first_svg_root` (method) — L992
+- `is_fetchless_url` (function) — L328
+- `blank_unsafe_urls` (function) — L350
+- `sanitize_markup` (function) — L377
+- `extract_svg` (function) — L436
+- `Tag` (class) — L449
+- `read_tag` (function) — L472
+- `read_attribute_value` (function) — L577
+- `skip_element_content` (function) — L607
+- `render_tag` (function) — L626
+- `is_allowed_attribute` (function) — L651
+- `is_safe_url` (function) — L673
+- `is_safe_style` (function) — L705
+- `decode_entities` (function) — L735
+- `replace_case_insensitive` (function) — L781
+- `char_len_at` (function) — L803
+- `tests` (module) — L808
+- `escapes_every_significant_character` (method) — L812
+- `presentation_markup_survives` (method) — L820
+- `svg_drawings_survive` (method) — L832
+- `links_and_images_survive` (method) — L840
+- `the_payloads_that_defeated_the_deny_list_do_not_survive` (method) — L853
+- `a_dropped_element_takes_its_program_text_with_it` (method) — L903
+- `an_unknown_element_is_unwrapped_so_prose_is_never_lost` (method) — L912
+- `an_attribute_value_may_hold_the_tag_delimiter` (method) — L918
+- `a_bare_less_than_stays_text_and_cannot_form_a_tag` (method) — L927
+- `comments_are_dropped_so_they_cannot_hide_an_unbalanced_quote` (method) — L932
+- `safe_data_images_survive_and_scriptable_ones_do_not` (method) — L937
+- `accessibility_and_namespaces_survive_the_allow_list` (method) — L948
+- `a_style_attribute_that_only_lays_out_survives` (method) — L964
+- `entities_are_decoded_the_way_a_browser_decodes_them` (method) — L973
+- `an_unterminated_numeric_entity_cannot_smuggle_a_scheme` (method) — L987
+- `extracts_only_the_first_svg_root` (method) — L999
 
 ## Graph
 
@@ -62,7 +62,7 @@ graph LR
 
 ### Referenced by
 
-- [[rust/doc-core/src/render/html.rs]] via `escape_style`, `sanitize_markup`, `escape_html`, `extract_svg`
+- [[rust/doc-core/src/render/html.rs]] via `extract_svg`, `escape_html`, `escape_style`, `sanitize_markup`
 - [[rust/doc-core/src/render/field.rs]] via `escape_html`
 - [[rust/doc-core/src/render/inline.rs]] via `escape_html`
 

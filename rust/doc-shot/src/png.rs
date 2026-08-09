@@ -129,6 +129,40 @@ fn channels(color_type: u8) -> Option<usize> {
     }
 }
 
+/// Stitch vertically-scrolled strips into one PNG: every strip must share the first's
+/// width, rows are concatenated top to bottom, and the whole is re-encoded.
+///
+/// This is how a tall document is captured as a single picture: a `::view`'s sandboxed
+/// frame only paints inside the viewport, so one full-height viewport ships the deep
+/// frames as empty paper — the capture scrolls a window over the page and joins the
+/// strips here instead.
+///
+/// # Errors
+/// A sentence when the strips disagree about width, or when there are none.
+pub fn stack(strips: &[Image]) -> Result<Vec<u8>, String> {
+    let first = strips.first().ok_or("no strips to stitch")?;
+    let width = first.width;
+    let mut height: u32 = 0;
+    let mut rgba = Vec::new();
+    for strip in strips {
+        if strip.width != width {
+            return Err(format!(
+                "strip width {} does not match the page's {width}",
+                strip.width
+            ));
+        }
+        height = height
+            .checked_add(strip.height)
+            .ok_or("the stitched page is too tall")?;
+        rgba.extend_from_slice(&strip.rgba);
+    }
+    Ok(encode(&Image {
+        width,
+        height,
+        rgba,
+    }))
+}
+
 /// Decode an 8-bit, non-interlaced PNG into RGBA.
 ///
 /// # Errors
@@ -392,6 +426,25 @@ mod tests {
             height,
             rgba: pixels.iter().flatten().copied().collect(),
         }
+    }
+
+    #[test]
+    fn stitched_strips_read_back_as_one_page_in_order() {
+        let top = image(2, 1, &[[255, 0, 0, 255], [0, 255, 0, 255]]);
+        let bottom = image(2, 2, &[[0; 4], [1, 2, 3, 255], [9, 9, 9, 255], [255; 4]]);
+        let stitched =
+            decode(&stack(&[top.clone(), bottom.clone()]).expect("stitch")).expect("png");
+        assert_eq!((stitched.width, stitched.height), (2, 3));
+        let joined: Vec<u8> = top.rgba.iter().chain(bottom.rgba.iter()).copied().collect();
+        assert_eq!(stitched.rgba, joined);
+    }
+
+    #[test]
+    fn strips_of_different_widths_are_refused_with_both_numbers() {
+        let wide = image(3, 1, &[[0; 4], [0; 4], [0; 4]]);
+        let narrow = image(2, 1, &[[0; 4], [0; 4]]);
+        let error = stack(&[wide, narrow]).expect_err("mismatch");
+        assert!(error.contains('2') && error.contains('3'), "{error}");
     }
 
     #[test]

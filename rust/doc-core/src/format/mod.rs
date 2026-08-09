@@ -136,6 +136,28 @@ mod tests {
     }
 
     #[test]
+    fn a_style_src_round_trips_and_a_srcless_style_is_unchanged() {
+        // The stored form of a `src=` style is the reference and an empty body —
+        // hydration fills it, and is never saved. Additive rule: a style block stating
+        // no src must not gain the attribute on its next save.
+        let referenced = "::style id=dress src=theme/site.css\n\n::end\n";
+        assert_eq!(round_trip(referenced), referenced);
+        let inline = "::style id=dress\np { color: red }\n::end\n";
+        assert_eq!(round_trip(inline), inline);
+    }
+
+    #[test]
+    fn an_open_code_block_round_trips_and_a_closed_one_is_unchanged() {
+        // `open` starts the listing expanded — the author saying the code is the content.
+        // Additive rule: a code block that does not state it must not gain the attribute
+        // on its next save.
+        let expanded = "::code id=q lang=sql open\nselect 1;\n::end\n";
+        assert_eq!(round_trip(expanded), expanded);
+        let folded = "::code id=q lang=sql\nselect 1;\n::end\n";
+        assert_eq!(round_trip(folded), folded);
+    }
+
+    #[test]
     fn a_nav_block_round_trips_including_an_empty_one() {
         // The empty body is the feature — it means "this document's contents" — so the
         // writer must not fill it in, the way an empty list gets a placeholder item.
@@ -151,6 +173,21 @@ mod tests {
         assert_eq!(
             round_trip("::nav id=n\n- a.dx\n::end\n"),
             "::nav id=n\n- a.dx\n::end\n"
+        );
+    }
+
+    #[test]
+    fn a_bare_keyword_opening_an_inline_body_stays_prose() {
+        // `run`/`open` are code attributes; on any other kind the word is the body's
+        // first word, never a swallowed attribute — an inline heading beginning with
+        // "Open" must keep it.
+        assert_eq!(
+            round_trip("::heading level=2 id=h Open questions ::end\n"),
+            "::heading level=2 id=h\nOpen questions\n::end\n"
+        );
+        assert_eq!(
+            round_trip("::paragraph id=p run with it ::end\n"),
+            "::paragraph id=p\nrun with it\n::end\n"
         );
     }
 

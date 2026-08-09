@@ -3,9 +3,9 @@ id: editor/vscode/src/engine.ts
 title: engine.ts
 kind: file-index
 lang: typescript
-rank: 0.005201
+rank: 0.005056
 links: [[rust/doc-core/src/edit.rs]] [[editor/vscode/test/editing.test.mjs]] [[editor/github/wasm/doc_wasm.js]] [[rust/doc-core/src/render/field.rs]] [[editor/github/content.js]] [[editor/github/test/engine.test.mjs]] [[editor/github/resolve.js]] [[editor/github/test/resolve.test.mjs]] [[rust/doc-core/src/format/stringify.rs]]
-generated_at: 2026-08-06T01:13:54.687Z
+generated_at: 2026-08-08T01:43:37.084Z
 ---
 
 # editor/vscode/src/engine.ts  ·  typescript  ·  250 LOC
@@ -61,11 +61,11 @@ graph LR
 
 ### Referenced by
 
-- [[rust/doc-core/src/edit.rs]] via `remove_block`, `block_header`, `board_place`, `preview_block`, `board_arrange`
-- [[editor/vscode/test/editing.test.mjs]] via `block_header`, `board_detach`, `replace_block`, `toggle_check`, `references`
-- [[editor/github/wasm/doc_wasm.js]] via `render_outline`, `insert_block`, `references`, `remove_block`, `board_arrange`
+- [[rust/doc-core/src/edit.rs]] via `preview_block`, `board_link`, `replace_block`, `block_source`, `block_header`
+- [[editor/vscode/test/editing.test.mjs]] via `board_link`, `block_source`, `toggle_check`, `preview_block`, `remove_block`
+- [[editor/github/wasm/doc_wasm.js]] via `set_block`, `board_arrange`, `board_link`, `preview_block`, `render_text`
 - [[rust/doc-core/src/render/field.rs]] via `field_html`
-- [[editor/github/content.js]] via `references`, `render_html`, `file_references`, `pack_document`
+- [[editor/github/content.js]] via `pack_document`, `references`, `render_html`, `file_references`
 - [[editor/github/test/engine.test.mjs]] via `render_html`
 - [[editor/github/resolve.js]] via `pack_document`
 - [[editor/github/test/resolve.test.mjs]] via `pack_document`

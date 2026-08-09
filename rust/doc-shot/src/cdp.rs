@@ -28,6 +28,11 @@ const LAUNCH_TIMEOUT: Duration = Duration::from_secs(15);
 /// How long one protocol command may take before the session gives up on it.
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(15);
 
+/// How long a screenshot may take: its work scales with the page, and rasterizing plus
+/// PNG-encoding a full-height document at capture density is honest minutes of work the
+/// flat command timeout was reading as a dead browser.
+const SCREENSHOT_TIMEOUT: Duration = Duration::from_secs(120);
+
 /// How long to wait for a page's load event before proceeding without it.
 const LOAD_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -99,6 +104,14 @@ impl Cdp {
                 "--disable-extensions",
                 "--force-device-scale-factor=1",
                 "--remote-debugging-port=0",
+                // The capture browser resolves no hostnames, ever. A capture is a read,
+                // and a document must not reach the network by being looked at — a
+                // `::view` naming an external stylesheet was both a phone-home channel
+                // and a hang: the render-blocking fetch never completed in this session,
+                // so the sandboxed frame never painted and shipped as empty paper.
+                // NXDOMAIN fails the fetch instantly; the page paints with what it
+                // carries. `file://` needs no resolution and is untouched.
+                "--host-resolver-rules=MAP * ~NOTFOUND",
             ])
             .arg(format!("--user-data-dir={}", profile_dir.display()))
             .arg(format!("--window-size={width},{height}"))
@@ -149,6 +162,14 @@ impl Cdp {
     /// # Errors
     /// Returns a sentence when the browser cannot create or attach the page.
     pub fn open(&mut self, url: &str) -> Result<(), String> {
+        self.attach()?;
+        self.command("Page.navigate", json!({ "url": url }))?;
+        self.wait_for_event("Page.loadEventFired", LOAD_TIMEOUT);
+        Ok(())
+    }
+
+    /// Attach this session to a fresh `about:blank` page, closing the previous one.
+    fn attach(&mut self) -> Result<(), String> {
         if let Some(previous) = self.target.take() {
             // Best-effort: a page that will not close must not stop the next one opening.
             let _ = self.raw_command("Target.closeTarget", json!({ "targetId": previous }));
@@ -171,28 +192,37 @@ impl Cdp {
                 .to_string(),
         );
         self.command("Page.enable", json!({}))?;
-        self.command("Page.navigate", json!({ "url": url }))?;
-        self.wait_for_event("Page.loadEventFired", LOAD_TIMEOUT);
         Ok(())
     }
 
-    /// Let the page finish becoming itself before it is measured or photographed.
-    ///
-    /// Advances virtual time until `budget_ms` of it has passed with no network fetches
-    /// pending — the DevTools form of the `--virtual-time-budget` flag the one-shot
-    /// capture route always carried. Without it a capture lands the instant the load
-    /// event fires, which is before a `::view`'s sandboxed frame has painted; the first
-    /// paginated read over this channel shipped nine empty view frames that way.
+    /// Open `url` and give the page `grace_ms` of real time to become itself before it
+    /// is measured or photographed.
     ///
     /// # Errors
-    /// Returns a sentence when the browser refuses to run virtual time.
-    pub fn settle(&mut self, budget_ms: u32) -> Result<(), String> {
-        self.command(
-            "Emulation.setVirtualTimePolicy",
-            json!({ "policy": "pauseIfNetworkFetchesPending", "budget": budget_ms }),
-        )?;
-        self.wait_for_event("Emulation.virtualTimeBudgetExpired", COMMAND_TIMEOUT);
+    /// Returns a sentence when the target cannot be opened.
+    pub fn open_settled(&mut self, url: &str, grace_ms: u32) -> Result<(), String> {
+        self.open(url)?;
+        // Real time, deliberately: virtual time froze a `::view`'s sandboxed frame at
+        // every stage it was tried (granted after load, the frame's tasks queue to an
+        // expired timeline; granted before navigation, the capture hangs or ships
+        // black). The pages this crate loads are local files — a settling grace of real
+        // milliseconds is honest and short, and `stable_screenshot` holds the page to
+        // its own definition of settled on top of it.
+        std::thread::sleep(Duration::from_millis(u64::from(grace_ms)));
         Ok(())
+    }
+
+    /// Let the live page finish becoming itself after a change that needs more time —
+    /// a scroll of a paginated capture, a viewport resize.
+    ///
+    /// Real milliseconds, deliberately: virtual time froze a `::view`'s sandboxed frame
+    /// at every stage it was tried — granted after load, the frame's tasks queue to an
+    /// already-expired timeline and it never paints; granted before navigation, the
+    /// capture hangs on a paused renderer or ships black. The pages this crate loads
+    /// are local files with no network, so a short real grace is honest, and
+    /// `stable_screenshot` holds the page to its own definition of settled on top.
+    pub fn settle(&mut self, grace_ms: u32) {
+        std::thread::sleep(Duration::from_millis(u64::from(grace_ms)));
     }
 
     /// Send one protocol command to the attached page and return its `result`.
@@ -201,8 +231,21 @@ impl Cdp {
     /// Returns the protocol error's message when the browser refuses the command, or a
     /// sentence when the connection fails.
     pub fn command(&mut self, method: &str, params: Value) -> Result<Value, String> {
+        self.command_within(method, params, COMMAND_TIMEOUT)
+    }
+
+    /// [`Self::command`] with its own deadline, for the commands whose work scales with
+    /// the page: capturing a twelve-thousand-pixel document rasterizes and PNG-encodes
+    /// tens of megapixels, which is minutes of honest work the flat command timeout was
+    /// reading as a dead browser.
+    fn command_within(
+        &mut self,
+        method: &str,
+        params: Value,
+        timeout: Duration,
+    ) -> Result<Value, String> {
         let session = self.session.clone();
-        self.dispatch(method, params, session.as_deref())
+        self.dispatch(method, params, session.as_deref(), timeout)
     }
 
     /// Evaluate a JavaScript expression on the page and return its value.
@@ -239,7 +282,7 @@ impl Cdp {
             });
             params["captureBeyondViewport"] = json!(true);
         }
-        let result = self.command("Page.captureScreenshot", params)?;
+        let result = self.command_within("Page.captureScreenshot", params, SCREENSHOT_TIMEOUT)?;
         base64::decode(
             result["data"]
                 .as_str()
@@ -253,6 +296,7 @@ impl Cdp {
         method: &str,
         params: Value,
         session: Option<&str>,
+        timeout: Duration,
     ) -> Result<Value, String> {
         self.next_id += 1;
         let id = self.next_id;
@@ -262,7 +306,7 @@ impl Cdp {
         }
         self.send_text(&message.to_string())?;
 
-        let deadline = Instant::now() + COMMAND_TIMEOUT;
+        let deadline = Instant::now() + timeout;
         loop {
             let text = self
                 .receive_message(deadline)
@@ -284,7 +328,7 @@ impl Cdp {
 
     /// A command with no session — the browser-level half of the protocol.
     fn raw_command(&mut self, method: &str, params: Value) -> Result<Value, String> {
-        self.dispatch(method, params, None)
+        self.dispatch(method, params, None, COMMAND_TIMEOUT)
     }
 
     /// Wait until the named event arrives or the timeout passes; either way, proceed.

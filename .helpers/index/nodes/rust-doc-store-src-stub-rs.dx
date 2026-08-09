@@ -3,9 +3,9 @@ id: rust/doc-store/src/stub.rs
 title: stub.rs
 kind: file-index
 lang: rust
-rank: 0.003113
+rank: 0.002954
 links: [[rust/doc-core/src/render/text.rs]] [[packaging/build-icons.py]] [[rust/doc-cli/src/mcp/handlers.rs]] [[editor/github/content.js]] [[editor/github/test/resolve.test.mjs]] [[editor/github/wasm/doc_wasm.d.ts]] [[editor/github/wasm/doc_wasm.js]] [[rust/doc-cli/src/daemon/engine.rs]] [[rust/doc-core/src/digest.rs]] [[rust/doc-core/src/lib.rs]] [[rust/doc-wasm/src/lib.rs]]
-generated_at: 2026-08-06T01:13:54.689Z
+generated_at: 2026-08-08T01:43:37.086Z
 ---
 
 # rust/doc-store/src/stub.rs  ·  rust  ·  143 LOC

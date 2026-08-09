@@ -88,6 +88,11 @@ pub fn run_fmt(args: &Args) -> Result<String, String> {
 /// operation the editing surfaces perform when a reader rewrites the tag line above a
 /// block, so a person and an agent retype a block through one implementation.
 ///
+/// With `--replace OLD --with NEW` the body is edited in place instead of retyped: the
+/// exact string `OLD` becomes `NEW` and every other character stays — the change-sized
+/// edit ([`edit::replace_in_block`]), priced at the characters that changed rather than
+/// the whole block. `OLD` must match exactly once unless `--all` says every occurrence.
+///
 /// A `--header` retype whose body arrives empty from anywhere but an explicit
 /// `--text ''` is refused when the block has words to lose: a closed stdin was never
 /// how anyone meant to erase a block, and it has erased them (part 40's field note).
@@ -103,6 +108,36 @@ fn set_in(args: &Args, cache_root: &Path) -> Result<String, String> {
         .positional(1)
         .ok_or_else(|| "a block id is required — see `dx outline <file>`".to_string())?;
     refuse_extra_positionals(args, 2)?;
+
+    if let Some(old) = args.value("replace") {
+        // The in-place edit stands alone: mixing it with a body source would make two
+        // instructions for one block, and whichever lost would be a silent surprise.
+        if args.value("text").is_some() || args.value("from").is_some() || args.present("header") {
+            return Err(
+                "--replace edits the body in place — it does not combine with --text, \
+                 --from, or --header"
+                    .to_string(),
+            );
+        }
+        let new = args.value("with").ok_or_else(|| {
+            "--replace needs --with <new text> (an empty --with '' deletes the match)".to_string()
+        })?;
+        let (updated, count) =
+            edit::replace_in_block(&workspace::read(&path)?, id, old, new, args.present("all"))?;
+        let document = parse(&updated);
+        workspace::save(&path, &document)?;
+        let note = edit_is_the_review(&updated, id, cache_root);
+        let warnings = joined_warnings(&document, &path);
+        let occurrences = if count == 1 {
+            "1 occurrence".to_string()
+        } else {
+            format!("{count} occurrences")
+        };
+        return Ok(format!(
+            "replaced {occurrences} in `{id}` in {}\n{note}{warnings}",
+            path.display()
+        ));
+    }
     let body = body_argument(args)?;
 
     if args.present("header") {
@@ -540,6 +575,56 @@ mod tests {
         assert!(!raw.contains("Old text"));
         assert!(raw.contains("::paragraph id=tail\nKeep me\n::end"));
         assert!(raw.contains("::heading level=1 id=h\nTitle\n::end"));
+    }
+
+    /// The change-sized edit: `--replace OLD --with NEW` touches the match and keeps
+    /// every other character, and the answer states how many occurrences changed.
+    #[test]
+    fn set_replace_changes_the_match_in_place() {
+        let path = scratch("set-replace").join("doc.dx");
+        let file = path.to_string_lossy().into_owned();
+        workspace::write_text(
+            &path,
+            "::paragraph id=note\nThe server listens on port 7431 by default.\n::end\n",
+        )
+        .expect("seed");
+
+        let answer = run_set(&args(&[
+            &file,
+            "note",
+            "--replace",
+            "7431",
+            "--with",
+            "9142",
+        ]))
+        .expect("set");
+
+        assert!(answer.contains("1 occurrence"), "{answer}");
+        let raw = workspace::read(&path).expect("resolve");
+        assert!(raw.contains("port 9142 by default"));
+        assert!(!raw.contains("7431"));
+    }
+
+    /// Two instructions for one body is a silent surprise waiting; the combination is
+    /// refused with a sentence instead.
+    #[test]
+    fn set_replace_does_not_combine_with_a_body_source() {
+        let path = scratch("set-replace-combo").join("doc.dx");
+        let file = path.to_string_lossy().into_owned();
+        workspace::write_text(&path, "::paragraph id=note\nwords\n::end\n").expect("seed");
+
+        let refusal = run_set(&args(&[
+            &file,
+            "note",
+            "--replace",
+            "words",
+            "--with",
+            "text",
+            "--text",
+            "whole body",
+        ]))
+        .expect_err("refuse");
+        assert!(refusal.contains("--replace"), "{refusal}");
     }
 
     /// The edit is the review: a runnable block typed through `dx set` (or authored by

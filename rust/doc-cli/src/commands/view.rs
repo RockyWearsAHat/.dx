@@ -83,6 +83,10 @@ pub fn run_render(args: &Args) -> Result<String, String> {
         return Ok(doc_core::render::field_html(text));
     }
 
+    if args.present("all") {
+        return run_render_all(args);
+    }
+
     let Some(id) = args.value("block") else {
         let document = selected_document(args)?;
         return Ok(html(&document, &html_options(args)));
@@ -104,6 +108,41 @@ pub fn run_render(args: &Args) -> Result<String, String> {
             Ok(render::block(&document, id, &options).unwrap_or_default())
         }
     }
+}
+
+/// `dx render --all [dir] --out <dir>` — every document in a workspace as its own page.
+///
+/// One command exports a whole site: each `.dx` under `dir` (the current directory when
+/// unnamed) becomes `<out>/<same relative path>.html`, rendered exactly as `dx render`
+/// renders it alone — hydrated, self-contained, one engine. This exists because the
+/// per-document route made a site deliverable pay one command per page after every edit,
+/// and a regeneration step anyone can forget is an export that drifts from its source.
+///
+/// The answer is a report of the files written, never page content — so `--out` names the
+/// export directory here, not a file to redirect one page into.
+fn run_render_all(args: &Args) -> Result<String, String> {
+    let root = args
+        .positional(0)
+        .map_or_else(|| PathBuf::from("."), PathBuf::from);
+    let out = PathBuf::from(args.value("out").ok_or_else(|| {
+        "dx render --all writes one page per document — say where with --out <dir>".to_string()
+    })?);
+
+    let documents = workspace::load_all(&root);
+    if documents.is_empty() {
+        return Err(format!("no .dx documents under {}", root.display()));
+    }
+
+    let options = html_options(args);
+    let mut report = String::new();
+    for loaded in documents {
+        let mut document = loaded.document;
+        doc_core::resolve::hydrate(&mut document, &workspace::resolver_for(&loaded.path));
+        let target = out.join(Path::new(&loaded.relative).with_extension("html"));
+        workspace::write_text(&target, &html(&document, &options))?;
+        report.push_str(&format!("wrote {}\n", target.display()));
+    }
+    Ok(report)
 }
 
 /// `dx png <file>` — the document as an image, written to a file.
@@ -500,6 +539,46 @@ mod tests {
         let out = run_text(&args(&[&path.to_string_lossy()])).expect("text");
         assert!(out.contains("# Top"));
         assert!(out.contains("## Beta"));
+    }
+
+    /// One command exports the workspace: every document becomes its own page under
+    /// `--out`, keeping its relative path, and the answer reports the files written.
+    #[test]
+    fn render_all_writes_one_page_per_document() {
+        let root = std::env::temp_dir().join("dx-view-tests-render-all");
+        let _ = std::fs::remove_dir_all(&root);
+        workspace::save(
+            &root.join("index.dx"),
+            &parse("::heading level=1 id=h\nHome\n::end\n"),
+        )
+        .expect("seed");
+        workspace::save(
+            &root.join("guide/start.dx"),
+            &parse("::paragraph id=p\nStart here.\n::end\n"),
+        )
+        .expect("seed");
+        let out = root.join("dist");
+
+        let report = run_render(&args(&[
+            &root.to_string_lossy(),
+            "--all",
+            "--out",
+            &out.to_string_lossy(),
+        ]))
+        .expect("render --all");
+
+        assert!(report.contains("index.html"), "{report}");
+        let home = std::fs::read_to_string(out.join("index.html")).expect("page");
+        assert!(home.contains("Home"));
+        let start = std::fs::read_to_string(out.join("guide/start.html")).expect("nested page");
+        assert!(start.contains("Start here."));
+    }
+
+    /// The export refuses to guess where the pages go: no `--out`, no files.
+    #[test]
+    fn render_all_without_out_is_refused_with_the_flag_to_pass() {
+        let refusal = run_render(&args(&["--all"])).expect_err("refuse");
+        assert!(refusal.contains("--out"), "{refusal}");
     }
 
     /// `--block` is what a surface calls between keystrokes, so it has to answer with the

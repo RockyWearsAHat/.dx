@@ -3,9 +3,9 @@ id: rust/doc-core/src/format/attrs.rs
 title: attrs.rs
 kind: file-index
 lang: rust
-rank: 0.003178
+rank: 0.003061
 links: [[rust/doc-core/src/format/parse.rs]] [[rust/doc-core/src/format/util.rs]] [[rust/doc-core/src/format/source.rs]]
-generated_at: 2026-08-06T01:13:54.688Z
+generated_at: 2026-08-08T01:43:37.086Z
 ---
 
 # rust/doc-core/src/format/attrs.rs  ·  rust  ·  137 LOC
@@ -40,6 +40,6 @@ graph LR
 
 ### Referenced by
 
-- [[rust/doc-core/src/format/parse.rs]] via `parse_leading_attributes`, `attr`
+- [[rust/doc-core/src/format/parse.rs]] via `attr`, `parse_leading_attributes`
 - [[rust/doc-core/src/format/source.rs]] via `set_attr`
 

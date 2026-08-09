@@ -360,9 +360,15 @@ fn index_tool() -> Value {
 fn edit_tool() -> Value {
     json!({
         "name": "dx_edit",
-        "description": "Replace the body of one block, leaving every other block byte-for-byte \
+        "description": "Change one block, leaving every other block byte-for-byte \
                         unchanged. This is the safe way to edit a long document. Get block ids \
-                        from dx_outline or from dx_source with ids=true. Pass `header` to also \
+                        from dx_outline or from dx_source with ids=true. Pass `text` to \
+                        replace the whole body — or, for a small change, `replace`+`with`: \
+                        the exact string `replace` becomes `with` and every other character \
+                        stays, so the call costs the change, not the block. Prefer \
+                        replace for renames, one-line fixes, and cross-cutting edits; a \
+                        whole-body `text` for one changed word is tokens spent retyping \
+                        what already exists. Pass `header` to also \
                         retype the block's `::kind attrs` opening line — the way to change a \
                         block's kind or any attribute (src=, reads=, writes=, run, for=) in \
                         one call; never rewrite a whole document with dx_write to change one \
@@ -376,8 +382,30 @@ fn edit_tool() -> Value {
             "type": "object",
             "properties": {
                 "path": path_property(),
-                "block": { "type": "string", "description": "Id of the block to replace." },
-                "text": { "type": "string", "description": "New body text for the block." },
+                "block": { "type": "string", "description": "Id of the block to change." },
+                "text": {
+                    "type": "string",
+                    "description": "New body text for the block — the whole body. For a \
+                                    small change inside a body, use `replace`+`with` \
+                                    instead."
+                },
+                "replace": {
+                    "type": "string",
+                    "description": "Exact text to find in the block's body — matched as \
+                                    characters, never as a pattern. Must occur exactly \
+                                    once unless `all` is true. Stands alone: do not also \
+                                    pass `text` or `header`."
+                },
+                "with": {
+                    "type": "string",
+                    "description": "What `replace` becomes. An empty string deletes the \
+                                    match. Required with `replace`."
+                },
+                "all": {
+                    "type": "boolean",
+                    "description": "Replace every occurrence of `replace` instead of \
+                                    requiring exactly one. Default: false."
+                },
                 "header": {
                     "type": "string",
                     "description": "New `::kind attrs` opening line for the block, e.g. \
@@ -393,7 +421,7 @@ fn edit_tool() -> Value {
                                     execute either way."
                 }
             },
-            "required": ["path", "block", "text"]
+            "required": ["path", "block"]
         }
     })
 }

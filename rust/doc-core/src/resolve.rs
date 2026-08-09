@@ -1,6 +1,6 @@
 //! References a document makes past its own edge, and how they are filled in.
 //!
-//! A document may name four things it does not itself carry:
+//! A document may name five things it does not itself carry:
 //!
 //! - **A sibling file**, on a `::code src=path` block. The file is the source of truth —
 //!   the listing a reader sees, the text `dx run` executes — and the document shows it as
@@ -15,6 +15,12 @@
 //! - **One block of a sibling document**, on a board node line (`- plan.dx#step x= y=`).
 //!   The block lives once, in its own document, and every board that names it shows the
 //!   current content instead of a copy.
+//! - **A sibling stylesheet**, on a `::style src=path.css` block. The document's dress is
+//!   the file's current text, so one sheet dresses every page of a site instead of being
+//!   pasted into each. The fetched CSS passes through the same sanitizer as an inline
+//!   body (`render::escape::escape_style`) — a file is not a trust upgrade — and a file
+//!   that cannot be read leaves the block's CSS empty: the page renders undressed, and
+//!   the report says why, because a sentence injected as CSS would just be a broken rule.
 //! - **A sibling picture**, on an `::image src=path` block. The file's current bytes are
 //!   embedded as a `data:` URI, so the rendered page carries its own artwork wherever it
 //!   is shown — a capture made from a scratch directory, an editor webview, a PNG export.
@@ -274,7 +280,7 @@ pub fn references(document: &Document) -> Vec<Reference> {
         }
     };
     for block in &document.blocks {
-        if matches!(block.kind.as_str(), "code" | "view") && !block.src.is_empty() {
+        if matches!(block.kind.as_str(), "code" | "view" | "style") && !block.src.is_empty() {
             let src = match block.kind.as_str() {
                 "view" => view_fragment(&block.src).0,
                 _ => block.src.as_str(),
@@ -298,13 +304,15 @@ pub fn references(document: &Document) -> Vec<Reference> {
 ///
 /// Board node references are resolved first: each `path.dx#block` line gains a hidden
 /// copy of the named block under exactly that id, so the board draws it like any sibling
-/// block. Then every `::code src=` body — including one a foreign block just brought in,
-/// whose path is re-rooted in *its* document's folder — is replaced with the file's
-/// current text, and every `::image src=` naming a sibling raster file is embedded as a
-/// `data:` URI of its current bytes. A reference that cannot be resolved becomes a
-/// sentence in the block's place naming the path — a listing's body, an image's alt —
-/// and an [`Unresolved`] is returned for it, so a caller that must not proceed on a
-/// partial document (running it, say) can tell which blocks are affected.
+/// block. Then every `::code src=` and `::style src=` body — including one a foreign
+/// block just brought in, whose path is re-rooted in *its* document's folder — is
+/// replaced with the file's current text, and every `::image src=` naming a sibling
+/// raster file is embedded as a `data:` URI of its current bytes. A reference that
+/// cannot be resolved becomes a sentence in the block's place naming the path — a
+/// listing's body, an image's alt; a style block stays empty instead, because a sentence
+/// in a style body would be parsed as CSS — and an [`Unresolved`] is returned for it, so
+/// a caller that must not proceed on a partial document (running it, say) can tell which
+/// blocks are affected.
 ///
 /// The result is for viewing and running, never for saving: nothing here is canonical
 /// text, and serializing a hydrated document would turn references back into copies.
@@ -317,7 +325,8 @@ pub fn hydrate(document: &mut Document, resolver: &dyn Resolver) -> Vec<Unresolv
         };
         match foreign_block(resolver, path, block_id) {
             Some(mut block) => {
-                if matches!(block.kind.as_str(), "code" | "view") && !block.src.is_empty() {
+                if matches!(block.kind.as_str(), "code" | "view" | "style") && !block.src.is_empty()
+                {
                     // The reference's path is relative to the document that owns it.
                     block.src = joined(folder(path), &block.src).unwrap_or_default();
                 }
@@ -343,7 +352,7 @@ pub fn hydrate(document: &mut Document, resolver: &dyn Resolver) -> Vec<Unresolv
     }
 
     for block in &mut document.blocks {
-        if !matches!(block.kind.as_str(), "code" | "view") || block.src.is_empty() {
+        if !matches!(block.kind.as_str(), "code" | "view" | "style") || block.src.is_empty() {
             continue;
         }
         let (path, fragment) = match block.kind.as_str() {
@@ -384,6 +393,20 @@ pub fn hydrate(document: &mut Document, resolver: &dyn Resolver) -> Vec<Unresolv
                     sentence: format!(
                         "{} could not be shown here — the view is the page's current \
                          render, and the file was not found inside this document's folder.",
+                        block.src
+                    ),
+                });
+            }
+            None if block.kind == "style" => {
+                // A sentence written into a style body would be parsed as (broken) CSS;
+                // the honest render is the page undressed, with the report saying why.
+                unresolved.push(Unresolved {
+                    block: block.id.clone(),
+                    reference: block.src.clone(),
+                    sentence: format!(
+                        "{} could not be read here — the document's dress is the file's \
+                         current text, and the file was not found inside this document's \
+                         folder.",
                         block.src
                     ),
                 });
@@ -782,9 +805,35 @@ mod tests {
                 panic!("asked for {path}");
             }
         }
-        let mut document = parse("::code id=x src=../../etc/passwd\n::end\n");
+        let mut document = parse(
+            "::code id=x src=../../etc/passwd\n::end\n\n\
+             ::style id=dress src=../theme.css\n::end\n",
+        );
         let notes = hydrate(&mut document, &Panics);
+        assert_eq!(notes.len(), 2);
+    }
+
+    #[test]
+    fn a_style_src_is_the_files_current_css() {
+        let mut document = parse("::style id=dress src=theme/site.css\n::end\n");
+        let notes = hydrate(
+            &mut document,
+            &map(&[("theme/site.css", "p { color: red }\n")], &[]),
+        );
+        assert!(notes.is_empty(), "{notes:?}");
+        assert_eq!(document.blocks[0].text, "p { color: red }");
+    }
+
+    #[test]
+    fn a_missing_style_src_is_a_report_not_injected_css() {
+        // A sentence written into a style body would be parsed as broken CSS; the page
+        // renders undressed and the report names the path instead.
+        let mut document = parse("::style id=dress src=theme/site.css\n::end\n");
+        let notes = hydrate(&mut document, &Nowhere);
         assert_eq!(notes.len(), 1);
+        assert_eq!(notes[0].block, "dress");
+        assert!(notes[0].sentence.contains("theme/site.css"));
+        assert_eq!(document.blocks[0].text, "");
     }
 
     #[test]
@@ -993,12 +1042,14 @@ mod tests {
         let document = parse(
             "::code id=a src=src/lib.rs\n::end\n\n\
              ::code id=b src=src/lib.rs\n::end\n\n\
+             ::style id=dress src=theme/site.css\n::end\n\n\
              ::board id=map\n- plan.dx#one x=0 y=0\n- plan.dx#two x=0 y=200\n::end\n",
         );
         assert_eq!(
             references(&document),
             vec![
                 Reference::File("src/lib.rs".to_string()),
+                Reference::File("theme/site.css".to_string()),
                 Reference::Document("plan.dx".to_string()),
             ]
         );

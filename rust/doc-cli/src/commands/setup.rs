@@ -465,6 +465,9 @@ READ
   dx outline  <file>                            block ids, kinds, and previews
   dx render   <file> [--section ID] [--theme T] self-contained HTML page
   dx render   <file> --block ID [--body=T]      one block, as the page draws it
+  dx render   --all [dir] --out DIR             every document as its own page —
+                                                one command exports a whole site,
+                                                <out>/<same relative path>.html each
   dx png      <file> [--section ID] [--out F]   render to an image
   dx png      <file> --pages                    one image per page, in order
   dx png      <file> --block ID                 one block alone — a board at natural size
@@ -495,15 +498,24 @@ READ
 WRITE
   dx new      <file> [--title T]                create a document
   dx index    [dir] [--force]                   scaffold index.dx — a project map
-                                                from the tree, one section per
-                                                area, meant to be read whole and
-                                                improved by its reader
+                                                from the tree, files ranked by
+                                                how load-bearing they look, meant
+                                                to be read whole and improved by
+                                                its reader — plus dev.dx, verify
+                                                gates for the detected build
+                                                system, awaiting review
+                                                (`dx run dev.dx --approve`)
   dx source   <file> [--block ID] [--header]    the exact characters, to edit
               --header prints the block's `::kind attrs` opening line
   dx set      <file> <block-id> --text T        replace one block's body
               [--header H]                      replace the whole block — a new
               `::kind attrs` line retypes it; an empty H reads the text as plain
               prose, markdown shorthand included
+              --replace OLD --with NEW [--all]  change OLD to NEW inside the body
+                                                and keep every other character —
+                                                the cheap edit for a rename or a
+                                                one-line fix; OLD must match once
+                                                unless --all says every one
   dx insert   <file> --after ID [--type T]      add a block after another
               [--id ID] [--level N]             name it, or set a heading's level
               [--lang L] [--run] [--deps D]     a runnable one, with --type code

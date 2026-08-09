@@ -3,38 +3,43 @@ id: rust/doc-run/src/confine.rs
 title: confine.rs
 kind: file-index
 lang: rust
-rank: 0.009598
+rank: 0.010521
 links: [[rust/doc-run/src/workdir.rs]] [[editor/github/resolve.js]] [[rust/doc-run/src/lib.rs]] [[rust/doc-cli/src/commands/browser.rs]] [[rust/doc-shot/src/play.rs]]
-generated_at: 2026-08-06T01:13:54.685Z
+generated_at: 2026-08-08T01:43:37.081Z
 ---
 
-# rust/doc-run/src/confine.rs  ·  rust  ·  424 LOC
+# rust/doc-run/src/confine.rs  ·  rust  ·  630 LOC
 
 ## Symbols
 
-- `Grant` (class) — L80
-- `offline` (method) — L92
-- `with_network` (method) — L101
-- `confine` (function) — L112
-- `overridden` (function) — L127
-- `describe` (function) — L133
-- `no_boundary_message` (function) — L147
-- `seatbelt` (function) — L162
-- `seatbelt_profile` (function) — L181
-- `secret_subpaths` (function) — L231
-- `bubblewrap` (function) — L242
-- `resolved` (function) — L309
-- `quote` (function) — L317
-- `tests` (module) — L323
-- `grant` (method) — L326
-- `the_profile_denies_everything_before_it_allows_anything` (method) — L331
-- `an_offline_grant_denies_every_network_family` (method) — L339
-- `only_a_dependency_install_is_given_the_network` (method) — L346
-- `a_writable_path_is_resolved_through_its_symlinks` (method) — L352
-- `reads_are_open_and_then_the_secret_stores_are_taken_back` (method) — L364
-- `a_quoted_path_cannot_end_the_string_it_is_in` (method) — L384
-- `confining_wraps_the_command_rather_than_replacing_it` (method) — L390
-- `the_override_is_the_only_way_past_and_it_announces_itself` (method) — L411
+- `Grant` (class) — L126
+- `offline` (method) — L142
+- `reading` (method) — L152
+- `with_network` (method) — L159
+- `repo_root` (function) — L172
+- `confine` (function) — L191
+- `overridden` (function) — L206
+- `describe` (function) — L212
+- `no_boundary_message` (function) — L226
+- `seatbelt` (function) — L241
+- `seatbelt_profile` (function) — L262
+- `toolchain_homes` (function) — L347
+- `ancestor_literals` (function) — L364
+- `secret_subpaths` (function) — L383
+- `bubblewrap` (function) — L394
+- `resolved` (function) — L484
+- `quote` (function) — L492
+- `tests` (module) — L498
+- `grant` (method) — L501
+- `the_profile_denies_everything_before_it_allows_anything` (method) — L506
+- `an_offline_grant_denies_every_network_family` (method) — L514
+- `only_a_dependency_install_is_given_the_network` (method) — L521
+- `a_writable_path_is_resolved_through_its_symlinks` (method) — L527
+- `reads_scope_to_the_grant_and_secrets_have_the_last_word` (method) — L539
+- `the_repo_root_is_the_nearest_marked_ancestor_or_the_folder_itself` (method) — L569
+- `a_quoted_path_cannot_end_the_string_it_is_in` (method) — L590
+- `confining_wraps_the_command_rather_than_replacing_it` (method) — L596
+- `the_override_is_the_only_way_past_and_it_announces_itself` (method) — L617
 
 ## Graph
 
@@ -56,7 +61,7 @@ graph LR
 ### References
 
 - [[rust/doc-run/src/workdir.rs]] via `grant`, `confine`, `with_network`
-- [[rust/doc-run/src/lib.rs]] via `confine`, `with_network`
+- [[rust/doc-run/src/lib.rs]] via `confine`, `with_network`, `reading`
 
 ### Referenced by
 

@@ -3,20 +3,20 @@ id: rust/doc-core/src/format/stringify.rs
 title: stringify.rs
 kind: file-index
 lang: rust
-rank: 0.003624
+rank: 0.003522
 links: [[editor/vscode/test/editing.test.mjs]] [[rust/doc-core/src/edit.rs]] [[editor/github/wasm/doc_wasm.js]] [[rust/doc-core/src/format/util.rs]] [[editor/github/wasm/doc_wasm.d.ts]] [[editor/vscode/src/engine.ts]] [[rust/doc-core/src/chunk.rs]] [[rust/doc-core/src/compress.rs]] [[rust/doc-core/src/format/normalize.rs]] [[rust/doc-wasm/src/lib.rs]]
-generated_at: 2026-08-06T01:13:54.688Z
+generated_at: 2026-08-08T01:43:37.085Z
 ---
 
-# rust/doc-core/src/format/stringify.rs  ·  rust  ·  220 LOC
+# rust/doc-core/src/format/stringify.rs  ·  rust  ·  227 LOC
 
 ## Symbols
 
 - `block_header` (function) — L12
-- `list_lines` (function) — L143
-- `block_body` (function) — L157
-- `stringify_blocks` (function) — L200
-- `stringify` (function) — L217
+- `list_lines` (function) — L150
+- `block_body` (function) — L164
+- `stringify_blocks` (function) — L207
+- `stringify` (function) — L224
 
 ## Graph
 
@@ -47,7 +47,7 @@ graph LR
 
 ### References
 
-- [[rust/doc-core/src/format/util.rs]] via `js_trim`, `normalize_class_name`
+- [[rust/doc-core/src/format/util.rs]] via `normalize_class_name`, `js_trim`
 - [[editor/github/wasm/doc_wasm.d.ts]] via `block_header`
 - [[editor/vscode/src/engine.ts]] via `block_header`
 - [[rust/doc-core/src/compress.rs]] via `insert`
@@ -57,7 +57,7 @@ graph LR
 ### Referenced by
 
 - [[editor/vscode/test/editing.test.mjs]] via `block_header`
-- [[rust/doc-core/src/edit.rs]] via `list_lines`, `block_header`
+- [[rust/doc-core/src/edit.rs]] via `block_header`, `list_lines`
 - [[editor/github/wasm/doc_wasm.js]] via `block_header`
 - [[rust/doc-core/src/chunk.rs]] via `stringify_blocks`
 

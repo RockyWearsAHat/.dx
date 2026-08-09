@@ -3,27 +3,28 @@ id: rust/doc-cli/src/commands/find.rs
 title: find.rs
 kind: file-index
 lang: rust
-rank: 0.004602
-links: [[rust/doc-cli/src/mcp/handlers.rs]] [[rust/doc-cli/src/mcp/mod.rs]] [[rust/doc-cli/src/args.rs]]
-generated_at: 2026-08-06T01:13:54.687Z
+rank: 0.004174
+links: [[rust/doc-cli/src/mcp/handlers.rs]] [[rust/doc-cli/src/mcp/mod.rs]] [[rust/doc-cli/src/commands/index.rs]] [[rust/doc-cli/src/args.rs]]
+generated_at: 2026-08-08T01:43:37.084Z
 ---
 
-# rust/doc-cli/src/commands/find.rs  ·  rust  ·  162 LOC
+# rust/doc-cli/src/commands/find.rs  ·  rust  ·  185 LOC
 
 ## Symbols
 
 - `run_ls` (function) — L16
 - `run_search` (function) — L42
-- `root_of` (function) — L69
-- `tests` (module) — L75
-- `args` (method) — L79
-- `project` (method) — L83
-- `ls_reports_every_document_with_its_title` (method) — L100
-- `ls_of_an_empty_directory_says_so_instead_of_printing_nothing` (method) — L110
-- `search_finds_the_matching_document_and_ranks_it` (method) — L118
-- `search_honors_the_limit_it_is_given` (method) — L129
-- `search_with_no_match_reports_the_query` (method) — L152
-- `search_requires_a_query` (method) — L159
+- `first_line_of` (function) — L76
+- `root_of` (function) — L86
+- `tests` (module) — L92
+- `args` (method) — L96
+- `project` (method) — L100
+- `ls_reports_every_document_with_its_title` (method) — L117
+- `ls_of_an_empty_directory_says_so_instead_of_printing_nothing` (method) — L127
+- `search_finds_the_matching_document_and_ranks_it` (method) — L135
+- `search_honors_the_limit_it_is_given` (method) — L149
+- `search_with_no_match_reports_the_query` (method) — L175
+- `search_requires_a_query` (method) — L182
 
 ## Graph
 
@@ -34,13 +35,16 @@ graph LR
   c --> x0
   x1["mod.rs"]
   c --> x1
-  x2["args.rs"]
+  x2["index.rs"]
   c --> x2
+  x3["args.rs"]
+  c --> x3
 ```
 
 ### References
 
 - [[rust/doc-cli/src/mcp/handlers.rs]] via `number`, `project`
 - [[rust/doc-cli/src/mcp/mod.rs]] via `project`
+- [[rust/doc-cli/src/commands/index.rs]] via `project`
 - [[rust/doc-cli/src/args.rs]] via `number`, `positional`
 

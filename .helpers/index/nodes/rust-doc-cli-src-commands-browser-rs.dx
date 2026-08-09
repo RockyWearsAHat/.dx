@@ -3,9 +3,9 @@ id: rust/doc-cli/src/commands/browser.rs
 title: browser.rs
 kind: file-index
 lang: rust
-rank: 0.007512
-links: [[rust/doc-store/src/store.rs]] [[rust/doc-cli/src/commands/edit.rs]] [[rust/doc-cli/src/commands/store.rs]] [[rust/doc-cli/src/workspace.rs]] [[rust/doc-cli/src/commands/exec.rs]] [[rust/doc-run/src/process.rs]] [[rust/doc-cli/src/service.rs]] [[rust/doc-cli/src/desktop.rs]] [[rust/doc-cli/src/extension.rs]] [[rust/doc-store/src/pack.rs]] [[rust/doc-cli/src/policies.rs]] [[rust/doc-cli/src/install.rs]]
-generated_at: 2026-08-06T01:13:54.685Z
+rank: 0.007456
+links: [[rust/doc-store/src/store.rs]] [[rust/doc-cli/src/commands/edit.rs]] [[rust/doc-cli/src/workspace.rs]] [[rust/doc-cli/src/commands/store.rs]] [[rust/doc-run/src/plan.rs]] [[rust/doc-run/src/process.rs]] [[rust/doc-cli/src/service.rs]] [[rust/doc-cli/src/desktop.rs]] [[rust/doc-cli/src/extension.rs]] [[rust/doc-store/src/pack.rs]] [[rust/doc-cli/src/policies.rs]] [[rust/doc-cli/src/install.rs]]
+generated_at: 2026-08-08T01:43:37.082Z
 ---
 
 # rust/doc-cli/src/commands/browser.rs  ·  rust  ·  354 LOC
@@ -44,11 +44,11 @@ graph LR
   c --> x0
   x1["edit.rs"]
   c --> x1
-  x2["store.rs"]
+  x2["workspace.rs"]
   c --> x2
-  x3["workspace.rs"]
+  x3["store.rs"]
   c --> x3
-  x4["exec.rs"]
+  x4["plan.rs"]
   c --> x4
   x5["process.rs"]
   c --> x5
@@ -64,9 +64,9 @@ graph LR
   c --> x10
   x11["install.rs"]
   c --> x11
-  x12["play.rs"]
+  x12["exec.rs"]
   c --> x12
-  x13["plan.rs"]
+  x13["play.rs"]
   c --> x13
 ```
 
@@ -74,22 +74,24 @@ graph LR
 
 - [[rust/doc-store/src/store.rs]] via `scratch`
 - [[rust/doc-cli/src/commands/edit.rs]] via `scratch`
-- [[rust/doc-cli/src/commands/store.rs]] via `scratch`
 - [[rust/doc-cli/src/workspace.rs]] via `scratch`
-- [[rust/doc-cli/src/commands/exec.rs]] via `summary`, `run`
-- [[rust/doc-run/src/process.rs]] via `display`, `run`
-- [[rust/doc-cli/src/service.rs]] via `run`, `status_lines`, `label`
-- [[rust/doc-cli/src/desktop.rs]] via `scratch`, `status_lines`, `installed`
-- [[rust/doc-cli/src/extension.rs]] via `steps`, `repo_source`, `target`
-- [[rust/doc-store/src/pack.rs]] via `scratch`
-- [[rust/doc-cli/src/policies.rs]] via `scratch`, `installed`
-- [[rust/doc-cli/src/install.rs]] via `scratch`
-- [[rust/doc-cli/src/commands/play.rs]] via `run`
+- [[rust/doc-cli/src/commands/store.rs]] via `scratch`
 - [[rust/doc-run/src/plan.rs]] via `build`
+- [[rust/doc-run/src/process.rs]] via `display`, `run`
+- [[rust/doc-cli/src/service.rs]] via `status_lines`, `run`, `label`
+- [[rust/doc-cli/src/desktop.rs]] via `status_lines`, `installed`, `scratch`
+- [[rust/doc-cli/src/extension.rs]] via `repo_source`, `steps`, `target`
+- [[rust/doc-store/src/pack.rs]] via `scratch`
+- [[rust/doc-cli/src/policies.rs]] via `installed`, `scratch`
+- [[rust/doc-cli/src/install.rs]] via `scratch`
+- [[rust/doc-cli/src/commands/exec.rs]] via `summary`, `run`
+- [[rust/doc-cli/src/commands/play.rs]] via `run`
 - [[rust/doc-run/src/workdir.rs]] via `scratch`
 - [[rust/doc-cli/src/mcp/handlers.rs]] via `run`
 - [[rust/doc-cli/src/state.rs]] via `scratch`
-- [[rust/doc-cli/src/args.rs]] via `value`, `present`
+- [[rust/doc-run/src/approvals.rs]] via `scratch`
+- [[rust/doc-cli/src/commands/index.rs]] via `run`
+- [[rust/doc-cli/src/args.rs]] via `present`, `value`
 - [[rust/doc-shot/src/play.rs]] via `describe`
 - [[editor/build.sh]] via `build`
 - [[rust/doc-cli/src/mcp/mod.rs]] via `success`

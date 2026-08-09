@@ -3,12 +3,12 @@ id: rust/doc-cli/src/commands/mod.rs
 title: mod.rs
 kind: file-index
 lang: rust
-rank: 0.011269
-links: [[rust/doc-shot/src/cdp.rs]] [[rust/doc-cli/src/daemon/packs.rs]] [[rust/doc-cli/src/daemon/engine.rs]] [[editor/github/content.js]] [[rust/doc-core/src/render/text.rs]] [[rust/doc-shot/src/play.rs]] [[editor/github/test/engine.test.mjs]] [[rust/doc-cli/src/args.rs]] [[editor/github/resolve.js]] [[editor/github/test/resolve.test.mjs]] [[editor/surface/edit.js]] [[rust/doc-cli/src/commands/play.rs]]
-generated_at: 2026-08-06T01:13:54.684Z
+rank: 0.012208
+links: [[rust/doc-shot/src/cdp.rs]] [[rust/doc-cli/src/daemon/packs.rs]] [[rust/doc-cli/src/daemon/engine.rs]] [[editor/github/content.js]] [[rust/doc-cli/src/mcp/handlers.rs]] [[rust/doc-core/src/render/text.rs]] [[rust/doc-shot/src/play.rs]] [[editor/github/test/engine.test.mjs]] [[rust/doc-cli/src/args.rs]] [[editor/github/resolve.js]] [[editor/github/test/resolve.test.mjs]] [[editor/surface/edit.js]]
+generated_at: 2026-08-08T01:43:37.080Z
 ---
 
-# rust/doc-cli/src/commands/mod.rs  ·  rust  ·  476 LOC
+# rust/doc-cli/src/commands/mod.rs  ·  rust  ·  503 LOC
 
 ## Symbols
 
@@ -16,27 +16,28 @@ generated_at: 2026-08-06T01:13:54.684Z
 - `edit` (module) — L14
 - `exec` (module) — L15
 - `find` (module) — L16
-- `play` (module) — L17
-- `setup` (module) — L18
-- `store` (module) — L19
-- `view` (module) — L20
-- `Output` (class) — L31
-- `text` (method) — L41
-- `Command` (class) — L49
-- `dispatch` (function) — L258
-- `refuse_unknown_flags` (function) — L279
-- `tests` (module) — L304
-- `args` (method) — L307
-- `an_unknown_command_answers_with_the_command_list` (method) — L312
-- `version_reports_the_build_version` (method) — L319
-- `familiar_aliases_reach_the_same_command` (method) — L325
-- `help_on_any_command_answers_without_running_it` (method) — L337
-- `a_flag_a_command_does_not_take_is_refused_by_name` (method) — L346
-- `the_documented_flags_are_all_accepted` (method) — L358
-- `search_accepts_the_limit_it_reads` (method) — L428
-- `commands_that_write_files_report_instead_of_producing_redirectable_content` (method) — L438
-- `the_servers_refuse_unknown_flags_through_the_same_formatter` (method) — L450
-- `output_text_is_readable_for_either_kind` (method) — L472
+- `index` (module) — L17
+- `play` (module) — L18
+- `setup` (module) — L19
+- `store` (module) — L20
+- `view` (module) — L21
+- `Output` (class) — L32
+- `text` (method) — L42
+- `Command` (class) — L50
+- `dispatch` (function) — L273
+- `refuse_unknown_flags` (function) — L294
+- `tests` (module) — L319
+- `args` (method) — L322
+- `an_unknown_command_answers_with_the_command_list` (method) — L327
+- `version_reports_the_build_version` (method) — L334
+- `familiar_aliases_reach_the_same_command` (method) — L340
+- `help_on_any_command_answers_without_running_it` (method) — L352
+- `a_flag_a_command_does_not_take_is_refused_by_name` (method) — L361
+- `the_documented_flags_are_all_accepted` (method) — L373
+- `search_accepts_the_limit_it_reads` (method) — L455
+- `commands_that_write_files_report_instead_of_producing_redirectable_content` (method) — L465
+- `the_servers_refuse_unknown_flags_through_the_same_formatter` (method) — L477
+- `output_text_is_readable_for_either_kind` (method) — L499
 
 ## Graph
 
@@ -51,48 +52,50 @@ graph LR
   x2 --> c
   x3["content.js"]
   x3 --> c
-  x4["text.rs"]
+  x4["handlers.rs"]
   x4 --> c
-  x5["play.rs"]
+  x5["text.rs"]
   x5 --> c
-  x6["engine.test.mjs"]
+  x6["play.rs"]
   x6 --> c
-  x7["args.rs"]
-  c --> x7
-  x8["resolve.js"]
-  x8 --> c
-  x9["resolve.test.mjs"]
+  x7["engine.test.mjs"]
+  x7 --> c
+  x8["args.rs"]
+  c --> x8
+  x9["resolve.js"]
   x9 --> c
-  x10["edit.js"]
+  x10["resolve.test.mjs"]
   x10 --> c
-  x11["play.rs"]
+  x11["edit.js"]
   x11 --> c
-  x12["view.rs"]
+  x12["build-icons.py"]
   x12 --> c
-  x13["mod.rs"]
+  x13["play.rs"]
   x13 --> c
 ```
 
 ### References
 
 - [[rust/doc-shot/src/cdp.rs]] via `dispatch`
-- [[rust/doc-cli/src/args.rs]] via `present`, `unknown_options`
+- [[rust/doc-cli/src/args.rs]] via `unknown_options`, `present`
 
 ### Referenced by
 
 - [[rust/doc-cli/src/daemon/packs.rs]] via `store`
 - [[rust/doc-cli/src/daemon/engine.rs]] via `text`, `store`
-- [[editor/github/content.js]] via `text`, `exec`
+- [[editor/github/content.js]] via `exec`, `text`
+- [[rust/doc-cli/src/mcp/handlers.rs]] via `edit`, `index`, `text`
 - [[rust/doc-core/src/render/text.rs]] via `text`
 - [[rust/doc-shot/src/play.rs]] via `play`
 - [[editor/github/test/engine.test.mjs]] via `exec`
 - [[editor/github/resolve.js]] via `exec`
 - [[editor/github/test/resolve.test.mjs]] via `exec`
 - [[editor/surface/edit.js]] via `edit`
+- [[packaging/build-icons.py]] via `index`
 - [[rust/doc-cli/src/commands/play.rs]] via `play`
 - [[rust/doc-cli/src/commands/view.rs]] via `text`
 - [[rust/doc-cli/src/daemon/mod.rs]] via `store`
 - [[rust/doc-cli/src/main.rs]] via `text`
-- [[rust/doc-cli/src/mcp/handlers.rs]] via `edit`
+- [[rust/doc-cli/src/mcp/mod.rs]] via `exec`
 - [[rust/doc-core/src/render/mod.rs]] via `text`
 

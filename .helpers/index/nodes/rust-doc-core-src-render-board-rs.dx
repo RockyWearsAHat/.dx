@@ -3,12 +3,12 @@ id: rust/doc-core/src/render/board.rs
 title: board.rs
 kind: file-index
 lang: rust
-rank: 0.014433
-links: [[editor/surface/edit.js]] [[rust/doc-core/src/render/html.rs]] [[packaging/build-icons.py]] [[editor/vscode/src/changes.ts]] [[rust/doc-core/src/format/layout.rs]] [[rust/doc-core/src/model.rs]] [[rust/doc-cli/src/daemon/http.rs]] [[rust/doc-cli/src/main.rs]] [[rust/doc-cli/src/mcp/mod.rs]]
-generated_at: 2026-08-06T01:13:54.683Z
+rank: 0.015227
+links: [[editor/surface/edit.js]] [[rust/doc-core/src/render/html.rs]] [[packaging/build-icons.py]] [[editor/vscode/src/changes.ts]] [[rust/doc-core/src/format/layout.rs]] [[rust/doc-core/src/model.rs]] [[rust/doc-shot/src/png.rs]] [[rust/doc-cli/src/daemon/http.rs]] [[rust/doc-cli/src/main.rs]] [[rust/doc-cli/src/mcp/mod.rs]] [[rust/doc-run/src/order.rs]]
+generated_at: 2026-08-08T01:43:37.078Z
 ---
 
-# rust/doc-core/src/render/board.rs  ·  rust  ·  1906 LOC
+# rust/doc-core/src/render/board.rs  ·  rust  ·  1955 LOC
 
 ## Symbols
 
@@ -23,55 +23,55 @@ generated_at: 2026-08-06T01:13:54.683Z
 - `Sizing` (class) — L181
 - `Node` (class) — L193
 - `nodes` (function) — L219
-- `parse_node_line` (function) — L224
-- `parse_edge` (function) — L268
-- `decode_label` (function) — L290
-- `flush` (function) — L318
-- `char_width` (function) — L334
-- `encode_label` (function) — L348
-- `one_side` (function) — L362
-- `side_named` (function) — L376
-- `edge_token` (function) — L390
-- `node_line` (function) — L417
-- `resolve_sizes` (function) — L459
-- `resolved_box` (function) — L483
-- `view_frame` (function) — L522
-- `fit_width` (function) — L537
-- `fit_height` (function) — L563
-- `item_lines` (function) — L609
-- `collect` (function) — L610
-- `view_box` (function) — L622
-- `stripped_lines` (function) — L641
-- `Rect` (class) — L661
-- `anchor` (method) — L670
-- `centre` (method) — L682
-- `holds` (method) — L691
-- `segment_hits` (function) — L714
-- `crossing_sine` (function) — L730
-- `Run` (class) — L752
-- `Anchor` (class) — L756
-- `Drawn` (class) — L770
-- `board_html` (function) — L786
-- `board_html_in` (function) — L813
-- `deduped` (function) — L850
-- `rects` (function) — L866
-- `natural_viewport` (function) — L881
-- `fit` (function) — L895
-- `extent` (function) — L908
-- `round` (function) — L927
-- `auto_sides` (function) — L938
-- `drawn_edges` (function) — L960
-- `midpoint` (function) — L994
-- `clearest_sides` (function) — L1013
-- `anchors` (function) — L1071
-- `lead` (function) — L1150
-- `curve` (function) — L1169
-- `controls` (function) — L1208
-- `hidden_samples` (function) — L1264
-- `cubic_at` (function) — L1277
-- `edges_svg` (function) — L1305
-- `edge_label` (function) — L1376
-- `node_html` (function) — L1391
+- `board_edges` (function) — L233
+- `parse_node_line` (function) — L249
+- `parse_edge` (function) — L293
+- `decode_label` (function) — L315
+- `flush` (function) — L343
+- `char_width` (function) — L359
+- `encode_label` (function) — L373
+- `one_side` (function) — L387
+- `side_named` (function) — L401
+- `edge_token` (function) — L415
+- `node_line` (function) — L442
+- `resolve_sizes` (function) — L484
+- `resolved_box` (function) — L508
+- `view_frame` (function) — L547
+- `fit_width` (function) — L562
+- `fit_height` (function) — L588
+- `item_lines` (function) — L634
+- `collect` (function) — L635
+- `view_box` (function) — L647
+- `stripped_lines` (function) — L666
+- `Rect` (class) — L686
+- `anchor` (method) — L695
+- `centre` (method) — L707
+- `holds` (method) — L716
+- `segment_hits` (function) — L739
+- `crossing_sine` (function) — L755
+- `Run` (class) — L777
+- `Anchor` (class) — L781
+- `Drawn` (class) — L795
+- `board_html` (function) — L811
+- `board_html_in` (function) — L838
+- `deduped` (function) — L875
+- `rects` (function) — L891
+- `natural_viewport` (function) — L906
+- `fit` (function) — L920
+- `extent` (function) — L933
+- `round` (function) — L952
+- `auto_sides` (function) — L963
+- `drawn_edges` (function) — L985
+- `midpoint` (function) — L1019
+- `clearest_sides` (function) — L1038
+- `anchors` (function) — L1096
+- `lead` (function) — L1175
+- `curve` (function) — L1194
+- `controls` (function) — L1233
+- `hidden_samples` (function) — L1289
+- `cubic_at` (function) — L1302
+- `edges_svg` (function) — L1330
+- `edge_label` (function) — L1401
 
 ## Graph
 
@@ -90,17 +90,21 @@ graph LR
   x4 --> c
   x5["model.rs"]
   c --> x5
-  x6["http.rs"]
+  x6["png.rs"]
   x6 --> c
-  x7["main.rs"]
+  x7["http.rs"]
   x7 --> c
-  x8["mod.rs"]
+  x8["main.rs"]
   x8 --> c
+  x9["mod.rs"]
+  x9 --> c
+  x10["order.rs"]
+  x10 --> c
 ```
 
 ### References
 
-- [[rust/doc-core/src/render/html.rs]] via `round`, `block_html`
+- [[rust/doc-core/src/render/html.rs]] via `block_html`, `round`
 - [[rust/doc-core/src/model.rs]] via `block_index`
 
 ### Referenced by
@@ -109,7 +113,9 @@ graph LR
 - [[packaging/build-icons.py]] via `round`
 - [[editor/vscode/src/changes.ts]] via `Run`
 - [[rust/doc-core/src/format/layout.rs]] via `nodes`, `node_line`
+- [[rust/doc-shot/src/png.rs]] via `round`
 - [[rust/doc-cli/src/daemon/http.rs]] via `flush`
 - [[rust/doc-cli/src/main.rs]] via `flush`
 - [[rust/doc-cli/src/mcp/mod.rs]] via `flush`
+- [[rust/doc-run/src/order.rs]] via `board_edges`
 

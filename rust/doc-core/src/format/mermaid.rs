@@ -117,7 +117,7 @@ pub(crate) fn convert(block: &Block) -> Option<Vec<Block>> {
     }
 
     let ids = node_ids(&block.id, &graph);
-    let placed = layout::arrange(&graph, &ids);
+    let body = layout::arrange(&graph, &ids);
     let mut blocks: Vec<Block> = graph
         .nodes
         .iter()
@@ -131,11 +131,13 @@ pub(crate) fn convert(block: &Block) -> Option<Vec<Block>> {
         })
         .collect();
 
+    // No height is stated: a computed number would be true only for this arrangement and
+    // stay on the header while edits move the nodes under it. Left unstated, the frame is
+    // re-sized from the nodes on every render, so it cannot go stale.
     blocks.push(Block {
         kind: "board".to_string(),
         id: block.id.clone(),
-        text: placed.body,
-        height: placed.height,
+        text: body,
         hidden: block.hidden,
         ..Block::default()
     });
@@ -217,9 +219,23 @@ fn read_statement(statement: &str, graph: &mut Graph) {
     };
     let from = intern(graph, from);
     let to = intern(graph, to);
-    if from != to {
-        graph.edges.push(GraphEdge { from, to, label });
+    if from == to {
+        return;
     }
+    // A link stated twice is one link — drawing both put a duplicate, unlabelled arrow on
+    // the board. As with [`intern`]'s nodes, a later mention carrying a label wins over an
+    // earlier bare one, because the words are the part a reader wrote.
+    if let Some(held) = graph
+        .edges
+        .iter_mut()
+        .find(|edge| edge.from == from && edge.to == to)
+    {
+        if held.label.is_empty() && !label.is_empty() {
+            held.label = label;
+        }
+        return;
+    }
+    graph.edges.push(GraphEdge { from, to, label });
 }
 
 /// Whether a statement is one of the mermaid directives this converter skips.
@@ -405,6 +421,22 @@ mod tests {
 
     fn graph(source: &str) -> Graph {
         read(source).expect("a flowchart")
+    }
+
+    /// A link stated twice is one link — a duplicate drew a second, unlabelled arrow into
+    /// the same node — and the mention carrying words wins, whichever order they came in.
+    #[test]
+    fn a_repeated_link_is_read_once_and_keeps_its_label() {
+        let read = graph("flowchart TD\nA-->B\nA-->|yes|B");
+        assert_eq!(read.edges.len(), 1, "{:?}", read.edges);
+        assert_eq!(read.edges[0].label, "yes");
+
+        let reversed = graph("flowchart TD\nA-->|yes|B\nA-->B");
+        assert_eq!(reversed.edges.len(), 1);
+        assert_eq!(
+            reversed.edges[0].label, "yes",
+            "the words survive a bare repeat"
+        );
     }
 
     #[test]

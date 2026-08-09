@@ -3,12 +3,12 @@ id: rust/doc-cli/src/workspace.rs
 title: workspace.rs
 kind: file-index
 lang: rust
-rank: 0.015493
-links: [[rust/doc-store/src/store.rs]] [[rust/doc-cli/src/commands/edit.rs]] [[rust/doc-cli/src/policies.rs]] [[rust/doc-store/src/pack.rs]] [[rust/doc-cli/src/commands/store.rs]] [[rust/doc-cli/src/install.rs]] [[rust/doc-cli/src/commands/browser.rs]] [[rust/doc-cli/src/desktop.rs]] [[rust/doc-run/src/workdir.rs]] [[rust/doc-cli/src/state.rs]] [[rust/doc-cli/src/mcp/handlers.rs]] [[rust/doc-core/src/resolve.rs]]
-generated_at: 2026-08-06T01:13:54.683Z
+rank: 0.016339
+links: [[rust/doc-store/src/store.rs]] [[rust/doc-cli/src/commands/edit.rs]] [[rust/doc-cli/src/policies.rs]] [[rust/doc-store/src/pack.rs]] [[rust/doc-cli/src/commands/store.rs]] [[rust/doc-cli/src/install.rs]] [[rust/doc-cli/src/commands/browser.rs]] [[rust/doc-cli/src/desktop.rs]] [[rust/doc-run/src/workdir.rs]] [[rust/doc-cli/src/state.rs]] [[rust/doc-run/src/approvals.rs]] [[rust/doc-cli/src/mcp/handlers.rs]]
+generated_at: 2026-08-08T01:43:37.078Z
 ---
 
-# rust/doc-cli/src/workspace.rs  ·  rust  ·  561 LOC
+# rust/doc-cli/src/workspace.rs  ·  rust  ·  722 LOC
 
 ## Symbols
 
@@ -24,31 +24,38 @@ generated_at: 2026-08-06T01:13:54.683Z
 - `resolver_for` (function) — L229
 - `file` (method) — L236
 - `document` (method) — L240
-- `load` (function) — L246
-- `save` (function) — L257
-- `write_text` (function) — L271
-- `document_dir` (function) — L283
-- `sync` (function) — L291
-- `stats` (function) — L296
-- `discover` (function) — L305
-- `load_all` (function) — L314
-- `Hit` (class) — L346
-- `search` (function) — L359
-- `tests` (module) — L407
-- `scratch` (method) — L410
-- `a_saved_document_is_a_pointer_on_disk_and_real_content_through_the_resolver` (method) — L422
-- `plain_text_written_by_anything_else_is_returned_as_the_newest_truth` (method) — L436
-- `a_pointer_resolves_from_the_packs_with_no_database_present` (method) — L444
-- `reading_creates_nothing` (method) — L458
-- `an_unresolvable_pointer_says_what_to_run` (method) — L471
-- `a_missing_file_explains_which_one` (method) — L483
-- `saving_canonicalizes_sloppy_input` (method) — L490
-- `listing_and_search_find_documents_through_the_store` (method) — L501
-- `search_works_before_any_index_exists` (method) — L520
-- `sync_adopts_plain_text_and_leaves_a_pointer` (method) — L528
-- `the_workspace_root_is_the_nearest_marked_ancestor` (method) — L540
-- `document_dir_is_where_a_blocks_relative_paths_resolve` (method) — L549
-- `write_text_is_for_output_that_is_not_a_document` (method) — L555
+- `binary` (method) — L244
+- `files_under` (method) — L248
+- `collect_tree` (function) — L265
+- `load` (function) — L287
+- `save` (function) — L298
+- `save_source` (function) — L322
+- `write_text` (function) — L338
+- `oversized_image_warnings` (function) — L353
+- `document_dir` (function) — L378
+- `sync` (function) — L386
+- `stats` (function) — L391
+- `discover` (function) — L400
+- `load_all` (function) — L409
+- `Hit` (class) — L441
+- `search` (function) — L457
+- `tests` (module) — L507
+- `scratch` (method) — L510
+- `a_folder_read_walks_sorted_and_skips_hidden_entries_and_build_caches` (method) — L522
+- `a_saved_document_is_a_pointer_on_disk_and_real_content_through_the_resolver` (method) — L548
+- `plain_text_written_by_anything_else_is_returned_as_the_newest_truth` (method) — L562
+- `a_pointer_resolves_from_the_packs_with_no_database_present` (method) — L570
+- `reading_creates_nothing` (method) — L584
+- `an_unresolvable_pointer_says_what_to_run` (method) — L597
+- `a_missing_file_explains_which_one` (method) — L609
+- `saving_canonicalizes_sloppy_input` (method) — L616
+- `listing_and_search_find_documents_through_the_store` (method) — L627
+- `search_works_before_any_index_exists` (method) — L646
+- `sync_adopts_plain_text_and_leaves_a_pointer` (method) — L654
+- `the_workspace_root_is_the_nearest_marked_ancestor` (method) — L666
+- `document_dir_is_where_a_blocks_relative_paths_resolve` (method) — L675
+- `every_fixture_input_still_matches_the_document_it_mirrors` (method) — L695
+- `write_text_is_for_output_that_is_not_a_document` (method) — L716
 
 ## Graph
 
@@ -75,27 +82,28 @@ graph LR
   c --> x8
   x9["state.rs"]
   x9 --> c
-  x10["handlers.rs"]
-  x10 --> c
-  x11["resolve.rs"]
-  c --> x11
-  x12["edit.js"]
-  x12 --> c
-  x13["http.rs"]
+  x10["approvals.rs"]
+  c --> x10
+  x11["handlers.rs"]
+  x11 --> c
+  x12["resolve.rs"]
+  c --> x12
+  x13["edit.js"]
   x13 --> c
 ```
 
 ### References
 
-- [[rust/doc-store/src/store.rs]] via `source`, `sync`, `relative_of`, `source_of_version`, `discover`
-- [[rust/doc-store/src/pack.rs]] via `load_all`, `source`, `scratch`, `document`
+- [[rust/doc-store/src/store.rs]] via `scratch`, `search`, `save`, `sync`, `discover`
+- [[rust/doc-store/src/pack.rs]] via `scratch`, `source`, `load_all`, `document`
 - [[rust/doc-run/src/workdir.rs]] via `scratch`
-- [[rust/doc-core/src/resolve.rs]] via `document`, `Resolver`, `file`
+- [[rust/doc-run/src/approvals.rs]] via `scratch`
+- [[rust/doc-core/src/resolve.rs]] via `Resolver`, `document`, `files_under`, `binary`, `file`
 - [[rust/doc-core/src/format/mermaid.rs]] via `read`
 - [[rust/doc-core/src/search.rs]] via `search`
+- [[rust/doc-run/src/lib.rs]] via `document`, `files_under`, `file`
 - [[rust/doc-core/src/lib.rs]] via `search`
 - [[rust/doc-core/tests/pipeline.rs]] via `document`
-- [[rust/doc-run/src/lib.rs]] via `document`, `file`
 - [[rust/doc-core/src/chunk.rs]] via `source`
 - [[rust/doc-core/src/format/mod.rs]] via `source`
 - [[rust/doc-core/src/format/source.rs]] via `first_heading_text`
@@ -110,7 +118,7 @@ graph LR
 - [[rust/doc-cli/src/commands/browser.rs]] via `scratch`
 - [[rust/doc-cli/src/desktop.rs]] via `scratch`
 - [[rust/doc-cli/src/state.rs]] via `scratch`
-- [[rust/doc-cli/src/mcp/handlers.rs]] via `search`, `read`, `source`, `list`
+- [[rust/doc-cli/src/mcp/handlers.rs]] via `search`, `read`, `list`, `source`
 - [[editor/surface/edit.js]] via `save`
 - [[rust/doc-cli/src/daemon/http.rs]] via `read`
 - [[rust/doc-cli/src/main.rs]] via `workspace_root`

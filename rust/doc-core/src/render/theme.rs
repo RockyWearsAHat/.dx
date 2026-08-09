@@ -150,16 +150,21 @@ h1, h2, h3, h4 {
 .dx-doc > h2:first-child,
 .dx-doc > h3:first-child { margin-top: 0; }
 
-h1 { font-size: 1.95rem; letter-spacing: -0.015em; }
-h2 { font-size: 1.4rem; }
+h1 { font-size: 2.3rem; letter-spacing: -0.02em; }
+h2 { font-size: 1.5rem; }
 h3 { font-size: 1.15rem; }
 /* A fourth level is a quiet lead-in, not a shouted label. */
 h4 { font-size: 1rem; font-weight: 600; color: var(--dx-muted); }
 
 p { margin: 0 0 1.15rem; }
 
+/* A link takes the page's own ink — a themed page recolors its links with itself, and the
+   underline in muted ink is what marks it as a link. Browser blue on a themed sheet is a
+   color the document never chose. */
 a {
-  color: var(--dx-accent);
+  color: currentColor;
+  text-decoration-line: underline;
+  text-decoration-color: var(--dx-muted);
   text-decoration-thickness: 1px;
   text-underline-offset: 2.5px;
 }
@@ -228,24 +233,24 @@ hr {
   .dx-code:not(.dx-code-folded):hover::after { opacity: 1; }
 }
 
-/* A folded block's label is the line you open it with. It is the same faint pencil note in
-   the same mono — a `summary` here is a line of type, not a control, so it gets no box, no
-   fill, and no focus ring beyond the text going to full ink.
+/* A folded block's label is the line you open it with. It stands at the listing's own
+   scale, in page ink — it is the only thing standing where a listing used to be, and a
+   faint sliver there reads as content missing rather than content folded. A `summary` here
+   is still a line of type, not a control, so it gets no box, no fill, and no focus ring
+   beyond an underline in muted ink saying it can be opened.
 
    It sits at the left, in the column the code will appear in, because a note in the right
-   margin is something a reader's eye skips and this one has to be found: it is the only
-   thing standing where a listing used to be. The marker is one small glyph for the same
-   reason — a reader has to be able to tell that something is folded, and a character is the
-   lightest way to say so on a sheet with no second surface. */
+   margin is something a reader's eye skips and this one has to be found. The marker is one
+   small glyph for the same reason — a reader has to be able to tell that something is
+   folded, and a character is the lightest way to say so on a sheet with no second surface. */
 .dx-code-folded > summary {
   display: block;
   list-style: none;
   cursor: pointer;
-  font: 400 0.68rem/1.6 var(--dx-mono);
+  font: 400 0.83rem/1.65 var(--dx-mono);
   letter-spacing: 0.02em;
-  color: var(--dx-faint);
+  color: var(--dx-text);
   user-select: none;
-  transition: color 0.15s ease;
 }
 .dx-code-folded > summary::-webkit-details-marker { display: none; }
 .dx-code-folded > summary::before {
@@ -257,7 +262,9 @@ hr {
 .dx-code-folded[open] > summary::before { content: "\25BE"; }
 .dx-code-folded > summary:hover,
 .dx-code-folded > summary:focus-visible {
-  color: var(--dx-muted);
+  text-decoration-line: underline;
+  text-decoration-color: var(--dx-muted);
+  text-underline-offset: 2.5px;
   outline: none;
 }
 /* Open, the label is a caption over the listing and needs the gap a caption has. */
@@ -469,7 +476,8 @@ figcaption {
 .dx-board-node-view { padding: 0; }
 .dx-board-node-view .dx-board-node-body { overflow: hidden; }
 .dx-board-node-view .dx-view { margin: 0; border: 0; }
-.dx-board-edges {
+.dx-board-edges,
+.dx-board-edge-labels {
   position: absolute;
   left: 0;
   top: 0;
@@ -479,13 +487,16 @@ figcaption {
      strokes themselves, which are the one part of it a reader can mean to click. */
   pointer-events: none;
 }
+/* The words ride their own sheet, painted after the nodes: a label is content, and a
+   label sliced by the box its curve runs against is content lost. The halo below keeps
+   one readable even where it crosses a node's ink. */
 /* The edges themselves — a direct child, so the arrowhead and the tether inside `defs` keep
    the fills they declare. An edge means "this, then that", and a curve with no head does not
    say which end is which; the head takes the stroke it terminates, so it is picked with it.
    Round caps, because a line fastened to a node ends in a point, not a cut. */
 .dx-board-edges > path {
   fill: none;
-  stroke: var(--dx-faint);
+  stroke: var(--dx-muted);
   stroke-width: 1.5;
   stroke-linecap: round;
 }
@@ -498,16 +509,17 @@ figcaption {
    black, which is what made an arrowhead read as a different colour than the line it tipped. */
 .dx-board-edges marker path,
 .dx-board-edges marker circle {
-  fill: var(--dx-faint);
+  fill: var(--dx-muted);
   fill: context-stroke;
 }
-/* Words written on an edge — "yes", "on failure". Set in the page's own marginal ink and
+/* Words written on an edge — "yes", "on failure". Set in the page's own ink — a decision's
+   words are content, and marginal ink at label size vanished on a dark theme — and
    centred on the curve, with the paper painted behind the glyphs so the line does not run
    through the middle of the word. `paint-order` is what puts that stroke under the fill;
    without it the halo is drawn over the letters and the label reads as embossed. */
 .dx-board-edge-label {
-  font: 400 0.62rem/1 var(--dx-mono);
-  fill: var(--dx-muted);
+  font: 400 0.72rem/1 var(--dx-mono);
+  fill: var(--dx-text);
   stroke: var(--dx-bg);
   stroke-width: 4;
   paint-order: stroke fill;
@@ -686,6 +698,86 @@ mod tests {
         assert!(
             css.contains("--dx-faint"),
             "the note is faint, not prominent"
+        );
+    }
+
+    #[test]
+    fn a_folded_summary_stands_at_the_listing_scale_in_page_ink() {
+        // A collapsed block's label is the only thing standing where a listing used to be:
+        // rendered as a faint ~8px sliver it read as content missing, not content folded.
+        let css = stylesheet();
+        let rule = css
+            .split(".dx-code-folded > summary {")
+            .nth(1)
+            .expect("a folded-summary rule")
+            .split('}')
+            .next()
+            .expect("its body");
+        assert!(
+            rule.contains("font: 400 0.83rem/1.65 var(--dx-mono)"),
+            "the label takes the listing's own scale: {rule}"
+        );
+        assert!(
+            rule.contains("color: var(--dx-text)"),
+            "the label stands in page ink, not faint pencil: {rule}"
+        );
+    }
+
+    #[test]
+    fn a_folded_summary_underlines_on_hover_to_read_clickable() {
+        let css = stylesheet();
+        let hover = css
+            .split(".dx-code-folded > summary:hover,")
+            .nth(1)
+            .expect("a folded-summary hover rule")
+            .split('}')
+            .next()
+            .expect("its body");
+        assert!(
+            hover.contains("text-decoration-line: underline")
+                && hover.contains("text-decoration-color: var(--dx-muted)"),
+            "hover marks the line clickable without a box: {hover}"
+        );
+    }
+
+    #[test]
+    fn the_display_scale_takes_one_deliberate_step_above_the_body() {
+        // Structure comes from type alone on a blank sheet, so the ramp needs real contrast:
+        // an h1 close to the body size reads flat as a site.
+        let css = stylesheet();
+        assert!(
+            css.contains("h1 { font-size: 2.3rem;"),
+            "h1 stands a clear step above the body"
+        );
+        assert!(
+            css.contains("h2 { font-size: 1.5rem; }"),
+            "h2 keeps its place under the h1"
+        );
+    }
+
+    #[test]
+    fn links_take_the_pages_own_ink_never_browser_blue() {
+        // A themed page recolors its links with itself; the muted underline is what marks a
+        // link. `--dx-accent` painting `a` was browser-blue-adjacent ink no theme chose.
+        let css = stylesheet();
+        let rule = css
+            .split("\na {")
+            .nth(1)
+            .expect("a link rule")
+            .split('}')
+            .next()
+            .expect("its body");
+        assert!(
+            rule.contains("color: currentColor"),
+            "a link writes in the page's own ink: {rule}"
+        );
+        assert!(
+            rule.contains("text-decoration-color: var(--dx-muted)"),
+            "the muted underline is the link's mark: {rule}"
+        );
+        assert!(
+            !rule.contains("--dx-accent"),
+            "no accent ink on a plain link: {rule}"
         );
     }
 

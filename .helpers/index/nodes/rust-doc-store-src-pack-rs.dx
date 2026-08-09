@@ -3,9 +3,9 @@ id: rust/doc-store/src/pack.rs
 title: pack.rs
 kind: file-index
 lang: rust
-rank: 0.005701
-links: [[rust/doc-store/src/store.rs]] [[rust/doc-cli/src/workspace.rs]] [[rust/doc-cli/src/commands/edit.rs]] [[rust/doc-cli/src/commands/store.rs]] [[rust/doc-cli/src/policies.rs]] [[rust/doc-cli/src/install.rs]] [[rust/doc-cli/src/commands/browser.rs]] [[rust/doc-cli/src/desktop.rs]] [[rust/doc-run/src/workdir.rs]] [[rust/doc-cli/src/state.rs]] [[rust/doc-core/src/chunk.rs]] [[rust/doc-cli/src/mcp/handlers.rs]]
-generated_at: 2026-08-06T01:13:54.686Z
+rank: 0.005925
+links: [[rust/doc-store/src/store.rs]] [[rust/doc-cli/src/commands/edit.rs]] [[rust/doc-cli/src/workspace.rs]] [[rust/doc-cli/src/commands/store.rs]] [[rust/doc-cli/src/policies.rs]] [[rust/doc-cli/src/install.rs]] [[rust/doc-cli/src/commands/browser.rs]] [[rust/doc-cli/src/desktop.rs]] [[rust/doc-run/src/workdir.rs]] [[rust/doc-cli/src/state.rs]] [[rust/doc-run/src/approvals.rs]] [[rust/doc-core/src/chunk.rs]]
+generated_at: 2026-08-08T01:43:37.083Z
 ---
 
 # rust/doc-store/src/pack.rs  ·  rust  ·  286 LOC
@@ -37,9 +37,9 @@ graph LR
   c["pack.rs"]
   x0["store.rs"]
   c --> x0
-  x1["workspace.rs"]
+  x1["edit.rs"]
   x1 --> c
-  x2["edit.rs"]
+  x2["workspace.rs"]
   x2 --> c
   x3["store.rs"]
   x3 --> c
@@ -55,30 +55,30 @@ graph LR
   x8 --> c
   x9["state.rs"]
   x9 --> c
-  x10["chunk.rs"]
-  c --> x10
-  x11["handlers.rs"]
-  x11 --> c
-  x12["resolve.rs"]
-  c --> x12
-  x13["edit.js"]
-  x13 --> c
+  x10["approvals.rs"]
+  x10 --> c
+  x11["chunk.rs"]
+  c --> x11
+  x12["handlers.rs"]
+  x12 --> c
+  x13["resolve.rs"]
+  c --> x13
 ```
 
 ### References
 
-- [[rust/doc-store/src/store.rs]] via `scratch`, `delete`, `list`, `ingest`, `document`
-- [[rust/doc-core/src/chunk.rs]] via `decode_pack`, `source`, `encode_pack`
+- [[rust/doc-store/src/store.rs]] via `list`, `root`, `source`, `ingest`, `document`
+- [[rust/doc-core/src/chunk.rs]] via `decode_pack`, `encode_pack`, `source`
 - [[rust/doc-core/src/resolve.rs]] via `document`
+- [[rust/doc-run/src/lib.rs]] via `document`
 - [[rust/doc-cli/src/mcp/mod.rs]] via `success`
 - [[rust/doc-core/src/compress.rs]] via `insert`
 - [[rust/doc-core/src/format/mod.rs]] via `source`
-- [[rust/doc-run/src/lib.rs]] via `document`
 
 ### Referenced by
 
-- [[rust/doc-cli/src/workspace.rs]] via `load_all`, `source`, `scratch`, `document`
 - [[rust/doc-cli/src/commands/edit.rs]] via `scratch`
+- [[rust/doc-cli/src/workspace.rs]] via `scratch`, `source`, `load_all`, `document`
 - [[rust/doc-cli/src/commands/store.rs]] via `scratch`
 - [[rust/doc-cli/src/policies.rs]] via `scratch`, `remove`
 - [[rust/doc-cli/src/install.rs]] via `scratch`
@@ -86,6 +86,7 @@ graph LR
 - [[rust/doc-cli/src/desktop.rs]] via `scratch`
 - [[rust/doc-run/src/workdir.rs]] via `scratch`
 - [[rust/doc-cli/src/state.rs]] via `scratch`
+- [[rust/doc-run/src/approvals.rs]] via `scratch`
 - [[rust/doc-cli/src/mcp/handlers.rs]] via `source`, `list`
 - [[editor/surface/edit.js]] via `source`
 - [[rust/doc-core/tests/pipeline.rs]] via `source`, `document`

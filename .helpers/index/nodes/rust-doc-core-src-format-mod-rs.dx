@@ -3,12 +3,12 @@ id: rust/doc-core/src/format/mod.rs
 title: mod.rs
 kind: file-index
 lang: rust
-rank: 0.012432
+rank: 0.012393
 links: [[rust/doc-core/src/compress.rs]] [[rust/doc-store/src/store.rs]] [[editor/surface/edit.js]] [[rust/doc-cli/src/daemon/engine.rs]] [[rust/doc-cli/src/daemon/packs.rs]] [[rust/doc-cli/src/mcp/handlers.rs]] [[rust/doc-cli/src/workspace.rs]] [[rust/doc-core/src/edit.rs]] [[rust/doc-core/src/format/normalize.rs]] [[rust/doc-core/tests/pipeline.rs]] [[rust/doc-store/src/pack.rs]] [[rust/doc-wasm/src/lib.rs]]
-generated_at: 2026-08-06T01:13:54.684Z
+generated_at: 2026-08-08T01:43:37.080Z
 ---
 
-# rust/doc-core/src/format/mod.rs  ·  rust  ·  488 LOC
+# rust/doc-core/src/format/mod.rs  ·  rust  ·  532 LOC
 
 ## Symbols
 
@@ -27,39 +27,43 @@ generated_at: 2026-08-06T01:13:54.684Z
 - `round_trip` (method) — L106
 - `writes_canonical_heading_and_paragraph` (method) — L111
 - `a_view_round_trips_and_unset_attributes_write_nothing` (method) — L119
-- `a_nav_block_round_trips_including_an_empty_one` (method) — L129
-- `a_nav_without_a_label_template_writes_no_label_attribute` (method) — L138
-- `recovers_inline_single_line_block` (method) — L148
-- `recovers_trailing_end_on_content_line_and_rewrites_lang` (method) — L156
-- `a_line_that_merely_mentions_the_close_token_keeps_all_of_its_text` (method) — L164
-- `a_paragraph_with_a_generated_id_is_not_mistaken_for_a_wrapper` (method) — L183
-- `an_unnamed_paragraph_survives_a_write_then_read` (method) — L192
-- `ignores_orphan_end` (method) — L207
-- `folds_unknown_block_type_to_paragraph_without_literal_markers` (method) — L215
-- `preserves_hidden_and_class_attributes` (method) — L223
-- `numbered_list_writes_dash_markers` (method) — L235
-- `nested_list_keeps_every_item_at_its_depth` (method) — L243
-- `deeply_nested_list_survives_and_is_idempotent` (method) — L252
-- `checklist_items_survive_a_save` (method) — L258
-- `script_module_round_trips` (method) — L269
-- `image_writes_src_attr_and_alt_body` (method) — L277
-- `empty_input_yields_default_paragraph` (method) — L285
-- `slugifies_and_clamps_heading` (method) — L293
-- `deduplicates_block_ids` (method) — L305
-- `parses_doc_frontmatter_header` (method) — L313
-- `legacy_markdown_is_converted_to_blocks` (method) — L330
-- `legacy_quote_and_code_fence` (method) — L338
-- `runnable_code_attributes_round_trip` (method) — L350
-- `declared_reads_round_trip_and_unset_writes_nothing` (method) — L361
-- `plain_code_gains_no_execution_attributes` (method) — L375
-- `output_block_round_trips_with_status_and_exit` (method) — L382
-- `successful_output_omits_the_default_exit_code` (method) — L392
-- `drawing_blocks_declare_and_carry_their_output_format` (method) — L400
-- `a_board_round_trips_with_its_node_lines_verbatim` (method) — L410
-- `a_board_without_a_height_writes_no_height_attribute` (method) — L421
-- `an_empty_board_round_trips_empty` (method) — L430
-- `parse_then_stringify_is_idempotent` (method) — L437
-- `real_documents_round_trip_byte_identical` (method) — L477
+- `an_image_round_trips_its_producer_and_unset_for_writes_nothing` (method) — L129
+- `a_nav_block_round_trips_including_an_empty_one` (method) — L139
+- `a_nav_without_a_label_template_writes_no_label_attribute` (method) — L148
+- `recovers_inline_single_line_block` (method) — L158
+- `recovers_trailing_end_on_content_line_and_rewrites_lang` (method) — L166
+- `a_line_that_merely_mentions_the_close_token_keeps_all_of_its_text` (method) — L174
+- `a_paragraph_with_a_generated_id_is_not_mistaken_for_a_wrapper` (method) — L193
+- `an_unnamed_paragraph_survives_a_write_then_read` (method) — L202
+- `ignores_orphan_end` (method) — L217
+- `folds_unknown_block_type_to_paragraph_without_literal_markers` (method) — L225
+- `preserves_hidden_and_class_attributes` (method) — L233
+- `numbered_list_writes_dash_markers` (method) — L245
+- `nested_list_keeps_every_item_at_its_depth` (method) — L253
+- `deeply_nested_list_survives_and_is_idempotent` (method) — L262
+- `checklist_items_survive_a_save` (method) — L268
+- `script_module_round_trips` (method) — L279
+- `image_writes_src_attr_and_alt_body` (method) — L287
+- `empty_input_yields_default_paragraph` (method) — L295
+- `slugifies_and_clamps_heading` (method) — L303
+- `deduplicates_block_ids` (method) — L315
+- `parses_doc_frontmatter_header` (method) — L323
+- `legacy_markdown_is_converted_to_blocks` (method) — L340
+- `legacy_quote_and_code_fence` (method) — L348
+- `runnable_code_attributes_round_trip` (method) — L360
+- `declared_reads_round_trip_and_unset_writes_nothing` (method) — L371
+- `a_write_grant_round_trips_and_unset_writes_nothing` (method) — L385
+- `plain_code_gains_no_execution_attributes` (method) — L395
+- `output_block_round_trips_with_status_and_exit` (method) — L402
+- `successful_output_omits_the_default_exit_code` (method) — L412
+- `drawing_blocks_declare_and_carry_their_output_format` (method) — L420
+- `a_board_round_trips_with_its_node_lines_verbatim` (method) — L430
+- `a_board_without_a_height_writes_no_height_attribute` (method) — L441
+- `an_empty_board_round_trips_empty` (method) — L450
+- `parse_then_stringify_is_idempotent` (method) — L457
+- `a_markdown_task_bullet_is_a_checklist_item_not_item_text` (method) — L463
+- `prose_between_typed_blocks_is_adopted_not_destroyed` (method) — L478
+- `real_documents_round_trip_byte_identical` (method) — L521
 
 ## Graph
 

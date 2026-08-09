@@ -3,9 +3,9 @@ id: editor/github/content.js
 title: content.js
 kind: file-index
 lang: javascript
-rank: 0.016035
-links: [[editor/github/test/engine.test.mjs]] [[rust/doc-cli/src/mcp/handlers.rs]] [[rust/doc-cli/src/daemon/engine.rs]] [[editor/github/resolve.js]] [[editor/github/wasm/doc_wasm.js]] [[rust/doc-core/src/render/theme.rs]] [[rust/doc-cli/src/commands/exec.rs]] [[editor/vscode/test/editing.test.mjs]] [[rust/doc-cli/src/commands/browser.rs]] [[rust/doc-run/src/process.rs]] [[editor/github/wasm/doc_wasm.d.ts]] [[rust/doc-cli/src/service.rs]]
-generated_at: 2026-08-06T01:13:54.683Z
+rank: 0.015471
+links: [[rust/doc-cli/src/mcp/handlers.rs]] [[editor/github/test/engine.test.mjs]] [[rust/doc-cli/src/daemon/engine.rs]] [[editor/github/resolve.js]] [[editor/github/wasm/doc_wasm.js]] [[rust/doc-core/src/render/theme.rs]] [[editor/vscode/test/editing.test.mjs]] [[rust/doc-cli/src/commands/browser.rs]] [[rust/doc-run/src/process.rs]] [[editor/github/wasm/doc_wasm.d.ts]] [[rust/doc-cli/src/service.rs]] [[rust/doc-wasm/src/lib.rs]]
+generated_at: 2026-08-08T01:43:37.078Z
 ---
 
 # editor/github/content.js  ·  javascript  ·  704 LOC
@@ -54,9 +54,9 @@ generated_at: 2026-08-06T01:13:54.683Z
 ```mermaid
 graph LR
   c["content.js"]
-  x0["engine.test.mjs"]
+  x0["handlers.rs"]
   c --> x0
-  x1["handlers.rs"]
+  x1["engine.test.mjs"]
   c --> x1
   x2["engine.rs"]
   c --> x2
@@ -66,64 +66,66 @@ graph LR
   c --> x4
   x5["theme.rs"]
   c --> x5
-  x6["exec.rs"]
-  c --> x6
-  x7["editing.test.mjs"]
-  x7 --> c
-  x8["browser.rs"]
+  x6["editing.test.mjs"]
+  x6 --> c
+  x7["browser.rs"]
+  c --> x7
+  x8["process.rs"]
   c --> x8
-  x9["process.rs"]
+  x9["doc_wasm.d.ts"]
   c --> x9
-  x10["doc_wasm.d.ts"]
+  x10["service.rs"]
   c --> x10
-  x11["service.rs"]
+  x11["lib.rs"]
   c --> x11
-  x12["lib.rs"]
+  x12["resolve.test.mjs"]
   c --> x12
-  x13["resolve.test.mjs"]
+  x13["engine.ts"]
   c --> x13
 ```
 
 ### References
 
-- [[editor/github/test/engine.test.mjs]] via `ask`, `render_html`, `stylesheet`
-- [[rust/doc-cli/src/mcp/handlers.rs]] via `run`, `resolve`, `call`
-- [[rust/doc-cli/src/daemon/engine.rs]] via `text`, `call`
-- [[editor/github/resolve.js]] via `collapse`, `diffLines`, `resolveDocument`, `rawUrl`, `isDocumentPath`
-- [[editor/github/wasm/doc_wasm.js]] via `references`, `stylesheet`, `render_html`, `file_references`, `pack_document`
+- [[rust/doc-cli/src/mcp/handlers.rs]] via `append`, `run`, `call`, `resolve`
+- [[editor/github/test/engine.test.mjs]] via `ask`, `stylesheet`, `render_html`
+- [[rust/doc-cli/src/daemon/engine.rs]] via `call`, `text`
+- [[editor/github/resolve.js]] via `rawUrl`, `isDocumentPath`, `resolveDocument`, `diffLines`, `locate`
+- [[editor/github/wasm/doc_wasm.js]] via `pack_document`, `references`, `render_html`, `stylesheet`, `file_references`
 - [[rust/doc-core/src/render/theme.rs]] via `stylesheet`
-- [[rust/doc-cli/src/commands/exec.rs]] via `run`
 - [[rust/doc-cli/src/commands/browser.rs]] via `run`
 - [[rust/doc-run/src/process.rs]] via `run`, `send`
-- [[editor/github/wasm/doc_wasm.d.ts]] via `references`, `stylesheet`, `render_html`, `file_references`, `pack_document`
+- [[editor/github/wasm/doc_wasm.d.ts]] via `pack_document`, `references`, `render_html`, `stylesheet`, `file_references`
 - [[rust/doc-cli/src/service.rs]] via `run`
-- [[rust/doc-wasm/src/lib.rs]] via `references`, `stylesheet`, `render_html`, `file_references`, `pack_document`
+- [[rust/doc-wasm/src/lib.rs]] via `pack_document`, `references`, `render_html`, `stylesheet`, `file_references`
 - [[editor/github/test/resolve.test.mjs]] via `pack_document`, `pack_paths`, `sha256_hex`
-- [[editor/vscode/src/engine.ts]] via `references`, `render_html`, `file_references`, `pack_document`
-- [[rust/doc-cli/src/commands/mod.rs]] via `text`, `exec`
+- [[editor/vscode/src/engine.ts]] via `pack_document`, `references`, `render_html`, `file_references`
+- [[rust/doc-cli/src/commands/mod.rs]] via `exec`, `text`
 - [[rust/doc-cli/src/commands/view.rs]] via `slice`
-- [[rust/doc-core/src/render/mod.rs]] via `text`, `theme`
-- [[editor/surface/edit.js]] via `apply`, `call`, `run`
+- [[rust/doc-core/src/render/mod.rs]] via `theme`, `text`
+- [[editor/surface/edit.js]] via `apply`, `run`, `call`
 - [[rust/doc-cli/src/commands/play.rs]] via `run`
 - [[rust/doc-cli/src/daemon/http.rs]] via `text`
+- [[rust/doc-core/src/lib.rs]] via `base64`, `resolve`
 - [[rust/doc-core/src/render/text.rs]] via `text`
 - [[rust/doc-core/src/resolve.rs]] via `references`, `file_references`
 - [[rust/doc-shot/src/lib.rs]] via `base64`
+- [[rust/doc-cli/src/commands/exec.rs]] via `run`
+- [[rust/doc-cli/src/commands/index.rs]] via `run`
 - [[rust/doc-cli/src/extension.rs]] via `locate`
 - [[rust/doc-cli/src/mcp/mod.rs]] via `error`
-- [[rust/doc-core/src/lib.rs]] via `resolve`
+- [[rust/doc-core/src/base64.rs]] via `decode`
 - [[rust/doc-run/src/toolchain.rs]] via `locate`
-- [[rust/doc-shot/src/base64.rs]] via `decode`
 - [[rust/doc-shot/src/play.rs]] via `locate`
+- [[rust/doc-shot/src/png.rs]] via `decode`
 - [[rust/doc-store/src/schema.rs]] via `apply`
 - [[rust/doc-store/src/store.rs]] via `delete`
 
 ### Referenced by
 
 - [[editor/vscode/test/editing.test.mjs]] via `references`, `render_html`
+- [[rust/doc-run/src/lib.rs]] via `sha256_hex`
 - [[packaging/build-icons.py]] via `run`
 - [[rust/doc-core/src/chunk.rs]] via `sha256_hex`
-- [[rust/doc-run/src/lib.rs]] via `sha256_hex`
 - [[rust/doc-shot/src/cdp.rs]] via `send`
 - [[rust/doc-store/src/stub.rs]] via `sha256_hex`
 

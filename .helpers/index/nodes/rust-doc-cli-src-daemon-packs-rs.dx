@@ -3,9 +3,9 @@ id: rust/doc-cli/src/daemon/packs.rs
 title: packs.rs
 kind: file-index
 lang: rust
-rank: 0.004195
+rank: 0.00385
 links: [[rust/doc-cli/src/daemon/mod.rs]] [[editor/github/engine.js]] [[rust/doc-cli/src/commands/mod.rs]] [[rust/doc-cli/src/daemon/engine.rs]] [[rust/doc-store/src/lib.rs]] [[rust/doc-cli/src/policies.rs]] [[rust/doc-cli/src/mcp/handlers.rs]] [[rust/doc-core/src/chunk.rs]] [[rust/doc-core/src/compress.rs]] [[rust/doc-core/src/format/mod.rs]] [[rust/doc-store/src/pack.rs]] [[rust/doc-store/src/store.rs]]
-generated_at: 2026-08-06T01:13:54.687Z
+generated_at: 2026-08-08T01:43:37.085Z
 ---
 
 # rust/doc-cli/src/daemon/packs.rs  ·  rust  ·  188 LOC
@@ -71,6 +71,6 @@ graph LR
 
 ### Referenced by
 
-- [[rust/doc-cli/src/daemon/mod.rs]] via `pack_bytes`, `store`
+- [[rust/doc-cli/src/daemon/mod.rs]] via `store`, `pack_bytes`
 - [[rust/doc-cli/src/daemon/engine.rs]] via `pack_bytes`, `store`
 

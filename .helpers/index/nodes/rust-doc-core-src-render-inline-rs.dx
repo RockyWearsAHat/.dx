@@ -3,9 +3,9 @@ id: rust/doc-core/src/render/inline.rs
 title: inline.rs
 kind: file-index
 lang: rust
-rank: 0.004761
+rank: 0.004687
 links: [[rust/doc-core/src/render/field.rs]] [[rust/doc-core/src/render/html.rs]] [[rust/doc-core/src/render/escape.rs]]
-generated_at: 2026-08-06T01:13:54.687Z
+generated_at: 2026-08-08T01:43:37.084Z
 ---
 
 # rust/doc-core/src/render/inline.rs  ·  rust  ·  251 LOC

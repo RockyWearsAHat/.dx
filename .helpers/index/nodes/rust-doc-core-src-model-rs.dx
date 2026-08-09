@@ -3,21 +3,26 @@ id: rust/doc-core/src/model.rs
 title: model.rs
 kind: file-index
 lang: rust
-rank: 0.01646
+rank: 0.014778
 links: [[rust/doc-core/src/edit.rs]] [[rust/doc-core/src/render/html.rs]] [[rust/doc-core/src/resolve.rs]] [[rust/doc-core/src/render/board.rs]] [[rust/doc-cli/src/workspace.rs]] [[rust/doc-core/src/format/source.rs]] [[rust/doc-run/src/lib.rs]] [[rust/doc-store/src/store.rs]]
-generated_at: 2026-08-06T01:13:54.683Z
+generated_at: 2026-08-08T01:43:37.079Z
 ---
 
-# rust/doc-core/src/model.rs  ·  rust  ·  153 LOC
+# rust/doc-core/src/model.rs  ·  rust  ·  219 LOC
 
 ## Symbols
 
 - `Item` (class) — L10
 - `Block` (class) — L21
-- `runner_for_language` (function) — L99
-- `Document` (class) — L115
-- `block_index` (method) — L137
-- `first_heading_text` (method) — L145
+- `runner_for_language` (function) — L123
+- `Document` (class) — L143
+- `block_index` (method) — L165
+- `first_heading_text` (method) — L173
+- `tests` (module) — L184
+- `typescript_routes_to_the_node_toolchain_and_deno_stays_explicit` (method) — L188
+- `direct_toolchain_languages_route_with_their_aliases` (method) — L195
+- `every_routed_runner_is_in_the_catalogue` (method) — L205
+- `an_unknown_language_has_no_runner` (method) — L215
 
 ## Graph
 

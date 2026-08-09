@@ -3,50 +3,57 @@ id: rust/doc-shot/src/play.rs
 title: play.rs
 kind: file-index
 lang: rust
-rank: 0.006274
-links: [[editor/surface/edit.js]] [[editor/github/test/resolve.test.mjs]] [[rust/doc-shot/src/cdp.rs]] [[rust/doc-shot/src/lib.rs]] [[editor/github/test/engine.test.mjs]] [[rust/doc-cli/src/daemon/http.rs]] [[rust/doc-core/src/render/mod.rs]] [[rust/doc-run/src/toolchain.rs]] [[rust/doc-cli/src/extension.rs]] [[editor/github/resolve.js]] [[rust/doc-cli/src/commands/mod.rs]] [[rust/doc-cli/src/commands/browser.rs]]
-generated_at: 2026-08-06T01:13:54.686Z
+rank: 0.006082
+links: [[editor/surface/edit.js]] [[rust/doc-core/src/render/mod.rs]] [[rust/doc-shot/src/cdp.rs]] [[rust/doc-shot/src/lib.rs]] [[editor/github/test/resolve.test.mjs]] [[editor/github/test/engine.test.mjs]] [[rust/doc-cli/src/daemon/http.rs]] [[rust/doc-run/src/toolchain.rs]] [[rust/doc-cli/src/extension.rs]] [[editor/github/resolve.js]] [[rust/doc-cli/src/commands/mod.rs]] [[rust/doc-cli/src/commands/browser.rs]]
+generated_at: 2026-08-08T01:43:37.083Z
 ---
 
-# rust/doc-shot/src/play.rs  ·  rust  ·  727 LOC
+# rust/doc-shot/src/play.rs  ·  rust  ·  841 LOC
 
 ## Symbols
 
-- `PlayOptions` (class) — L56
-- `default` (method) — L72
-- `PlayFrame` (class) — L86
-- `Target` (class) — L101
-- `Action` (class) — L110
-- `play` (function) — L128
-- `parse_script` (function) — L147
-- `parse_statement` (function) — L169
-- `parse_duration` (function) — L197
-- `parse_target` (function) — L212
-- `check_budget` (function) — L222
-- `describe` (function) — L255
-- `KeySpec` (class) — L271
-- `key_spec` (function) — L282
-- `drive` (function) — L324
-- `perform` (function) — L378
-- `block_rect_js` (function) — L451
-- `locate` (function) — L467
-- `node_clip` (function) — L481
-- `field` (function) — L495
-- `capture` (function) — L502
-- `png_dimensions` (function) — L522
-- `tests` (module) — L532
-- `a_script_parses_into_its_actions_in_order` (method) — L537
-- `a_scroll_may_name_the_node_whose_overflow_it_turns` (method) — L553
-- `durations_read_naturally_in_either_unit` (method) — L565
-- `a_statement_that_makes_no_sense_is_named_with_the_vocabulary` (method) — L573
-- `an_empty_script_is_refused_with_an_example` (method) — L580
-- `the_stated_limits_are_enforced_before_any_browser_starts` (method) — L586
-- `named_keys_and_characters_map_to_real_key_events` (method) — L606
-- `every_action_describes_itself_in_its_own_words` (method) — L624
-- `png_dimensions_come_out_of_the_header` (method) — L639
-- `a_block_id_needing_escapes_still_finds_its_element` (method) — L650
-- `a_real_page_is_driven_and_returns_annotated_frames` (method) — L659
-- `a_node_clip_frames_only_that_block` (method) — L696
+- `PlayOptions` (class) — L60
+- `default` (method) — L80
+- `PlayFrame` (class) — L94
+- `Target` (class) — L109
+- `Action` (class) — L118
+- `play` (function) — L142
+- `parse_script` (function) — L161
+- `parse_statement` (function) — L183
+- `parse_duration` (function) — L211
+- `parse_target` (function) — L226
+- `check_budget` (function) — L236
+- `describe` (function) — L269
+- `KeySpec` (class) — L285
+- `key_spec` (function) — L296
+- `drive` (function) — L338
+- `perform` (function) — L392
+- `block_rect_js` (function) — L462
+- `Frame` (class) — L480
+- `resolve_point` (function) — L491
+- `scroll_centre` (function) — L500
+- `script_frame` (function) — L518
+- `locate` (function) — L540
+- `node_clip` (function) — L557
+- `field` (function) — L571
+- `capture` (function) — L578
+- `png_dimensions` (function) — L598
+- `tests` (module) — L608
+- `a_script_parses_into_its_actions_in_order` (method) — L613
+- `a_scroll_may_name_the_node_whose_overflow_it_turns` (method) — L629
+- `durations_read_naturally_in_either_unit` (method) — L641
+- `a_statement_that_makes_no_sense_is_named_with_the_vocabulary` (method) — L649
+- `an_empty_script_is_refused_with_an_example` (method) — L656
+- `the_stated_limits_are_enforced_before_any_browser_starts` (method) — L662
+- `named_keys_and_characters_map_to_real_key_events` (method) — L682
+- `every_action_describes_itself_in_its_own_words` (method) — L700
+- `png_dimensions_come_out_of_the_header` (method) — L715
+- `a_point_target_is_viewport_absolute_without_a_node` (method) — L726
+- `with_a_node_a_point_is_read_inside_the_blocks_box` (method) — L733
+- `a_bare_scroll_turns_over_the_frames_centre_when_a_node_sets_one` (method) — L745
+- `a_block_id_needing_escapes_still_finds_its_element` (method) — L764
+- `a_real_page_is_driven_and_returns_annotated_frames` (method) — L773
+- `a_node_clip_frames_only_that_block` (method) — L810
 
 ## Graph
 
@@ -55,17 +62,17 @@ graph LR
   c["play.rs"]
   x0["edit.js"]
   x0 --> c
-  x1["resolve.test.mjs"]
-  x1 --> c
+  x1["mod.rs"]
+  c --> x1
   x2["cdp.rs"]
   c --> x2
   x3["lib.rs"]
   x3 --> c
-  x4["engine.test.mjs"]
-  c --> x4
-  x5["http.rs"]
+  x4["resolve.test.mjs"]
+  x4 --> c
+  x5["engine.test.mjs"]
   c --> x5
-  x6["mod.rs"]
+  x6["http.rs"]
   c --> x6
   x7["toolchain.rs"]
   x7 --> c
@@ -85,10 +92,10 @@ graph LR
 
 ### References
 
-- [[rust/doc-shot/src/cdp.rs]] via `open`, `screenshot`, `command`, `evaluate`
+- [[rust/doc-core/src/render/mod.rs]] via `field`
+- [[rust/doc-shot/src/cdp.rs]] via `command`, `evaluate`, `screenshot`, `open`
 - [[editor/github/test/engine.test.mjs]] via `json`
 - [[rust/doc-cli/src/daemon/http.rs]] via `json`
-- [[rust/doc-core/src/render/mod.rs]] via `field`
 - [[editor/github/resolve.js]] via `locate`
 - [[rust/doc-cli/src/commands/mod.rs]] via `play`
 - [[editor/github/engine.js]] via `perform`
@@ -98,8 +105,8 @@ graph LR
 ### Referenced by
 
 - [[editor/surface/edit.js]] via `field`
-- [[editor/github/test/resolve.test.mjs]] via `locate`
 - [[rust/doc-shot/src/lib.rs]] via `capture`, `screenshot`, `play`
+- [[editor/github/test/resolve.test.mjs]] via `locate`
 - [[rust/doc-run/src/toolchain.rs]] via `locate`
 - [[rust/doc-cli/src/extension.rs]] via `locate`, `Target`
 - [[rust/doc-cli/src/commands/browser.rs]] via `describe`

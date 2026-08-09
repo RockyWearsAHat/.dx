@@ -3,9 +3,9 @@ id: rust/doc-core/src/format/source.rs
 title: source.rs
 kind: file-index
 lang: rust
-rank: 0.003194
+rank: 0.003122
 links: [[rust/doc-core/src/format/util.rs]] [[rust/doc-core/src/format/normalize.rs]] [[rust/doc-core/src/format/parse.rs]] [[rust/doc-cli/src/workspace.rs]] [[rust/doc-core/src/format/attrs.rs]] [[rust/doc-core/src/format/legacy.rs]] [[rust/doc-core/src/model.rs]] [[rust/doc-core/src/render/html.rs]] [[rust/doc-store/src/store.rs]]
-generated_at: 2026-08-06T01:13:54.688Z
+generated_at: 2026-08-08T01:43:37.086Z
 ---
 
 # rust/doc-core/src/format/source.rs  ·  rust  ·  265 LOC
@@ -50,7 +50,7 @@ graph LR
 
 ### References
 
-- [[rust/doc-core/src/format/util.rs]] via `parse_value`, `js_trim`
+- [[rust/doc-core/src/format/util.rs]] via `js_trim`, `parse_value`
 - [[rust/doc-core/src/format/normalize.rs]] via `normalize_blocks`
 - [[rust/doc-core/src/format/parse.rs]] via `parse_docsrc_blocks`
 - [[rust/doc-core/src/format/attrs.rs]] via `set_attr`

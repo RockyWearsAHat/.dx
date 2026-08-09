@@ -82,8 +82,18 @@ const COMMANDS: &[Command] = &[
             "body",
             "field",
             "out",
+            "all",
         ],
-        run: |args| view::run_render(args).map(Output::Document),
+        // `--all` writes one page per document itself and answers with a report of the
+        // files it wrote — content that must not be redirected into `--out`, which names
+        // the export *directory* in that form.
+        run: |args| {
+            view::run_render(args).map(if args.present("all") {
+                Output::Report
+            } else {
+                Output::Document
+            })
+        },
     },
     Command {
         names: &["ls", "list"],
@@ -173,7 +183,7 @@ const COMMANDS: &[Command] = &[
     },
     Command {
         names: &["set"],
-        flags: &["text", "from", "header"],
+        flags: &["text", "from", "header", "replace", "with", "all"],
         run: |args| edit::run_set(args).map(Output::Report),
     },
     Command {
@@ -384,12 +394,16 @@ mod tests {
                     "body",
                     "field",
                     "out",
+                    "all",
                 ],
             ),
             ("png", vec!["section", "out", "pages", "block", "against"]),
             ("search", vec!["limit"]),
             ("source", vec!["block", "header"]),
-            ("set", vec!["text", "from", "header"]),
+            (
+                "set",
+                vec!["text", "from", "header", "replace", "with", "all"],
+            ),
             (
                 "insert",
                 vec![

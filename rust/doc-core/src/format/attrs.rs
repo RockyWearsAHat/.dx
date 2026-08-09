@@ -1,6 +1,7 @@
 //! Attribute-string parsing for the DOCSRC reader.
 //!
-//! Block headers carry an attribute remainder (`id=…`, `class=…`, bare `hidden`/`module`,
+//! Block headers carry an attribute remainder (`id=…`, `class=…`, bare
+//! `hidden`/`module`/`run`/`open`,
 //! and per-type keys). This module ports the reference's left-to-right attribute scanner
 //! and the small `(key, value)` lookup helpers used by the parser.
 
@@ -9,17 +10,20 @@ use super::util::js_trim;
 /// A `(key, value)` attribute pair extracted from a block header.
 pub(super) type Attr = (String, String);
 
-/// Parse the leading attributes of a header remainder and return the unconsumed remainder.
+/// Parse the leading attributes of a `kind` block's header remainder and return the
+/// unconsumed remainder.
 ///
-/// Consumes, left to right, either a bare boolean (`hidden`/`module`) or a `key=value`
-/// (double-quoted, single-quoted, or bare) pair, stopping at the first non-attribute token.
-/// Keys are lowercased. Port of `parseLeadingAttributesAndRemainder`.
-pub(super) fn parse_leading_attributes(text: &str) -> (Vec<Attr>, String) {
+/// Consumes, left to right, either a bare boolean the kind may carry (see
+/// [`bare_booleans`]) or a `key=value` (double-quoted, single-quoted, or bare) pair,
+/// stopping at the first non-attribute token. Keys are lowercased. Port of
+/// `parseLeadingAttributesAndRemainder`, with the bare booleans scoped per kind.
+pub(super) fn parse_leading_attributes(text: &str, kind: &str) -> (Vec<Attr>, String) {
+    let allowed = bare_booleans(kind);
     let mut attrs: Vec<Attr> = Vec::new();
     let mut rest = text;
 
     loop {
-        if let Some(consumed) = match_bare_boolean(rest) {
+        if let Some(consumed) = match_bare_boolean(rest, allowed) {
             let key = js_trim(&rest[..consumed]).to_lowercase();
             set_attr(&mut attrs, &key, "true");
             rest = &rest[consumed..];
@@ -59,12 +63,24 @@ pub(super) fn attr<'a>(attrs: &'a [Attr], key: &str) -> &'a str {
         .unwrap_or("")
 }
 
-/// Match a leading bare boolean attribute (`hidden`/`module`/`run`) followed by whitespace
-/// or end-of-string, after optional leading whitespace. Returns the consumed byte length.
-fn match_bare_boolean(text: &str) -> Option<usize> {
+/// The bare boolean attributes a block of `kind` may carry. Scoped per kind so a bare
+/// word opening an inline body — `::heading id=h Open questions ::end` — stays prose
+/// instead of being swallowed as an attribute: `run` and `open` belong to code,
+/// `module` to script, and `hidden` to every block.
+fn bare_booleans(kind: &str) -> &'static [&'static str] {
+    match kind.to_ascii_lowercase().as_str() {
+        "code" => &["hidden", "run", "open"],
+        "script" => &["hidden", "module"],
+        _ => &["hidden"],
+    }
+}
+
+/// Match a leading bare boolean attribute from `allowed` followed by whitespace or
+/// end-of-string, after optional leading whitespace. Returns the consumed byte length.
+fn match_bare_boolean(text: &str, allowed: &[&str]) -> Option<usize> {
     let leading_ws = text.len() - text.trim_start().len();
     let body = &text[leading_ws..];
-    for keyword in ["hidden", "module", "run"] {
+    for keyword in allowed {
         if body.len() >= keyword.len() && body[..keyword.len()].eq_ignore_ascii_case(keyword) {
             let after = &body[keyword.len()..];
             if after.is_empty() || after.starts_with(|c: char| c.is_ascii_whitespace()) {

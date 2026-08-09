@@ -68,6 +68,7 @@ fn push_block(blocks: &mut Vec<Block>, block_type: &str, attrs: &[Attr], content
             };
             block.src = js_trim(attr(attrs, "src")).to_string();
             block.run = parse_boolean_attribute(attr(attrs, "run"));
+            block.open = parse_boolean_attribute(attr(attrs, "open"));
             block.deps = js_trim(attr(attrs, "deps")).to_string();
             block.reads = js_trim(attr(attrs, "reads")).to_string();
             block.writes = js_trim(attr(attrs, "writes")).to_string();
@@ -144,8 +145,11 @@ fn push_block(blocks: &mut Vec<Block>, block_type: &str, attrs: &[Attr], content
         "rule" => {}
         // Style: inline CSS body, trailing-trimmed but otherwise verbatim. `media` scopes it
         // the same way it scopes a `::stylesheet`, so "this dress is for print" is one word.
+        // `src` names a sibling stylesheet whose current text is the block's CSS — the
+        // stored body stays as written, and `resolve::hydrate` fills it in at view time.
         "style" => {
             block.text = js_trim_end(&content_lines.join("\n")).to_string();
+            block.src = js_trim(attr(attrs, "src")).to_string();
             block.media = js_trim(attr(attrs, "media")).to_string();
         }
         // Stylesheet: resolve the link from `href`, then `src`, then the body, in that order.
@@ -230,7 +234,7 @@ pub(super) fn parse_docsrc_blocks(body: &str) -> Vec<Block> {
         if let Some((block_type, inner)) = parse_inline_block(line) {
             adopt_loose(&mut loose, &mut blocks);
             if block_type != "end" {
-                let (attrs, remainder) = parse_leading_attributes(inner);
+                let (attrs, remainder) = parse_leading_attributes(inner, &block_type);
                 let content: Vec<String> = if remainder.is_empty() {
                     Vec::new()
                 } else {
@@ -262,7 +266,7 @@ pub(super) fn parse_docsrc_blocks(body: &str) -> Vec<Block> {
         // Re-split the opening line from the raw form to capture leading attributes plus a
         // same-line remainder, matching `rawLine.replace(/^::[a-z-]+/i, '')`.
         let opening_remainder = strip_block_type_prefix(&raw_line);
-        let (attrs, remainder) = parse_leading_attributes(opening_remainder);
+        let (attrs, remainder) = parse_leading_attributes(opening_remainder, &block_type);
         let mut content_lines: Vec<String> = Vec::new();
         if !remainder.is_empty() {
             content_lines.push(remainder);
@@ -379,7 +383,7 @@ pub(crate) fn header_line_facts(line: &str) -> Option<(String, bool)> {
     if block_type == "end" {
         return None;
     }
-    let (attrs, _) = parse_leading_attributes(strip_block_type_prefix(trimmed));
+    let (attrs, _) = parse_leading_attributes(strip_block_type_prefix(trimmed), &block_type);
     let has_id = attrs.iter().any(|(key, _)| key == "id");
     Some((block_type, has_id))
 }

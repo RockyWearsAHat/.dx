@@ -3,9 +3,9 @@ id: rust/doc-cli/src/daemon/mod.rs
 title: mod.rs
 kind: file-index
 lang: rust
-rank: 0.006502
+rank: 0.005588
 links: [[rust/doc-cli/src/mcp/mod.rs]] [[rust/doc-cli/src/daemon/packs.rs]] [[editor/github/test/resolve.test.mjs]] [[rust/doc-cli/src/daemon/engine.rs]] [[rust/doc-cli/src/daemon/http.rs]] [[rust/doc-core/src/compress.rs]] [[editor/github/engine.js]] [[rust/doc-cli/src/commands/mod.rs]] [[rust/doc-cli/src/policies.rs]] [[rust/doc-cli/src/workspace.rs]] [[rust/doc-shot/src/cdp.rs]] [[rust/doc-store/src/lib.rs]]
-generated_at: 2026-08-06T01:13:54.686Z
+generated_at: 2026-08-08T01:43:37.084Z
 ---
 
 # rust/doc-cli/src/daemon/mod.rs  ·  rust  ·  652 LOC
@@ -84,8 +84,8 @@ graph LR
 
 ### References
 
-- [[rust/doc-cli/src/mcp/mod.rs]] via `request`, `serve`
-- [[rust/doc-cli/src/daemon/packs.rs]] via `pack_bytes`, `store`
+- [[rust/doc-cli/src/mcp/mod.rs]] via `answer`, `request`
+- [[rust/doc-cli/src/daemon/packs.rs]] via `store`, `pack_bytes`
 - [[rust/doc-cli/src/daemon/http.rs]] via `header`
 - [[rust/doc-core/src/compress.rs]] via `insert`
 - [[editor/github/engine.js]] via `store`

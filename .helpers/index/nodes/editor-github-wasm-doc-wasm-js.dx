@@ -3,9 +3,9 @@ id: editor/github/wasm/doc_wasm.js
 title: doc_wasm.js
 kind: file-index
 lang: javascript
-rank: 0.008743
-links: [[rust/doc-core/src/edit.rs]] [[editor/vscode/test/editing.test.mjs]] [[editor/github/wasm/doc_wasm.d.ts]] [[rust/doc-wasm/src/lib.rs]] [[editor/vscode/src/engine.ts]] [[editor/github/content.js]] [[rust/doc-core/src/render/theme.rs]] [[editor/github/test/resolve.test.mjs]] [[rust/doc-core/src/render/field.rs]] [[rust/doc-core/src/compress.rs]] [[rust/doc-shot/src/base64.rs]] [[editor/github/resolve.js]]
-generated_at: 2026-08-06T01:13:54.685Z
+rank: 0.008595
+links: [[rust/doc-core/src/edit.rs]] [[editor/vscode/test/editing.test.mjs]] [[editor/github/wasm/doc_wasm.d.ts]] [[rust/doc-wasm/src/lib.rs]] [[editor/vscode/src/engine.ts]] [[editor/github/content.js]] [[rust/doc-core/src/render/theme.rs]] [[editor/github/test/resolve.test.mjs]] [[rust/doc-core/src/render/field.rs]] [[rust/doc-core/src/base64.rs]] [[rust/doc-core/src/compress.rs]] [[rust/doc-shot/src/png.rs]]
+generated_at: 2026-08-08T01:43:37.081Z
 ---
 
 # editor/github/wasm/doc_wasm.js  ·  javascript  ·  1411 LOC
@@ -87,28 +87,29 @@ graph LR
   x7 --> c
   x8["field.rs"]
   c --> x8
-  x9["compress.rs"]
+  x9["base64.rs"]
   c --> x9
-  x10["base64.rs"]
+  x10["compress.rs"]
   c --> x10
-  x11["resolve.js"]
-  x11 --> c
-  x12["engine.test.mjs"]
+  x11["png.rs"]
+  c --> x11
+  x12["resolve.js"]
   x12 --> c
-  x13["view.rs"]
-  c --> x13
+  x13["engine.test.mjs"]
+  x13 --> c
 ```
 
 ### References
 
-- [[rust/doc-core/src/edit.rs]] via `remove_block`, `board_arrange`, `board_place`, `block_header`, `set_block`
-- [[editor/github/wasm/doc_wasm.d.ts]] via `render_outline`, `insert_block`, `decompress`, `join_chunks`, `references`
-- [[rust/doc-wasm/src/lib.rs]] via `render_outline`, `insert_block`, `decompress`, `join_chunks`, `references`
-- [[editor/vscode/src/engine.ts]] via `render_outline`, `insert_block`, `references`, `remove_block`, `board_arrange`
+- [[rust/doc-core/src/edit.rs]] via `set_block`, `board_arrange`, `board_link`, `preview_block`, `block_source`
+- [[editor/github/wasm/doc_wasm.d.ts]] via `decompress`, `set_block`, `board_arrange`, `board_link`, `preview_block`
+- [[rust/doc-wasm/src/lib.rs]] via `decompress`, `set_block`, `board_arrange`, `board_link`, `preview_block`
+- [[editor/vscode/src/engine.ts]] via `set_block`, `board_arrange`, `board_link`, `preview_block`, `render_text`
 - [[rust/doc-core/src/render/theme.rs]] via `stylesheet`
 - [[rust/doc-core/src/render/field.rs]] via `field_html`
+- [[rust/doc-core/src/base64.rs]] via `encode`, `decode`
 - [[rust/doc-core/src/compress.rs]] via `decompress`, `compress`
-- [[rust/doc-shot/src/base64.rs]] via `encode`, `decode`
+- [[rust/doc-shot/src/png.rs]] via `encode`, `decode`
 - [[rust/doc-cli/src/commands/view.rs]] via `slice`
 - [[rust/doc-core/src/digest.rs]] via `sha1_hex`, `sha256_hex`
 - [[rust/doc-core/src/format/stringify.rs]] via `block_header`
@@ -117,15 +118,15 @@ graph LR
 
 ### Referenced by
 
-- [[editor/vscode/test/editing.test.mjs]] via `block_header`, `board_detach`, `replace_block`, `toggle_check`, `references`
-- [[editor/github/content.js]] via `references`, `stylesheet`, `render_html`, `file_references`, `pack_document`
-- [[editor/github/test/resolve.test.mjs]] via `pack_paths`, `sha256_hex`, `pack_document`
+- [[editor/vscode/test/editing.test.mjs]] via `board_link`, `block_source`, `toggle_check`, `preview_block`, `remove_block`
+- [[editor/github/content.js]] via `pack_document`, `references`, `render_html`, `stylesheet`, `file_references`
+- [[editor/github/test/resolve.test.mjs]] via `pack_document`, `pack_paths`, `sha256_hex`
 - [[editor/github/resolve.js]] via `pack_document`, `sha256_hex`, `pack_paths`
-- [[editor/github/test/engine.test.mjs]] via `render_html`, `stylesheet`
-- [[rust/doc-core/src/chunk.rs]] via `sha256_hex`, `decompress`, `compress`
-- [[rust/doc-store/src/store.rs]] via `decompress`, `compress`
+- [[editor/github/test/engine.test.mjs]] via `stylesheet`, `render_html`
+- [[rust/doc-core/src/chunk.rs]] via `compress`, `sha256_hex`, `decompress`
+- [[rust/doc-run/src/lib.rs]] via `sha256_hex`
+- [[rust/doc-store/src/store.rs]] via `compress`, `decompress`
 - [[packaging/build-icons.py]] via `compress`
 - [[rust/doc-core/tests/pipeline.rs]] via `compress`
-- [[rust/doc-run/src/lib.rs]] via `sha256_hex`
 - [[rust/doc-store/src/stub.rs]] via `sha256_hex`
 

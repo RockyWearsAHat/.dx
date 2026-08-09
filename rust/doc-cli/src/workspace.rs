@@ -257,11 +257,17 @@ impl Resolver for FolderResolver {
     }
 }
 
-/// Gather every file under `dir` into `files` as `(path, lossy text)` pairs, `prefix`
+/// Gather every file under `dir` into `files` as `(path, content)` pairs, `prefix`
 /// carrying the path back to the document's folder. Hidden entries and regenerated build
 /// caches (`target`, `node_modules`) are skipped — the contract [`Resolver::files_under`]
 /// states. Unreadable entries are skipped rather than failed: a vanished file simply
 /// stops contributing to the fingerprint, which is itself a change.
+///
+/// A text file contributes its exact text; a binary file contributes its bytes' digest.
+/// It must never contribute *lossy* text: two different builds of a binary differ mostly
+/// inside invalid-UTF-8 runs that lossy conversion collapses to identical replacement
+/// characters — which is how a rebuilt wasm engine once slipped past a gate that
+/// declared its folder with `reads=`.
 fn collect_tree(dir: &Path, prefix: &str, files: &mut Vec<(String, String)>) {
     let Ok(entries) = fs::read_dir(dir) else {
         return;
@@ -278,7 +284,9 @@ fn collect_tree(dir: &Path, prefix: &str, files: &mut Vec<(String, String)>) {
                 collect_tree(&path, &held, files);
             }
         } else if let Ok(bytes) = fs::read(&path) {
-            files.push((held, String::from_utf8_lossy(&bytes).into_owned()));
+            let content = String::from_utf8(bytes)
+                .unwrap_or_else(|raw| doc_core::digest::sha256_hex(raw.as_bytes()));
+            files.push((held, content));
         }
     }
 }
@@ -543,6 +551,27 @@ mod tests {
             "a file is not a folder"
         );
         assert!(resolver.files_under("gone").is_none());
+    }
+
+    #[test]
+    fn two_different_binaries_never_share_a_fingerprint_contribution() {
+        // Lossy conversion collapses invalid-UTF-8 runs to identical replacement
+        // characters, which once let a rebuilt wasm engine slip past a `reads=` gate.
+        // A binary contributes its bytes' digest, so any byte change is a change.
+        let root = scratch("binary-read");
+        fs::create_dir_all(root.join("built")).expect("dirs");
+        let resolver = FolderResolver {
+            folder: root.clone(),
+        };
+        fs::write(root.join("built/engine.wasm"), [0xFF, 0xFE]).expect("write");
+        let first = resolver.files_under("built").expect("folder");
+        fs::write(root.join("built/engine.wasm"), [0xFE, 0xFF]).expect("write");
+        let second = resolver.files_under("built").expect("folder");
+        assert_ne!(first, second, "a changed binary must change the read");
+        assert!(
+            String::from_utf8_lossy(&[0xFF, 0xFE]) == String::from_utf8_lossy(&[0xFE, 0xFF]),
+            "the lossy views really do collide — that is the trap this pins"
+        );
     }
 
     #[test]

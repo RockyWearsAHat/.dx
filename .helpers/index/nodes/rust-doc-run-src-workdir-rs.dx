@@ -3,9 +3,9 @@ id: rust/doc-run/src/workdir.rs
 title: workdir.rs
 kind: file-index
 lang: rust
-rank: 0.011478
-links: [[rust/doc-store/src/store.rs]] [[rust/doc-cli/src/commands/edit.rs]] [[rust/doc-cli/src/commands/store.rs]] [[rust/doc-cli/src/workspace.rs]] [[rust/doc-run/src/confine.rs]] [[rust/doc-store/src/pack.rs]] [[rust/doc-cli/src/state.rs]] [[rust/doc-cli/src/install.rs]] [[rust/doc-cli/src/policies.rs]] [[rust/doc-cli/src/commands/browser.rs]] [[rust/doc-cli/src/desktop.rs]] [[rust/doc-run/src/lib.rs]]
-generated_at: 2026-08-06T01:13:54.684Z
+rank: 0.01125
+links: [[rust/doc-store/src/store.rs]] [[rust/doc-cli/src/commands/edit.rs]] [[rust/doc-cli/src/workspace.rs]] [[rust/doc-cli/src/commands/store.rs]] [[rust/doc-run/src/confine.rs]] [[rust/doc-store/src/pack.rs]] [[rust/doc-cli/src/state.rs]] [[rust/doc-cli/src/install.rs]] [[rust/doc-cli/src/policies.rs]] [[rust/doc-cli/src/commands/browser.rs]] [[rust/doc-cli/src/desktop.rs]] [[rust/doc-run/src/approvals.rs]]
+generated_at: 2026-08-08T01:43:37.081Z
 ---
 
 # rust/doc-run/src/workdir.rs  ·  rust  ·  218 LOC
@@ -34,9 +34,9 @@ graph LR
   c --> x0
   x1["edit.rs"]
   x1 --> c
-  x2["store.rs"]
+  x2["workspace.rs"]
   x2 --> c
-  x3["workspace.rs"]
+  x3["store.rs"]
   x3 --> c
   x4["confine.rs"]
   x4 --> c
@@ -52,10 +52,12 @@ graph LR
   x9 --> c
   x10["desktop.rs"]
   x10 --> c
-  x11["lib.rs"]
-  c --> x11
-  x12["process.rs"]
+  x11["approvals.rs"]
+  x11 --> c
+  x12["lib.rs"]
   c --> x12
+  x13["process.rs"]
+  c --> x13
 ```
 
 ### References
@@ -68,12 +70,13 @@ graph LR
 ### Referenced by
 
 - [[rust/doc-cli/src/commands/edit.rs]] via `scratch`
-- [[rust/doc-cli/src/commands/store.rs]] via `scratch`
 - [[rust/doc-cli/src/workspace.rs]] via `scratch`
+- [[rust/doc-cli/src/commands/store.rs]] via `scratch`
 - [[rust/doc-run/src/confine.rs]] via `grant`, `confine`, `with_network`
 - [[rust/doc-cli/src/state.rs]] via `write_file`, `scratch`
 - [[rust/doc-cli/src/install.rs]] via `scratch`
 - [[rust/doc-cli/src/policies.rs]] via `scratch`
 - [[rust/doc-cli/src/commands/browser.rs]] via `scratch`
 - [[rust/doc-cli/src/desktop.rs]] via `scratch`
+- [[rust/doc-run/src/approvals.rs]] via `scratch`
 

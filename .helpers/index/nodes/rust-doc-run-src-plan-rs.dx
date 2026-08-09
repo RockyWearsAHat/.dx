@@ -3,12 +3,12 @@ id: rust/doc-run/src/plan.rs
 title: plan.rs
 kind: file-index
 lang: rust
-rank: 0.003876
-links: [[rust/doc-run/src/toolchain.rs]] [[rust/doc-cli/src/commands/browser.rs]] [[editor/build.sh]] [[rust/doc-core/src/chunk.rs]] [[rust/doc-run/src/process.rs]] [[rust/doc-run/src/lib.rs]]
-generated_at: 2026-08-06T01:13:54.687Z
+rank: 0.00569
+links: [[rust/doc-run/src/toolchain.rs]] [[rust/doc-cli/src/commands/exec.rs]] [[rust/doc-cli/src/commands/browser.rs]] [[editor/build.sh]] [[rust/doc-core/src/chunk.rs]] [[rust/doc-run/src/process.rs]] [[rust/doc-cli/src/extension.rs]] [[rust/doc-run/src/lib.rs]] [[rust/doc-cli/src/mcp/mod.rs]]
+generated_at: 2026-08-08T01:43:37.083Z
 ---
 
-# rust/doc-run/src/plan.rs  ·  rust  ·  510 LOC
+# rust/doc-run/src/plan.rs  ·  rust  ·  898 LOC
 
 ## Symbols
 
@@ -17,30 +17,49 @@ generated_at: 2026-08-06T01:13:54.687Z
 - `cache` (method) — L55
 - `Plan` (class) — L62
 - `build` (function) — L79
-- `parse_deps` (function) — L97
-- `python` (function) — L110
-- `venv_relative_python` (function) — L159
-- `with_cache` (function) — L168
-- `node` (function) — L174
-- `deno` (function) — L216
-- `bash` (function) — L250
-- `rust` (function) — L266
-- `exe_suffix` (function) — L285
-- `cargo_manifest` (function) — L296
-- `go` (function) — L312
-- `go_env` (function) — L342
-- `ruby` (function) — L349
-- `tests` (module) — L372
-- `dirs` (method) — L375
-- `deps_split_on_commas_and_whitespace` (method) — L383
-- `python_plans_write_the_script_and_run_it` (method) — L390
-- `every_language_fetches_in_setup_and_never_in_the_run` (method) — L402
-- `python_dependencies_are_installed_into_a_venv_the_run_then_uses` (method) — L423
-- `cargo_manifest_pins_versions_when_asked` (method) — L440
-- `compiled_languages_run_the_binary_they_built` (method) — L449
-- `toolchain_caches_are_pointed_away_from_the_readers_home` (method) — L471
-- `deno_no_longer_runs_with_every_permission_granted` (method) — L497
-- `an_unknown_runner_is_an_error_not_a_panic` (method) — L507
+- `parse_deps` (function) — L102
+- `python` (function) — L115
+- `venv_relative_python` (function) — L164
+- `with_cache` (function) — L173
+- `node` (function) — L179
+- `typescript` (function) — L233
+- `deno` (function) — L281
+- `bash` (function) — L320
+- `rust` (function) — L341
+- `exe_suffix` (function) — L360
+- `cargo_manifest` (function) — L371
+- `go` (function) — L387
+- `go_env` (function) — L417
+- `ruby` (function) — L424
+- `CFamily` (class) — L449
+- `compilers` (method) — L459
+- `name` (method) — L467
+- `source_file` (method) — L475
+- `c_family` (function) — L489
+- `compile_env` (function) — L513
+- `deps_unsupported` (function) — L522
+- `java` (function) — L536
+- `Jdk` (class) — L554
+- `locate_jdk` (function) — L570
+- `java_toolchain_present` (function) — L596
+- `swift` (function) — L605
+- `tests` (module) — L638
+- `dirs` (method) — L641
+- `deps_split_on_commas_and_whitespace` (method) — L649
+- `python_plans_write_the_script_and_run_it` (method) — L656
+- `every_language_fetches_in_setup_and_never_in_the_run` (method) — L668
+- `python_dependencies_are_installed_into_a_venv_the_run_then_uses` (method) — L707
+- `bash_runs_with_pipefail` (method) — L726
+- `cargo_manifest_pins_versions_when_asked` (method) — L739
+- `compiled_languages_run_the_binary_they_built` (method) — L748
+- `toolchain_caches_are_pointed_away_from_the_readers_home` (method) — L770
+- `deno_no_longer_runs_with_every_permission_granted` (method) — L797
+- `an_unknown_runner_is_an_error_not_a_panic` (method) — L807
+- `typescript_installs_tsx_in_setup_and_runs_it_offline` (method) — L814
+- `typescript_dependencies_join_the_npm_install` (method) — L832
+- `direct_toolchain_languages_compile_in_setup_and_run_the_artifact` (method) — L846
+- `compiled_system_languages_refuse_deps_with_a_sentence` (method) — L877
+- `a_missing_direct_toolchain_is_named_in_the_error` (method) — L888
 
 ## Graph
 
@@ -49,27 +68,36 @@ graph LR
   c["plan.rs"]
   x0["toolchain.rs"]
   c --> x0
-  x1["browser.rs"]
+  x1["exec.rs"]
   x1 --> c
-  x2["build.sh"]
-  c --> x2
-  x3["chunk.rs"]
+  x2["browser.rs"]
+  x2 --> c
+  x3["build.sh"]
   c --> x3
-  x4["process.rs"]
+  x4["chunk.rs"]
   c --> x4
-  x5["lib.rs"]
-  x5 --> c
+  x5["process.rs"]
+  c --> x5
+  x6["extension.rs"]
+  x6 --> c
+  x7["lib.rs"]
+  x7 --> c
+  x8["mod.rs"]
+  c --> x8
 ```
 
 ### References
 
-- [[rust/doc-run/src/toolchain.rs]] via `missing_toolchain_message`, `first_available`, `have`
+- [[rust/doc-run/src/toolchain.rs]] via `have`, `missing_toolchain_message`, `first_available`
 - [[editor/build.sh]] via `build`
 - [[rust/doc-core/src/chunk.rs]] via `build`
-- [[rust/doc-run/src/process.rs]] via `with_env`
+- [[rust/doc-run/src/process.rs]] via `with_env`, `display`
+- [[rust/doc-cli/src/mcp/mod.rs]] via `success`
 
 ### Referenced by
 
+- [[rust/doc-cli/src/commands/exec.rs]] via `cache`
 - [[rust/doc-cli/src/commands/browser.rs]] via `build`
+- [[rust/doc-cli/src/extension.rs]] via `name`
 - [[rust/doc-run/src/lib.rs]] via `parse_deps`
 

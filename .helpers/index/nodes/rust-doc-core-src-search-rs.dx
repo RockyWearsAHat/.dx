@@ -3,12 +3,12 @@ id: rust/doc-core/src/search.rs
 title: search.rs
 kind: file-index
 lang: rust
-rank: 0.005204
+rank: 0.005084
 links: [[rust/doc-store/src/store.rs]] [[rust/doc-cli/src/workspace.rs]] [[rust/doc-cli/src/mcp/handlers.rs]] [[rust/doc-core/src/lib.rs]] [[packaging/build-icons.py]] [[rust/doc-core/examples/bench.rs]] [[rust/doc-wasm/src/lib.rs]]
-generated_at: 2026-08-06T01:13:54.686Z
+generated_at: 2026-08-08T01:43:37.084Z
 ---
 
-# rust/doc-core/src/search.rs  ·  rust  ·  369 LOC
+# rust/doc-core/src/search.rs  ·  rust  ·  449 LOC
 
 ## Symbols
 
@@ -16,24 +16,30 @@ generated_at: 2026-08-06T01:13:54.686Z
 - `DocStats` (class) — L34
 - `SearchIndex` (class) — L47
 - `search` (method) — L68
-- `build_index` (function) — L109
-- `is_searchable` (function) — L135
-- `document_tokens` (function) — L156
-- `push_block_tokens` (function) — L172
-- `push_tokens` (function) — L180
-- `distinct_tokens` (function) — L193
-- `tests` (module) — L206
-- `heading` (method) — L210
-- `paragraph` (method) — L219
-- `doc` (method) — L227
-- `finds_by_title_heading_and_body` (method) — L236
-- `finds_by_tags_and_list_and_checklist_items` (method) — L254
-- `code_and_its_captured_output_are_findable` (method) — L281
-- `style_stylesheet_and_script_text_is_not_indexed` (method) — L292
-- `ranks_more_relevant_document_first` (method) — L323
-- `covering_more_query_terms_ranks_higher` (method) — L341
-- `empty_query_returns_no_hits` (method) — L353
-- `equal_scores_break_ties_by_path` (method) — L360
+- `score_against` (function) — L100
+- `best_block_id` (function) — L118
+- `build_index` (function) — L151
+- `is_searchable` (function) — L177
+- `document_tokens` (function) — L198
+- `push_block_tokens` (function) — L214
+- `push_tokens` (function) — L222
+- `distinct_tokens` (function) — L235
+- `tests` (module) — L248
+- `heading` (method) — L252
+- `paragraph` (method) — L261
+- `doc` (method) — L269
+- `finds_by_title_heading_and_body` (method) — L278
+- `finds_by_tags_and_list_and_checklist_items` (method) — L296
+- `code_and_its_captured_output_are_findable` (method) — L323
+- `style_stylesheet_and_script_text_is_not_indexed` (method) — L334
+- `ranks_more_relevant_document_first` (method) — L365
+- `covering_more_query_terms_ranks_higher` (method) — L383
+- `best_block_is_the_block_that_answers_the_query` (method) — L395
+- `best_block_covering_more_query_terms_beats_repeating_one` (method) — L407
+- `best_block_is_none_when_nothing_matches_or_the_query_is_empty` (method) — L418
+- `best_block_ties_go_to_the_earliest_block` (method) — L425
+- `empty_query_returns_no_hits` (method) — L433
+- `equal_scores_break_ties_by_path` (method) — L440
 
 ## Graph
 
@@ -58,7 +64,7 @@ graph LR
 
 ### References
 
-- [[rust/doc-store/src/store.rs]] via `search`, `build_index`, `distinct_tokens`, `document_tokens`
+- [[rust/doc-store/src/store.rs]] via `search`, `document_tokens`, `build_index`, `distinct_tokens`
 - [[rust/doc-core/src/lib.rs]] via `search`
 
 ### Referenced by

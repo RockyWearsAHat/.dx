@@ -3,9 +3,9 @@ id: rust/doc-run/src/process.rs
 title: process.rs
 kind: file-index
 lang: rust
-rank: 0.011454
-links: [[rust/doc-cli/src/commands/browser.rs]] [[rust/doc-cli/src/commands/exec.rs]] [[rust/doc-cli/src/service.rs]] [[editor/github/content.js]] [[rust/doc-cli/src/commands/play.rs]] [[rust/doc-run/src/lib.rs]] [[rust/doc-run/src/plan.rs]] [[rust/doc-cli/src/mcp/handlers.rs]] [[editor/surface/edit.js]] [[packaging/build-icons.py]] [[rust/doc-cli/src/extension.rs]] [[rust/doc-cli/src/install.rs]]
-generated_at: 2026-08-06T01:13:54.684Z
+rank: 0.011155
+links: [[rust/doc-cli/src/commands/browser.rs]] [[rust/doc-run/src/plan.rs]] [[rust/doc-cli/src/service.rs]] [[rust/doc-run/src/lib.rs]] [[editor/github/content.js]] [[rust/doc-cli/src/commands/play.rs]] [[rust/doc-cli/src/commands/index.rs]] [[rust/doc-cli/src/mcp/handlers.rs]] [[rust/doc-cli/src/commands/exec.rs]] [[editor/surface/edit.js]] [[packaging/build-icons.py]] [[rust/doc-cli/src/extension.rs]]
+generated_at: 2026-08-08T01:43:37.081Z
 ---
 
 # rust/doc-run/src/process.rs  ·  rust  ·  361 LOC
@@ -41,47 +41,49 @@ graph LR
   c["process.rs"]
   x0["browser.rs"]
   x0 --> c
-  x1["exec.rs"]
+  x1["plan.rs"]
   x1 --> c
   x2["service.rs"]
   x2 --> c
-  x3["content.js"]
+  x3["lib.rs"]
   x3 --> c
-  x4["play.rs"]
+  x4["content.js"]
   x4 --> c
-  x5["lib.rs"]
+  x5["play.rs"]
   x5 --> c
-  x6["plan.rs"]
+  x6["index.rs"]
   x6 --> c
   x7["handlers.rs"]
   x7 --> c
-  x8["edit.js"]
-  x8 --> c
-  x9["build-icons.py"]
+  x8["exec.rs"]
+  c --> x8
+  x9["edit.js"]
   x9 --> c
-  x10["extension.rs"]
+  x10["build-icons.py"]
   x10 --> c
-  x11["install.rs"]
+  x11["extension.rs"]
   x11 --> c
-  x12["mod.rs"]
-  c --> x12
-  x13["workdir.rs"]
-  x13 --> c
+  x12["install.rs"]
+  x12 --> c
+  x13["mod.rs"]
+  c --> x13
 ```
 
 ### References
 
+- [[rust/doc-cli/src/commands/exec.rs]] via `run`
 - [[rust/doc-cli/src/mcp/mod.rs]] via `code`
+- [[rust/doc-run/src/order.rs]] via `code`
 
 ### Referenced by
 
 - [[rust/doc-cli/src/commands/browser.rs]] via `display`, `run`
-- [[rust/doc-cli/src/commands/exec.rs]] via `run`
+- [[rust/doc-run/src/plan.rs]] via `with_env`, `display`
 - [[rust/doc-cli/src/service.rs]] via `run`
+- [[rust/doc-run/src/lib.rs]] via `succeeded`, `with_env`
 - [[editor/github/content.js]] via `run`, `send`
 - [[rust/doc-cli/src/commands/play.rs]] via `run`
-- [[rust/doc-run/src/lib.rs]] via `succeeded`, `with_env`
-- [[rust/doc-run/src/plan.rs]] via `with_env`
+- [[rust/doc-cli/src/commands/index.rs]] via `display`, `run`
 - [[rust/doc-cli/src/mcp/handlers.rs]] via `run`
 - [[editor/surface/edit.js]] via `run`
 - [[packaging/build-icons.py]] via `run`

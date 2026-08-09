@@ -3,12 +3,12 @@ id: rust/doc-core/src/format/lines.rs
 title: lines.rs
 kind: file-index
 lang: rust
-rank: 0.003217
+rank: 0.003088
 links: [[rust/doc-core/src/format/parse.rs]] [[rust/doc-core/src/format/util.rs]] [[rust/doc-core/src/edit.rs]] [[rust/doc-core/src/format/legacy.rs]]
-generated_at: 2026-08-06T01:13:54.688Z
+generated_at: 2026-08-08T01:43:37.086Z
 ---
 
-# rust/doc-core/src/format/lines.rs  ·  rust  ·  180 LOC
+# rust/doc-core/src/format/lines.rs  ·  rust  ·  185 LOC
 
 ## Symbols
 
@@ -19,7 +19,7 @@ generated_at: 2026-08-06T01:13:54.688Z
 - `parse_list_items` (function) — L112
 - `match_list_marker` (function) — L131
 - `strip_bullet_marker` (function) — L163
-- `parse_checklist_line` (function) — L169
+- `parse_checklist_line` (function) — L173
 
 ## Graph
 
@@ -38,11 +38,11 @@ graph LR
 
 ### References
 
-- [[rust/doc-core/src/format/util.rs]] via `strip_leading_inline_ws`, `js_trim`
+- [[rust/doc-core/src/format/util.rs]] via `js_trim`, `strip_leading_inline_ws`
 
 ### Referenced by
 
-- [[rust/doc-core/src/format/parse.rs]] via `build_nested_list_structure`, `parse_block_header`, `parse_inline_block`, `parse_checklist_line`, `parse_list_items`
-- [[rust/doc-core/src/edit.rs]] via `parse_checklist_line`, `parse_list_items`, `build_nested_list_structure`
+- [[rust/doc-core/src/format/parse.rs]] via `build_nested_list_structure`, `parse_checklist_line`, `parse_inline_block`, `parse_list_items`, `parse_block_header`
+- [[rust/doc-core/src/edit.rs]] via `parse_list_items`, `parse_checklist_line`, `build_nested_list_structure`
 - [[rust/doc-core/src/format/legacy.rs]] via `build_nested_list_structure`
 

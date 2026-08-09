@@ -3,9 +3,9 @@ id: editor/vscode/src/preview.ts
 title: preview.ts
 kind: file-index
 lang: typescript
-rank: 0.004022
+rank: 0.003885
 links: [[editor/vscode/src/extension.ts]]
-generated_at: 2026-08-06T01:13:54.687Z
+generated_at: 2026-08-08T01:43:37.085Z
 ---
 
 # editor/vscode/src/preview.ts  ·  typescript  ·  239 LOC

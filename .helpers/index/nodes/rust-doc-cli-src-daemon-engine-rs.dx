@@ -3,9 +3,9 @@ id: rust/doc-cli/src/daemon/engine.rs
 title: engine.rs
 kind: file-index
 lang: rust
-rank: 0.030787
+rank: 0.027599
 links: [[rust/doc-cli/src/mcp/handlers.rs]] [[editor/github/content.js]] [[rust/doc-core/src/render/text.rs]] [[rust/doc-cli/src/daemon/packs.rs]] [[rust/doc-cli/src/commands/mod.rs]] [[rust/doc-core/src/render/mod.rs]] [[rust/doc-cli/src/daemon/http.rs]] [[rust/doc-store/src/lib.rs]] [[packaging/build-icons.py]] [[rust/doc-cli/src/daemon/mod.rs]] [[rust/doc-core/src/resolve.rs]] [[rust/doc-core/src/format/util.rs]]
-generated_at: 2026-08-06T01:13:54.682Z
+generated_at: 2026-08-08T01:43:37.077Z
 ---
 
 # rust/doc-cli/src/daemon/engine.rs  ·  rust  ·  373 LOC
@@ -70,7 +70,7 @@ graph LR
 
 ### References
 
-- [[rust/doc-cli/src/mcp/handlers.rs]] via `call`, `source`
+- [[rust/doc-cli/src/mcp/handlers.rs]] via `source`, `call`, `text`
 - [[rust/doc-core/src/render/text.rs]] via `text`
 - [[rust/doc-cli/src/daemon/packs.rs]] via `pack_bytes`, `store`
 - [[rust/doc-cli/src/commands/mod.rs]] via `text`, `store`
@@ -88,15 +88,15 @@ graph LR
 
 ### Referenced by
 
-- [[editor/github/content.js]] via `text`, `call`
-- [[packaging/build-icons.py]] via `pack`, `bytes`
+- [[editor/github/content.js]] via `call`, `text`
+- [[packaging/build-icons.py]] via `bytes`, `pack`
 - [[rust/doc-core/src/format/util.rs]] via `bytes`
 - [[editor/surface/edit.js]] via `call`
 - [[rust/doc-cli/src/commands/view.rs]] via `text`
 - [[rust/doc-cli/src/desktop.rs]] via `Outcome`
 - [[rust/doc-cli/src/main.rs]] via `text`
 - [[rust/doc-cli/src/policies.rs]] via `bytes`
+- [[rust/doc-core/src/base64.rs]] via `bytes`
 - [[rust/doc-core/src/format/legacy.rs]] via `bytes`
-- [[rust/doc-shot/src/base64.rs]] via `bytes`
 - [[rust/doc-store/src/stub.rs]] via `bytes`
 

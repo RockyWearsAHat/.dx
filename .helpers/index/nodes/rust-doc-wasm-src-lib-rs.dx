@@ -3,9 +3,9 @@ id: rust/doc-wasm/src/lib.rs
 title: lib.rs
 kind: file-index
 lang: rust
-rank: 0.012036
+rank: 0.011725
 links: [[rust/doc-core/src/edit.rs]] [[editor/vscode/test/editing.test.mjs]] [[editor/github/wasm/doc_wasm.js]] [[rust/doc-core/src/render/theme.rs]] [[editor/github/content.js]] [[rust/doc-core/src/render/field.rs]] [[rust/doc-core/src/chunk.rs]] [[rust/doc-store/src/store.rs]] [[editor/github/resolve.js]] [[editor/github/test/engine.test.mjs]] [[editor/github/test/resolve.test.mjs]] [[rust/doc-cli/src/daemon/engine.rs]]
-generated_at: 2026-08-06T01:13:54.684Z
+generated_at: 2026-08-08T01:43:37.080Z
 ---
 
 # rust/doc-wasm/src/lib.rs  ·  rust  ·  560 LOC
@@ -86,9 +86,9 @@ graph LR
 
 ### References
 
-- [[rust/doc-cli/src/mcp/handlers.rs]] via `search`, `source`
+- [[rust/doc-cli/src/mcp/handlers.rs]] via `source`, `search`
 - [[rust/doc-core/src/format/layout.rs]] via `size`
-- [[rust/doc-core/src/resolve.rs]] via `add_document`, `add_file`
+- [[rust/doc-core/src/resolve.rs]] via `add_file`, `add_document`
 - [[rust/doc-cli/src/workspace.rs]] via `search`
 - [[rust/doc-core/src/format/mod.rs]] via `source`
 - [[rust/doc-core/src/lib.rs]] via `search`
@@ -97,22 +97,22 @@ graph LR
 
 ### Referenced by
 
-- [[rust/doc-core/src/edit.rs]] via `remove_block`, `block_header`, `board_place`, `preview_block`, `board_arrange`
-- [[editor/vscode/test/editing.test.mjs]] via `block_header`, `board_detach`, `replace_block`, `toggle_check`, `references`
-- [[editor/github/wasm/doc_wasm.js]] via `render_outline`, `insert_block`, `decompress`, `join_chunks`, `references`
+- [[rust/doc-core/src/edit.rs]] via `preview_block`, `board_link`, `replace_block`, `block_source`, `block_header`
+- [[editor/vscode/test/editing.test.mjs]] via `board_link`, `block_source`, `toggle_check`, `preview_block`, `remove_block`
+- [[editor/github/wasm/doc_wasm.js]] via `decompress`, `set_block`, `board_arrange`, `board_link`, `preview_block`
 - [[rust/doc-core/src/render/theme.rs]] via `stylesheet`
-- [[editor/github/content.js]] via `references`, `stylesheet`, `render_html`, `file_references`, `pack_document`
+- [[editor/github/content.js]] via `pack_document`, `references`, `render_html`, `stylesheet`, `file_references`
 - [[rust/doc-core/src/render/field.rs]] via `field_html`
-- [[rust/doc-core/src/chunk.rs]] via `sha256_hex`, `decompress`, `compress`, `source`
-- [[rust/doc-store/src/store.rs]] via `decompress`, `compress`, `search`, `source`
+- [[rust/doc-core/src/chunk.rs]] via `compress`, `sha256_hex`, `decompress`, `source`
+- [[rust/doc-store/src/store.rs]] via `compress`, `decompress`, `source`, `search`
 - [[editor/github/resolve.js]] via `pack_document`, `sha256_hex`, `pack_paths`
-- [[editor/github/test/engine.test.mjs]] via `render_html`, `stylesheet`
-- [[editor/github/test/resolve.test.mjs]] via `pack_paths`, `sha256_hex`, `pack_document`
+- [[editor/github/test/engine.test.mjs]] via `stylesheet`, `render_html`
+- [[editor/github/test/resolve.test.mjs]] via `pack_document`, `pack_paths`, `sha256_hex`
 - [[rust/doc-cli/src/daemon/engine.rs]] via `provided_from`
 - [[rust/doc-core/src/compress.rs]] via `compress`
+- [[rust/doc-run/src/lib.rs]] via `sha256_hex`
 - [[packaging/build-icons.py]] via `compress`
 - [[rust/doc-core/src/format/stringify.rs]] via `block_header`
 - [[rust/doc-core/tests/pipeline.rs]] via `compress`
-- [[rust/doc-run/src/lib.rs]] via `sha256_hex`
 - [[rust/doc-store/src/stub.rs]] via `sha256_hex`
 
