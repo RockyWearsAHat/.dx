@@ -89,5 +89,7 @@ welcome.dx unsourced percentages).
 - **Driving DX.app from automation:** post real `CGEvent`s — AppleScript's System Events
   click never reaches the DOM and makes a broken editor look like a working one.
 
-Next step: work `index.dx#now-worklist` top-down — the `workspace.rs` error-swallowing
-line first (it violates the resolver's own contract).
+Next step: work `index.dx#now-worklist` top-down — the edit.js board-geometry parity pin
+first (NODE_MIN_HEIGHT 60 vs FIT_MIN_HEIGHT 56 has already drifted), then the kind/attr
+vocabulary export through doc-wasm; the two share the "engine registries reach the
+surface" shape, so design them together.
