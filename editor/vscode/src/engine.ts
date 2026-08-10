@@ -24,17 +24,15 @@ export interface Engine {
    */
   render_html(text: string, theme: string, fragment: boolean, resources?: string): string;
   /**
-   * Every reference the source makes past its own edge, as JSON
-   * `[{kind: 'file' | 'document', path}, …]` — the prefetch list for `render_html`.
+   * What a gathering host still has to fetch, as JSON
+   * `[{kind: 'file' | 'document', path}, …]`. `held` is the `resources` JSON plus an
+   * `absent` array of paths already tried and not got; the host asks, fetches, adds, and
+   * asks again until the answer is empty. The walk — which references open it, how a
+   * gathered page extends it, when it stops — is the engine's.
    */
-  references(text: string): string;
-  /**
-   * The sibling files a fetched file names in turn (a `::view` page naming its
-   * stylesheets), same JSON rows as {@link Engine.references} — the second round of the
-   * prefetch. `path` is the fetched file's own reference, so its links resolve against
-   * its folder.
-   */
-  file_references(path: string, text: string): string;
+  pending(text: string, held?: string): string;
+  /** The digest a `.dx` pointer line records, or `''` when the text is document content. */
+  pointer_digest(text: string): string;
   /** The canonical source of one document held in a `DXCP1` pack. */
   pack_document(pack: Uint8Array, path: string): string;
   /** Render `.dx` source to Markdown. */
@@ -145,76 +143,71 @@ export function engine(): Engine {
   }
 }
 
-/**
- * The marker that opens a `.dx` pointer, matching `doc-store`'s strict stub reader —
- * the same recognition the github extension's resolver uses, so nothing that is not
- * exactly a pointer is ever mistaken for one.
- */
-const POINTER = /^~ dx1 ([0-9a-f]{64})\s*$/;
+/** What the host has gathered so far, and what it has given up on. */
+interface Held {
+  files: Record<string, string>;
+  documents: Record<string, string>;
+  absent: string[];
+}
 
 /**
  * Gather what `source` references into the JSON `render_html` takes, or `undefined`
  * when it references nothing.
  *
- * The engine decides *what* is referenced and what becomes of the bytes; this gathers
- * them, which only the host can: files are read from the document's own folder, and a
- * sibling `.dx` that turns out to be a pointer is resolved through the committed pack
- * (`.doc/repo.dxcp`) — the reader never sees a pointer where a document belongs. A path
- * that cannot be read is left out, and the engine renders its sentence in place.
+ * The engine runs the walk — `pending` says what is still missing, given what is held, and
+ * stops when nothing is. This does the one part only the host can: files are read from the
+ * document's own folder, and a sibling `.dx` that turns out to be a pointer is resolved
+ * through the committed pack (`.doc/repo.dxcp`) — the reader never sees a pointer where a
+ * document belongs. A path that cannot be read is marked absent, which stops the walk
+ * asking again and leaves the engine to render its sentence in place.
  */
 export function resourcesFor(source: string, documentDir: string): string | undefined {
-  let refs: unknown;
+  const held: Held = { files: {}, documents: {}, absent: [] };
+  let gathered = false;
+
+  for (;;) {
+    let wanted: unknown;
+    try {
+      wanted = JSON.parse(engine().pending(source, JSON.stringify(held)));
+    } catch {
+      return gathered ? JSON.stringify(held) : undefined;
+    }
+    if (!Array.isArray(wanted) || wanted.length === 0) {
+      break;
+    }
+    for (const ref of wanted as { kind?: string; path?: string }[]) {
+      if (typeof ref.path !== 'string') {
+        continue;
+      }
+      const text = read(path.join(documentDir, ref.path), ref.kind === 'document');
+      if (text === undefined) {
+        held.absent.push(ref.path);
+      } else {
+        (ref.kind === 'document' ? held.documents : held.files)[ref.path] = text;
+        gathered = true;
+      }
+    }
+  }
+  return gathered ? JSON.stringify(held) : undefined;
+}
+
+/**
+ * The text at `target`, or `undefined` when it cannot be read.
+ *
+ * `asDocument` is what makes a pointer resolve: a `.dx` file on disk may be one line into
+ * the store, and the engine — not a pattern kept here — says whether it is.
+ */
+function read(target: string, asDocument: boolean): string | undefined {
+  let text: string;
   try {
-    refs = JSON.parse(engine().references(source));
+    text = fs.readFileSync(target, 'utf8');
   } catch {
     return undefined;
   }
-  if (!Array.isArray(refs) || refs.length === 0) {
-    return undefined;
+  if (asDocument && engine().pointer_digest(text) !== '') {
+    return packedDocument(target);
   }
-  const files: Record<string, string> = {};
-  const documents: Record<string, string> = {};
-  // Fetched files can reference further files — a `::view` page naming its stylesheets —
-  // so the list is a queue: the engine's `file_references` says what each fetched file
-  // adds, and everything lands in one flat set before rendering. The engine decides what
-  // is referenced; this only ever reads.
-  const queue = (refs as { kind?: string; path?: string }[]).filter(
-    (ref): ref is { kind?: string; path: string } => typeof ref.path === 'string'
-  );
-  while (queue.length > 0) {
-    const ref = queue.shift() as { kind?: string; path: string };
-    if (files[ref.path] !== undefined || documents[ref.path] !== undefined) {
-      continue;
-    }
-    const target = path.join(documentDir, ref.path);
-    let text: string;
-    try {
-      text = fs.readFileSync(target, 'utf8');
-    } catch {
-      continue;
-    }
-    if (ref.kind === 'file') {
-      files[ref.path] = text;
-      try {
-        const nested = JSON.parse(engine().file_references(ref.path, text));
-        if (Array.isArray(nested)) {
-          for (const entry of nested as { kind?: string; path?: string }[]) {
-            if (typeof entry.path === 'string') {
-              queue.push(entry as { kind?: string; path: string });
-            }
-          }
-        }
-      } catch {
-        // A file that names nothing readable still renders; the engine says so in place.
-      }
-    } else if (ref.kind === 'document') {
-      const resolved = POINTER.test(text.trim()) ? packedDocument(target) : text;
-      if (resolved !== undefined) {
-        documents[ref.path] = resolved;
-      }
-    }
-  }
-  return JSON.stringify({ files, documents });
+  return text;
 }
 
 /**

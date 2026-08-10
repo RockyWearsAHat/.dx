@@ -34,7 +34,6 @@ test('every editing call the extension makes is exported', () => {
     'replace_block',
     'insert_block',
     'remove_block',
-    'preview_block',
     'field_html',
     'board_place',
     'board_arrange',
@@ -71,9 +70,8 @@ const REVIEW =
   '::code id=listing src=src/lib.rs lang=rust\n::end\n\n' +
   '::board id=map height=300\n- plan.dx#step x=20 y=20 w=200 h=90\n::end\n';
 
-test('references cross the boundary: listed, then resolved from provided resources', () => {
-  const refs = JSON.parse(engine.references(REVIEW));
-  assert.deepEqual(refs, [
+test('references cross the boundary: the walk asks, the host answers, the page resolves', () => {
+  assert.deepEqual(JSON.parse(engine.pending(REVIEW)), [
     { kind: 'file', path: 'src/lib.rs' },
     { kind: 'document', path: 'plan.dx' },
   ]);
@@ -82,12 +80,41 @@ test('references cross the boundary: listed, then resolved from provided resourc
     files: { 'src/lib.rs': 'pub fn answer() -> u32 { 42 }\n' },
     documents: { 'plan.dx': '::paragraph id=step\nShip it.\n::end\n' },
   });
+  // Everything gathered: the walk is over, which is the host's signal to render.
+  assert.deepEqual(JSON.parse(engine.pending(REVIEW, resources)), []);
   const page = engine.render_html(REVIEW, 'light', true, resources);
   assert.match(page, /pub fn answer/, 'the listing is the file, not the empty body');
   assert.match(page, /Ship it\./, 'the board node shows the sibling document’s block');
 
   const bare = engine.render_html(REVIEW, 'light', true);
   assert.match(bare, /could not be read here/, 'no resources means a sentence, never silence');
+});
+
+/**
+ * The second round, and the reason the walk is a loop rather than one pass: a `::view`
+ * page names stylesheets the document never mentions, and a host that fetched once would
+ * render the frame undressed.
+ */
+test('a gathered page extends the walk, and a path given up on ends it', () => {
+  const source = '::view id=site src=site/index.html\n::end\n';
+  const held = {
+    files: { 'site/index.html': '<link rel="stylesheet" href="look.css">' },
+    documents: {},
+    absent: [],
+  };
+  assert.deepEqual(JSON.parse(engine.pending(source, JSON.stringify(held))), [
+    { kind: 'file', path: 'site/look.css' },
+  ]);
+
+  held.absent.push('site/look.css');
+  assert.deepEqual(JSON.parse(engine.pending(source, JSON.stringify(held))), []);
+});
+
+test('the engine says which files are pointers, so no host keeps a pattern of its own', () => {
+  const pointer = '~ dx1 ' + 'a'.repeat(64) + '\n';
+  assert.equal(engine.pointer_digest(pointer), 'a'.repeat(64));
+  assert.equal(engine.pointer_digest(SAMPLE), '');
+  assert.equal(engine.pointer_digest('~ dx1 nothex\n'), '');
 });
 
 const TODO = '::checklist id=todo\n[ ] sketch it\n[x] ship it\n::end\n';
@@ -231,28 +258,6 @@ test('removing takes out one block and only that one', () => {
   const after = engine.remove_block(SAMPLE, 'intro');
   assert.doesNotMatch(after, /The opening line\./);
   assert.match(after, /Guide/);
-});
-
-/**
- * The call the page makes between keystrokes. Everything about "the document keeps rendering
- * while you write on it" arrives through this one export, so what it must do is be there, be
- * the block and nothing around it, read the body the way the block does, and write nothing.
- */
-test('a block draws itself from characters that were never saved', () => {
-  const drawn = engine.preview_block(SAMPLE, 'intro', 'A *new* line.', 'light');
-  assert.match(drawn, /<em>new<\/em>/);
-  assert.doesNotMatch(drawn, /Guide/, 'the preview carried the document around it');
-  assert.doesNotMatch(drawn, /dx-doc/, 'the preview carried the sheet it sits on');
-  // A preview is a read. The source it was given is the source it leaves behind.
-  assert.equal(engine.block_source(SAMPLE, 'intro'), 'The opening line.');
-});
-
-test('a previewed block is drawn exactly as the page draws it', () => {
-  const saved = engine.set_block(SAMPLE, 'points', 'one\ntwo\nthree');
-  const page = engine.render_html(saved, 'light', true);
-  const drawn = engine.preview_block(SAMPLE, 'points', 'one\ntwo\nthree', 'light');
-  assert.equal(drawn.match(/<li>/g).length, 3, 'a list did not preview as its lines');
-  assert.ok(page.includes(drawn), `the block renders differently alone:\n${drawn}\n\n${page}`);
 });
 
 test('an unknown block throws a sentence naming the ones that exist', () => {

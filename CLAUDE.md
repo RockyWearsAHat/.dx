@@ -55,7 +55,7 @@ crate's module docs are the authority for its area.
 
 | Crate | Responsibility |
 |-------|----------------|
-| `doc-core` | The format and its views: `format` (parse/stringify, `mermaid`/`layout`), `render` (HTML, Markdown, outline, sections, `nav`, `board`, `block`, `field_html`), `edit` (every block operation an editing surface performs), `resolve` (references past the document's edge, and `hydrate`), `chunk`, `digest`, `compress`, `search`. No OS dependencies — also compiles to `wasm32`. |
+| `doc-core` | The format and its views: `format` (parse/stringify, `mermaid`/`layout`), `render` (HTML, Markdown, outline, sections, `nav`, `board`, `block`, `field_html`), `edit` (every block operation an editing surface performs), `resolve` (references past the document's edge, `hydrate`, and the prefetch walk a gathering host runs), `pointer` (the `~ dx1 …` line every surface has to recognize alike), `chunk`, `digest`, `compress`, `search`. No OS dependencies — also compiles to `wasm32`. |
 | `doc-store` | The SQLite chunk store and the resolver: manifests, packs, git routing, the stub format. The authority for content. |
 | `doc-run` | Executing `::code … run` blocks: per-language plans, dependency install, timeouts, output capture, `confine` (the kernel sandbox), `approvals` (the review ledger). |
 | `doc-shot` | Rendering to PNG through an installed Chromium: `capture_pages`, `capture_block`, `cdp` (a live DevTools session), `play` (scripted input over the same script-free render). The capture browser resolves no hostnames — a capture is a read. |

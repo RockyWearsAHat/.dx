@@ -19,21 +19,27 @@
 // bundler, and the tested code is byte-for-byte the code the browser runs.
 
 /// The marker that opens a pointer line, followed by the format tag and a 64-hex digest.
-const POINTER = /^~ dx1 ([0-9a-f]{64})\s*$/;
+///
+/// The one copy of the grammar outside the engine, and it is here because this file runs in
+/// the page, where the engine is a message away and the answer is needed before any message
+/// can be sent. `resolve.test.mjs` holds it to `doc_core::pointer` — the recognizer of
+/// record — case for case, so a file is a pointer to every surface or to none.
+const POINTER = /^~ dx1 ([0-9a-f]{64})\s*$/i;
 
 /// Where a repository keeps its committed documents, relative to the repository root.
 const REPO_PACK = '.doc/repo.dxcp';
 
 /// The digest a pointer records, or `null` when `text` is not a pointer.
 ///
-/// Recognition is strict on purpose, matching `doc-store`'s stub reader: anything that is not
-/// exactly the marker plus 64 hex digits is real content that must be shown as it is, never
-/// mistaken for a pointer and replaced.
+/// Recognition is strict on purpose: anything that is not exactly the marker plus 64 hex
+/// digits is real content that must be shown as it is, never mistaken for a pointer and
+/// replaced. A digest comes back lower case however it was written, which is the form the
+/// engine records and the form a pack is keyed by.
 function digestIn(text) {
   if (typeof text !== 'string') return null;
   const first = text.split('\n', 1)[0].trimEnd();
   const match = POINTER.exec(first);
-  return match ? match[1] : null;
+  return match ? match[1].toLowerCase() : null;
 }
 
 /// Whether `path` names a `.dx` document.

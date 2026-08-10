@@ -72,6 +72,9 @@ engine.js    resolve, verify, render                                  (engine, n
 ```
 
 `engine.js` answers only an allowlist of calls, so a page can never name an arbitrary export.
+It is the same list `dx serve` answers (`daemon::engine::CALLS`) — the shim sends the same call
+to whichever engine is reachable, so the two are held equal by
+`daemon::engine::tests::the_browser_shim_allows_exactly_the_calls_this_door_answers`.
 
 ### The engine is a service
 

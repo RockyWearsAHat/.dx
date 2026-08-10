@@ -46,17 +46,6 @@ enum Engine {
         try run(["render", url.path, "--theme", "auto", "--fragment"])
     }
 
-    /// One block as the page would draw it, with `body` in it — saving nothing.
-    ///
-    /// This is what keeps a document rendered while it is written on: the reader types `.dx`
-    /// source, and the block beside the field shows what that source says. `dx render` is a
-    /// read, so nothing here writes to the file the reader has not finished with.
-    static func draw(_ block: String, in url: URL, as body: String) throws -> String {
-        // `--body=` rather than `--body `, so a line starting with `-` is a line and not a
-        // flag. The same reason `set` passes its text that way.
-        try run(["render", url.path, "--theme", "auto", "--block", block, "--body=" + body])
-    }
-
     /// The exact characters of one block, for the reader to edit.
     ///
     /// Not the rendered HTML: by the time a paragraph is drawn, the difference between the

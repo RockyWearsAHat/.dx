@@ -20,7 +20,7 @@ import { documentText, revisionText } from './changes';
 import { runCli } from './cli';
 import { engine, outlineOf, resourcesFor } from './engine';
 import { makeNonce } from './policy';
-import { blockHtml, exportTheme, previewHtml, sheetHtml, Surface } from './preview';
+import { exportTheme, previewHtml, sheetHtml, Surface } from './preview';
 
 /** View type of the rendered document editor. */
 const VIEW_TYPE = 'dx.document';
@@ -202,13 +202,13 @@ interface EditCall {
   /** Correlates this call with its reply. */
   readonly call: number;
   /**
-   * `source`, `parts`, `draw`, `decorate`, `commit`, `replace`, `remove`, `run`, `check`, or
-   * `board`.
+   * `source`, `parts`, `decorate`, `commit`, `replace`, `remove`, `run`, `check`, or
+   * `board` — the contract `editor/surface/edit.js` documents, and nothing else.
    */
   readonly op: string;
   /** The block the call is about. */
   readonly id?: string;
-  /** The characters being written, for `draw`, `decorate`, and `commit`. */
+  /** The characters being written, for `decorate` and `commit`. */
   readonly text?: string;
   /** The `::kind attrs` opening line being written, for `replace`. */
   readonly header?: string;
@@ -249,9 +249,9 @@ interface EditOutcome {
   /**
    * The answer, for calls that have one.
    *
-   * `source` answers with characters; `draw` with one block's HTML; `commit` and `remove`
-   * with `{ document, focus }` — the re-rendered document for the page to swap in, and the
-   * block to open once it is there.
+   * `source` answers with characters; `parts` with `{ header, body }`; `commit` and
+   * `remove` with `{ document, focus }` — the re-rendered document for the page to swap in,
+   * and the block to open once it is there.
    */
   value?: string | { document: string; focus?: string } | { header: string; body: string };
   /** A sentence the editor shows on the page. */
@@ -294,11 +294,6 @@ async function applyEdit(
             body: engine().block_source(source, id),
           },
         };
-
-      // A read, and the only call that changes nothing: what the block would look like with
-      // the characters currently in the field.
-      case 'draw':
-        return { value: blockHtml(source, id, call.text ?? '') };
 
       // The characters currently in a prose field, decorated by the engine — marks styled
       // in place, every byte kept. A pure function of the text; the document is not read.

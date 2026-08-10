@@ -33,6 +33,7 @@ pub mod digest;
 pub mod edit;
 pub mod format;
 pub mod model;
+pub mod pointer;
 pub mod render;
 pub mod resolve;
 pub mod search;
