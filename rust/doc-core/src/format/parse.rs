@@ -277,23 +277,23 @@ pub(super) fn parse_docsrc_blocks(body: &str) -> Vec<Block> {
 
         while cursor < lines.len() {
             let body_line = &lines[cursor];
-            let body_trimmed = js_trim(body_line);
 
-            if body_trimmed == "::end" {
-                found_end = true;
-                break;
-            }
-
-            if let Some(idx) = trailing_end_index(body_line) {
-                let before_end = js_trim_end(&body_line[..idx]);
-                if !before_end.is_empty() {
-                    content_lines.push(before_end.to_string());
+            match close_token(body_line) {
+                // An escaped close token is content: the writer put that backslash there so a
+                // document could show dx syntax, and reading takes exactly one back off.
+                Some(token) if token.escaped() => {
+                    content_lines.push(token.unescape(body_line));
                 }
-                found_end = true;
-                break;
+                Some(token) => {
+                    let before_end = js_trim_end(&body_line[..token.start]);
+                    if !before_end.is_empty() {
+                        content_lines.push(before_end.to_string());
+                    }
+                    found_end = true;
+                    break;
+                }
+                None => content_lines.push(body_line.clone()),
             }
-
-            content_lines.push(body_line.clone());
             cursor += 1;
         }
 
@@ -323,29 +323,69 @@ fn adopt_loose(loose: &mut Vec<String>, blocks: &mut Vec<Block>) {
     blocks.extend(parse_legacy_blocks(&segment));
 }
 
-/// Where a body line's *trailing* close token starts, if it has one.
+/// A body line's close token: where `::end` sits, and how many backslashes escape it.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct CloseToken {
+    /// Byte index where `::end` starts.
+    pub(super) start: usize,
+    /// Consecutive backslashes immediately before the token — one level per escape.
+    backslashes: usize,
+}
+
+impl CloseToken {
+    /// Whether this token is escaped, and so is content rather than the block's end.
+    fn escaped(self) -> bool {
+        self.backslashes > 0
+    }
+
+    /// The line as content, with exactly one escaping backslash taken off.
+    fn unescape(self, line: &str) -> String {
+        let cut = self.start - 1;
+        format!("{}{}", &line[..cut], &line[self.start..])
+    }
+}
+
+/// Where a body line's close token starts, if the line has the shape of one at all.
 ///
-/// The format's recovery rule is "trailing close token on same line as content" — a body line
-/// like `    } ::end` closes its block. The rule is deliberately narrow: `::end` counts only when
-/// whitespace precedes it and nothing but whitespace follows, which is the same shape
-/// [`parse_inline_block`] matches for a whole single-line block.
+/// The format's recovery rule is "close token alone on a line, or trailing after content" — a
+/// body line like `    } ::end` closes its block. The rule is deliberately narrow: `::end`
+/// counts only when whitespace (or nothing, or the escaping backslashes) precedes it and
+/// nothing but whitespace follows, which is the same shape [`parse_inline_block`] matches for
+/// a whole single-line block.
 ///
 /// It has to stay narrow, because the alternative destroys prose. Matching `::end` anywhere in
 /// a line meant that a document *describing* the format lost content: a paragraph reading
 /// "a block ends with `::end` on its own line" was cut at the backtick, and an SVG label
 /// containing `::end` truncated the drawing and everything under it. A block terminates on a
 /// line of its own, or at the end of a line — never in the middle of a sentence.
-fn trailing_end_index(body_line: &str) -> Option<usize> {
+///
+/// # The escape, and why it exists
+/// A close token directly preceded by a backslash is *content*: the line is kept, one backslash
+/// lighter. Without it a document could not show dx syntax at all — the format contract, the
+/// block reference, and every tutorial that prints a block would be cut off at their first
+/// example — and the writer ([`super::stringify`]) puts the backslash there, so the escape is
+/// something documents round-trip through rather than something an author maintains. The ladder
+/// is one level per backslash, which is what keeps it reversible: `\::end` reads as `::end`,
+/// `\\::end` reads as `\::end`, and a line whose backslashes do not sit against a close-shaped
+/// token (`foo\::end`) is ordinary content, untouched.
+pub(super) fn close_token(body_line: &str) -> Option<CloseToken> {
     let lower = body_line.to_ascii_lowercase();
-    let index = lower.rfind("::end")?;
-    if !body_line[index + "::end".len()..]
+    let start = lower.rfind("::end")?;
+    if !body_line[start + "::end".len()..]
         .chars()
         .all(char::is_whitespace)
     {
         return None;
     }
-    let precedes = body_line[..index].chars().next_back()?;
-    precedes.is_whitespace().then_some(index)
+    let before = &body_line[..start];
+    let unescaped = before.trim_end_matches('\\');
+    if !(unescaped.is_empty() || unescaped.ends_with(char::is_whitespace)) {
+        return None;
+    }
+    Some(CloseToken {
+        start,
+        backslashes: before.len() - unescaped.len(),
+    })
 }
 
 /// Remove a leading `::type` prefix (case-insensitive ASCII letters and `-`) from a raw

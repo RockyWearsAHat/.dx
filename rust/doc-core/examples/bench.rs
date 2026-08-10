@@ -7,7 +7,7 @@
 //!
 //! It deliberately avoids any external benchmark crate (no Criterion): a simple warm-up
 //! followed by an averaged loop over many iterations gives stable enough numbers to put
-//! in `ANALYSIS.md`. Run with:
+//! in `analysis.dx`. Run with:
 //!
 //! ```text
 //! cargo run --release -p doc-core --example bench

@@ -62,31 +62,79 @@ pub fn run_search(args: &Args) -> Result<String, String> {
 
     let mut out = String::new();
     for hit in &hits {
-        out.push_str(&format!(
-            "{:.3}  {}  {}\n",
-            hit.score,
-            hit.document.relative,
-            hit.document.title()
-        ));
-        // The hit carries its answer: the best-matching block's first line, and the id
-        // to read the rest with `dx text <path> --section <id>`.
+        // A source file's title is its path, so naming it twice says nothing.
+        let title = hit.document.title();
+        let named = if title == hit.document.relative {
+            hit.document.relative.clone()
+        } else {
+            format!("{}  {title}", hit.document.relative)
+        };
+        out.push_str(&format!("{:.3}  {named}\n", hit.score));
+        // The hit carries its answer: the line that matched, and the id to read the rest
+        // with `dx text <path> --section <id>` — or, for a source file, its line range.
         if let Some(id) = &hit.block {
-            if let Some(line) = first_line_of(&hit.document.document, id) {
-                out.push_str(&format!("       #{id}  {line}\n"));
+            if let Some(excerpt) = answer_excerpt(&hit.document.document, id, query) {
+                out.push_str(&format!("       #{id}  {excerpt}\n"));
             }
         }
     }
     Ok(out)
 }
 
-/// The first non-empty line of one block's text, for the hit's answer line.
-fn first_line_of(document: &doc_core::model::Document, id: &str) -> Option<String> {
+/// Characters of a hit's excerpt, before it is cut on a character boundary.
+///
+/// Enough to carry a fact and its sentence; short enough that three hits still cost a fraction
+/// of opening one file.
+const EXCERPT_LIMIT: usize = 240;
+
+/// Lines of context shown after the answering line.
+const EXCERPT_LINES: usize = 3;
+
+/// The part of a block that answers `query` — the hit's answer, not a label for it.
+///
+/// A search is only cheaper than a read if the hit carries the answer, so the excerpt starts at
+/// the line covering the most of what was asked (ties to the earliest, keeping the choice
+/// deterministic) and runs on for a couple of lines, because a fact and the sentence that gives
+/// it meaning are rarely the same line. Code-fence markers are skipped: they are how the
+/// renderer draws a listing, never something anybody searched for.
+fn answer_excerpt(document: &doc_core::model::Document, id: &str, query: &str) -> Option<String> {
     let scoped = doc_core::render::section(document, id)?;
     let text = doc_core::render::text(&scoped, &doc_core::render::TextOptions::default());
-    text.lines()
+    let tokens = doc_core::search::distinct_tokens(query);
+    let lines: Vec<&str> = text
+        .lines()
         .map(str::trim)
-        .find(|line| !line.is_empty())
-        .map(ToString::to_string)
+        .filter(|line| !line.is_empty() && !line.starts_with("```"))
+        .collect();
+
+    let covered = |line: &str| {
+        let lowered = line.to_lowercase();
+        tokens
+            .iter()
+            .filter(|token| lowered.contains(token.as_str()))
+            .count()
+    };
+    let start = lines
+        .iter()
+        .enumerate()
+        .max_by_key(|(index, line)| (covered(line), std::cmp::Reverse(*index)))
+        .filter(|(_, line)| covered(line) > 0)
+        .map_or(0, |(index, _)| index);
+
+    let excerpt = lines
+        .iter()
+        .skip(start)
+        .take(EXCERPT_LINES)
+        .copied()
+        .collect::<Vec<&str>>()
+        .join(" ");
+    if excerpt.is_empty() {
+        return None;
+    }
+    Some(match excerpt.char_indices().nth(EXCERPT_LIMIT) {
+        Some((cut, _)) => format!("{}…", &excerpt[..cut]),
+        None => excerpt,
+    })
 }
 
 /// The directory to search: positional `index` if given, else the current directory.

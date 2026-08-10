@@ -54,7 +54,7 @@ fi
 
 # Ad-hoc signing is enough to load the extension on this machine with Safari's developer
 # setting turned on. Safari will not load an ad-hoc extension for an ordinary reader, so a
-# distributed build needs DX_SIGNING_IDENTITY set to a Developer ID — see packaging/README.md.
+# distributed build needs DX_SIGNING_IDENTITY set to a Developer ID — see packaging/packaging.dx.
 identity="${DX_SIGNING_IDENTITY:--}"
 xcodebuild -project "$project" \
   -scheme "dx" \

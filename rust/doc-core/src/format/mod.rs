@@ -1,6 +1,6 @@
 //! DOCSRC — the canonical, human/AI-shared text serialization of a [`Document`].
 //!
-//! `docs/dx-format-contract.md` is the authority on the behavior; this module is its
+//! `docs/dx-format-contract.dx` is the authority on the behavior; this module is its
 //! implementation, and owns two halves of the format contract:
 //!
 //! - [`stringify`] — the **canonical writer**: turns a [`Document`] into DOCSRC text. One
@@ -17,7 +17,7 @@
 //!
 //! Round-trip determinism is the contract: `parse` then `stringify` converges to canonical
 //! form, and `stringify` is idempotent on already-canonical input. See
-//! `docs/dx-format-contract.md` for the authoritative behavior spec.
+//! `docs/dx-format-contract.dx` for the authoritative behavior spec.
 //!
 //! # Module layout
 //! The implementation is split into cohesive submodules, all private except for the two
@@ -113,6 +113,57 @@ mod tests {
         let input =
             "::heading level=1 id=h\nHi\n::end\n\n::paragraph id=intro\nHello world\n::end\n";
         assert_eq!(round_trip(input), input);
+    }
+
+    /// A document has to be able to show dx syntax, or the format cannot document itself:
+    /// the format contract, the block reference, and every tutorial that prints a block were
+    /// all cut off at their first example, because a body line reading `::end` closed the
+    /// block that was quoting it.
+    #[test]
+    fn a_block_can_carry_dx_syntax_because_the_writer_escapes_the_close_token() {
+        let document = parse(
+            "::code id=example lang=text\n::paragraph id=intro\nHello\n\\::end\n::end\n\n\
+             ::paragraph id=after\nStill here.\n::end\n",
+        );
+
+        // The example survives whole — including its own closing line — and so does the
+        // block after it, which the early close used to swallow.
+        assert_eq!(document.blocks.len(), 2);
+        assert_eq!(
+            document.blocks[0].text,
+            "::paragraph id=intro\nHello\n::end"
+        );
+        assert_eq!(document.blocks[1].text, "Still here.");
+
+        // And the writer puts the escape back, so the file reads as itself next time.
+        let written = stringify(&document);
+        assert!(written.contains("\\::end\n::end"), "{written}");
+        assert_eq!(stringify(&parse(&written)), written);
+    }
+
+    /// The escape is a ladder — one backslash per level — which is what makes it reversible:
+    /// a document quoting a document quoting a block still reads back byte-for-byte.
+    #[test]
+    fn escaping_the_close_token_is_reversible_at_every_depth() {
+        for body in ["::end", "\\::end", "\\\\::end", "} ::end", "::END"] {
+            let mut document = parse("::code id=q lang=text\nx\n::end\n");
+            document.blocks[0].text = body.to_string();
+            let written = stringify(&document);
+            assert_eq!(
+                parse(&written).blocks[0].text,
+                body,
+                "body {body:?} did not survive {written:?}"
+            );
+            assert_eq!(stringify(&parse(&written)), written, "{written}");
+        }
+    }
+
+    /// The narrow rule still holds: `::end` inside a sentence is prose, not a close token,
+    /// and prose that merely mentions it must not grow a backslash on save.
+    #[test]
+    fn a_mention_of_the_close_token_mid_line_is_left_exactly_as_written() {
+        let prose = "::paragraph id=p\na block ends with `::end` on its own line\n::end\n";
+        assert_eq!(round_trip(prose), prose);
     }
 
     #[test]

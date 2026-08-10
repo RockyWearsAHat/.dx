@@ -3,7 +3,7 @@ Block Reference
 ::end
 
 ::paragraph id=block-reference-summary
-Every block type the parser reads and the renderer draws. `docs/dx-format-contract.md` is the authority on the format itself; this page is the catalog you can see.
+Every block type the parser reads and the renderer draws. `docs/dx-format-contract.dx` is the authority on the format itself; this page is the catalog you can see.
 ::end
 
 ::html id=block-type-table

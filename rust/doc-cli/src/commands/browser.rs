@@ -2,7 +2,7 @@
 //!
 //! A committed `.dx` file is one line, and github.com shows that line: its file viewer picks
 //! renderers from a fixed first-party list and no repository, app, or `.gitattributes` entry
-//! can add to it (`docs/github.md` has the detail). The only place left to resolve a pointer
+//! can add to it (`docs/github.dx` has the detail). The only place left to resolve a pointer
 //! is the reader's own browser, which is why a browser extension exists at all.
 //!
 //! The extension's files are not in the binary — see [`crate::extension`] for why. This

@@ -1,6 +1,7 @@
 //! The canonical DOCSRC writer: turn a [`Document`] into byte-exact `.dx` text.
 
 use super::normalize::normalize_blocks;
+use super::parse;
 use super::util::{clamp_heading_level_u8, format_attribute_value, js_trim, normalize_class_name};
 use crate::model::{Block, Document, Item};
 
@@ -195,6 +196,32 @@ fn block_body(block: &Block) -> String {
     }
 }
 
+/// Escape every close token in a body, so a document can carry dx syntax as content.
+///
+/// A body line shaped like a close token (`::end` alone, or trailing after whitespace) would
+/// end the block when read back, truncating the document at its first example. Writing one
+/// backslash immediately before the token makes the line content again, and
+/// [`super::parse::close_token`] takes exactly that one back off — so the ladder is reversible
+/// at every depth and the round trip stays byte-for-byte.
+///
+/// Complexity: `O(n)` in the body's byte size.
+fn escape_close_tokens(body: &str) -> String {
+    let carries_token = body
+        .as_bytes()
+        .windows("::end".len())
+        .any(|window| window.eq_ignore_ascii_case(b"::end"));
+    if !carries_token {
+        return body.to_string();
+    }
+    body.split('\n')
+        .map(|line| match parse::close_token(line) {
+            Some(token) => format!("{}\\{}", &line[..token.start], &line[token.start..]),
+            None => line.to_string(),
+        })
+        .collect::<Vec<String>>()
+        .join("\n")
+}
+
 /// The separator written between two canonical blocks.
 pub const BLOCK_SEPARATOR: &str = "\n\n";
 
@@ -216,7 +243,7 @@ pub fn stringify_blocks(document: &Document) -> Vec<String> {
         .iter()
         .map(|block| {
             let header = block_header(block);
-            let body = block_body(block);
+            let body = escape_close_tokens(&block_body(block));
             format!("{header}\n{body}\n::end")
         })
         .collect()
