@@ -421,7 +421,9 @@ fn list(args: &Value, root: &Path) -> ToolResult {
 ///
 /// A hit names the block that best matches the query and hands over that block's text (a
 /// heading brings its whole section), capped at [`SEARCH_EXCERPT_LIMIT`] — so the search
-/// that lands usually needs no follow-up read at all.
+/// that lands usually needs no follow-up read at all. A block longer than the cap is shown
+/// from the line the engine's own ranker says answers the question, never from its first
+/// line: an excerpt that stops before the fact reads as a miss and costs the read it saved.
 fn search(args: &Value, root: &Path) -> ToolResult {
     let query = required(args, "query")?;
     let directory = directory_arg(args, root);
@@ -438,7 +440,8 @@ fn search(args: &Value, root: &Path) -> ToolResult {
             if let Some(id) = &hit.block {
                 if let Some(scoped) = section(&hit.document.document, id) {
                     item["block"] = json!(id);
-                    item["excerpt"] = json!(excerpt(&text(&scoped, &TextOptions::default())));
+                    item["excerpt"] =
+                        json!(excerpt(&text(&scoped, &TextOptions::default()), query));
                 }
             }
             item
@@ -451,17 +454,27 @@ fn search(args: &Value, root: &Path) -> ToolResult {
 /// the spot, while the hit still names its block for a full section read.
 const SEARCH_EXCERPT_LIMIT: usize = 700;
 
-/// Cap `answer` at [`SEARCH_EXCERPT_LIMIT`] bytes on a character boundary, marking the cut.
-fn excerpt(answer: &str) -> String {
+/// Cap `answer` at [`SEARCH_EXCERPT_LIMIT`] bytes on a character boundary, marking each cut.
+///
+/// Text that fits is handed over whole. Text that does not is windowed on the line
+/// [`doc_core::search::answering_line`] picks for `query` — the same ranker that chose the
+/// block — and marked as cut at both ends, so a reader can see the excerpt is a window rather
+/// than the start of the block.
+fn excerpt(answer: &str, query: &str) -> String {
     let trimmed = answer.trim_end();
     if trimmed.len() <= SEARCH_EXCERPT_LIMIT {
         return trimmed.to_string();
     }
-    let mut end = SEARCH_EXCERPT_LIMIT;
-    while !trimmed.is_char_boundary(end) {
+
+    let lines: Vec<&str> = trimmed.lines().collect();
+    let start = doc_core::search::answering_line(trimmed, query).unwrap_or(0);
+    let windowed = lines[start..].join("\n");
+    let mut end = SEARCH_EXCERPT_LIMIT.min(windowed.len());
+    while !windowed.is_char_boundary(end) {
         end -= 1;
     }
-    format!("{}…", &trimmed[..end])
+    let opening = if start > 0 { "…" } else { "" };
+    format!("{opening}{}…", &windowed[..end])
 }
 
 /// `dx_render` — the HTML page source.
@@ -1512,10 +1525,25 @@ mod tests {
     #[test]
     fn a_long_search_answer_is_capped_on_a_character_boundary() {
         let long = "é".repeat(SEARCH_EXCERPT_LIMIT); // 2 bytes per char, well past the cap
-        let capped = excerpt(&long);
-        assert!(capped.len() <= SEARCH_EXCERPT_LIMIT + '…'.len_utf8());
+        let capped = excerpt(&long, "anything");
+        assert!(capped.len() <= SEARCH_EXCERPT_LIMIT + 2 * '…'.len_utf8());
         assert!(capped.ends_with('…'));
-        assert!(excerpt("short answer") == "short answer");
+        assert!(excerpt("short answer", "anything") == "short answer");
+    }
+
+    #[test]
+    fn a_cut_excerpt_starts_where_the_answer_is_not_where_the_block_is() {
+        // The failure this pins: a hit landed on the right block and showed its opening
+        // lines, which said nothing about the question — indistinguishable from a miss, and
+        // it cost the read the search was replacing.
+        let filler = "unrelated preamble that fills the excerpt budget\n".repeat(40);
+        let answer = "the sample rate is 16000 Hz";
+        let cut = excerpt(
+            &format!("{filler}{answer}\ntrailing line"),
+            "what sample rate",
+        );
+        assert!(cut.contains(answer), "{cut}");
+        assert!(cut.starts_with('…'), "a window says it is one: {cut}");
     }
 
     #[test]
