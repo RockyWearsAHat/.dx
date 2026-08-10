@@ -63,6 +63,9 @@ pub enum StoreError {
     },
     /// A document's chunks are missing or do not match the digest recorded for it.
     Corrupt(String),
+    /// Writing the packs from what the index holds would drop a document some `.dx` pointer
+    /// still names — the index has lost it, and exporting would make that loss durable.
+    WouldLose(String),
     /// The database or filesystem refused an operation.
     Backend(String),
 }
@@ -93,6 +96,12 @@ impl fmt::Display for StoreError {
             Self::Corrupt(detail) => write!(
                 f,
                 "{detail}; run `dx sync` to rebuild the store from the packs in .doc/"
+            ),
+            Self::WouldLose(path) => write!(
+                f,
+                "the index no longer holds {path}, but the file still points at it — writing \
+                 the packs now would lose the document; run `dx sync` to restore it from \
+                 .doc/repo.dxcp first"
             ),
             Self::Backend(detail) => write!(f, "{detail}"),
         }

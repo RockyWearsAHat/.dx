@@ -57,6 +57,20 @@ pub fn route(root: &Path, relative: &str) -> Route {
     }
 }
 
+/// Whether git will carry `relative` in this workspace's history.
+///
+/// True for a file git neither ignores nor sits outside of; false when the workspace is not a
+/// repository at all. This is the question a *storage* decision asks, and it is deliberately
+/// not [`route`]'s question. Routing defaults to `Repo` when git is absent because the risk
+/// there is losing content — the safe answer is the artifact that travels. Storage has no such
+/// risk: a directory with no git has no history to delta, so the safe answer is the smaller
+/// file.
+#[must_use]
+pub fn tracks(root: &Path, relative: &str) -> bool {
+    succeeds(root, &["rev-parse", "--is-inside-work-tree"])
+        && !succeeds(root, &["check-ignore", "-q", "--", relative])
+}
+
 /// Whether `git args` run against `root` exits zero.
 fn succeeds(root: &Path, args: &[&str]) -> bool {
     Command::new("git")
@@ -124,6 +138,26 @@ mod tests {
         std::fs::write(root.join("fresh.dx"), "::paragraph id=p\nx\n::end\n").expect("write");
 
         assert_eq!(route(&root, "fresh.dx"), Route::Repo);
+    }
+
+    #[test]
+    fn a_directory_that_is_not_a_repository_tracks_nothing() {
+        // Storage's default is the opposite of routing's, and on purpose: no history to
+        // delta means the compressed form is simply the better file.
+        assert!(!tracks(&std::env::temp_dir(), "nothing-here.dxcp"));
+    }
+
+    #[test]
+    fn the_committed_pack_is_tracked_and_the_local_one_is_not() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .expect("workspace root");
+        if !succeeds(root, &["rev-parse", "--is-inside-work-tree"]) {
+            return;
+        }
+        assert!(tracks(root, ".doc/repo.dxcp"));
+        assert!(!tracks(root, ".doc/local.dxcp"));
     }
 
     #[test]
