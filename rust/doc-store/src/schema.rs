@@ -29,12 +29,19 @@
 //! chunks no `manifest_chunks` row points at. A counter would be a second source of truth that
 //! could drift from the join table; a query cannot.
 
+use std::path::Path;
+
 use rusqlite::Connection;
 
 use crate::StoreError;
 
 /// Current schema version. A database at an older version is rebuilt (see [`apply`]).
-pub const VERSION: i64 = 2;
+///
+/// It rises for a change of *meaning* as well as of shape: version 3 carries the same tables
+/// as 2, but `tokens` now holds stemmed words and identifier parts
+/// ([`doc_core::search`]), and a row written by the older tokeniser would narrow a search to
+/// the wrong documents. Derived data that no longer matches how it is queried is stale data.
+pub const VERSION: i64 = 3;
 
 /// Drop every table this schema owns, in dependency order.
 ///
@@ -110,8 +117,51 @@ CREATE INDEX IF NOT EXISTS idx_sections_document ON sections(document_id, positi
 CREATE INDEX IF NOT EXISTS idx_tokens_token ON tokens(token);
 ";
 
+/// The schema version recorded in the database at `path`, or `None` when there is no
+/// database there.
+///
+/// Opening a store *migrates* it, and migrating rebuilds derived data — so a read has to be
+/// able to ask what version is on disk without becoming a write. A database this build
+/// cannot read is reported by its version, never by rewriting it: reading never writes.
+///
+/// `None` also covers a database this process cannot open at all — a read-only medium that
+/// refuses even the WAL sidecar files, which is every run inside the sandbox. The version is
+/// unknown there, not old, and the caller that actually opens the store reports what went
+/// wrong; calling it stale would turn a mount problem into a silent fall-through.
+pub fn version_at(path: &Path) -> Result<Option<i64>, StoreError> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let flags = rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY;
+    let ask = |connection: &Connection| -> Option<i64> {
+        connection
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .ok()
+    };
+
+    if let Ok(connection) = Connection::open_with_flags(path, flags) {
+        if let Some(version) = ask(&connection) {
+            return Ok(Some(version));
+        }
+    }
+    // A store on read-only media: WAL wants an `-shm` file it cannot create, so read the
+    // database as immutable — sound exactly there, because nothing can be writing it.
+    let uri = format!(
+        "file:{}?immutable=1",
+        path.to_string_lossy()
+            .replace('?', "%3F")
+            .replace('#', "%23")
+    );
+    let immutable = Connection::open_with_flags(uri, flags | rusqlite::OpenFlags::SQLITE_OPEN_URI);
+    Ok(immutable.ok().and_then(|connection| ask(&connection)))
+}
+
 /// Open `connection` for use as a document store: enforce foreign keys, pick a durable but
 /// fast journal, and migrate the schema up to [`VERSION`].
+///
+/// This is the **write** path. It may drop and recreate the derived tables, so a caller that
+/// is only reading must check [`version_at`] first rather than opening its way through an
+/// upgrade.
 ///
 /// `PRAGMA foreign_keys` must be set per connection, not once per database, which is why it
 /// belongs here rather than in the DDL.

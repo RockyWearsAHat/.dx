@@ -79,7 +79,8 @@ fn main() {
             format::parse(BLOCK_REF_DX),
         ),
     ];
-    let index = search::build_index(&corpus);
+    let borrowed = || corpus.iter().map(|(path, doc)| (path.as_str(), doc));
+    let index = search::build_index(borrowed());
 
     // A pack of the three documents for the storage rows.
     let pack = Pack::build(corpus.iter().map(|(path, doc)| (path.as_str(), doc)));
@@ -129,7 +130,7 @@ fn main() {
 
     // ---- search build / query -------------------------------------------------
     time_ns("search::build_index 3 docs", 0, || {
-        search::build_index(&corpus)
+        search::build_index(borrowed())
     });
     time_ns("search::query 'block document'", 0, || {
         index.search("block document")

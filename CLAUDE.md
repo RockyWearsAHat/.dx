@@ -156,8 +156,11 @@ crates and the surfaces; `rust/engine.dx` is the crate-by-crate responsibility l
   is the runbook.
 - **An agent reads by the cheapest route that carries the meaning.** `dx_search` covers the
   documents *and* the source files, and a hit carries the answering excerpt with the block id
-  or line range to read — so a search that lands is the read. `dx_source` (with `section`) is
-  the default read and `dx_outline` is the map that keeps it to one section. `dx_read`'s images
+  or line range to read — so a search that lands is the read. It answers a question asked in
+  the reader's words rather than only the project's, and the block it hands back is the one
+  that *states* the fact, never a heading or a test over it (`index.dx#contract-search`).
+  `dx_source` (with `section`) is the default read and `dx_outline` is the map that keeps it
+  to one section. `dx_read`'s images
   are spent only on what text cannot carry — boards, diagrams, charts, rendered views. Pages
   break between blocks, never through a line, and never leave a heading without its text; a
   `::board` is always its own page captured at natural canvas size. Reading captures are sized

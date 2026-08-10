@@ -251,12 +251,17 @@ fn list_tool() -> Value {
 fn search_tool() -> Value {
     json!({
         "name": "dx_search",
-        "description": "Search every .dx document in a project by content and title, best \
-                        matches first. Each hit carries its answer: the id of the block that \
-                        best matches and that block's text (a heading brings its section, \
-                        capped) — so a search that lands needs no follow-up read. When you \
-                        do need more, dx_source with `section` on the hit's block is the \
-                        cheap route.",
+        "description": "Search a project — its .dx documents *and* its source files — best \
+                        matches first, documents before code. Each hit carries its answer: \
+                        the id of the block that best matches and that block's text (a \
+                        heading brings its section, capped; a source file's block id is the \
+                        line range to open) — so a search that lands needs no follow-up \
+                        read. When you do need more, dx_source with `section` on the hit's \
+                        block is the cheap route. Ask in a whole question and in your own \
+                        words: matching folds word endings (packed finds pack), splits \
+                        compound names (packWeights is reachable as pack and weights), and \
+                        falls back to a word's kin when the project never says it on its \
+                        own (packed reaches bitpack.c, microphone reaches mic.py).",
         "inputSchema": {
             "type": "object",
             "properties": {
