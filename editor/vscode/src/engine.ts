@@ -160,15 +160,24 @@ interface Held {
  * through the committed pack (`.doc/repo.dxcp`) — the reader never sees a pointer where a
  * document belongs. A path that cannot be read is marked absent, which stops the walk
  * asking again and leaves the engine to render its sentence in place.
+ *
+ * `dx` is the engine to ask, defaulting to the loaded one. It arrives as a collaborator for
+ * the same reason `changes.ts` takes its two programs that way: the reading is the part worth
+ * testing, and a test that has to load a WebAssembly module out of an installed extension
+ * directory to exercise a `readFileSync` is testing the wrong thing.
  */
-export function resourcesFor(source: string, documentDir: string): string | undefined {
+export function resourcesFor(
+  source: string,
+  documentDir: string,
+  dx: Engine = engine()
+): string | undefined {
   const held: Held = { files: {}, documents: {}, absent: [] };
   let gathered = false;
 
   for (;;) {
     let wanted: unknown;
     try {
-      wanted = JSON.parse(engine().pending(source, JSON.stringify(held)));
+      wanted = JSON.parse(dx.pending(source, JSON.stringify(held)));
     } catch {
       return gathered ? JSON.stringify(held) : undefined;
     }
@@ -179,7 +188,7 @@ export function resourcesFor(source: string, documentDir: string): string | unde
       if (typeof ref.path !== 'string') {
         continue;
       }
-      const text = read(path.join(documentDir, ref.path), ref.kind === 'document');
+      const text = read(path.join(documentDir, ref.path), ref.kind === 'document', dx);
       if (text === undefined) {
         held.absent.push(ref.path);
       } else {
@@ -197,15 +206,15 @@ export function resourcesFor(source: string, documentDir: string): string | unde
  * `asDocument` is what makes a pointer resolve: a `.dx` file on disk may be one line into
  * the store, and the engine — not a pattern kept here — says whether it is.
  */
-function read(target: string, asDocument: boolean): string | undefined {
+function read(target: string, asDocument: boolean, dx: Engine): string | undefined {
   let text: string;
   try {
     text = fs.readFileSync(target, 'utf8');
   } catch {
     return undefined;
   }
-  if (asDocument && engine().pointer_digest(text) !== '') {
-    return packedDocument(target);
+  if (asDocument && dx.pointer_digest(text) !== '') {
+    return packedDocument(target, dx);
   }
   return text;
 }
@@ -215,13 +224,13 @@ function read(target: string, asDocument: boolean): string | undefined {
  * beside `.doc/` nearest above it. `undefined` when no pack holds it; the engine then
  * says so on the page, which beats pretending the pointer line was the document.
  */
-function packedDocument(target: string): string | undefined {
+function packedDocument(target: string, dx: Engine): string | undefined {
   for (let dir = path.dirname(target); ; dir = path.dirname(dir)) {
     const pack = path.join(dir, '.doc', 'repo.dxcp');
     if (fs.existsSync(pack)) {
       try {
         const relative = path.relative(dir, target).split(path.sep).join('/');
-        return engine().pack_document(fs.readFileSync(pack), relative);
+        return dx.pack_document(fs.readFileSync(pack), relative);
       } catch {
         return undefined;
       }
