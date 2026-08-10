@@ -12,7 +12,7 @@ The content is here, stored once per distinct block.
 
 | File | What it is | Commit it? |
 |------|------------|-----------|
-| `repo.dxcp` | **Your documents.** Every repository document, split into content-addressed chunks, deduplicated across documents and versions, and compressed as one stream. | **Yes.** This is the content. |
+| `repo.dxcp` | **Your documents.** Every repository document, split into content-addressed chunks and deduplicated across documents and versions. Written *uncompressed*: git deltas plain bytes between revisions and cannot delta a compressed stream, so leaving the bytes alone makes the file bigger here and the repository smaller. | **Yes.** This is the content. |
 | `local.dxcp` | Documents git ignores or has never tracked — scratch work that should not reach a teammate. | No |
 | `index.db` | SQLite: the local queryable authority. Chunks, manifests, sections, and a token index for search. Rebuildable from `repo.dxcp`. | No |
 

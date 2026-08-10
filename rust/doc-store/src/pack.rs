@@ -9,17 +9,23 @@
 //!   reaches a teammate.
 //!
 //! Both are `DXCP1` containers ([`doc_core::chunk`]): chunk bodies deduplicated across every
-//! document in the pack, referenced by index, and compressed as one `dxz` frame — the codec
-//! is named by the frame's magic ([`doc_core::compress`] currently writes DEFLATE or stored,
-//! and `DXZ1` frames from older builds are decoded forever). Splitting by route rather than
-//! writing one pack means committing a document does not rewrite the bytes of unrelated
-//! local notes.
+//! document in the pack, referenced by index, and wrapped in one `dxz` frame whose magic
+//! names its codec (`DXZ1` frames from older builds are decoded forever). Splitting by route
+//! rather than writing one pack means committing a document does not rewrite the bytes of
+//! unrelated local notes.
+//!
+//! The two packs are written under different policies, because they have different readers.
+//! `local.dxcp` is nobody's history, so it is compressed. `repo.dxcp` is committed, and git
+//! deltas plain bytes between revisions while it cannot delta a compressed stream — so the
+//! committed pack is deliberately the larger file on disk and the smaller one in history.
+//! [`doc_core::chunk::PackStorage`] carries the reasoning and `validation.dx#git-cost-holds`
+//! carries the measurement.
 
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use doc_core::chunk::{decode_pack, encode_pack, Pack};
+use doc_core::chunk::{decode_pack, encode_pack_for, Pack, PackStorage};
 use doc_core::model::Document;
 
 use crate::store::STORE_DIR;
@@ -54,13 +60,17 @@ pub(crate) fn export(store: &Store) -> Result<(), StoreError> {
     }
 
     let (repo_path, local_path) = paths(store.root());
-    write_pack(&repo_path, &repo)?;
-    write_pack(&local_path, &local)?;
+    write_pack(&repo_path, &repo, PackStorage::ForVersionControl)?;
+    write_pack(&local_path, &local, PackStorage::Compressed)?;
     Ok(())
 }
 
 /// Write one pack file, or remove it when there is nothing to store.
-fn write_pack(path: &Path, documents: &[(String, Document)]) -> Result<(), StoreError> {
+fn write_pack(
+    path: &Path,
+    documents: &[(String, Document)],
+    storage: PackStorage,
+) -> Result<(), StoreError> {
     if documents.is_empty() {
         if path.exists() {
             fs::remove_file(path).map_err(|error| {
@@ -81,7 +91,7 @@ fn write_pack(path: &Path, documents: &[(String, Document)]) -> Result<(), Store
             .iter()
             .map(|(relative, document)| (relative.as_str(), document)),
     );
-    fs::write(path, encode_pack(&pack)).map_err(|error| {
+    fs::write(path, encode_pack_for(&pack, storage)).map_err(|error| {
         StoreError::Backend(format!("could not write {}: {error}", path.display()))
     })
 }

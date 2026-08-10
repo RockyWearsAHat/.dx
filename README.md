@@ -33,7 +33,7 @@ and writes its output into the document, fingerprinted so re-running executes on
 changed. Reading, rendering, and screenshotting never execute anything.
 
 On disk, a document you have adopted into a workspace is a one-line pointer; the content lives
-in `.doc/repo.dxcp` as content-addressed, deduplicated, compressed chunks — committed to git,
+in `.doc/repo.dxcp` as content-addressed, deduplicated chunks — committed to git,
 diffed as prose after `dx git-setup`, and always resolved back to the true document by every
 reader: the CLI, the editor, an agent, and git itself.
 
@@ -155,7 +155,18 @@ cd rust
 cargo test                                  # the whole suite, attacks and Chromium included
 cargo clippy --all-targets -- -D warnings
 cargo fmt --check
+node --test "../editor/github/test/"*.test.mjs   # after ../editor/github/test/fixture.sh
+node --test "../editor/vscode/test/"*.test.mjs
 ```
+
+`.github/workflows/ci.yml` runs the same things on every push and pull request, on both
+kernels that can confine a running block — Seatbelt on macOS, bubblewrap on Linux — because a
+platform that cannot impose the boundary refuses to run a block at all, and testing one of
+them would leave half the contract unproven. `rust/rust-toolchain.toml` pins the compiler so
+CI, a fresh clone, and this machine all write one `target/`.
+
+[`validation.dx`](validation.dx) is where the claims about what this saves are held to
+measured numbers — including the two that came out against the method.
 
 Every public item is documented, there is no `unsafe`, and library code does not panic.
 [`dev.dx`](dev.dx) is the authority on the gates and what each one reads.

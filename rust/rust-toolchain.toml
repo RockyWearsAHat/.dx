@@ -1,0 +1,9 @@
+# One toolchain writes this workspace's `target/`.
+#
+# Two rustc versions sharing one target directory fail doctests with E0514, and this machine
+# has a Homebrew rustc as well as the rustup one. A rustup proxy honours this file; a Homebrew
+# `cargo` does not, so keep `~/.cargo/bin` first on PATH as well — CLAUDE.md's quality bar says
+# the same thing, and this file is what makes CI and a fresh clone agree with it.
+[toolchain]
+channel = "1.96.0"
+components = ["rustfmt", "clippy"]

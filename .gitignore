@@ -32,8 +32,15 @@ editor/vscode/node_modules/
 # builds with editor/build.sh; a stale one fails the node suite.
 editor/github/test/fixture/
 
-# Helpers/GSH workspace-tool artifacts — agent tooling state, not project content.
+# Agent tooling state — generated beside the project, never part of it. Each of these was
+# once committed; together they were 101 files and 2.0 MB of stale generated index, vendored
+# third-party skills, and session logs, none of it referenced by a single line of the project.
 /.gsh/
+/.helpers/
+/.github/knowledge/
+/.github/session-memory/
+/.github/matt-pocock-skills/
+/.github/devops-audit-community-settings.json
 
 # wasm-pack type declarations: nothing consumes them (the extension is plain JS)
 editor/github/wasm/*.d.ts

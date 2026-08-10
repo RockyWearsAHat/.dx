@@ -13,13 +13,14 @@
 //!
 //! # Layout
 //! [`split`] turns a document into chunks; [`join`] turns chunk texts back into canonical
-//! source; [`encode_pack`] / [`decode_pack`] move a whole set of documents through one
-//! compressed, deduplicated byte container.
+//! source; [`encode_pack_for`] / [`decode_pack`] move a whole set of documents through one
+//! deduplicated byte container, compressed or stored as-is by [`PackStorage`] — the choice
+//! belongs to whoever will read the file, and for a committed pack that reader is git.
 //!
 //! This module is host-free (no filesystem, no clock), so it compiles to `wasm32`
 //! alongside the rest of `doc-core`.
 
-use crate::compress::{compress, decompress, DecompressError};
+use crate::compress::{compress, decompress, store_as_is, DecompressError};
 use crate::digest::sha256_hex;
 use crate::format::{stringify_blocks, BLOCK_SEPARATOR};
 use crate::model::Document;
@@ -233,17 +234,39 @@ impl Reader<'_> {
     }
 }
 
-/// Encode `pack` into a compressed `DXCP1` byte container.
+/// Who a pack is written for, which is what decides whether it is compressed.
+///
+/// Smallest-on-disk is the obvious policy and it is the wrong one for a file that lives in
+/// git. A compressed pack is one opaque stream, so two revisions of it share nothing a delta
+/// can express, and git stores a whole new object for every edit; twenty one-paragraph edits
+/// to one document cost 124 KB of history compressed and 25 KB stored, against 6 KB for the
+/// same document committed as plain text (`validation.dx#git-cost-holds` runs both arms).
+/// Uncompressed, the payload is the chunk text itself, which git deltas between revisions and
+/// then compresses in its own packfile — so the repository ends up smaller by leaving the
+/// bytes alone.
+///
+/// Nothing about reading changes: the codec is named in the frame's own magic either way, and
+/// every pack ever written still decodes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PackStorage {
+    /// Smallest bytes on disk — for a pack nothing version-controls.
+    Compressed,
+    /// Bytes git can delta between revisions — for a pack that is committed.
+    ForVersionControl,
+}
+
+/// Encode `pack` into a `DXCP1` byte container.
 ///
 /// Entries reference chunks by index into the chunk table rather than by hash, so a
-/// document costs a few bytes per block beyond the block bodies themselves. The whole
-/// payload is compressed as one `dxz` frame ([`crate::compress`] picks the codec and names
-/// it in the frame's magic), so redundancy *between* chunks compresses too.
+/// document costs a few bytes per block beyond the block bodies themselves. The payload is
+/// wrapped in one `dxz` frame whose magic names its codec, so a reader never has to be told
+/// which policy wrote it — see [`PackStorage`] for why a committed pack chooses the larger
+/// file on purpose.
 ///
 /// Layout:
 /// ```text
 ///   [0..5]   magic b"DXCP1"
-///   [5..9]   u32 LE length of the compressed payload
+///   [5..9]   u32 LE length of the framed payload
 ///   [9..]    dxz(payload) — a dxz frame, codec named by its own magic
 ///
 ///   payload:
@@ -252,7 +275,7 @@ impl Reader<'_> {
 ///                                        varint chunk count, varint chunk indices
 /// ```
 #[must_use]
-pub fn encode_pack(pack: &Pack) -> Vec<u8> {
+pub fn encode_pack_for(pack: &Pack, storage: PackStorage) -> Vec<u8> {
     let mut payload = Vec::new();
 
     put_varint(&mut payload, pack.chunks.len() as u64);
@@ -274,12 +297,21 @@ pub fn encode_pack(pack: &Pack) -> Vec<u8> {
         }
     }
 
-    let compressed = compress(&payload);
-    let mut out = Vec::with_capacity(HEADER_LENGTH + compressed.len());
+    let framed = match storage {
+        PackStorage::Compressed => compress(&payload),
+        PackStorage::ForVersionControl => store_as_is(&payload),
+    };
+    let mut out = Vec::with_capacity(HEADER_LENGTH + framed.len());
     out.extend_from_slice(MAGIC);
-    out.extend_from_slice(&(compressed.len() as u32).to_le_bytes());
-    out.extend_from_slice(&compressed);
+    out.extend_from_slice(&(framed.len() as u32).to_le_bytes());
+    out.extend_from_slice(&framed);
     out
+}
+
+/// Encode `pack` the smallest way — [`encode_pack_for`] with [`PackStorage::Compressed`].
+#[must_use]
+pub fn encode_pack(pack: &Pack) -> Vec<u8> {
+    encode_pack_for(pack, PackStorage::Compressed)
 }
 
 /// Decode a `DXCP1` container produced by [`encode_pack`].
@@ -469,6 +501,54 @@ mod tests {
         let decoded = decode_pack(&encode_pack(&pack)).expect("decode");
         assert_eq!(
             decoded.source("i18n.dx").expect("entry"),
+            stringify(&document)
+        );
+    }
+
+    /// A repetitive document to make the two policies visibly disagree on size.
+    fn compressible() -> Document {
+        let body =
+            "the same sentence, over and over, so a codec has something to find.\n".repeat(60);
+        parse(&format!("::paragraph id=p\n{body}::end\n"))
+    }
+
+    /// The committed pack is the larger file on purpose: git deltas plain bytes between
+    /// revisions and cannot delta a compressed stream, so the policy that wins on disk loses
+    /// in history. `validation.dx#git-cost-holds` measures both arms.
+    #[test]
+    fn a_pack_written_for_version_control_leaves_its_bytes_alone() {
+        let document = compressible();
+        let pack = Pack::build(vec![("notes.dx", &document)]);
+
+        let committed = encode_pack_for(&pack, PackStorage::ForVersionControl);
+        let compressed = encode_pack_for(&pack, PackStorage::Compressed);
+
+        assert!(
+            committed.len() > compressed.len(),
+            "storing as-is should cost more disk than compressing: {} vs {}",
+            committed.len(),
+            compressed.len()
+        );
+        assert!(
+            committed.windows(4).any(|window| window == b"DXZ3"),
+            "the frame names the stored codec, so any reader still knows what it holds"
+        );
+    }
+
+    /// Both policies are the same content, which is the only thing a reader may depend on.
+    #[test]
+    fn both_pack_policies_decode_to_the_same_documents() {
+        let document = compressible();
+        let pack = Pack::build(vec![("notes.dx", &document)]);
+
+        let from_committed =
+            decode_pack(&encode_pack_for(&pack, PackStorage::ForVersionControl)).expect("decode");
+        let from_compressed =
+            decode_pack(&encode_pack_for(&pack, PackStorage::Compressed)).expect("decode");
+
+        assert_eq!(from_committed, from_compressed);
+        assert_eq!(
+            from_committed.source("notes.dx").expect("entry"),
             stringify(&document)
         );
     }
