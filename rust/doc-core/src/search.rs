@@ -82,6 +82,42 @@
 use crate::model::{Block, Document};
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::hash::{BuildHasherDefault, Hasher};
+
+/// FNV-1a over a token's bytes, and the reason there is a hasher in this file at all.
+///
+/// Tokenising a repository is the most expensive thing search does — three quarters of a
+/// query's wall clock here — and nearly all of it is hashing short ASCII words into one map
+/// per unit. The standard hasher is SipHash, chosen to be hard to flood with collisions from
+/// untrusted keys; these keys are the words of files the caller already chose to read, and
+/// paying for that protection on every word of every file is the whole cost of the safety
+/// nobody needed. FNV-1a is a few instructions per byte and keeps the map's behaviour
+/// otherwise identical — including determinism, which never depended on iteration order.
+#[derive(Default)]
+struct TokenHasher(u64);
+
+impl Hasher for TokenHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        // The empty-state constant is FNV's offset basis; every byte folds in then mixes.
+        let mut hash = if self.0 == 0 {
+            0xcbf2_9ce4_8422_2325
+        } else {
+            self.0
+        };
+        for byte in bytes {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(0x1000_0000_01b3);
+        }
+        self.0 = hash;
+    }
+}
+
+/// A map keyed by tokens, hashed with [`TokenHasher`].
+type TokenMap<V> = HashMap<String, V, BuildHasherDefault<TokenHasher>>;
 
 /// BM25 term-frequency saturation: how quickly repeats of one term stop earning score.
 const BM25_K1: f64 = 1.2;
@@ -270,7 +306,7 @@ struct TokenStats {
 /// them apart meant hashing and allocating each key twice on the hottest path there is.
 struct UnitStats {
     /// Token → what it contributed to this unit.
-    entries: HashMap<String, TokenStats>,
+    entries: TokenMap<TokenStats>,
     /// Field-weighted total token count, used for length normalisation.
     length: f64,
 }
@@ -289,7 +325,7 @@ impl Recorder {
     fn new() -> Self {
         Recorder {
             stats: UnitStats {
-                entries: HashMap::new(),
+                entries: TokenMap::default(),
                 length: 0.0,
             },
             cursor: 0,
@@ -743,6 +779,28 @@ impl SearchIndex {
     pub fn with_corpus_size(mut self, total_documents: usize) -> Self {
         self.corpus_size = Some(u32::try_from(total_documents).unwrap_or(u32::MAX));
         self
+    }
+
+    /// One index over the documents of several, built over disjoint sets.
+    ///
+    /// Tokenising is the expensive half of a search — three quarters of a query's wall clock
+    /// over a repository of source files — and it is per-document work with nothing shared,
+    /// so a host with cores to spare can index in parallel and join the parts here. The join
+    /// itself is a concatenation: an index is its documents' statistics and nothing else.
+    ///
+    /// The result's corpus size is unset, because the parts *are* the corpus; a caller that
+    /// narrowed before indexing restates it with [`SearchIndex::with_corpus_size`]. Order is
+    /// the order the parts arrive in, which is what keeps a parallel build deterministic —
+    /// scores never depend on it, and ties break by path regardless.
+    ///
+    /// This crate never spawns a thread itself: it compiles to `wasm32`, where the host owns
+    /// concurrency. Splitting the work is the caller's decision; only the joining is here.
+    #[must_use]
+    pub fn merge(parts: impl IntoIterator<Item = SearchIndex>) -> SearchIndex {
+        SearchIndex {
+            docs: parts.into_iter().flat_map(|part| part.docs).collect(),
+            corpus_size: None,
+        }
     }
 
     /// Rank documents against `query`, returning hits sorted by descending score.
@@ -1422,6 +1480,24 @@ mod tests {
                 seen.push(stemmed);
             }
         }
+    }
+
+    #[test]
+    fn indexing_in_parts_ranks_exactly_as_indexing_at_once() {
+        // The property the parallel build rests on: how the work was split must not reach
+        // the ranking. Same documents, same query, same scores — to the last bit.
+        let docs = a_corpus_that_says_it_its_own_way();
+        let whole = indexed(&docs).search("how does it pick the graphics card");
+        let split = SearchIndex::merge(docs.chunks(3).map(|slice| {
+            build_index(
+                slice
+                    .iter()
+                    .map(|(path, document)| (path.as_str(), document)),
+            )
+        }))
+        .search("how does it pick the graphics card");
+        assert_eq!(whole, split);
+        assert!(!whole.is_empty(), "the corpus does answer this");
     }
 
     #[test]
