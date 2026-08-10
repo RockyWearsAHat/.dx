@@ -280,36 +280,6 @@ let wasm_bindgen = (function(exports) {
     exports.board_place = board_place;
 
     /**
-     * Decompress any `dxz` frame, whichever codec its magic names — including `DXZ1` (LZSS),
-     * which is no longer written but is decoded forever.
-     *
-     * Returns the original bytes, or an error if `frame` is not a valid `dxz` frame.
-     * @param {Uint8Array} frame
-     * @returns {Uint8Array}
-     */
-    function decompress(frame) {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            const ptr0 = passArray8ToWasm0(frame, wasm.__wbindgen_export);
-            const len0 = WASM_VECTOR_LEN;
-            wasm.decompress(retptr, ptr0, len0);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
-            var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
-            if (r3) {
-                throw takeObject(r2);
-            }
-            var v2 = getArrayU8FromWasm0(r0, r1).slice();
-            wasm.__wbindgen_export3(r0, r1 * 1, 1);
-            return v2;
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    exports.decompress = decompress;
-
-    /**
      * One field's text as decorated HTML: the source with its marks styled in place.
      *
      * What the editing surface shows *inside* the field — `**bold**` set in bold with the
@@ -338,39 +308,6 @@ let wasm_bindgen = (function(exports) {
         }
     }
     exports.field_html = field_html;
-
-    /**
-     * The sibling files a fetched file names in turn — a `::view` page naming its
-     * stylesheets — as the same JSON rows [`references`] writes.
-     *
-     * The second half of the prefetch protocol: after gathering [`references`], a host asks
-     * this about each fetched file (`path` is that file's own reference, so links resolve
-     * against *its* folder) and gathers what it returns. Files that name nothing return `[]`.
-     * @param {string} path
-     * @param {string} text
-     * @returns {string}
-     */
-    function file_references(path, text) {
-        let deferred3_0;
-        let deferred3_1;
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            const ptr0 = passStringToWasm0(path, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-            const len0 = WASM_VECTOR_LEN;
-            const ptr1 = passStringToWasm0(text, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-            const len1 = WASM_VECTOR_LEN;
-            wasm.file_references(retptr, ptr0, len0, ptr1, len1);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            deferred3_0 = r0;
-            deferred3_1 = r1;
-            return getStringFromWasm0(r0, r1);
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-            wasm.__wbindgen_export3(deferred3_0, deferred3_1, 1);
-        }
-    }
-    exports.file_references = file_references;
 
     /**
      * Add a block of `kind` after the block called `after`, or at the top when `after` is empty.
@@ -536,75 +473,58 @@ let wasm_bindgen = (function(exports) {
     exports.parse = parse;
 
     /**
-     * The HTML one block renders to with `body` in it, saving nothing.
+     * What a gathering host still has to fetch, as JSON
+     * `[{"kind": "file" | "document", "path": string}, …]`, deduplicated.
      *
-     * This is what keeps a page rendered while a reader writes on it: the surface hands over
-     * the characters currently in the field and gets back the block as it will be read. The
-     * same [`doc_core::edit::preview_block`] DX.app reaches through `dx render --block`, so
-     * what a reader sees mid-sentence in an editor and on a Mac is the same markup.
-     *
-     * `theme` is `auto`, `light`, or `dark`. The block is drawn exactly as [`render_html`]
-     * draws it in the page, so a previewed block is dressed like the page it sits in.
-     *
-     * Returns an error naming the ids that do exist when `id` names no block.
+     * `held` is the same `resources` JSON [`render_html`] takes, plus an `"absent"` array of
+     * the paths already tried and not got. The host loops — ask, fetch what comes back, add it
+     * (or mark it absent), ask again — until the answer is `[]`, and then renders against what
+     * it gathered. The walk itself is [`doc_core::resolve::Provided::pending`]: which
+     * references open it, how a gathered page extends it, and when it stops are decided there,
+     * once, for every host.
      * @param {string} text
-     * @param {string} id
-     * @param {string} body
-     * @param {string} theme
+     * @param {string | null} [held]
      * @returns {string}
      */
-    function preview_block(text, id, body, theme) {
-        let deferred6_0;
-        let deferred6_1;
+    function pending(text, held) {
+        let deferred3_0;
+        let deferred3_1;
         try {
             const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
             const ptr0 = passStringToWasm0(text, wasm.__wbindgen_export, wasm.__wbindgen_export2);
             const len0 = WASM_VECTOR_LEN;
-            const ptr1 = passStringToWasm0(id, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-            const len1 = WASM_VECTOR_LEN;
-            const ptr2 = passStringToWasm0(body, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-            const len2 = WASM_VECTOR_LEN;
-            const ptr3 = passStringToWasm0(theme, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-            const len3 = WASM_VECTOR_LEN;
-            wasm.preview_block(retptr, ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3);
+            var ptr1 = isLikeNone(held) ? 0 : passStringToWasm0(held, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            var len1 = WASM_VECTOR_LEN;
+            wasm.pending(retptr, ptr0, len0, ptr1, len1);
             var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
             var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
-            var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
-            var ptr5 = r0;
-            var len5 = r1;
-            if (r3) {
-                ptr5 = 0; len5 = 0;
-                throw takeObject(r2);
-            }
-            deferred6_0 = ptr5;
-            deferred6_1 = len5;
-            return getStringFromWasm0(ptr5, len5);
+            deferred3_0 = r0;
+            deferred3_1 = r1;
+            return getStringFromWasm0(r0, r1);
         } finally {
             wasm.__wbindgen_add_to_stack_pointer(16);
-            wasm.__wbindgen_export3(deferred6_0, deferred6_1, 1);
+            wasm.__wbindgen_export3(deferred3_0, deferred3_1, 1);
         }
     }
-    exports.preview_block = preview_block;
+    exports.pending = pending;
 
     /**
-     * Every reference `.dx` source makes past its own edge, as JSON
-     * `[{"kind": "file" | "document", "path": string}, …]`, deduplicated.
+     * The digest a `.dx` pointer line records, or `""` when `text` is document content.
      *
-     * This is the prefetch list for [`render_html`]'s `resources`: a host gathers each
-     * path — sibling documents from the repository pack, files from the workspace — and
-     * hands the set back. A document with no references returns `[]`.
+     * A host that opens files off a disk has to know which of them are pointers into the store,
+     * and it asks rather than matching a pattern of its own: [`doc_core::pointer`] is the one
+     * recognizer, so a file is a pointer to every surface or to none.
      * @param {string} text
      * @returns {string}
      */
-    function references(text) {
+    function pointer_digest(text) {
         let deferred2_0;
         let deferred2_1;
         try {
             const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
             const ptr0 = passStringToWasm0(text, wasm.__wbindgen_export, wasm.__wbindgen_export2);
             const len0 = WASM_VECTOR_LEN;
-            wasm.references(retptr, ptr0, len0);
+            wasm.pointer_digest(retptr, ptr0, len0);
             var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
             var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
             deferred2_0 = r0;
@@ -615,7 +535,7 @@ let wasm_bindgen = (function(exports) {
             wasm.__wbindgen_export3(deferred2_0, deferred2_1, 1);
         }
     }
-    exports.references = references;
+    exports.pointer_digest = pointer_digest;
 
     /**
      * Take one block out, returning the document's canonical source without it.
@@ -664,7 +584,7 @@ let wasm_bindgen = (function(exports) {
      * emits just the document container (for embedding in an existing page) instead of a full
      * document. The document's own `::style` blocks are applied either way.
      *
-     * `resources` answers the document's references ([`references`] lists them): JSON
+     * `resources` answers the document's references ([`pending`] says what to gather): JSON
      * `{"files": {path: text}, "documents": {path: source}}`. A host with nothing to give
      * omits it, and every reference renders as its honest sentence — the page never shows a
      * referenced listing as silently empty. Malformed JSON is treated the same way, which
@@ -1038,11 +958,6 @@ let wasm_bindgen = (function(exports) {
         if (idx < 1028) return;
         heap[idx] = heap_next;
         heap_next = idx;
-    }
-
-    function getArrayU8FromWasm0(ptr, len) {
-        ptr = ptr >>> 0;
-        return getUint8ArrayMemory0().subarray(ptr / 1, ptr / 1 + len);
     }
 
     let cachedDataViewMemory0 = null;

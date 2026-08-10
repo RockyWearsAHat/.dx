@@ -186,7 +186,7 @@ page showing it stays current:
 - **A sibling coded page**: `::view id=screen src=site/index.html width=390` shows the
   page the file renders to, framed live at the stated viewport — the same reference the
   other way up. Hydration also inlines the page's own *relative* stylesheets
-  (`resolve::file_references` tells a prefetching host about them), because the sandboxed
+  (`resolve::Provided::pending` walks a prefetching host to them), because the sandboxed
   frame has no folder to fetch from; absolute stylesheets and images stay the frame's own
   to fetch, exactly as a browser would. The `src` may carry a fragment
   (`src=site/index.html#visit`): the file before the `#` is read, and the frame shows

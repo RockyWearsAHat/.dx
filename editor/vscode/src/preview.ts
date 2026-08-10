@@ -61,7 +61,6 @@ if (window.dxEditor) {
   window.dxEditor.attach({
     source: (id) => dxCall({ op: 'source', id }),
     parts: (id) => dxCall({ op: 'parts', id }),
-    draw: (id, text) => dxCall({ op: 'draw', id, text }),
     decorate: (text) => dxCall({ op: 'decorate', text }),
     commit: (id, text, then) => dxCall({ op: 'commit', id, text, then }),
     replace: (id, header, body, then) => dxCall({ op: 'replace', id, header, body, then }),
@@ -188,23 +187,6 @@ export function sheetHtml(source: string, documentDir?: string): string {
     resolveTheme(configuration.get<string>('theme', 'match-editor')),
     true,
     documentDir === undefined ? undefined : resourcesFor(source, documentDir)
-  );
-}
-
-/**
- * One block as the page would draw it, with `body` in it — saving nothing.
- *
- * The live half of writing on a page: what a reader types is `.dx` source, and this is what
- * that source says. It renders with the same theme and the same options as the page around
- * it, so a block being written is set exactly like the blocks that are not.
- */
-export function blockHtml(source: string, id: string, body: string): string {
-  const configuration = vscode.workspace.getConfiguration('dx');
-  return engine().preview_block(
-    source,
-    id,
-    body,
-    resolveTheme(configuration.get<string>('theme', 'match-editor'))
   );
 }
 

@@ -76,8 +76,6 @@ final class Editor: NSObject, WKScriptMessageHandlerWithReply {
             { op: 'source', id }),
           parts: (id) => window.webkit.messageHandlers.\(channel).postMessage(
             { op: 'parts', id }),
-          draw: (id, text) => window.webkit.messageHandlers.\(channel).postMessage(
-            { op: 'draw', id, text }),
           decorate: (text) => window.webkit.messageHandlers.\(channel).postMessage(
             { op: 'decorate', text }),
           commit: (id, text, then) => window.webkit.messageHandlers.\(channel).postMessage(
@@ -165,10 +163,6 @@ final class Editor: NSObject, WKScriptMessageHandlerWithReply {
                         "header": try Engine.header(of: block, in: url),
                         "body": try Engine.source(of: block, in: url),
                     ], nil)
-            case "draw":
-                replyHandler(
-                    try Engine.draw(try id(call), in: url, as: call["text"] as? String ?? ""),
-                    nil)
             case "decorate":
                 replyHandler(try Engine.decorate(call["text"] as? String ?? ""), nil)
             case "run":

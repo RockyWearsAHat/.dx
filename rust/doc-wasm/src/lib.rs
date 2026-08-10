@@ -9,8 +9,8 @@
 //! # Boundary conventions
 //! - Documents cross the boundary as JSON strings shaped by [`dto::DocumentDto`]
 //!   (`camelCase`, `type` for block kind — the shape JavaScript hosts expect).
-//! - Binary payloads (packed documents, compressed frames, hash inputs) cross as byte
-//!   slices (`&[u8]` in, `Vec<u8>` out), which `wasm-bindgen` maps to `Uint8Array`.
+//! - Binary payloads (packed documents, hash inputs) cross as byte slices (`&[u8]` in,
+//!   `Vec<u8>` out), which `wasm-bindgen` maps to `Uint8Array`.
 //! - Fallible operations return `Result<_, JsValue>`; the error is a JS string. Infallible
 //!   operations (`parse`, `sha256_hex`, `stylesheet`) return their value directly.
 //!
@@ -69,7 +69,7 @@ pub fn stringify(doc_json: &str) -> Result<String, JsValue> {
 /// emits just the document container (for embedding in an existing page) instead of a full
 /// document. The document's own `::style` blocks are applied either way.
 ///
-/// `resources` answers the document's references ([`references`] lists them): JSON
+/// `resources` answers the document's references ([`pending`] says what to gather): JSON
 /// `{"files": {path: text}, "documents": {path: source}}`. A host with nothing to give
 /// omits it, and every reference renders as its honest sentence — the page never shows a
 /// referenced listing as silently empty. Malformed JSON is treated the same way, which
@@ -88,49 +88,34 @@ pub fn render_html(text: &str, theme: &str, fragment: bool, resources: Option<St
     )
 }
 
-/// Every reference `.dx` source makes past its own edge, as JSON
+/// What a gathering host still has to fetch, as JSON
 /// `[{"kind": "file" | "document", "path": string}, …]`, deduplicated.
 ///
-/// This is the prefetch list for [`render_html`]'s `resources`: a host gathers each
-/// path — sibling documents from the repository pack, files from the workspace — and
-/// hands the set back. A document with no references returns `[]`.
+/// `held` is the same `resources` JSON [`render_html`] takes, plus an `"absent"` array of
+/// the paths already tried and not got. The host loops — ask, fetch what comes back, add it
+/// (or mark it absent), ask again — until the answer is `[]`, and then renders against what
+/// it gathered. The walk itself is [`doc_core::resolve::Provided::pending`]: which
+/// references open it, how a gathered page extends it, and when it stops are decided there,
+/// once, for every host.
 #[wasm_bindgen]
-pub fn references(text: &str) -> String {
+pub fn pending(text: &str, held: Option<String>) -> String {
     let document = doc_core::format::parse(text);
-    let rows: Vec<serde_json::Value> = doc_core::resolve::references(&document)
+    let rows: Vec<serde_json::Value> = provided_from(held.as_deref())
+        .pending(&document)
         .iter()
-        .map(|reference| match reference {
-            doc_core::resolve::Reference::File(path) => {
-                serde_json::json!({"kind": "file", "path": path})
-            }
-            doc_core::resolve::Reference::Document(path) => {
-                serde_json::json!({"kind": "document", "path": path})
-            }
-        })
+        .map(|reference| serde_json::json!({"kind": reference.kind(), "path": reference.path()}))
         .collect();
     serde_json::to_string(&rows).unwrap_or_else(|_| "[]".to_string())
 }
 
-/// The sibling files a fetched file names in turn — a `::view` page naming its
-/// stylesheets — as the same JSON rows [`references`] writes.
+/// The digest a `.dx` pointer line records, or `""` when `text` is document content.
 ///
-/// The second half of the prefetch protocol: after gathering [`references`], a host asks
-/// this about each fetched file (`path` is that file's own reference, so links resolve
-/// against *its* folder) and gathers what it returns. Files that name nothing return `[]`.
+/// A host that opens files off a disk has to know which of them are pointers into the store,
+/// and it asks rather than matching a pattern of its own: [`doc_core::pointer`] is the one
+/// recognizer, so a file is a pointer to every surface or to none.
 #[wasm_bindgen]
-pub fn file_references(path: &str, text: &str) -> String {
-    let rows: Vec<serde_json::Value> = doc_core::resolve::file_references(path, text)
-        .iter()
-        .map(|reference| match reference {
-            doc_core::resolve::Reference::File(path) => {
-                serde_json::json!({"kind": "file", "path": path})
-            }
-            doc_core::resolve::Reference::Document(path) => {
-                serde_json::json!({"kind": "document", "path": path})
-            }
-        })
-        .collect();
-    serde_json::to_string(&rows).unwrap_or_else(|_| "[]".to_string())
+pub fn pointer_digest(text: &str) -> String {
+    doc_core::pointer::digest_in(text).unwrap_or_default()
 }
 
 /// Build the resolver [`render_html`] hydrates against from its `resources` JSON.
@@ -157,6 +142,11 @@ fn provided_from(resources: Option<&str>) -> doc_core::resolve::Provided {
             if let Some(source) = source.as_str() {
                 provided.add_document(path, source);
             }
+        }
+    }
+    if let Some(entries) = value.get("absent").and_then(serde_json::Value::as_array) {
+        for path in entries.iter().filter_map(serde_json::Value::as_str) {
+            provided.add_absent(path);
         }
     }
     provided
@@ -254,15 +244,6 @@ pub fn vocabulary() -> String {
     doc_core::surface::vocabulary()
 }
 
-/// Decompress any `dxz` frame, whichever codec its magic names — including `DXZ1` (LZSS),
-/// which is no longer written but is decoded forever.
-///
-/// Returns the original bytes, or an error if `frame` is not a valid `dxz` frame.
-#[wasm_bindgen]
-pub fn decompress(frame: &[u8]) -> Result<Vec<u8>, JsValue> {
-    doc_core::compress::decompress(frame).map_err(|err| js_err(format!("{err:?}")))
-}
-
 /// Compute the lowercase hex SHA-256 digest of `input`, byte-identical to the reference.
 #[wasm_bindgen]
 pub fn sha256_hex(input: &[u8]) -> String {
@@ -354,31 +335,6 @@ pub fn insert_block(text: &str, after: &str, kind: &str, body: &str) -> Result<S
 #[wasm_bindgen]
 pub fn remove_block(text: &str, id: &str) -> Result<String, JsValue> {
     doc_core::edit::remove_block(text, id).map_err(js_err)
-}
-
-/// The HTML one block renders to with `body` in it, saving nothing.
-///
-/// This is what keeps a page rendered while a reader writes on it: the surface hands over
-/// the characters currently in the field and gets back the block as it will be read. The
-/// same [`doc_core::edit::preview_block`] DX.app reaches through `dx render --block`, so
-/// what a reader sees mid-sentence in an editor and on a Mac is the same markup.
-///
-/// `theme` is `auto`, `light`, or `dark`. The block is drawn exactly as [`render_html`]
-/// draws it in the page, so a previewed block is dressed like the page it sits in.
-///
-/// Returns an error naming the ids that do exist when `id` names no block.
-#[wasm_bindgen]
-pub fn preview_block(text: &str, id: &str, body: &str, theme: &str) -> Result<String, JsValue> {
-    doc_core::edit::preview_block(
-        text,
-        id,
-        body,
-        &doc_core::render::HtmlOptions {
-            theme: doc_core::render::Theme::parse(theme),
-            ..doc_core::render::HtmlOptions::default()
-        },
-    )
-    .map_err(js_err)
 }
 
 /// Put a node at `x`,`y` on a board, sized `w` by `h` — moving its line, adding one, or

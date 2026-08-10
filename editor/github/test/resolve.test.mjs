@@ -65,6 +65,34 @@ test('a pointer line is recognized, and nothing else is', () => {
   assert.equal(digestIn(null), null);
 });
 
+/**
+ * The page cannot ask the engine what a pointer is — the engine is a message away and the
+ * answer is needed before the message can be sent — so `resolve.js` keeps the only copy of
+ * the grammar outside `doc_core::pointer`. This is what keeps the copy honest. It had
+ * already diverged once: the engine accepts a digest written in upper case and this did not,
+ * so such a file rendered everywhere except on github.com, where it stayed a pointer.
+ */
+test('the page recognizes exactly the pointers the engine does', (t) => {
+  const wasm = engine();
+  if (!wasm) {
+    t.skip('run editor/build.sh first');
+    return;
+  }
+  const digest = 'c939d5becfb64b14193566ffed7ccf8217c90bf5c90e6ba2a5ce8bf87903c823';
+  for (const text of [
+    `~ dx1 ${digest}\n`,
+    `~ dx1 ${digest.toUpperCase()}  \n`,
+    `~ dx1 ${digest}`,
+    '~ dx1 not-a-digest',
+    '~ dx2 c939d5be',
+    '~',
+    '::paragraph id=p\n~ dx1 abc\n::end\n',
+    '',
+  ]) {
+    assert.equal(digestIn(text) ?? '', wasm.pointer_digest(text), JSON.stringify(text));
+  }
+});
+
 test('only .dx files are claimed', () => {
   assert.ok(isDocumentPath('docs/notes.dx'));
   assert.ok(isDocumentPath('NOTES.DX'));

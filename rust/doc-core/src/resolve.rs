@@ -97,10 +97,10 @@ impl Resolver for Nowhere {
 
 /// A resolver answering from content gathered ahead of time.
 ///
-/// For hosts that cannot read on demand: a browser asks [`references`] what a document
-/// needs, fetches it — sibling documents from the repository pack, files from wherever
-/// the host can honestly get them — and renders against the gathered set. Anything not
-/// gathered resolves to its sentence, exactly as a missing file would.
+/// For hosts that cannot read on demand: a browser asks [`Provided::pending`] what is still
+/// missing, fetches it — sibling documents from the repository pack, files from wherever
+/// the host can honestly get them — adds it here, and asks again until nothing is pending.
+/// Anything not gathered resolves to its sentence, exactly as a missing file would.
 #[derive(Debug, Default)]
 pub struct Provided {
     /// `(path, text)` pairs answering [`Resolver::file`].
@@ -109,6 +109,8 @@ pub struct Provided {
     documents: Vec<(String, String)>,
     /// `(path, bytes)` pairs answering [`Resolver::binary`].
     binaries: Vec<(String, Vec<u8>)>,
+    /// Paths the host tried and could not get, so [`Provided::pending`] stops asking.
+    absent: Vec<String>,
 }
 
 impl Provided {
@@ -131,6 +133,56 @@ impl Provided {
     /// Supply the raw bytes of the file at `path` — what an `::image src=` embeds.
     pub fn add_binary(&mut self, path: &str, bytes: &[u8]) {
         self.binaries.push((path.to_string(), bytes.to_vec()));
+    }
+
+    /// Record that `path` was asked for and could not be got.
+    ///
+    /// The reference still resolves to its sentence — an absent path and a path that was
+    /// never mentioned render the same, which is the honest thing to show. What this adds
+    /// is termination: [`Provided::pending`] will not ask for it again.
+    pub fn add_absent(&mut self, path: &str) {
+        self.absent.push(path.to_string());
+    }
+
+    /// What the host still has to fetch before [`hydrate`] will find everything in hand.
+    ///
+    /// This is the prefetch walk, stated once. A document's own [`references`] open it; each
+    /// file already gathered extends it with what that file names in turn ([`file_references`]
+    /// — a `::view` page naming its stylesheets); and anything already held, or already
+    /// marked absent, is left out. The host's whole job is the loop:
+    ///
+    /// ```text
+    /// while !provided.pending(&document).is_empty() {
+    ///     for reference in provided.pending(&document) { fetch it, or mark it absent }
+    /// }
+    /// ```
+    ///
+    /// which terminates because every round either fills a path or marks it absent, and the
+    /// set of paths a document and its files can name is finite. Hosts differ only in *how*
+    /// they fetch — the filesystem in an editor, the repository's raw route in a browser —
+    /// and never in what to fetch or when to stop.
+    #[must_use]
+    pub fn pending(&self, document: &Document) -> Vec<Reference> {
+        let mut out: Vec<Reference> = Vec::new();
+        let mut consider = |reference: Reference| {
+            let held = match &reference {
+                Reference::File(path) => self.files.iter().any(|(held, _)| held == path),
+                Reference::Document(path) => self.documents.iter().any(|(held, _)| held == path),
+            };
+            let given_up = self.absent.iter().any(|path| path == reference.path());
+            if !held && !given_up && !out.contains(&reference) {
+                out.push(reference);
+            }
+        };
+        for reference in references(document) {
+            consider(reference);
+        }
+        for (path, text) in &self.files {
+            for reference in file_references(path, text) {
+                consider(reference);
+            }
+        }
+        out
     }
 }
 
@@ -174,7 +226,7 @@ pub struct Unresolved {
 
 /// One reference a document makes, as [`hydrate`] will resolve it.
 ///
-/// [`references`] reports these so a host that cannot fetch synchronously (a browser)
+/// [`Provided::pending`] reports these so a host that cannot fetch synchronously (a browser)
 /// can gather everything first and answer the resolver from memory.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Reference {
@@ -183,6 +235,27 @@ pub enum Reference {
     /// A sibling document, one block of which a board shows (`path` only — the host
     /// fetches the whole document; the block is picked here).
     Document(String),
+}
+
+impl Reference {
+    /// The word a host names this kind of reference by — the `kind` field of the JSON the
+    /// wasm engine and the daemon both hand back, written once so the two doors cannot
+    /// spell it differently.
+    #[must_use]
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::File(_) => "file",
+            Self::Document(_) => "document",
+        }
+    }
+
+    /// The path referenced, relative to the document's own folder.
+    #[must_use]
+    pub fn path(&self) -> &str {
+        match self {
+            Self::File(path) | Self::Document(path) => path,
+        }
+    }
 }
 
 /// The path law: a reference stays inside the document's own folder, or it is nothing.
@@ -269,8 +342,9 @@ fn joined(base_folder: &str, path: &str) -> Option<String> {
 
 /// Every reference `document` makes, in reading order, deduplicated.
 ///
-/// This is the prefetch list for hosts that must gather before they can answer a
-/// [`Resolver`]; a host that can read on demand never needs it.
+/// This opens the prefetch walk. A host that must gather before it can answer a [`Resolver`]
+/// asks [`Provided::pending`] instead, which starts here and keeps going through what the
+/// gathered files name in turn; a host that can read on demand needs neither.
 #[must_use]
 pub fn references(document: &Document) -> Vec<Reference> {
     let mut out: Vec<Reference> = Vec::new();
@@ -505,10 +579,9 @@ fn image_media_type(path: &str) -> Option<&'static str> {
 /// The sibling files a fetched file names in turn — a view's page naming its stylesheets.
 ///
 /// `path` is the file's own reference (so its links resolve against *its* folder), `text`
-/// its current content. This is the second half of the prefetch protocol: a host that
-/// cannot read on demand gathers [`references`], then asks this about each fetched file
-/// and gathers what it returns, so [`hydrate`] finds everything already in hand. A host
-/// that reads on demand never needs it. Non-HTML files name nothing.
+/// its current content. This is what keeps the prefetch walk going past its first round;
+/// [`Provided::pending`] applies it to every gathered file, so no host has to. Non-HTML
+/// files name nothing.
 #[must_use]
 pub fn file_references(path: &str, text: &str) -> Vec<Reference> {
     let mut out = Vec::new();
@@ -676,6 +749,66 @@ mod tests {
             provided.add_document(path, source);
         }
         provided
+    }
+
+    /// The walk every gathering host used to carry its own copy of — a queue, a dedupe, and
+    /// a second round for what the fetched files name. Two copies drifted apart once; this
+    /// is the one implementation both of them now call.
+    #[test]
+    fn the_prefetch_walk_opens_with_the_documents_own_references() {
+        let document = parse(
+            "::code id=lib src=src/lib.rs lang=rust\n::end\n\
+             ::board id=plan\n- notes.dx#step x=0 y=0 w=10 h=10\n::end\n",
+        );
+        assert_eq!(
+            Provided::new().pending(&document),
+            vec![
+                Reference::File("src/lib.rs".to_string()),
+                Reference::Document("notes.dx".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_gathered_page_extends_the_walk_with_the_stylesheets_it_names() {
+        let document = parse("::view id=site src=site/index.html\n::end\n");
+        let held = map(
+            &[(
+                "site/index.html",
+                "<link rel=\"stylesheet\" href=\"look.css\">",
+            )],
+            &[],
+        );
+        // Relative to the *page's* folder, so the host fetches site/look.css.
+        assert_eq!(
+            held.pending(&document),
+            vec![Reference::File("site/look.css".to_string())]
+        );
+    }
+
+    #[test]
+    fn the_walk_ends_when_everything_is_held_or_given_up_on() {
+        let document = parse(
+            "::code id=lib src=src/lib.rs lang=rust\n::end\n\
+             ::board id=plan\n- notes.dx#step x=0 y=0 w=10 h=10\n::end\n",
+        );
+        let mut held = map(&[("src/lib.rs", "fn main() {}\n")], &[]);
+        // A path the host could not fetch is not asked for twice — without this the loop
+        // would spin forever on a document naming a file that is not there.
+        assert_eq!(
+            held.pending(&document),
+            vec![Reference::Document("notes.dx".to_string())]
+        );
+        held.add_absent("notes.dx");
+        assert!(held.pending(&document).is_empty());
+    }
+
+    #[test]
+    fn a_reference_names_its_kind_and_path_the_one_way() {
+        // Both engine doors write these two words into their JSON; they are stated here.
+        assert_eq!(Reference::File("a.css".to_string()).kind(), "file");
+        assert_eq!(Reference::Document("a.dx".to_string()).kind(), "document");
+        assert_eq!(Reference::File("a.css".to_string()).path(), "a.css");
     }
 
     #[test]

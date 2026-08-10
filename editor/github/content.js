@@ -112,8 +112,7 @@
     // keeps one argument grammar for both engines rather than a second base64 path.
     sha256_hex: (bytes) => call('sha256_hex', { text: new TextDecoder().decode(bytes) }),
     render_html: (...args) => call('render_html', ...args),
-    references: (source) => call('references', source),
-    file_references: (path, text) => call('file_references', path, text),
+    pending: (source, held) => call('pending', source, held),
     stylesheet: () => call('stylesheet'),
   };
 
@@ -218,65 +217,70 @@
   /// Gather what `source` references into the resources JSON `render_html` takes, or
   /// `undefined` when it references nothing or the page's context is unknown.
   ///
-  /// The engine says *what* is referenced (`references`) and what becomes of the bytes;
-  /// this gathers them the only way a page on github.com can: sibling documents from the
-  /// repository's committed pack, sibling files from the repository's own raw route —
-  /// the same session-carrying fetch the pack itself uses, so a private repository's
-  /// files resolve exactly like its documents. A path that cannot be gathered is left
-  /// out, and the engine renders its honest sentence in that block's place.
+  /// The engine runs the walk — `pending` says what is still missing, given what is held so
+  /// far, and stops when nothing is. This gathers it the only way a page on github.com can:
+  /// sibling documents from the repository's committed pack, sibling files from the
+  /// repository's own raw route — the same session-carrying fetch the pack itself uses, so
+  /// a private repository's files resolve exactly like its documents. A path that cannot be
+  /// gathered is marked absent, which is both what stops the walk asking again and what
+  /// leaves the engine to render its honest sentence in that block's place.
   async function resourcesFor(source, context) {
     if (!context || !context.path) return undefined;
-    let refs;
-    try {
-      refs = JSON.parse(await engine.references(source));
-    } catch {
-      return undefined;
-    }
-    if (!Array.isArray(refs) || refs.length === 0) return undefined;
-
     const slash = context.path.lastIndexOf('/');
     const folder = slash < 0 ? '' : context.path.slice(0, slash);
     const inRepo = (relative) => (folder ? `${folder}/${relative}` : relative);
-    const files = {};
-    const documents = {};
-    // A queue, not a single pass: a fetched file can reference further files — a `::view`
-    // page naming its stylesheets — and the engine's `file_references` says what each one
-    // adds. The engine decides what is referenced; this only ever fetches.
-    const queue = refs.filter((ref) => typeof ref.path === 'string');
-    while (queue.length > 0) {
-      const ref = queue.shift();
-      if (files[ref.path] !== undefined || documents[ref.path] !== undefined) continue;
-      if (ref.kind === 'document') {
-        const handle = await packHandle(
-          globalThis.dxResolve.rawUrl(context.location, context.ref, globalThis.dxResolve.REPO_PACK),
-        );
-        if (!handle) continue;
-        try {
-          documents[ref.path] = await engine.pack_document(handle, inRepo(ref.path));
-        } catch {
-          // Not in the pack: the engine's sentence on the page says so.
-        }
-      } else if (ref.kind === 'file') {
-        try {
-          const response = await fetch(
-            globalThis.dxResolve.rawUrl(context.location, context.ref, inRepo(ref.path)),
-            { credentials: 'same-origin' },
-          );
-          if (!response.ok) continue;
-          const text = await response.text();
-          files[ref.path] = text;
-          const nested = JSON.parse(await engine.file_references(ref.path, text));
-          if (Array.isArray(nested)) {
-            for (const entry of nested) {
-              if (typeof entry.path === 'string') queue.push(entry);
-            }
-          }
-        } catch {
-          // Unreachable: the engine's sentence on the page says so.
+    const held = { files: {}, documents: {}, absent: [] };
+    let gathered = false;
+
+    for (;;) {
+      let wanted;
+      try {
+        wanted = JSON.parse(await engine.pending(source, JSON.stringify(held)));
+      } catch {
+        return gathered ? JSON.stringify(held) : undefined;
+      }
+      if (!Array.isArray(wanted) || wanted.length === 0) break;
+      for (const ref of wanted) {
+        if (typeof ref.path !== 'string') continue;
+        const text = await fetched(ref, inRepo(ref.path), context);
+        if (text === undefined) {
+          held.absent.push(ref.path);
+        } else {
+          (ref.kind === 'document' ? held.documents : held.files)[ref.path] = text;
+          gathered = true;
         }
       }
     }
-    return JSON.stringify({ files, documents });
+    return gathered ? JSON.stringify(held) : undefined;
+  }
+
+  /// One reference's bytes, or `undefined` when this page cannot get them.
+  ///
+  /// `path` is where the reference sits in the repository — the document's own folder plus
+  /// the relative path the reference states.
+  async function fetched(ref, path, context) {
+    if (ref.kind === 'document') {
+      const handle = await packHandle(
+        globalThis.dxResolve.rawUrl(context.location, context.ref, globalThis.dxResolve.REPO_PACK),
+      );
+      if (!handle) return undefined;
+      try {
+        return await engine.pack_document(handle, path);
+      } catch {
+        // Not in the pack: the engine's sentence on the page says so.
+        return undefined;
+      }
+    }
+    try {
+      const response = await fetch(
+        globalThis.dxResolve.rawUrl(context.location, context.ref, path),
+        { credentials: 'same-origin' },
+      );
+      return response.ok ? await response.text() : undefined;
+    } catch {
+      // Unreachable: the engine's sentence on the page says so.
+      return undefined;
+    }
   }
 
   /// Build the element that shows a resolved document: the rendered page, on a blank sheet.

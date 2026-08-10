@@ -18,10 +18,12 @@
 //! adding a call here.
 //!
 //! # Why these calls
-//! They are exactly the engine surface `editor/github/resolve.js` depends on, and they match
-//! `doc-wasm`'s exports name for name and result for result. The browser shim can therefore
-//! send the same call to whichever engine is reachable — the daemon or its bundled wasm —
-//! and `resolve.js` cannot tell the difference. One engine, two doors.
+//! They are exactly the engine surface the browser extension's page side depends on, and they
+//! match `doc-wasm`'s exports name for name and result for result. The browser shim can
+//! therefore send the same call to whichever engine is reachable — the daemon or its bundled
+//! wasm — and `resolve.js` cannot tell the difference. One engine, two doors, held to the
+//! same list by
+//! [`the_browser_shim_allows_exactly_the_calls_this_door_answers`](tests::the_browser_shim_allows_exactly_the_calls_this_door_answers).
 
 use serde_json::Value;
 
@@ -43,13 +45,12 @@ pub enum Outcome {
 /// States the surface in one place, names it back to a caller who got it wrong, and gives
 /// [`every_advertised_call_is_answered`](tests::every_advertised_call_is_answered) something
 /// to check the match arms against.
-pub const CALLS: [&str; 7] = [
+pub const CALLS: [&str; 6] = [
     "pack_document",
     "pack_paths",
     "sha256_hex",
     "render_html",
-    "references",
-    "file_references",
+    "pending",
     "stylesheet",
 ];
 
@@ -109,44 +110,24 @@ pub fn call(packs: &mut Packs, name: &str, args: &[Value]) -> Result<Outcome, St
                 },
             ))))
         }
-        "references" => {
+        "pending" => {
+            // What the caller still has to fetch, given what it says it holds. The walk is
+            // `doc_core::resolve::Provided::pending` — the same one the wasm engine runs —
+            // and this stays a pure function of bytes the caller supplied: the daemon
+            // fetches nothing itself, here or anywhere.
             let source = text(args, 0)?;
+            let held = args.get(1).and_then(Value::as_str);
             let document = doc_core::format::parse(source);
-            let rows: Vec<Value> = doc_core::resolve::references(&document)
+            let rows: Vec<Value> = provided_from(held)
+                .pending(&document)
                 .iter()
-                .map(|reference| match reference {
-                    doc_core::resolve::Reference::File(path) => {
-                        serde_json::json!({"kind": "file", "path": path})
-                    }
-                    doc_core::resolve::Reference::Document(path) => {
-                        serde_json::json!({"kind": "document", "path": path})
-                    }
+                .map(|reference| {
+                    serde_json::json!({"kind": reference.kind(), "path": reference.path()})
                 })
                 .collect();
             // A JSON *string*, as `doc-wasm` returns, because the caller parses it.
             let encoded = serde_json::to_string(&rows)
-                .map_err(|error| format!("listing the document's references: {error}"))?;
-            Ok(Outcome::Value(Value::String(encoded)))
-        }
-        "file_references" => {
-            // The second half of the prefetch protocol: what a fetched file (a `::view`
-            // page) names in turn. Still a pure function of bytes the caller supplied.
-            let path = text(args, 0)?;
-            let content = text(args, 1)?;
-            let rows: Vec<Value> = doc_core::resolve::file_references(path, content)
-                .iter()
-                .map(|reference| match reference {
-                    doc_core::resolve::Reference::File(path) => {
-                        serde_json::json!({"kind": "file", "path": path})
-                    }
-                    doc_core::resolve::Reference::Document(path) => {
-                        serde_json::json!({"kind": "document", "path": path})
-                    }
-                })
-                .collect();
-            // A JSON *string*, as `doc-wasm` returns, because the caller parses it.
-            let encoded = serde_json::to_string(&rows)
-                .map_err(|error| format!("listing the file's references: {error}"))?;
+                .map_err(|error| format!("listing what is still to fetch: {error}"))?;
             Ok(Outcome::Value(Value::String(encoded)))
         }
         "stylesheet" => Ok(Outcome::Value(Value::String(
@@ -159,9 +140,10 @@ pub fn call(packs: &mut Packs, name: &str, args: &[Value]) -> Result<Outcome, St
     }
 }
 
-/// Build the resolver `render_html` hydrates against from its resources JSON, exactly
-/// as `doc-wasm`'s `provided_from` reads the same shape. Malformed JSON resolves
-/// nothing, so the mistake shows on the page as sentences rather than vanishing.
+/// Build the gathered set — what `render_html` hydrates against and what `pending`
+/// measures its answer from — out of the caller's JSON, exactly as `doc-wasm`'s
+/// `provided_from` reads the same shape. Malformed JSON resolves nothing, so the mistake
+/// shows on the page as sentences rather than vanishing.
 fn provided_from(resources: Option<&str>) -> doc_core::resolve::Provided {
     let mut provided = doc_core::resolve::Provided::new();
     let Some(raw) = resources else {
@@ -182,6 +164,11 @@ fn provided_from(resources: Option<&str>) -> doc_core::resolve::Provided {
             if let Some(source) = source.as_str() {
                 provided.add_document(path, source);
             }
+        }
+    }
+    if let Some(entries) = value.get("absent").and_then(Value::as_array) {
+        for path in entries.iter().filter_map(Value::as_str) {
+            provided.add_absent(path);
         }
     }
     provided
@@ -355,6 +342,30 @@ mod tests {
                 "`{name}` is advertised but not answered"
             );
         }
+    }
+
+    /// The browser shim sends the same call to whichever engine is reachable, so the two
+    /// doors have to advertise the same names. They are stated in different languages in
+    /// different repositories' worth of build output, and nothing but this kept them in
+    /// step: a call added here and forgotten in `engine.js` is refused as `unknown engine
+    /// call` only once a reader has a daemon running, which is the hardest case to notice.
+    #[test]
+    fn the_browser_shim_allows_exactly_the_calls_this_door_answers() {
+        let shim = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../editor/github/engine.js"),
+        )
+        .expect("editor/github/engine.js");
+        let (_, rest) = shim
+            .split_once("const ALLOWED = new Set([")
+            .expect("engine.js must state its allowlist");
+        let (list, _) = rest.split_once("])").expect("an allowlist that closes");
+        // Every odd piece of a split on the quote character is the inside of one quoted
+        // name, which reads the list without caring how it is spaced or commented.
+        let mut allowed: Vec<&str> = list.split('\'').skip(1).step_by(2).collect();
+        allowed.sort_unstable();
+        let mut answered: Vec<&str> = CALLS.to_vec();
+        answered.sort_unstable();
+        assert_eq!(allowed, answered);
     }
 
     #[test]
