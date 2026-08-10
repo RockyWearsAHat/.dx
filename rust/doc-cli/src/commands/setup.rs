@@ -494,7 +494,12 @@ READ
               from dx outline, or x,y.
   dx open     <file> [--section ID]             open the rendered page in a browser
   dx ls       [dir]                             every .dx document in a project
-  dx search   <query> [dir] [--limit N]         find documents; each hit shows its answering block
+  dx search   <query> [dir] [--limit N]         search the documents *and* the source
+                                                files; each hit shows its answering block —
+                                                a line range, for a source file. Ask a whole
+                                                question in your own words: word endings,
+                                                compoundNames, and a word the project spells
+                                                its own way all still land
 
 WRITE
   dx new      <file> [--title T]                create a document

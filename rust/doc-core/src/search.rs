@@ -15,8 +15,22 @@
 //!
 //! # Tokenisation
 //! Text is lowercased and split on every non-alphanumeric character; empty tokens are
-//! dropped. Tokens are compared with simple equality (no stemming), keeping the index
-//! deterministic and dependency-free.
+//! dropped. Each word is then indexed under the tokens a reader might ask for it by, which
+//! is what keeps a question answerable in the asker's vocabulary rather than only the
+//! project's:
+//!
+//! - **Its stem.** A conservative English suffix strip ([`stem`]) folds `weights` onto
+//!   `weight` and `packed` onto `pack`, applied identically to text and query so the two
+//!   meet in the middle. It refuses whenever the remainder would be too short to be a word
+//!   or holds no vowel (`ring` keeps its `ing`, and so does `string`), because a wrong stem
+//!   is a wrong match, and it never touches a word carrying digits (`sha256`, `utf8`).
+//! - **The parts of a compound identifier.** `packWeights`, `PackWeights`, and
+//!   `pack_weights` all yield `pack` and `weight` beside the whole word, so the name a
+//!   codebase writes is reachable by the words it is made of. Parts earn
+//!   [`PART_WEIGHT`] of the whole word's weight — a part is weaker evidence than the word.
+//!
+//! Every token derived from one word shares that word's position, so deriving tokens never
+//! invents or breaks a phrase, and a word still counts once toward length.
 //!
 //! # Ranking
 //! One scorer ranks documents and blocks alike: BM25 over field-weighted term frequencies,
@@ -27,17 +41,24 @@
 //! - **IDF** makes rarity worth more than repetition: in "what does confine do", a term
 //!   held by one document outvotes a term held by all of them. Ubiquitous words damp
 //!   themselves, so there is no stopword list to maintain and no language baked in.
-//! - **Field weights** (title ×3, summary/tags/headings ×2, body ×1) land a query on the
-//!   document *about* a thing rather than one that merely mentions it.
+//! - **Field weights** (title ×3, summary/tags/headings ×2, body ×1, captured output ×0.5)
+//!   land a query on the document *about* a thing rather than one that merely mentions it,
+//!   or that merely printed it.
 //! - **BM25 saturation** caps what repeating one term can earn, and **length
 //!   normalisation** stops a long document from winning on bulk alone.
 //! - **The phrase bonus** rewards word pairs that appear side by side exactly as the
 //!   query typed them, and a phrase never bridges a field, block, or list-item boundary.
+//! - **The loose tier** catches the word a corpus never says on its own: a query token no
+//!   unit holds — and only then — also scores against its kin at [`LOOSE_WEIGHT`], the words
+//!   that carry it inside them (`bitpack` for `packed`) and the abbreviation it starts with
+//!   (`mic` for `microphone`). It costs nothing on a query the corpus can answer as asked,
+//!   and it can only add: a token with no holder scored zero before.
 //!
 //! Scores stay fully deterministic: no floating-point value depends on hash-map iteration
 //! order, and ties break by ascending path (documents) or earliest block.
 
 use crate::model::{Block, Document};
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 /// BM25 term-frequency saturation: how quickly repeats of one term stop earning score.
@@ -54,10 +75,44 @@ const WEIGHT_TAG: f64 = 2.0;
 const WEIGHT_HEADING: f64 = 2.0;
 /// Field weight of every other searchable block's text.
 const WEIGHT_BODY: f64 = 1.0;
+/// Field weight of a captured `::output` block.
+///
+/// Output stays searchable — "which document printed that error?" is a real question — but it
+/// is a record of a run, not something written to answer anything, and it quotes whatever was
+/// asked of it. A measurement page that prints its twelve questions must not outrank the
+/// twelve documents that answer them.
+const WEIGHT_OUTPUT: f64 = 0.5;
 /// An adjacent query-token pair earns this share of its two terms' summed IDF.
 const PHRASE_BONUS: f64 = 0.5;
 /// Positions skipped between fields, blocks, and list items so a phrase never bridges them.
 const SEGMENT_GAP: u64 = 2;
+/// Share of a word's weight each part of a compound identifier earns.
+///
+/// A part is real evidence — `packWeights` is about packing — but weaker than the word as
+/// written, or every long identifier would outrank the file named for the thing.
+const PART_WEIGHT: f64 = 0.5;
+/// Share of an exact match's weight a loose (inside-a-word) match earns.
+const LOOSE_WEIGHT: f64 = 0.35;
+/// Shortest query token matched inside longer words. Below this a token is a fragment that
+/// appears in everything (`get`, `set`, `id`) and matching it inside words says nothing.
+///
+/// Public because a store that narrows a corpus before ranking it must narrow by the same
+/// rule the ranker scores by, or narrowing decides the question the scorer was asked.
+pub const MIN_LOOSE_LEN: usize = 4;
+/// Most containing words one absent query token expands to, shortest first — the closest
+/// containers — so an unlucky query cannot turn one term into a scan of the vocabulary.
+///
+/// Public for the same reason as [`MIN_LOOSE_LEN`].
+pub const MAX_LOOSE_VARIANTS: usize = 64;
+/// Shortest stored word treated as an abbreviation of a longer query word (`mic` for
+/// `microphone`). Two letters is a preposition, not a shortening.
+const MIN_ABBREVIATION: usize = 3;
+/// What a test chunk's score is multiplied by when choosing a hit's *answering* block.
+///
+/// A test quotes a fact to check it; the code states it. Asked "what magic bytes does a
+/// frame carry", a reader wants the constant, not the loop that asserts over it — and the
+/// test wins on repetition every time, because repeating the query is what a test does.
+const TEST_DISCOUNT: f64 = 0.4;
 
 /// A search result: the document path and its relevance score (higher is better).
 #[derive(Debug, Clone, PartialEq)]
@@ -68,15 +123,22 @@ pub struct ScoredHit {
     pub score: f64,
 }
 
+/// What one token contributes to one unit: how much weight it earned, and where it sat.
+#[derive(Default)]
+struct TokenStats {
+    /// Field-weighted occurrence count — what BM25 saturates.
+    weighted: f64,
+    /// Ascending positions in the unit's token stream, for the phrase bonus.
+    positions: Vec<u64>,
+}
+
 /// Field-weighted token statistics for one ranked unit — a whole document, or one block.
 ///
-/// `weighted` and `length` carry the field-weighted term frequencies BM25 consumes;
-/// `positions` carries each token's unweighted stream positions for the phrase bonus.
+/// One map, not two: weight and positions are recorded together for every token, so keeping
+/// them apart meant hashing and allocating each key twice on the hottest path there is.
 struct UnitStats {
-    /// Token → field-weighted occurrence count.
-    weighted: HashMap<String, f64>,
-    /// Token → ascending positions in the unit's token stream.
-    positions: HashMap<String, Vec<u64>>,
+    /// Token → what it contributed to this unit.
+    entries: HashMap<String, TokenStats>,
     /// Field-weighted total token count, used for length normalisation.
     length: f64,
 }
@@ -95,8 +157,7 @@ impl Recorder {
     fn new() -> Self {
         Recorder {
             stats: UnitStats {
-                weighted: HashMap::new(),
-                positions: HashMap::new(),
+                entries: HashMap::new(),
                 length: 0.0,
             },
             cursor: 0,
@@ -104,31 +165,48 @@ impl Recorder {
     }
 
     /// Tokenise `text` into the unit at `weight`, then close the segment.
+    ///
+    /// One word occupies one position and adds `weight` to the unit's length however many
+    /// tokens it is indexed under: the word's own stem at full weight, each part of a
+    /// compound identifier at [`PART_WEIGHT`] of it.
     fn segment(&mut self, weight: f64, text: &str) {
-        let mut tokens = Vec::new();
-        push_tokens(&mut tokens, text);
-        if tokens.is_empty() {
-            return;
-        }
-        for token in tokens {
-            *self.stats.weighted.entry(token.clone()).or_insert(0.0) += weight;
-            self.stats
-                .positions
-                .entry(token)
-                .or_default()
-                .push(self.cursor);
+        let start = self.cursor;
+        for_each_word(text, |variants| {
+            for (index, token) in variants.iter().enumerate() {
+                let earned = if index == 0 {
+                    weight
+                } else {
+                    weight * PART_WEIGHT
+                };
+                // One lookup for both halves of a token's record, and the key is copied only
+                // when the token is new to this unit.
+                let entry = match self.stats.entries.get_mut(token.as_str()) {
+                    Some(entry) => entry,
+                    None => self.stats.entries.entry(token.clone()).or_default(),
+                };
+                entry.weighted += earned;
+                // Only the word as written takes a position. A phrase is made of the words
+                // that were typed ([`phrase_pairs`]), and every part of a word shares the
+                // word's own position anyway, so recording them would cost memory to prove
+                // an adjacency that can never differ.
+                if index == 0 {
+                    entry.positions.push(self.cursor);
+                }
+            }
             self.stats.length += weight;
             self.cursor += 1;
+        });
+        if self.cursor != start {
+            self.cursor += SEGMENT_GAP;
         }
-        self.cursor += SEGMENT_GAP;
     }
 
     /// Record one searchable block: its text and each list item as separate segments.
     fn block(&mut self, block: &Block) {
-        let weight = if block.kind == "heading" {
-            WEIGHT_HEADING
-        } else {
-            WEIGHT_BODY
+        let weight = match block.kind.as_str() {
+            "heading" => WEIGHT_HEADING,
+            "output" => WEIGHT_OUTPUT,
+            _ => WEIGHT_BODY,
         };
         self.segment(weight, &block.text);
         for item in &block.items {
@@ -160,6 +238,79 @@ fn block_stats(block: &Block) -> UnitStats {
     recorder.stats
 }
 
+/// One query word and the index tokens it scores against.
+///
+/// Normally that is the word itself. When the ranked set holds the word in no unit at all,
+/// it is also every word that *contains* it, at [`LOOSE_WEIGHT`] — the tier that lets a
+/// question asked in the reader's vocabulary reach a project that only ever writes its own.
+struct QueryTerm {
+    /// Token and the share of its frequency this term counts, best match first.
+    variants: Vec<(String, f64)>,
+}
+
+impl QueryTerm {
+    /// This term's field-weighted frequency in `unit`: its variants' frequencies, each at
+    /// the share the variant earns. Zero means the unit does not hold the term at all.
+    fn frequency_in(&self, unit: &UnitStats) -> f64 {
+        self.variants
+            .iter()
+            .filter_map(|(token, share)| {
+                unit.entries.get(token).map(|found| found.weighted * share)
+            })
+            .sum()
+    }
+}
+
+/// Expand each query token into the term the ranker scores, consulting the units' own
+/// vocabulary — and building that vocabulary only when a token needs it, which is never for
+/// a query the corpus can answer as asked.
+///
+/// Complexity: `O(q · u)` for the exact pass over `u` units, plus — only for a token no unit
+/// holds — one `O(total tokens)` vocabulary pass shared by every such token.
+fn query_terms(units: &[&UnitStats], query_tokens: &[String]) -> Vec<QueryTerm> {
+    let mut vocabulary: Option<Vec<&str>> = None;
+    query_tokens
+        .iter()
+        .map(|token| {
+            let mut variants = vec![(token.clone(), 1.0)];
+            let held = units.iter().any(|unit| unit.entries.contains_key(token));
+            if !held && token.chars().count() >= MIN_LOOSE_LEN {
+                let vocabulary = vocabulary.get_or_insert_with(|| {
+                    let mut words: Vec<&str> = units
+                        .iter()
+                        .flat_map(|unit| unit.entries.keys().map(String::as_str))
+                        .collect();
+                    words.sort_unstable();
+                    words.dedup();
+                    words
+                });
+                // Both directions of "the same word, written differently": the words that
+                // carry this one inside them (`bitpack` for `pack`), and the abbreviation
+                // this one starts with (`mic` for `microphone`), which is how code names
+                // things the prose spells out.
+                let mut kin: Vec<&str> = vocabulary
+                    .iter()
+                    .copied()
+                    .filter(|word| {
+                        word.contains(token.as_str())
+                            || (word.chars().count() >= MIN_ABBREVIATION
+                                && token.starts_with(*word))
+                    })
+                    .collect();
+                // Closest first — the shortest container, the longest abbreviation — then
+                // alphabetical, so the cut at [`MAX_LOOSE_VARIANTS`] is deterministic.
+                kin.sort_by_key(|word| (word.len().abs_diff(token.len()), *word));
+                variants.extend(
+                    kin.into_iter()
+                        .take(MAX_LOOSE_VARIANTS)
+                        .map(|word| (word.to_string(), LOOSE_WEIGHT)),
+                );
+            }
+            QueryTerm { variants }
+        })
+        .collect()
+}
+
 /// The one scoring rule, at every granularity: BM25 over field-weighted term frequencies
 /// with IDF taken from the ranked set, plus the phrase bonus for `pairs` (word pairs
 /// adjacent in the query as typed — see [`phrase_pairs`]).
@@ -185,12 +336,13 @@ fn rank(
 
     // IDF per query token (Robertson–Spärck Jones, in the always-positive Lucene form):
     // a token held by few units is worth far more than one held by all of them.
-    let idf: Vec<f64> = query_tokens
+    let terms = query_terms(units, query_tokens);
+    let idf: Vec<f64> = terms
         .iter()
-        .map(|token| {
+        .map(|term| {
             let holders = units
                 .iter()
-                .filter(|unit| unit.weighted.contains_key(token))
+                .filter(|unit| term.frequency_in(unit) > 0.0)
                 .count() as u32;
             let df = f64::from(holders);
             ((n - df + 0.5) / (df + 0.5) + 1.0).ln()
@@ -206,10 +358,11 @@ fn rank(
         .iter()
         .map(|unit| {
             let mut score = 0.0f64;
-            for (token, token_idf) in query_tokens.iter().zip(&idf) {
-                let Some(&frequency) = unit.weighted.get(token) else {
+            for (term, token_idf) in terms.iter().zip(&idf) {
+                let frequency = term.frequency_in(unit);
+                if frequency <= 0.0 {
                     continue;
-                };
+                }
                 let saturated = frequency * (BM25_K1 + 1.0)
                     / (frequency
                         + BM25_K1 * (1.0 - BM25_B + BM25_B * unit.length / average_length));
@@ -236,7 +389,7 @@ fn rank(
 /// deduplicated list would suggest.
 fn phrase_pairs(query: &str) -> Vec<(String, String)> {
     let mut raw = Vec::new();
-    push_tokens(&mut raw, query);
+    push_words(&mut raw, query);
     let mut pairs: Vec<(String, String)> = Vec::new();
     for window in raw.windows(2) {
         if window[0] == window[1] {
@@ -252,11 +405,10 @@ fn phrase_pairs(query: &str) -> Vec<(String, String)> {
 
 /// Whether `second` ever appears at the position directly after `first` in this unit.
 fn has_adjacent_pair(unit: &UnitStats, first: &str, second: &str) -> bool {
-    let (Some(first_positions), Some(second_positions)) =
-        (unit.positions.get(first), unit.positions.get(second))
-    else {
+    let (Some(first), Some(second)) = (unit.entries.get(first), unit.entries.get(second)) else {
         return false;
     };
+    let (first_positions, second_positions) = (&first.positions, &second.positions);
     let mut i = 0;
     let mut j = 0;
     while i < first_positions.len() && j < second_positions.len() {
@@ -370,6 +522,10 @@ impl SearchIndex {
 /// of the same or higher level), and the heading itself only when its section holds no
 /// match. This is what lets a search hit carry its answer: the caller hands back this one
 /// block's text with the hit, instead of leaving the reader a second read to find it.
+///
+/// A test is a label of the same kind. A chunk that asserts over a constant repeats the
+/// query more often than the line declaring it, so test code scores at [`TEST_DISCOUNT`]
+/// here — unless the query is itself about tests, when the test *is* the answer.
 #[must_use]
 pub fn best_block_id(document: &Document, query: &str) -> Option<String> {
     let query_tokens = distinct_tokens(query);
@@ -388,7 +544,14 @@ pub fn best_block_id(document: &Document, query: &str) -> Option<String> {
         .map(|(_, block)| block_stats(block))
         .collect();
     let units: Vec<&UnitStats> = stats.iter().collect();
-    let scores = rank(&units, &query_tokens, &phrase_pairs(query), None);
+    let mut scores = rank(&units, &query_tokens, &phrase_pairs(query), None);
+    if !asks_about_tests(&query_tokens) {
+        for (score, (_, block)) in scores.iter_mut().zip(&candidates) {
+            if is_test_code(&block.text) {
+                *score *= TEST_DISCOUNT;
+            }
+        }
+    }
 
     let mut best: Option<(f64, usize)> = None;
     for (position, score) in scores.iter().enumerate() {
@@ -422,6 +585,39 @@ pub fn best_block_id(document: &Document, query: &str) -> Option<String> {
     Some(heading.id.clone())
 }
 
+/// Whether a query is asking about tests, in which case a test block is the answer and must
+/// not be discounted. Tokens arrive stemmed, so `tests` and `testing` are both `test`.
+fn asks_about_tests(query_tokens: &[String]) -> bool {
+    query_tokens
+        .iter()
+        .any(|token| matches!(token.as_str(), "test" | "spec" | "assert" | "fixture"))
+}
+
+/// Markers that a chunk of source is test code rather than the code under test.
+///
+/// One per ecosystem this repository or its readers write in. A marker is deliberately a
+/// declaration — `#[test]`, `def test_`, `describe(` — never a bare word like "assert",
+/// which appears in the code that raises the error a test checks for.
+const TEST_MARKERS: &[&str] = &[
+    "#[test]",
+    "#[cfg(test)]",
+    "mod tests",
+    "def test_",
+    "func Test",
+    "TEST(",
+    "TEST_F(",
+    "describe(",
+    "it(",
+    "@Test",
+    "assert_eq!",
+    "assertEqual",
+];
+
+/// Whether a block's text reads as test code (see [`TEST_MARKERS`]).
+fn is_test_code(text: &str) -> bool {
+    TEST_MARKERS.iter().any(|marker| text.contains(marker))
+}
+
 /// Build a [`SearchIndex`] over `(path, document)` pairs.
 ///
 /// Paths are stored as-is and echoed in results; the same path may appear more than once
@@ -433,13 +629,17 @@ pub fn best_block_id(document: &Document, query: &str) -> Option<String> {
 /// first number stays exact — state the second with [`SearchIndex::with_corpus_size`] so
 /// a multi-term query's common terms are not mistaken for rare ones.
 ///
+/// Documents are **borrowed**, never copied: a caller with a loaded corpus hands out
+/// `(path, &document)` pairs and pays for the statistics alone. Copying the corpus to index
+/// it was the largest single cost of a project-wide search, and it bought nothing.
+///
 /// Complexity: `O(total tokens)` time and space across every document, since each token is
 /// tallied and its position recorded exactly once.
-pub fn build_index(docs: &[(String, Document)]) -> SearchIndex {
+pub fn build_index<'a>(docs: impl IntoIterator<Item = (&'a str, &'a Document)>) -> SearchIndex {
     let entries = docs
-        .iter()
+        .into_iter()
         .map(|(path, document)| DocEntry {
-            path: path.clone(),
+            path: path.to_string(),
             stats: document_stats(document),
         })
         .collect();
@@ -499,13 +699,192 @@ fn push_block_tokens(out: &mut Vec<String>, block: &Block) {
     }
 }
 
-/// Lowercase, split on non-alphanumeric runs, and append non-empty tokens to `out`.
-fn push_tokens(out: &mut Vec<String>, text: &str) {
+/// Visit every word of `text` with the tokens it is indexed and matched under: the word's
+/// own stem first, then the stems of a compound identifier's parts.
+///
+/// A callback rather than a returned list, and one buffer reused across the words, because
+/// this runs over every byte of every document indexed — returning a vector per word made
+/// tokenising the corpus cost more than searching it. One call is one word, which is what
+/// lets a recorder give every token of a word the same position and charge its length once.
+fn for_each_word(text: &str, mut visit: impl FnMut(&[String])) {
+    let mut scratch: Vec<String> = Vec::new();
     for piece in text.split(|c: char| !c.is_alphanumeric()) {
-        if !piece.is_empty() {
-            out.push(piece.to_lowercase());
+        if piece.is_empty() {
+            continue;
+        }
+        let used = expand_word(piece, &mut scratch);
+        visit(&scratch[..used]);
+    }
+}
+
+/// Write the tokens one word is indexed under into `tokens` — its stem, then the stems of
+/// its identifier parts — and return how many were written.
+///
+/// `tokens` is a scratch buffer reused across words and **overwritten in place**, never
+/// cleared and re-pushed: after the first few words it has the capacity every later word
+/// needs, so tokenising a corpus stops allocating a string per word. Parts follow the whole
+/// word, never replace it, and duplicates are dropped — a caller weights the first entry as
+/// the word itself and the rest as parts.
+fn expand_word(word: &str, tokens: &mut Vec<String>) -> usize {
+    let lowered = if word.bytes().any(|byte| byte.is_ascii_uppercase()) || !word.is_ascii() {
+        Cow::Owned(word.to_lowercase())
+    } else {
+        Cow::Borrowed(word)
+    };
+    let mut used = 0;
+    let keep = |candidate: &str, tokens: &mut Vec<String>, used: &mut usize| {
+        if tokens[..*used].iter().any(|held| held == candidate) {
+            return;
+        }
+        match tokens.get_mut(*used) {
+            Some(slot) => {
+                slot.clear();
+                slot.push_str(candidate);
+            }
+            None => tokens.push(candidate.to_string()),
+        }
+        *used += 1;
+    };
+
+    keep(&stem(&lowered), tokens, &mut used);
+    // A word of plain lowercase letters has no boundary to find, and most words are that.
+    let may_be_compound = !word.is_ascii()
+        || word
+            .bytes()
+            .any(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit());
+    if may_be_compound {
+        for part in identifier_parts(word) {
+            if part.chars().count() >= 2 {
+                keep(&stem(&part), tokens, &mut used);
+            }
         }
     }
+    used
+}
+
+/// The parts of a compound identifier, lowercased — empty when the word is not compound.
+///
+/// Boundaries are the ones a programmer types: `bitPack` and `BitPack` break between case
+/// runs, `HTTPServer` breaks before the last capital of a run, and `utf8Decode` breaks where
+/// letters meet digits. A `snake_case` name is already split by the tokeniser, which treats
+/// every non-alphanumeric character as a break.
+fn identifier_parts(word: &str) -> Vec<String> {
+    // Nothing is allocated until a boundary is found, which is the common case: an ordinary
+    // lowercase word is not a compound identifier.
+    let mut parts: Vec<String> = Vec::new();
+    let mut start = 0;
+    let mut characters = word.char_indices().peekable();
+    let mut previous: Option<char> = None;
+    while let Some((index, current)) = characters.next() {
+        if let Some(previous) = previous {
+            let following = characters.peek().map(|(_, character)| *character);
+            let case_break = previous.is_lowercase() && current.is_uppercase();
+            let acronym_break = previous.is_uppercase()
+                && current.is_uppercase()
+                && following.is_some_and(char::is_lowercase);
+            let digit_break = previous.is_numeric() != current.is_numeric();
+            if case_break || acronym_break || digit_break {
+                parts.push(word[start..index].to_lowercase());
+                start = index;
+            }
+        }
+        previous = Some(current);
+    }
+    if !parts.is_empty() {
+        parts.push(word[start..].to_lowercase());
+    }
+    parts
+}
+
+/// Shortest word a suffix strip will touch, and the shortest remainder it may leave:
+/// below this the strip has eaten the word rather than its ending.
+const MIN_STEM: usize = 3;
+
+/// A conservative English suffix strip, applied to indexed text and to queries alike.
+///
+/// Its whole job is to let `weights` find `weight` and `packed` find `pack` without letting
+/// `string` find `str`. So it refuses a strip that would leave fewer than [`MIN_STEM`]
+/// characters or no vowel, it never touches a word carrying a digit (`sha256`, `utf8`,
+/// `x86`), and it applies exactly one rule — the first that matches. It is deliberately
+/// short of Porter: it folds the endings a question and an answer differ by, and leaves
+/// every ending whose rule would need a dictionary to be safe.
+///
+/// Applied to both sides of a search, an imperfect stem is still symmetric: it can fail to
+/// join two spellings, and it cannot make a word match something it does not share a stem
+/// with. Complexity: `O(n)` in the word's length.
+fn stem(word: &str) -> Cow<'_, str> {
+    // English suffixes are ASCII, and a word that is not is not one this strip understands.
+    let letters = word.as_bytes();
+    if letters.len() < MIN_STEM || !word.is_ascii() || letters.iter().any(u8::is_ascii_digit) {
+        return Cow::Borrowed(word);
+    }
+    let ends = |suffix: &str| word.ends_with(suffix);
+    let keep = |candidate: &str| candidate.len() >= MIN_STEM && candidate.bytes().any(is_vowel);
+    let strip = |take: usize| -> Cow<'_, str> {
+        let candidate = undouble(&word[..letters.len() - take]);
+        if keep(candidate) {
+            Cow::Borrowed(candidate)
+        } else {
+            Cow::Borrowed(word)
+        }
+    };
+
+    if ends("sses") {
+        return Cow::Borrowed(&word[..letters.len() - 2]);
+    }
+    if ends("ies") {
+        let candidate = format!("{}y", &word[..letters.len() - 3]);
+        return if keep(&candidate) {
+            Cow::Owned(candidate)
+        } else {
+            Cow::Borrowed(word)
+        };
+    }
+    if ends("s") && !ends("ss") && !ends("us") && !ends("is") {
+        return strip(1);
+    }
+    if ends("ing") {
+        return strip(3);
+    }
+    if ends("ed") {
+        return strip(2);
+    }
+    Cow::Borrowed(word)
+}
+
+/// Collapse a stem's doubled final consonant, so `running` and `runs` meet at `run`.
+///
+/// `ll`, `ss`, and `zz` keep both letters: they are how English spells the word itself
+/// (`call`, `pass`, `buzz`), not an artefact of the suffix.
+fn undouble(stem: &str) -> &str {
+    let letters = stem.as_bytes();
+    let doubled = letters.len() > MIN_STEM
+        && letters[letters.len() - 1] == letters[letters.len() - 2]
+        && !is_vowel(letters[letters.len() - 1])
+        && !matches!(letters[letters.len() - 1], b'l' | b's' | b'z');
+    if doubled {
+        &stem[..letters.len() - 1]
+    } else {
+        stem
+    }
+}
+
+/// Whether `letter` is an English vowel — `y` counts, as it does in `carry`.
+fn is_vowel(letter: u8) -> bool {
+    matches!(letter, b'a' | b'e' | b'i' | b'o' | b'u' | b'y')
+}
+
+/// Lowercase, split on non-alphanumeric runs, and append every derived token to `out`.
+fn push_tokens(out: &mut Vec<String>, text: &str) {
+    for_each_word(text, |variants| out.extend_from_slice(variants));
+}
+
+/// Append only each word's own token — the first of its variants — to `out`.
+///
+/// Phrase adjacency is about the words that were typed, so the tokens a word *derives* must
+/// not stand between it and the next word.
+fn push_words(out: &mut Vec<String>, text: &str) {
+    for_each_word(text, |variants| out.extend(variants.first().cloned()));
 }
 
 /// The distinct tokens of `query`, preserving first-seen order.
@@ -588,6 +967,14 @@ pub fn source_document(path: &str, text: &str) -> Document {
 
 #[cfg(test)]
 mod tests {
+    /// Index a corpus the tests own by value; the engine indexes borrowed documents.
+    fn indexed(docs: &[(String, Document)]) -> SearchIndex {
+        build_index(
+            docs.iter()
+                .map(|(path, document)| (path.as_str(), document)),
+        )
+    }
+
     use super::*;
     use crate::model::{Block, Item};
 
@@ -695,7 +1082,7 @@ mod tests {
             "src/confine.rs",
             "pub fn confine(command: &mut Command) {\n    // seatbelt profile\n}\n",
         );
-        let index = build_index(&[
+        let index = indexed(&[
             ("guide.dx".to_string(), guide),
             ("src/confine.rs".to_string(), code),
         ]);
@@ -730,7 +1117,7 @@ mod tests {
                 ],
             ),
         )];
-        let index = build_index(&documents);
+        let index = indexed(&documents);
         assert_eq!(index.search("storage")[0].path, "a.dx");
         assert_eq!(index.search("bundle")[0].path, "a.dx");
         assert_eq!(index.search("archive")[0].path, "a.dx");
@@ -757,7 +1144,7 @@ mod tests {
             }],
             ..Block::default()
         });
-        let index = build_index(&[("n.dx".to_string(), document)]);
+        let index = indexed(&[("n.dx".to_string(), document)]);
         assert_eq!(index.search("rust")[0].path, "n.dx");
         assert_eq!(index.search("wasm")[0].path, "n.dx");
         assert_eq!(index.search("codec")[0].path, "n.dx");
@@ -769,7 +1156,7 @@ mod tests {
 ::code id=c lang=python run\nretry_budget = compute()\n::end\n\n\
 ::output id=o for=c status=ok\nConnectionResetError\n::end\n";
         let docs = vec![("notes.dx".to_string(), crate::format::parse(source))];
-        let index = build_index(&docs);
+        let index = indexed(&docs);
         assert_eq!(index.search("retry_budget").len(), 1);
         assert_eq!(index.search("ConnectionResetError").len(), 1);
     }
@@ -797,7 +1184,7 @@ mod tests {
                 },
             ],
         );
-        let index = build_index(&[("s.dx".to_string(), document)]);
+        let index = indexed(&[("s.dx".to_string(), document)]);
         assert!(index.search("magentaonly").is_empty());
         assert!(index.search("sheetonly").is_empty());
         assert!(index.search("scriptonly").is_empty());
@@ -814,7 +1201,7 @@ mod tests {
             )],
         );
         let weak = doc("Other", vec![paragraph("A passing compression mention.")]);
-        let index = build_index(&[
+        let index = indexed(&[
             ("weak.dx".to_string(), weak),
             ("strong.dx".to_string(), strong),
         ]);
@@ -830,7 +1217,7 @@ mod tests {
             "Rust Only",
             vec![paragraph("rust rust rust rust rust rust")],
         );
-        let index = build_index(&[("one.dx".to_string(), one), ("both.dx".to_string(), both)]);
+        let index = indexed(&[("one.dx".to_string(), one), ("both.dx".to_string(), both)]);
         let hits = index.search("rust wasm");
         assert_eq!(hits[0].path, "both.dx");
     }
@@ -864,7 +1251,7 @@ mod tests {
                 ),
             ),
         ];
-        let index = build_index(&documents);
+        let index = indexed(&documents);
         assert_eq!(index.search("what does confine do")[0].path, "confine.dx");
     }
 
@@ -878,7 +1265,7 @@ mod tests {
             "Other Notes",
             vec![paragraph("confinement mentioned once here")],
         );
-        let index = build_index(&[
+        let index = indexed(&[
             ("mentions.dx".to_string(), mentions),
             ("about.dx".to_string(), about),
         ]);
@@ -892,7 +1279,7 @@ mod tests {
         // Same tokens, same lengths, same document frequencies — only adjacency differs.
         let phrase = doc("A", vec![paragraph("state the board geometry once")]);
         let scattered = doc("B", vec![paragraph("geometry rules the board layout")]);
-        let index = build_index(&[
+        let index = indexed(&[
             ("scattered.dx".to_string(), scattered),
             ("phrase.dx".to_string(), phrase),
         ]);
@@ -909,7 +1296,7 @@ mod tests {
             "S",
             vec![paragraph("the board"), paragraph("geometry rule")],
         );
-        let index = build_index(&[
+        let index = indexed(&[
             ("split.dx".to_string(), split),
             ("joined.dx".to_string(), joined),
         ]);
@@ -925,7 +1312,7 @@ mod tests {
         // Same tokens, same lengths in both documents; only which pair they hold differs.
         let typed = doc("A", vec![paragraph("rust and wasm compile here")]);
         let invented = doc("B", vec![paragraph("wasm and rust compile here")]);
-        let index = build_index(&[
+        let index = indexed(&[
             ("invented.dx".to_string(), invented),
             ("typed.dx".to_string(), typed),
         ]);
@@ -963,13 +1350,13 @@ mod tests {
                 doc("T", vec![paragraph("nothing to see")]),
             ));
         }
-        let full_hits = build_index(&full).search("alpha beta");
-        let narrowed_hits = build_index(&matching)
+        let full_hits = indexed(&full).search("alpha beta");
+        let narrowed_hits = indexed(&matching)
             .with_corpus_size(full.len())
             .search("alpha beta");
         assert_eq!(full_hits, narrowed_hits);
         // Without the stated size, the survivors masquerade as the corpus and IDF shifts.
-        let unstated_hits = build_index(&matching).search("alpha beta");
+        let unstated_hits = indexed(&matching).search("alpha beta");
         assert_ne!(full_hits[0].score, unstated_hits[0].score);
     }
 
@@ -1052,7 +1439,7 @@ does, and what the store does\n::end\n\n\
 
     #[test]
     fn empty_query_returns_no_hits() {
-        let index = build_index(&[("a.dx".to_string(), doc("Title", vec![]))]);
+        let index = indexed(&[("a.dx".to_string(), doc("Title", vec![]))]);
         assert!(index.search("").is_empty());
         assert!(index.search("   ::  ").is_empty()); // tokenises to nothing
     }
@@ -1061,10 +1448,156 @@ does, and what the store does\n::end\n\n\
     fn equal_scores_break_ties_by_path() {
         let a = doc("Same", vec![paragraph("same")]);
         let b = doc("Same", vec![paragraph("same")]);
-        let index = build_index(&[("z.dx".to_string(), a), ("a.dx".to_string(), b)]);
+        let index = indexed(&[("z.dx".to_string(), a), ("a.dx".to_string(), b)]);
         let hits = index.search("same");
         assert_eq!(hits[0].path, "a.dx");
         assert_eq!(hits[1].path, "z.dx");
         assert_eq!(hits[0].score, hits[1].score);
+    }
+
+    // ---- reaching a fact stated in the project's words, not the reader's ----------------
+
+    /// The strip exists to join two spellings of one word, and to refuse when it cannot: a
+    /// stem short enough to be another word entirely is a wrong match, not a loose one.
+    #[test]
+    fn stemming_folds_word_forms_and_refuses_when_the_remainder_is_not_a_word() {
+        for (word, expected) in [
+            ("weights", "weight"),
+            ("packed", "pack"),
+            ("packing", "pack"),
+            ("running", "run"),
+            ("runs", "run"),
+            ("chunks", "chunk"),
+            ("classes", "class"),
+            ("queries", "query"),
+        ] {
+            assert_eq!(stem(word), expected, "{word}");
+        }
+        // Refusals: the remainder would be too short, has no vowel, or the word is spelled
+        // that way — and a token carrying digits is a name, never an English word.
+        for word in [
+            "string", "ring", "pass", "sha256", "utf8", "bus", "this", "was",
+        ] {
+            assert_eq!(stem(word), word, "{word}");
+        }
+    }
+
+    /// A question asked in the words a codebase composes its identifiers from reaches the
+    /// identifier: `pack weights` finds `packWeights`, which is what a reader would grep for.
+    #[test]
+    fn a_compound_identifier_is_reachable_by_the_words_it_is_made_of() {
+        let code = source_document(
+            "src/weights.c",
+            "void packWeights(Tensor *t) {\n    step();\n}\n",
+        );
+        let plain = source_document("src/other.c", "void step(Tensor *t) {\n    walk();\n}\n");
+        let index = indexed(&[
+            ("src/weights.c".to_string(), code),
+            ("src/other.c".to_string(), plain),
+        ]);
+        let hits = index.search("pack weights");
+        assert_eq!(
+            hits.first().map(|hit| hit.path.as_str()),
+            Some("src/weights.c")
+        );
+    }
+
+    /// The measured first-contact miss: the project writes `bitpack` and never `pack`, so a
+    /// question about packing matched nothing at all. A word no unit holds is looked for
+    /// inside the words that do.
+    #[test]
+    fn a_word_the_corpus_never_says_alone_is_found_inside_the_words_that_carry_it() {
+        let bitpack = source_document(
+            "bitpack.c",
+            "uint64_t bitpack_getu(const uint64_t *w) {\n    return *w;\n}\n",
+        );
+        let other = source_document(
+            "audio.c",
+            "void render(float *samples) {\n    mix(samples);\n}\n",
+        );
+        let index = indexed(&[
+            ("bitpack.c".to_string(), bitpack),
+            ("audio.c".to_string(), other),
+        ]);
+        let hits = index.search("how are weights packed");
+        assert_eq!(hits.first().map(|hit| hit.path.as_str()), Some("bitpack.c"));
+    }
+
+    /// The loose tier is a fallback, not a second opinion: a word the corpus does hold is
+    /// scored on that word alone, so a document merely containing it inside a longer word
+    /// cannot outrank the one that says it.
+    #[test]
+    fn a_word_the_corpus_holds_is_not_also_matched_inside_longer_words() {
+        let says = doc("Says it", vec![paragraph("the pack is written on save")]);
+        let contains = doc(
+            "Contains it",
+            vec![paragraph("bitpack unpack repack bitpacking unpacked")],
+        );
+        let index = indexed(&[
+            ("says.dx".to_string(), says),
+            ("contains.dx".to_string(), contains),
+        ]);
+        let hits = index.search("pack");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].path, "says.dx");
+    }
+
+    /// Deriving tokens from a word must not invent an adjacency: every token of one word
+    /// shares that word's position, and only the word itself takes part in a phrase.
+    #[test]
+    fn derived_tokens_share_their_word_position_and_never_form_a_phrase() {
+        let compound = doc("C", vec![paragraph("packWeights")]);
+        let separated = doc("S", vec![paragraph("pack and then weights")]);
+        let index = indexed(&[
+            ("compound.dx".to_string(), compound),
+            ("separated.dx".to_string(), separated),
+        ]);
+        // Both hold the words; neither typed them side by side, so neither earns the bonus.
+        let hits = index.search("pack weights");
+        assert_eq!(hits.len(), 2);
+    }
+
+    /// A test repeats the query — that is what a test does — so it wins on frequency and
+    /// hands back an assertion where the reader asked for the fact.
+    #[test]
+    fn the_answering_block_is_the_code_that_states_a_fact_not_the_test_over_it() {
+        let chunk = |id: &str, text: &str| Block {
+            id: id.to_string(),
+            kind: "code".to_string(),
+            text: text.to_string(),
+            ..Block::default()
+        };
+        let document = doc(
+            "compress.rs",
+            vec![
+                chunk(
+                    "L1-L2",
+                    "//! A frame opens with four magic bytes naming its codec.\n\
+const MAGIC_LZSS: &[u8; 4] = b\"DXZ1\";",
+                ),
+                chunk(
+                    "L4-L13",
+                    "#[cfg(test)]\n\
+mod tests {\n\
+    #[test]\n\
+    fn every_magic_byte_decodes() {\n\
+        for magic in [MAGIC_LZSS] {\n\
+            let frame = magic.to_vec();\n\
+            assert_eq!(magic_of(&frame), magic);\n\
+        }\n\
+    }\n\
+}",
+                ),
+            ],
+        );
+        assert_eq!(
+            best_block_id(&document, "what magic bytes does a frame carry").as_deref(),
+            Some("L1-L2")
+        );
+        // Asked about the test, the test is the answer.
+        assert_eq!(
+            best_block_id(&document, "what test covers every magic byte").as_deref(),
+            Some("L4-L13")
+        );
     }
 }

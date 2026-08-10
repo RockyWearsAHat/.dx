@@ -19,7 +19,9 @@ use doc_core::compress::{compress, decompress};
 use doc_core::format::{parse, stringify};
 use doc_core::model::Document;
 use doc_core::render::outline;
-use doc_core::search::{build_index, distinct_tokens, document_tokens};
+use doc_core::search::{
+    build_index, distinct_tokens, document_tokens, MAX_LOOSE_VARIANTS, MIN_LOOSE_LEN,
+};
 use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::git::{self, Route};
@@ -149,6 +151,17 @@ impl SyncReport {
             && self.pruned.is_empty()
             && self.chunks_collected == 0
     }
+}
+
+/// Whether the index at `root` was written by an older dx and would be rebuilt on open.
+///
+/// A reader asks this before opening: [`Store::open`] migrates, and migrating discards the
+/// derived tables, so opening a stale index turns a read into a write. `false` when there is
+/// no index at all — there is nothing stale about a store that does not exist yet.
+///
+/// A store from a *newer* dx is not stale, it is unreadable, and [`Store::open`] says so.
+pub fn stale_index(root: &Path) -> Result<bool, StoreError> {
+    Ok(schema::version_at(&root.join(DB_RELATIVE))?.is_some_and(|found| found < schema::VERSION))
 }
 
 /// The document store rooted at a workspace directory.
@@ -557,6 +570,50 @@ impl Store {
             .map_err(StoreError::backend)
     }
 
+    /// The tokens to narrow the corpus by: each query token, plus — for a token the store
+    /// holds in no document of its own — the stored tokens that contain it.
+    ///
+    /// This is the SQL half of the ranker's loose tier ([`doc_core::search`]): the ranker can
+    /// only score documents it was handed, so a narrowing that knows nothing of containing
+    /// words would decide the question before the scorer ever saw it.
+    ///
+    /// Complexity: one indexed lookup per token, plus one `LIKE` scan of the token table for
+    /// each token that has no holder — the case that would otherwise contribute nothing.
+    fn narrowing_tokens(&self, query_tokens: &[String]) -> Result<Vec<String>, StoreError> {
+        let mut narrowing = Vec::new();
+        for token in query_tokens {
+            narrowing.push(token.clone());
+            let held: Option<i64> = self
+                .connection
+                .query_row(
+                    "SELECT 1 FROM tokens WHERE token = ?1 LIMIT 1",
+                    params![token],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(StoreError::backend)?;
+            if held.is_some() || token.chars().count() < MIN_LOOSE_LEN {
+                continue;
+            }
+            let mut statement = self
+                .connection
+                .prepare(
+                    "SELECT DISTINCT token FROM tokens WHERE token LIKE ?1
+                     ORDER BY length(token), token LIMIT ?2",
+                )
+                .map_err(StoreError::backend)?;
+            let containers = statement
+                .query_map(params![format!("%{token}%"), MAX_LOOSE_VARIANTS], |row| {
+                    row.get::<_, String>(0)
+                })
+                .map_err(StoreError::backend)?
+                .collect::<Result<Vec<String>, _>>()
+                .map_err(StoreError::backend)?;
+            narrowing.extend(containers);
+        }
+        Ok(narrowing)
+    }
+
     /// Search stored documents for `query`, best matches first, each with its relevance score.
     ///
     /// The token table narrows the corpus to documents that contain at least one query token;
@@ -566,8 +623,12 @@ impl Store {
     /// score returned here is that implementation's own, never a placeholder standing in for it.
     /// The full document count is stated to the index, so IDF ranks the survivors exactly as
     /// the whole store would — narrowing changes what is reassembled, never what wins.
+    ///
+    /// A word the store holds inside longer words but never on its own narrows to those
+    /// words ([`Store::narrowing_tokens`]), so the ranker's loose tier still has the
+    /// documents it would have scored. Narrowing must never be the reason a hit is missing.
     pub fn search(&self, query: &str, limit: usize) -> Result<Vec<ScoredSummary>, StoreError> {
-        let tokens = distinct_tokens(query);
+        let tokens = self.narrowing_tokens(&distinct_tokens(query))?;
         if tokens.is_empty() || limit == 0 {
             return Ok(Vec::new());
         }
@@ -598,7 +659,12 @@ impl Store {
             .collect();
         // Token narrowing kept every holder of every query token, so per-term counts are
         // exact; stating the store's true size keeps IDF's n exact too.
-        let index = build_index(&documents).with_corpus_size(summaries.len());
+        let index = build_index(
+            documents
+                .iter()
+                .map(|(path, document)| (path.as_str(), document)),
+        )
+        .with_corpus_size(summaries.len());
 
         Ok(index
             .search(query)
@@ -1196,6 +1262,62 @@ mod tests {
             hits[0].score,
             hits[1].score
         );
+    }
+
+    /// Narrowing runs in SQL and ranking runs in memory, so the two have to agree about
+    /// what a query token can match. A word the store holds only inside longer words must
+    /// still reach the ranker, or narrowing answers a question the scorer never saw.
+    #[test]
+    fn narrowing_reaches_a_document_that_only_holds_the_word_inside_a_longer_one() {
+        let root = scratch("search-loose");
+        let mut store = Store::open(&root).expect("open");
+        store
+            .ingest(
+                "bitpack.dx",
+                "::paragraph id=p\nbitpack_getu reads a bitpacked weight\n::end\n",
+            )
+            .expect("bitpack");
+        store
+            .ingest(
+                "audio.dx",
+                "::paragraph id=p\nthe mixer renders samples\n::end\n",
+            )
+            .expect("audio");
+
+        let hits = store.search("how are weights packed", 10).expect("search");
+        assert_eq!(
+            hits.first().map(|hit| hit.summary.path.as_str()),
+            Some("bitpack.dx")
+        );
+    }
+
+    /// Opening a store migrates it, and migrating discards the derived tables — so a read
+    /// has to be able to see that an index is old without rewriting it. This is the guard
+    /// that keeps `dx search` on a just-upgraded install from silently rebuilding the index.
+    #[test]
+    fn an_index_from_an_older_dx_reads_as_stale_and_is_left_exactly_as_it_was() {
+        let root = scratch("stale-index");
+        {
+            let mut store = Store::open(&root).expect("open");
+            store.ingest("notes.dx", NOTES).expect("ingest");
+        }
+        let database = root.join(DB_RELATIVE);
+        let connection = Connection::open(&database).expect("reopen");
+        connection
+            .pragma_update(None, "user_version", schema::VERSION - 1)
+            .expect("stamp an older version");
+        drop(connection);
+
+        assert!(stale_index(&root).expect("ask"));
+        assert_eq!(
+            schema::version_at(&database).expect("version"),
+            Some(schema::VERSION - 1),
+            "asking must not upgrade what it asked about"
+        );
+
+        // The write path is where the upgrade belongs, and it happens there.
+        let _ = Store::open(&root).expect("open");
+        assert!(!stale_index(&root).expect("ask again"));
     }
 
     #[test]

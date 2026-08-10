@@ -18,6 +18,7 @@
 //! [`save`] stores the document as chunks, rewrites its stub, and re-exports the packs, so
 //! canonical form and the on-disk pointer are always what the store says they are.
 
+use std::collections::HashMap;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -106,8 +107,17 @@ pub fn open_store(root: &Path) -> Result<Store, String> {
 /// sandbox — still answers: it opens without the ability to write. A store that will not
 /// open either way is an error, never "no store" — falling through to the packs would
 /// quietly answer from a stale copy while the true store sits broken.
+///
+/// An index written by an *older* dx is the one case that is not an error and not a store:
+/// opening it would migrate it, and migrating rebuilds the derived tables — a read that
+/// silently rewrites the index is exactly what this project says reading never does. The
+/// packs carry the content, so the read falls through to them and the next write (or
+/// `dx sync`) does the upgrade, deliberately.
 fn open_existing(root: &Path) -> Result<Option<Store>, String> {
     if !root.join(".doc").join("index.db").exists() {
+        return Ok(None);
+    }
+    if doc_store::stale_index(root).map_err(|error| error.to_string())? {
         return Ok(None);
     }
     match Store::open(root) {
@@ -702,11 +712,15 @@ pub struct Hit {
 pub fn search(directory: &Path, query: &str, limit: usize) -> Result<Vec<Hit>, String> {
     let mut documents = load_all(directory)?.documents;
     documents.extend(source_corpus(directory));
-    let indexed: Vec<(String, Document)> = documents
+    let index = doc_core::search::build_index(
+        documents
+            .iter()
+            .map(|loaded| (loaded.relative.as_str(), &loaded.document)),
+    );
+    let by_path: HashMap<&str, &Loaded> = documents
         .iter()
-        .map(|loaded| (loaded.relative.clone(), loaded.document.clone()))
+        .map(|loaded| (loaded.relative.as_str(), loaded))
         .collect();
-    let index = doc_core::search::build_index(&indexed);
 
     // `limit` is per corpus, documents first. A project's documents are written to answer
     // questions and its source files merely contain the answer, so letting one crowd out the
@@ -729,14 +743,11 @@ pub fn search(directory: &Path, query: &str, limit: usize) -> Result<Vec<Hit>, S
                 return None;
             }
             *taken += 1;
-            documents
-                .iter()
-                .find(|loaded| loaded.relative == result.path)
-                .map(|loaded| Hit {
-                    block: doc_core::search::best_block_id(&loaded.document, query),
-                    document: loaded.clone(),
-                    score: result.score,
-                })
+            by_path.get(result.path.as_str()).map(|loaded| Hit {
+                block: doc_core::search::best_block_id(&loaded.document, query),
+                document: (*loaded).clone(),
+                score: result.score,
+            })
         })
         .collect();
 
@@ -976,6 +987,36 @@ mod tests {
     /// Reach is the whole value of the cheap route, so the languages a project is actually
     /// written in have to be in it. An Objective-C and Metal project was invisible to search
     /// until this list grew; a C project's Makefile still is, unless a name can be source too.
+    /// First contact, measured: a reader asks in their own words and the project only
+    /// speaks its own. The question has to reach the file that holds the answer even when
+    /// no line in the repository is written the way the question was.
+    #[test]
+    fn a_question_asked_in_the_readers_words_reaches_the_file_written_in_the_projects() {
+        let root = scratch("search-vocabulary");
+        fs::write(root.join("a.dx"), NOTES).expect("write");
+        fs::create_dir_all(root.join("src")).expect("dirs");
+        fs::write(
+            root.join("src/bitpack.c"),
+            "uint64_t bitpack_getu(const uint64_t *w, int i) {\n    return w[i];\n}\n",
+        )
+        .expect("write");
+        fs::write(
+            root.join("src/audio.c"),
+            "void render(float *samples) {\n    mix(samples);\n}\n",
+        )
+        .expect("write");
+
+        let hits = search(&root, "how are weights packed", 5).expect("search");
+        assert!(
+            hits.iter()
+                .any(|hit| hit.document.relative == "src/bitpack.c"),
+            "the project writes `bitpack`, never `packed`: {:?}",
+            hits.iter()
+                .map(|hit| &hit.document.relative)
+                .collect::<Vec<_>>()
+        );
+    }
+
     #[test]
     fn search_reaches_the_languages_a_project_is_written_in() {
         let root = scratch("search-languages");
