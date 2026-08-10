@@ -17,7 +17,7 @@ one search away — use it before reading anything whole.
 canonical, renders to a page, and can execute the code blocks inside it.
 
 **A `.dx` file on disk is a one-line pointer, not the content** — `~ dx1 <64-hex digest>`. The
-content lives in the workspace store as content-addressed compressed chunks.
+content lives in the workspace store as content-addressed chunks.
 
 The rule everything rests on: **the resolver always hands back the true document.** Every read
 — a person in the editor, `dx render`, an agent calling `dx_read`, git showing a diff — goes
@@ -32,7 +32,7 @@ edit invisible to git.
 | Path | What it is | Committed? |
 |------|------------|-----------|
 | `*.dx` | One-line pointer carrying the content digest | yes |
-| `.doc/repo.dxcp` | The repository's documents, chunk-deduplicated and compressed | **yes** — this is the content |
+| `.doc/repo.dxcp` | The repository's documents, chunk-deduplicated, stored uncompressed so git can delta it | **yes** — this is the content |
 | `.doc/local.dxcp` | Git-ignored scratch documents | no |
 | `.doc/index.db` | SQLite: the queryable local authority, rebuildable from the packs | no |
 

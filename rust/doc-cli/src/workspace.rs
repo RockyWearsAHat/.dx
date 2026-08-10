@@ -565,10 +565,41 @@ pub fn load_all(directory: &Path) -> Result<Listing, String> {
 /// An allow-list rather than "everything that decodes as UTF-8": a lock file, a minified
 /// bundle, or a generated blob answers no question anyone asks, and indexing it only dilutes
 /// the ranking of the files that do.
+///
+/// What belongs here is a language someone writes by hand. The list was once short enough to
+/// be a bug: an Objective-C project's `.m` files and a Metal project's shaders were invisible,
+/// so a question whose only answer was in them could not be reached by the cheap route at all —
+/// on a first-contact repository that is the difference between landing and sending the caller
+/// back to grep. When a project speaks a language not listed here, adding it is the fix.
 const SEARCHABLE_SOURCE: &[&str] = &[
-    "rs", "js", "mjs", "cjs", "ts", "tsx", "jsx", "py", "rb", "go", "java", "kt", "swift", "c",
-    "h", "cc", "cpp", "hpp", "cs", "sh", "bash", "zsh", "sql", "toml", "yaml", "yml", "json", "md",
-    "css", "html", "txt",
+    // Systems and application languages.
+    "rs", "c", "h", "cc", "cpp", "cxx", "hpp", "hh", "m", "mm", "metal", "cu", "go", "zig", "swift",
+    "java", "kt", "kts", "scala", "cs", "fs", "dart", "hs", "ml", "ex", "exs", "erl", "clj", "lua",
+    "nim", "d", "pas", "asm", "s", // Scripting and the web.
+    "js", "mjs", "cjs", "ts", "tsx", "jsx", "vue", "svelte", "py", "pyi", "rb", "php", "pl", "pm",
+    "r", "jl", "sh", "bash", "zsh", "fish", "ps1",
+    // Markup, style, data, and configuration a person writes.
+    "md", "mdx", "rst", "adoc", "txt", "html", "htm", "css", "scss", "sass", "less", "sql",
+    "graphql", "gql", "proto", "toml", "yaml", "yml", "json", "jsonc", "ini", "cfg", "conf", "env",
+    "tf", "hcl", "cmake", "mk", "gradle", "bzl", "nix",
+];
+
+/// Extension-less filenames that are source all the same.
+///
+/// A C project's whole build is a `Makefile`, and a container's whole environment is a
+/// `Dockerfile`; an extension-only allow-list cannot see either.
+const SEARCHABLE_NAMES: &[&str] = &[
+    "Makefile",
+    "makefile",
+    "GNUmakefile",
+    "Dockerfile",
+    "Containerfile",
+    "Justfile",
+    "justfile",
+    "Rakefile",
+    "Gemfile",
+    "Procfile",
+    "CMakeLists.txt",
 ];
 
 /// Largest source file offered to the index.
@@ -632,10 +663,11 @@ fn collect_source_files(directory: &Path, found: &mut Vec<PathBuf>) {
             }
             continue;
         }
-        let searchable = path
-            .extension()
-            .and_then(|extension| extension.to_str())
-            .is_some_and(|extension| SEARCHABLE_SOURCE.contains(&extension));
+        let searchable = SEARCHABLE_NAMES.contains(&name)
+            || path
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| SEARCHABLE_SOURCE.contains(&extension));
         let sized = entry
             .metadata()
             .is_ok_and(|metadata| metadata.len() <= MAX_SOURCE_BYTES);
@@ -711,7 +743,39 @@ pub fn search(directory: &Path, query: &str, limit: usize) -> Result<Vec<Hit>, S
     // Documents first, each group still in score order — the ranking decides what is best,
     // the grouping decides which question is answered first.
     ranked.sort_by_key(|hit| !hit.document.relative.ends_with(".dx"));
-    Ok(ranked)
+    Ok(drop_noise(ranked))
+}
+
+/// Share of the best hit's score a hit must reach to be worth a caller's attention.
+///
+/// The engine returns everything that matched at all, which is right for a ranking and wrong
+/// for an answer: a hit two orders of magnitude below the best one matched an incidental word,
+/// and printing it costs the caller a paragraph to conclude what the score already said. This
+/// was visible the moment `dx index` scaffolded a project — a placeholder line reading "TODO:
+/// what docs/ is for" came back against every question, because a fresh index has few documents
+/// and something in them always matches faintly.
+const NOISE_FLOOR: f64 = 0.10;
+
+/// Drop hits so far below the best one that they answer nothing.
+///
+/// Deliberately conservative: the cut is relative to the best hit, so a query where everything
+/// scores low keeps its whole ranking, and a single strong answer is never trimmed away by the
+/// weak ones around it. Ordering is untouched.
+fn drop_noise(ranked: Vec<Hit>) -> Vec<Hit> {
+    let Some(best) = ranked
+        .iter()
+        .map(|hit| hit.score)
+        .fold(None::<f64>, |best, score| {
+            Some(best.map_or(score, |b| b.max(score)))
+        })
+    else {
+        return ranked;
+    };
+    let floor = best * NOISE_FLOOR;
+    ranked
+        .into_iter()
+        .filter(|hit| hit.score >= floor)
+        .collect()
 }
 
 #[cfg(test)]
@@ -907,6 +971,116 @@ mod tests {
             "a source hit names the lines to read, got {:?}",
             hit.block
         );
+    }
+
+    /// Reach is the whole value of the cheap route, so the languages a project is actually
+    /// written in have to be in it. An Objective-C and Metal project was invisible to search
+    /// until this list grew; a C project's Makefile still is, unless a name can be source too.
+    #[test]
+    fn search_reaches_the_languages_a_project_is_written_in() {
+        let root = scratch("search-languages");
+        fs::write(root.join("a.dx"), NOTES).expect("write");
+        fs::create_dir_all(root.join("engine")).expect("dirs");
+        fs::write(
+            root.join("engine/backend_metal.m"),
+            "// The Metal compute backend dispatches the xorpopcount kernel.\n",
+        )
+        .expect("write");
+        fs::write(
+            root.join("engine/Makefile"),
+            "# Building needs the Xcode command line tools.\nall:\n\tclang -O3 backend_metal.m\n",
+        )
+        .expect("write");
+
+        let metal = search(&root, "metal compute backend", 5).expect("search");
+        assert!(
+            metal
+                .iter()
+                .any(|hit| hit.document.relative == "engine/backend_metal.m"),
+            "an .m file answers, so it must be reachable: {:?}",
+            metal
+                .iter()
+                .map(|hit| &hit.document.relative)
+                .collect::<Vec<_>>()
+        );
+
+        let build = search(&root, "Xcode command line tools", 5).expect("search");
+        assert!(
+            build
+                .iter()
+                .any(|hit| hit.document.relative == "engine/Makefile"),
+            "a Makefile has no extension and is still source: {:?}",
+            build
+                .iter()
+                .map(|hit| &hit.document.relative)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    /// A hit far below the best one matched an incidental word. Printing it costs the caller a
+    /// paragraph to conclude what the score already said. The rule is tested on the ranking it
+    /// governs rather than through BM25, so it pins the contract and not a scorer's arithmetic.
+    #[test]
+    fn search_drops_hits_far_below_the_best_one() {
+        let hit = |relative: &str, score: f64| Hit {
+            document: Loaded {
+                path: PathBuf::from(relative),
+                relative: relative.to_string(),
+                document: parse("# A document\n"),
+            },
+            score,
+            block: None,
+        };
+
+        let kept = drop_noise(vec![
+            hit("answer.dx", 8.9),
+            hit("related.dx", 6.2),
+            hit("incidental.dx", 0.061),
+        ]);
+
+        assert_eq!(
+            kept.iter()
+                .map(|hit| hit.document.relative.as_str())
+                .collect::<Vec<_>>(),
+            vec!["answer.dx", "related.dx"],
+            "a hit at 0.7% of the best answers nothing; one at 70% still might"
+        );
+    }
+
+    /// The floor is a share of the best hit, so it can never empty a result set: whatever the
+    /// scores are, the best one is always at 100% of itself.
+    #[test]
+    fn search_never_drops_the_best_hit() {
+        let only = Hit {
+            document: Loaded {
+                path: PathBuf::from("only.dx"),
+                relative: "only.dx".to_string(),
+                document: parse("# A document\n"),
+            },
+            score: 0.0001,
+            block: None,
+        };
+        assert_eq!(drop_noise(vec![only]).len(), 1);
+    }
+
+    /// The floor is relative, so a query whose every hit is weak keeps its whole ranking —
+    /// a weak best answer is still the answer, and trimming it would leave the caller nothing.
+    #[test]
+    fn search_keeps_every_hit_when_they_are_all_equally_weak() {
+        let root = scratch("search-weak");
+        fs::write(
+            root.join("one.dx"),
+            "# One\n\nA note mentioning chunks once.\n",
+        )
+        .expect("write");
+        fs::write(
+            root.join("two.dx"),
+            "# Two\n\nA note mentioning chunks once.\n",
+        )
+        .expect("write");
+
+        let hits = search(&root, "chunks", 5).expect("search");
+        assert_eq!(hits.len(), 2, "equal scores are all above a relative floor");
     }
 
     /// Documents and source are two bounded answers, documents first: a project's documents are

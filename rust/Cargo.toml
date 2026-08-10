@@ -6,7 +6,7 @@ members = ["doc-cli", "doc-core", "doc-run", "doc-shot", "doc-store", "doc-wasm"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
-repository = "https://github.com/doc-platform/doc"
+repository = "https://github.com/RockyWearsAHat/.dx"
 
 # Optimise the compiled artifacts: small, fast binaries and wasm.
 [profile.release]

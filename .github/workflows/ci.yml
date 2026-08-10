@@ -1,0 +1,118 @@
+name: proof
+
+# The same gates the repository proves itself with locally, run where nobody can forget them.
+# `dev.dx` is the fast loop for a working session; this is the slow, complete one — the suites
+# that must watch the sandbox from outside it (doc-run/tests/attacks.rs) and the ones that need
+# a real browser (doc-shot) both run here, because both are skipped or weakened anywhere else.
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  engine:
+    name: engine (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Both kernels that can confine a running block: Seatbelt on macOS, bubblewrap on
+        # Linux. A platform that cannot impose the boundary refuses to run a block at all, so
+        # testing only one of them would leave half the contract unproven.
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install bubblewrap (the Linux sandbox)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          # rust/rust-toolchain.toml pins the version; this action installs the components.
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+
+      - name: Tests
+        working-directory: rust
+        run: cargo test --workspace --locked
+
+      - name: Clippy
+        working-directory: rust
+        run: cargo clippy --all-targets --locked -- -D warnings
+
+      - name: Format
+        working-directory: rust
+        run: cargo fmt --check
+
+  surfaces:
+    name: surfaces (JS, against the committed engine)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # The extension tests read a pack a real `dx sync` wrote, so they need a real dx.
+      - name: Build dx
+        working-directory: rust
+        run: cargo build --release --locked -p doc-cli
+
+      - name: Build the extension fixture
+        run: ./editor/github/test/fixture.sh
+
+      - name: GitHub extension
+        run: node --test "editor/github/test/"*.test.mjs
+
+      - name: VS Code extension
+        run: node --test "editor/vscode/test/"*.test.mjs
+
+  corpus:
+    name: corpus (every document resolves and is canonical)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+
+      - name: Build dx
+        working-directory: rust
+        run: cargo build --release --locked -p doc-cli
+
+      # A fresh clone has pointers and packs but no index — the case `dx sync` exists for.
+      # If this step reports anything to do, a committed pointer does not resolve from what
+      # the repository actually carries, which is the one failure the store may never have.
+      - name: Every pointer resolves from the packs alone
+        run: |
+          set -euo pipefail
+          dx=rust/target/release/dx
+          "$dx" sync .
+          count=0
+          for f in $("$dx" ls . | awk '{print $1}'); do
+            case "$f" in *.dx) ;; *) continue ;; esac
+            canonical=$("$dx" textconv "$f")
+            [ -n "$canonical" ] || { echo "empty document: $f" >&2; exit 1; }
+            count=$((count + 1))
+          done
+          [ "$count" -ge 10 ] || { echo "only $count documents resolved — the listing is not whole" >&2; exit 1; }
+          echo "ok - $count documents resolve and are canonical"

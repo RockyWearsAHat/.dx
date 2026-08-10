@@ -89,6 +89,19 @@ pub fn compress(input: &[u8]) -> Vec<u8> {
     frame(MAGIC_STORED, input.len(), input)
 }
 
+/// Wrap raw bytes in a frame that stores them exactly as they are.
+///
+/// The same `DXZ3` frame [`compress`] falls back to when no codec beats the input, offered
+/// as a deliberate choice for the one caller that wants it: a file whose consumer is git,
+/// which deltas plain bytes between revisions and cannot delta a compressed stream. Round-trips
+/// through [`decompress`] like any other frame — reading never has to know which was chosen.
+///
+/// Complexity: `O(n)` in the input size.
+#[must_use]
+pub fn store_as_is(input: &[u8]) -> Vec<u8> {
+    frame(MAGIC_STORED, input.len(), input)
+}
+
 /// Assemble a frame: magic, original length, payload.
 fn frame(magic: &[u8; 4], original_length: usize, payload: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(HEADER_LENGTH + payload.len());
