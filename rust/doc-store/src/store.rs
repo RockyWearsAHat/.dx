@@ -136,6 +136,10 @@ pub struct SyncReport {
     pub unresolved: Vec<String>,
     /// Index rows dropped because their `.dx` file was deleted from the tree.
     pub pruned: Vec<String>,
+    /// Pack files whose bytes on disk changed, `.doc/`-relative. A pack can be rewritten with
+    /// no document changing at all — an encoding policy that moved, or a file whose git status
+    /// did — which is exactly the case a sync has to notice rather than report as clean.
+    pub packs_rewritten: Vec<String>,
     /// Chunks deleted because nothing referenced them.
     pub chunks_collected: usize,
 }
@@ -149,6 +153,7 @@ impl SyncReport {
             && self.restored.is_empty()
             && self.unresolved.is_empty()
             && self.pruned.is_empty()
+            && self.packs_rewritten.is_empty()
             && self.chunks_collected == 0
     }
 }
@@ -168,9 +173,22 @@ pub fn stale_index(root: &Path) -> Result<bool, StoreError> {
 pub struct Store {
     root: PathBuf,
     connection: Connection,
+    /// Set only for the duration of [`Store::sync`]. Every write exports the packs, and the
+    /// export refuses to drop a document the tree still points at — which is the right answer
+    /// everywhere except inside the repair that is putting those documents back.
+    repairing: bool,
 }
 
 impl Store {
+    /// An open store over `connection`, in normal (non-repairing) operation.
+    fn over(root: PathBuf, connection: Connection) -> Self {
+        Self {
+            root,
+            connection,
+            repairing: false,
+        }
+    }
+
     /// Open (creating if needed) the store for the workspace rooted at `root`.
     ///
     /// Creates `.doc/` and migrates the schema. Opening does not touch any `.dx` file and
@@ -184,7 +202,7 @@ impl Store {
 
         let connection = Connection::open(root.join(DB_RELATIVE)).map_err(StoreError::backend)?;
         schema::apply(&connection)?;
-        Ok(Self { root, connection })
+        Ok(Self::over(root, connection))
     }
 
     /// Open an existing store without the ability to write.
@@ -204,10 +222,7 @@ impl Store {
             let probe: Result<i64, _> =
                 connection.query_row("SELECT count(*) FROM documents", [], |row| row.get(0));
             if probe.is_ok() {
-                return Ok(Self {
-                    root: root.to_path_buf(),
-                    connection,
-                });
+                return Ok(Self::over(root.to_path_buf(), connection));
             }
         }
 
@@ -220,20 +235,14 @@ impl Store {
         let connection =
             Connection::open_with_flags(uri, flags | rusqlite::OpenFlags::SQLITE_OPEN_URI)
                 .map_err(StoreError::backend)?;
-        Ok(Self {
-            root: root.to_path_buf(),
-            connection,
-        })
+        Ok(Self::over(root.to_path_buf(), connection))
     }
 
     /// Open a store held entirely in memory, for tests and one-shot rendering.
     pub fn open_in_memory(root: &Path) -> Result<Self, StoreError> {
         let connection = Connection::open_in_memory().map_err(StoreError::backend)?;
         schema::apply(&connection)?;
-        Ok(Self {
-            root: root.to_path_buf(),
-            connection,
-        })
+        Ok(Self::over(root.to_path_buf(), connection))
     }
 
     /// The workspace root this store belongs to.
@@ -728,8 +737,19 @@ impl Store {
     }
 
     /// Write the repo and local packs from what is stored.
+    ///
+    /// Outside a repair this refuses to drop a document the tree still points at
+    /// ([`StoreError::WouldLose`]): an export trusts the index completely, so an index that
+    /// has lost documents would otherwise make the loss durable in the packs.
     fn export_packs(&self) -> Result<(), StoreError> {
-        pack::export(self)
+        pack::export(
+            self,
+            if self.repairing {
+                pack::Loss::Expected
+            } else {
+                pack::Loss::Refuse
+            },
+        )
     }
 
     /// Reconcile the workspace with the store so every `.dx` file resolves correctly.
@@ -749,7 +769,35 @@ impl Store {
     ///    is a ghost that keeps resolving a document nobody can see. This never fires on a
     ///    fresh clone: a new database has no rows, so every pack document is restored, not
     ///    pruned, and the deleted document's bytes stay reachable in the pack's git history.
+    ///
+    /// Finally the packs are written whether or not any of that fired, because a pack can be
+    /// out of date with **nothing to reconcile**: the encoding policy it was written under may
+    /// have moved, or the file's git status may have. The writer compares the bytes it would
+    /// write against the bytes that are there, so the common case still touches
+    /// nothing, and [`SyncReport::packs_rewritten`] names what actually changed.
     pub fn sync(&mut self) -> Result<SyncReport, StoreError> {
+        let before = pack::snapshot(&self.root);
+
+        self.repairing = true;
+        let reconciled = self.reconcile();
+        self.repairing = false;
+        let mut report = reconciled?;
+
+        self.export_packs()?;
+        let after = pack::snapshot(&self.root);
+        report.packs_rewritten = pack::NAMES
+            .iter()
+            .zip(before.iter().zip(after.iter()))
+            .filter(|(_, (was, now))| was != now)
+            .map(|(name, _)| (*name).to_string())
+            .collect();
+        Ok(report)
+    }
+
+    /// Steps 1–5 of [`Store::sync`], with [`Store::repairing`] set: put the tree and the index
+    /// back in agreement. Kept separate so the flag is cleared on every exit path, including
+    /// an error.
+    fn reconcile(&mut self) -> Result<SyncReport, StoreError> {
         let mut report = SyncReport::default();
         let available = pack::load_all(&self.root)?;
 
@@ -1368,6 +1416,85 @@ mod tests {
         assert!(stub::is_stub(
             &fs::read_to_string(root.join("orphan.dx")).expect("read")
         ));
+    }
+
+    #[test]
+    fn sync_rewrites_a_pack_whose_encoding_no_longer_matches_the_policy() {
+        // The gap this closes: with nothing to reconcile, sync used to return early and a
+        // pack written under a policy that has since moved was never rewritten. Harmless
+        // while every policy decodes, and wrong the day one does not.
+        let root = scratch("policy-drift");
+        let mut store = Store::open(&root).expect("open");
+        store.ingest("notes.dx", NOTES).expect("ingest");
+        assert!(store.sync().expect("settle").is_clean());
+
+        // Rewrite the pack under the other policy, without changing a single document.
+        let (repo_path, _) = pack::paths(&root);
+        let source = store.source("notes.dx").expect("source");
+        let pack = doc_core::chunk::Pack::build([("notes.dx", &parse(&source))]);
+        let other =
+            if doc_core::chunk::encode_pack_for(&pack, doc_core::chunk::PackStorage::Compressed)
+                == fs::read(&repo_path).expect("read")
+            {
+                doc_core::chunk::PackStorage::ForVersionControl
+            } else {
+                doc_core::chunk::PackStorage::Compressed
+            };
+        fs::write(&repo_path, doc_core::chunk::encode_pack_for(&pack, other)).expect("write");
+
+        let report = store.sync().expect("sync");
+        assert_eq!(
+            report.packs_rewritten,
+            vec![pack::REPO_PACK.to_string()],
+            "a pack whose encoding drifted must be rewritten: {report:?}"
+        );
+        assert!(!report.is_clean(), "and reported, not called clean");
+        assert!(store.sync().expect("settle").is_clean(), "then it settles");
+    }
+
+    #[test]
+    fn sync_restores_documents_the_index_lost_without_tripping_the_export_guard() {
+        // The two changes have to compose: exporting refuses to drop a pointed-at document,
+        // and sync is the repair that puts those documents back — so the guard must stand
+        // down for exactly the length of the repair, and be back up after it.
+        let root = scratch("repair-guard");
+        let mut store = Store::open(&root).expect("open");
+        for name in ["a.dx", "b.dx", "c.dx"] {
+            store.ingest(name, NOTES).expect("ingest");
+        }
+        drop(store);
+        fs::remove_file(root.join(".doc/index.db")).expect("lose the index");
+
+        let mut store = Store::open(&root).expect("reopen");
+        let report = store.sync().expect("sync repairs rather than refusing");
+        assert_eq!(report.restored.len(), 3, "{report:?}");
+        for name in ["a.dx", "b.dx", "c.dx"] {
+            assert!(store.source(name).is_ok(), "{name} must resolve again");
+        }
+        assert!(store.sync().expect("settle").is_clean());
+    }
+
+    #[test]
+    fn a_save_refuses_when_the_index_has_lost_a_document_the_tree_still_points_at() {
+        let root = scratch("save-guard");
+        let mut store = Store::open(&root).expect("open");
+        store.ingest("keep.dx", NOTES).expect("keep");
+        store.ingest("lost.dx", NOTES).expect("lost");
+        store
+            .connection
+            .execute("DELETE FROM documents WHERE path = 'lost.dx'", [])
+            .expect("forget");
+
+        let error = store
+            .ingest("keep.dx", "::heading level=1 id=n\nNotes again\n::end\n")
+            .expect_err("a save must not make the loss durable");
+        assert!(
+            matches!(&error, StoreError::WouldLose(path) if path == "lost.dx"),
+            "{error}"
+        );
+        // And the repair the message names actually works.
+        let report = store.sync().expect("sync");
+        assert_eq!(report.restored, vec!["lost.dx".to_string()]);
     }
 
     #[test]

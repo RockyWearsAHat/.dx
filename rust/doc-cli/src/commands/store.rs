@@ -39,11 +39,12 @@ pub fn run_sync(args: &Args) -> Result<String, String> {
         return Ok(out);
     }
 
-    let sections: [(&str, &Vec<String>); 5] = [
+    let sections: [(&str, &Vec<String>); 6] = [
         ("adopted from plain text", &report.ingested),
         ("restored from a pack", &report.restored),
         ("pointer rewritten", &report.stubs_written),
         ("pruned (file deleted from the tree)", &report.pruned),
+        ("pack rewritten", &report.packs_rewritten),
         ("UNRESOLVED", &report.unresolved),
     ];
     for (label, paths) in sections {

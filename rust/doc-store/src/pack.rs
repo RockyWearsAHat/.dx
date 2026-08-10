@@ -14,14 +14,17 @@
 //! rather than writing one pack means committing a document does not rewrite the bytes of
 //! unrelated local notes.
 //!
-//! The two packs are written under different policies, because they have different readers.
-//! `local.dxcp` is nobody's history, so it is compressed. `repo.dxcp` is committed, and git
-//! deltas plain bytes between revisions while it cannot delta a compressed stream — so the
-//! committed pack is deliberately the larger file on disk and the smaller one in history.
+//! The two packs are written under different policies, because they have different readers —
+//! and the policy follows each file's **git status, never its name** ([`storage_for`]). A pack
+//! git carries in history is written plain, because git deltas plain bytes between revisions
+//! while it cannot delta a compressed stream; so the committed pack is deliberately the larger
+//! file on disk and the smaller one in history. A pack git ignores, or any pack in a directory
+//! that is not a repository, has no history to delta and is simply compressed.
 //! [`doc_core::chunk::PackStorage`] carries the reasoning and `validation.dx#git-cost-holds`
 //! carries the measurement.
 
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -29,7 +32,7 @@ use doc_core::chunk::{decode_pack, encode_pack_for, Pack, PackStorage};
 use doc_core::model::Document;
 
 use crate::store::STORE_DIR;
-use crate::{Store, StoreError};
+use crate::{git, Store, StoreError};
 
 /// The committed pack, relative to the workspace root.
 pub const REPO_PACK: &str = ".doc/repo.dxcp";
@@ -42,11 +45,38 @@ pub fn paths(root: &Path) -> (PathBuf, PathBuf) {
     (root.join(REPO_PACK), root.join(LOCAL_PACK))
 }
 
+/// Whether an export may write packs that no longer carry a document the tree still points at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Loss {
+    /// Normal operation. An export takes the index as the whole truth, so an index that has
+    /// lost documents writes a pack that has lost them too — which is exactly how a
+    /// half-built index turns into missing content. Refuse, and name the repair.
+    Refuse,
+    /// A repair in progress ([`Store::sync`]). There, a pointer with no index row is the
+    /// thing being repaired and the packs are what it is repaired *from*, so an export that
+    /// lands mid-restore is expected to be short.
+    Expected,
+}
+
+/// How a pack file must be encoded, decided by what git will do with it.
+///
+/// The names `repo.dxcp` and `local.dxcp` are a convention, and a convention is not a policy:
+/// a workspace that commits its local pack would otherwise keep paying for a compressed stream
+/// git cannot delta, silently. So the question asked is [`git::tracks`] — will history carry
+/// these bytes? — and the answer picks the encoding.
+fn storage_for(root: &Path, relative: &str) -> PackStorage {
+    if git::tracks(root, relative) {
+        PackStorage::ForVersionControl
+    } else {
+        PackStorage::Compressed
+    }
+}
+
 /// Write both packs from what `store` holds, splitting documents by git route.
 ///
 /// A pack with no documents is removed rather than written empty, so a workspace with nothing
-/// local does not carry a stray file.
-pub(crate) fn export(store: &Store) -> Result<(), StoreError> {
+/// local does not carry a stray file. A pack whose bytes would be unchanged is left alone.
+pub(crate) fn export(store: &Store, loss: Loss) -> Result<(), StoreError> {
     let mut repo: Vec<(String, Document)> = Vec::new();
     let mut local: Vec<(String, Document)> = Vec::new();
 
@@ -59,25 +89,61 @@ pub(crate) fn export(store: &Store) -> Result<(), StoreError> {
         }
     }
 
-    let (repo_path, local_path) = paths(store.root());
-    write_pack(&repo_path, &repo, PackStorage::ForVersionControl)?;
-    write_pack(&local_path, &local, PackStorage::Compressed)?;
+    let root = store.root();
+    let (repo_path, local_path) = paths(root);
+    if loss == Loss::Refuse {
+        let keeping: BTreeSet<&str> = repo
+            .iter()
+            .chain(local.iter())
+            .map(|(relative, _)| relative.as_str())
+            .collect();
+        refuse_to_drop(store, &[&repo_path, &local_path], &keeping)?;
+    }
+
+    write_pack(&repo_path, &repo, storage_for(root, REPO_PACK))?;
+    write_pack(&local_path, &local, storage_for(root, LOCAL_PACK))?;
     Ok(())
 }
 
-/// Write one pack file, or remove it when there is nothing to store.
+/// Fail if any pack carries a document `keeping` does not, while its `.dx` file is still there.
+///
+/// Both packs are checked against the *whole* store rather than pack by pack, because a
+/// document whose git status changed legitimately moves from one pack to the other.
+fn refuse_to_drop(
+    store: &Store,
+    packs: &[&PathBuf],
+    keeping: &BTreeSet<&str>,
+) -> Result<(), StoreError> {
+    for path in packs {
+        for (relative, _) in read_pack(path)? {
+            if !keeping.contains(relative.as_str()) && store.stub_path(&relative).exists() {
+                return Err(StoreError::WouldLose(relative));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Write one pack file, or remove it when there is nothing to store; `true` when the bytes on
+/// disk changed.
+///
+/// Rewriting a file with the bytes it already holds is not free — it churns mtimes, which is
+/// what a watcher and a build cache key off — so the encoded bytes are compared first. That
+/// comparison is also what lets [`Store::sync`] notice a pack whose *encoding policy* changed
+/// while no document did.
 fn write_pack(
     path: &Path,
     documents: &[(String, Document)],
     storage: PackStorage,
-) -> Result<(), StoreError> {
+) -> Result<bool, StoreError> {
     if documents.is_empty() {
         if path.exists() {
             fs::remove_file(path).map_err(|error| {
                 StoreError::Backend(format!("could not remove {}: {error}", path.display()))
             })?;
+            return Ok(true);
         }
-        return Ok(());
+        return Ok(false);
     }
 
     if let Some(parent) = path.parent() {
@@ -91,10 +157,29 @@ fn write_pack(
             .iter()
             .map(|(relative, document)| (relative.as_str(), document)),
     );
-    fs::write(path, encode_pack_for(&pack, storage)).map_err(|error| {
-        StoreError::Backend(format!("could not write {}: {error}", path.display()))
-    })
+    let bytes = encode_pack_for(&pack, storage);
+    if fs::read(path).is_ok_and(|found| found == bytes) {
+        return Ok(false);
+    }
+    fs::write(path, bytes)
+        .map_err(|error| {
+            StoreError::Backend(format!("could not write {}: {error}", path.display()))
+        })
+        .map(|()| true)
 }
+
+/// The bytes both packs hold right now, in the order [`paths`] names them.
+///
+/// [`Store::sync`] takes this before and after reconciling: comparing the two is the only
+/// honest way to report *the packs were rewritten*, since the writes happen in the middle of
+/// the repair rather than at the end of it.
+pub(crate) fn snapshot(root: &Path) -> [Option<Vec<u8>>; 2] {
+    let (repo_path, local_path) = paths(root);
+    [fs::read(repo_path).ok(), fs::read(local_path).ok()]
+}
+
+/// The pack names [`snapshot`] reports, in the same order.
+pub(crate) const NAMES: [&str; 2] = [REPO_PACK, LOCAL_PACK];
 
 /// Every document available from either pack, keyed by workspace-relative path.
 ///
@@ -279,6 +364,127 @@ mod tests {
         let available = load_all(&root).expect("load");
         assert_eq!(available.len(), 3);
         assert!(available.values().all(|source| source == shared));
+    }
+
+    #[test]
+    fn a_pack_git_does_not_carry_is_compressed_and_one_it_carries_is_not() {
+        // The policy follows git status, not the file's name: a workspace with no git has no
+        // history to delta, so both packs take the smaller form.
+        let root = scratch("policy");
+        assert_eq!(storage_for(&root, REPO_PACK), PackStorage::Compressed);
+        assert_eq!(storage_for(&root, LOCAL_PACK), PackStorage::Compressed);
+
+        if !std::process::Command::new("git")
+            .arg("-C")
+            .arg(&root)
+            .args(["init", "-q"])
+            .status()
+            .is_ok_and(|status| status.success())
+        {
+            return;
+        }
+        fs::write(root.join(".gitignore"), format!("{LOCAL_PACK}\n")).expect("ignore");
+        assert_eq!(
+            storage_for(&root, REPO_PACK),
+            PackStorage::ForVersionControl,
+            "a committed pack must stay delta-able"
+        );
+        assert_eq!(
+            storage_for(&root, LOCAL_PACK),
+            PackStorage::Compressed,
+            "an ignored pack has no history to delta"
+        );
+    }
+
+    #[test]
+    fn writing_a_pack_whose_bytes_are_unchanged_touches_nothing() {
+        // The property `dx sync` leans on: re-exporting is free, so it can export every time
+        // and still notice the one case where the bytes genuinely differ.
+        let root = scratch("idempotent");
+        // Long enough that the two policies genuinely differ: a 35-byte pack compresses to
+        // itself, and a test that cannot tell the policies apart proves nothing.
+        let long = format!(
+            "::paragraph id=p\n{}\n::end\n",
+            "the very same sentence, over and over. ".repeat(60)
+        );
+        let mut store = Store::open(&root).expect("open");
+        store.ingest("notes.dx", &long).expect("ingest");
+
+        let documents = vec![("notes.dx".to_string(), parse(&long))];
+        let (repo_path, _) = paths(&root);
+        let storage = storage_for(&root, REPO_PACK);
+        assert_eq!(storage, PackStorage::Compressed, "no git here");
+        assert!(
+            !write_pack(&repo_path, &documents, storage).expect("write"),
+            "identical bytes must not be rewritten"
+        );
+        assert!(
+            write_pack(&repo_path, &documents, PackStorage::ForVersionControl).expect("write"),
+            "a changed encoding policy must reach the file"
+        );
+        assert!(
+            load_all(&root).expect("load").contains_key("notes.dx"),
+            "and the rewritten pack still decodes"
+        );
+    }
+
+    #[test]
+    fn an_export_refuses_to_drop_a_document_the_tree_still_points_at() {
+        // Part 66's failure, made impossible: the index lost a document while its pointer
+        // stayed on disk, and the next export wrote a pack without it.
+        let root = scratch("wouldlose");
+        let mut store = Store::open(&root).expect("open");
+        store.ingest("keep.dx", NOTES).expect("keep");
+        store.ingest("lost.dx", NOTES).expect("lost");
+
+        // Simulate an index that has lost a row while the pointer file survives — exactly
+        // what a half-applied migration left behind.
+        rusqlite::Connection::open(root.join(".doc/index.db"))
+            .expect("index")
+            .execute("DELETE FROM documents WHERE path = 'lost.dx'", [])
+            .expect("forget");
+        assert!(store.stub_path("lost.dx").exists());
+
+        let error = export(&store, Loss::Refuse).expect_err("must refuse");
+        assert!(
+            matches!(&error, StoreError::WouldLose(path) if path == "lost.dx"),
+            "{error}"
+        );
+        assert!(
+            error.to_string().contains("dx sync"),
+            "the refusal must name the repair: {error}"
+        );
+
+        // The pack is untouched, so the document is still there to be restored.
+        assert!(load_all(&root).expect("load").contains_key("lost.dx"));
+        // And a repair may export freely — that is what puts the row back.
+        export(&store, Loss::Expected).expect("a repair exports");
+    }
+
+    #[test]
+    fn a_deliberate_deletion_is_not_a_loss() {
+        // `dx rm` removes the pointer first, so nothing points at the document any more and
+        // the export must go through. The guard has to tell the two apart.
+        let root = scratch("deleted");
+        let mut store = Store::open(&root).expect("open");
+        store.ingest("notes.dx", NOTES).expect("ingest");
+        store.delete("notes.dx").expect("delete");
+        assert!(load_all(&root).expect("load").is_empty());
+    }
+
+    #[test]
+    fn a_document_that_changes_pack_is_not_read_as_a_loss() {
+        // A file that becomes git-ignored moves from the repo pack to the local one. It left
+        // one pack, but it did not leave the store, so the guard must not fire.
+        let root = scratch("moved");
+        let mut store = Store::open(&root).expect("open");
+        store.ingest("notes.dx", NOTES).expect("ingest");
+        let (repo_path, _) = paths(&root);
+        assert!(repo_path.exists());
+
+        // Whichever pack it is in now, exporting again with the guard on must be fine.
+        export(&store, Loss::Refuse).expect("no loss");
+        assert!(load_all(&root).expect("load").contains_key("notes.dx"));
     }
 
     #[test]
