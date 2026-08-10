@@ -207,7 +207,18 @@ impl Sources {
                  run `dx sync` to rebuild from .doc/, or restore .doc/repo.dxcp",
                 path.display()
             )),
-            None => Err(format!("could not read {}", path.display())),
+            // The plain "no such file" case, and the one a person hits most: say what is
+            // missing and what makes it exist, rather than restating the path back.
+            None if !path.exists() => Err(format!(
+                "no file at {}; `dx ls` lists the documents in this project, and \
+                 `dx new {}` creates one",
+                path.display(),
+                path.display()
+            )),
+            None => Err(format!(
+                "could not read {} — it exists but is not text this dx can read",
+                path.display()
+            )),
         }
     }
 
@@ -891,6 +902,25 @@ mod tests {
     }
 
     const NOTES: &str = "::heading level=1 id=notes\nNotes\n::end\n\n::paragraph id=p\nkubernetes scheduling notes\n::end\n";
+
+    #[test]
+    fn a_missing_file_is_told_apart_from_an_unresolvable_pointer() {
+        // Two failures that look alike from the outside and want opposite advice: one
+        // wants `dx new`, the other wants `dx sync`. A message that says neither costs
+        // the reader the whole diagnosis.
+        let root = scratch("missing");
+        let missing = read(&root.join("nothing-here.dx")).expect_err("no file");
+        assert!(missing.contains("dx new"), "{missing}");
+        assert!(!missing.contains("dx sync"), "{missing}");
+
+        fs::write(
+            root.join("orphan.dx"),
+            format!("~ dx1 {}\n", "0".repeat(64)),
+        )
+        .expect("pointer");
+        let orphan = read(&root.join("orphan.dx")).expect_err("nothing behind it");
+        assert!(orphan.contains("dx sync"), "{orphan}");
+    }
 
     #[test]
     fn parallel_work_comes_back_in_the_order_it_went_in() {
