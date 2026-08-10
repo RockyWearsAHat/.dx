@@ -564,6 +564,8 @@ impl Store {
     /// platform uses. Narrowing in SQL keeps the cost proportional to the matches rather than
     /// to the whole store, and reusing `build_index` keeps one ranking implementation — the
     /// score returned here is that implementation's own, never a placeholder standing in for it.
+    /// The full document count is stated to the index, so IDF ranks the survivors exactly as
+    /// the whole store would — narrowing changes what is reassembled, never what wins.
     pub fn search(&self, query: &str, limit: usize) -> Result<Vec<ScoredSummary>, StoreError> {
         let tokens = distinct_tokens(query);
         if tokens.is_empty() || limit == 0 {
@@ -588,13 +590,15 @@ impl Store {
         for path in candidates {
             documents.push((path.clone(), self.document(&path)?));
         }
-        let index = build_index(&documents);
 
         let summaries: HashMap<String, Summary> = self
             .list()?
             .into_iter()
             .map(|summary| (summary.path.clone(), summary))
             .collect();
+        // Token narrowing kept every holder of every query token, so per-term counts are
+        // exact; stating the store's true size keeps IDF's n exact too.
+        let index = build_index(&documents).with_corpus_size(summaries.len());
 
         Ok(index
             .search(query)

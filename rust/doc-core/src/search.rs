@@ -17,9 +17,47 @@
 //! Text is lowercased and split on every non-alphanumeric character; empty tokens are
 //! dropped. Tokens are compared with simple equality (no stemming), keeping the index
 //! deterministic and dependency-free.
+//!
+//! # Ranking
+//! One scorer ranks documents and blocks alike: BM25 over field-weighted term frequencies,
+//! with inverse document frequency computed over the corpus (a narrowed candidate set
+//! states the full size it came from — [`SearchIndex::with_corpus_size`]), plus a phrase
+//! bonus for word pairs typed side by side. What each piece buys:
+//!
+//! - **IDF** makes rarity worth more than repetition: in "what does confine do", a term
+//!   held by one document outvotes a term held by all of them. Ubiquitous words damp
+//!   themselves, so there is no stopword list to maintain and no language baked in.
+//! - **Field weights** (title ×3, summary/tags/headings ×2, body ×1) land a query on the
+//!   document *about* a thing rather than one that merely mentions it.
+//! - **BM25 saturation** caps what repeating one term can earn, and **length
+//!   normalisation** stops a long document from winning on bulk alone.
+//! - **The phrase bonus** rewards word pairs that appear side by side exactly as the
+//!   query typed them, and a phrase never bridges a field, block, or list-item boundary.
+//!
+//! Scores stay fully deterministic: no floating-point value depends on hash-map iteration
+//! order, and ties break by ascending path (documents) or earliest block.
 
 use crate::model::{Block, Document};
 use std::collections::HashMap;
+
+/// BM25 term-frequency saturation: how quickly repeats of one term stop earning score.
+const BM25_K1: f64 = 1.2;
+/// BM25 length normalisation: how strongly a unit's length discounts its term frequencies.
+const BM25_B: f64 = 0.75;
+/// Field weight of a document's title.
+const WEIGHT_TITLE: f64 = 3.0;
+/// Field weight of a document's summary.
+const WEIGHT_SUMMARY: f64 = 2.0;
+/// Field weight of each document tag.
+const WEIGHT_TAG: f64 = 2.0;
+/// Field weight of a heading block's text.
+const WEIGHT_HEADING: f64 = 2.0;
+/// Field weight of every other searchable block's text.
+const WEIGHT_BODY: f64 = 1.0;
+/// An adjacent query-token pair earns this share of its two terms' summed IDF.
+const PHRASE_BONUS: f64 = 0.5;
+/// Positions skipped between fields, blocks, and list items so a phrase never bridges them.
+const SEGMENT_GAP: u64 = 2;
 
 /// A search result: the document path and its relevance score (higher is better).
 #[derive(Debug, Clone, PartialEq)]
@@ -30,14 +68,217 @@ pub struct ScoredHit {
     pub score: f64,
 }
 
-/// Per-document token statistics held by the index.
-struct DocStats {
+/// Field-weighted token statistics for one ranked unit — a whole document, or one block.
+///
+/// `weighted` and `length` carry the field-weighted term frequencies BM25 consumes;
+/// `positions` carries each token's unweighted stream positions for the phrase bonus.
+struct UnitStats {
+    /// Token → field-weighted occurrence count.
+    weighted: HashMap<String, f64>,
+    /// Token → ascending positions in the unit's token stream.
+    positions: HashMap<String, Vec<u64>>,
+    /// Field-weighted total token count, used for length normalisation.
+    length: f64,
+}
+
+/// Accumulates a unit's statistics one field segment at a time.
+///
+/// Each `segment` call closes with a positional gap, so tokens from different fields,
+/// blocks, or list items are never adjacent — a phrase cannot bridge a boundary the
+/// reader would experience as one.
+struct Recorder {
+    stats: UnitStats,
+    cursor: u64,
+}
+
+impl Recorder {
+    fn new() -> Self {
+        Recorder {
+            stats: UnitStats {
+                weighted: HashMap::new(),
+                positions: HashMap::new(),
+                length: 0.0,
+            },
+            cursor: 0,
+        }
+    }
+
+    /// Tokenise `text` into the unit at `weight`, then close the segment.
+    fn segment(&mut self, weight: f64, text: &str) {
+        let mut tokens = Vec::new();
+        push_tokens(&mut tokens, text);
+        if tokens.is_empty() {
+            return;
+        }
+        for token in tokens {
+            *self.stats.weighted.entry(token.clone()).or_insert(0.0) += weight;
+            self.stats
+                .positions
+                .entry(token)
+                .or_default()
+                .push(self.cursor);
+            self.stats.length += weight;
+            self.cursor += 1;
+        }
+        self.cursor += SEGMENT_GAP;
+    }
+
+    /// Record one searchable block: its text and each list item as separate segments.
+    fn block(&mut self, block: &Block) {
+        let weight = if block.kind == "heading" {
+            WEIGHT_HEADING
+        } else {
+            WEIGHT_BODY
+        };
+        self.segment(weight, &block.text);
+        for item in &block.items {
+            self.segment(weight, &item.text);
+        }
+    }
+}
+
+/// The statistics of a whole document: title, summary, tags, then every searchable block.
+fn document_stats(document: &Document) -> UnitStats {
+    let mut recorder = Recorder::new();
+    recorder.segment(WEIGHT_TITLE, &document.title);
+    recorder.segment(WEIGHT_SUMMARY, &document.summary);
+    for tag in &document.tags {
+        recorder.segment(WEIGHT_TAG, tag);
+    }
+    for block in &document.blocks {
+        if is_searchable(&block.kind) {
+            recorder.block(block);
+        }
+    }
+    recorder.stats
+}
+
+/// The statistics of one block ranked on its own, for [`best_block_id`].
+fn block_stats(block: &Block) -> UnitStats {
+    let mut recorder = Recorder::new();
+    recorder.block(block);
+    recorder.stats
+}
+
+/// The one scoring rule, at every granularity: BM25 over field-weighted term frequencies
+/// with IDF taken from the ranked set, plus the phrase bonus for `pairs` (word pairs
+/// adjacent in the query as typed — see [`phrase_pairs`]).
+/// [`SearchIndex::search`] applies it to documents and [`best_block_id`] to single blocks,
+/// so the two rankings cannot drift apart. Returns one score per unit, in unit order; a
+/// unit containing none of the query tokens scores exactly `0.0`.
+///
+/// `corpus_size` states how many documents the full corpus holds when `units` are the
+/// survivors of a narrowing pass; `None` means `units` *are* the corpus. Term document
+/// frequencies always count over `units` — exact under token narrowing, which keeps every
+/// holder of every query token — so only `n` needs stating to keep IDF honest.
+fn rank(
+    units: &[&UnitStats],
+    query_tokens: &[String],
+    pairs: &[(String, String)],
+    corpus_size: Option<u32>,
+) -> Vec<f64> {
+    let unit_count = units.len() as u32;
+    // A stated corpus can only be larger than what survived narrowing.
+    let n = f64::from(corpus_size.unwrap_or(unit_count).max(unit_count));
+    let average_length =
+        (units.iter().map(|unit| unit.length).sum::<f64>() / f64::from(unit_count.max(1))).max(1.0);
+
+    // IDF per query token (Robertson–Spärck Jones, in the always-positive Lucene form):
+    // a token held by few units is worth far more than one held by all of them.
+    let idf: Vec<f64> = query_tokens
+        .iter()
+        .map(|token| {
+            let holders = units
+                .iter()
+                .filter(|unit| unit.weighted.contains_key(token))
+                .count() as u32;
+            let df = f64::from(holders);
+            ((n - df + 0.5) / (df + 0.5) + 1.0).ln()
+        })
+        .collect();
+    let idf_of: HashMap<&str, f64> = query_tokens
+        .iter()
+        .map(String::as_str)
+        .zip(idf.iter().copied())
+        .collect();
+
+    units
+        .iter()
+        .map(|unit| {
+            let mut score = 0.0f64;
+            for (token, token_idf) in query_tokens.iter().zip(&idf) {
+                let Some(&frequency) = unit.weighted.get(token) else {
+                    continue;
+                };
+                let saturated = frequency * (BM25_K1 + 1.0)
+                    / (frequency
+                        + BM25_K1 * (1.0 - BM25_B + BM25_B * unit.length / average_length));
+                score += token_idf * saturated;
+            }
+            for (first, second) in pairs {
+                if has_adjacent_pair(unit, first, second) {
+                    let bonus = idf_of.get(first.as_str()).copied().unwrap_or(0.0)
+                        + idf_of.get(second.as_str()).copied().unwrap_or(0.0);
+                    score += PHRASE_BONUS * bonus;
+                }
+            }
+            score
+        })
+        .collect()
+}
+
+/// The word pairs of `query` that were actually typed side by side, in order,
+/// deduplicated, self-pairs dropped.
+///
+/// Derived from the raw token stream rather than [`distinct_tokens`], because
+/// deduplication invents adjacencies: in `wasm rust wasm compile` the typed pairs are
+/// (wasm, rust), (rust, wasm), and (wasm, compile) — never (rust, compile), which the
+/// deduplicated list would suggest.
+fn phrase_pairs(query: &str) -> Vec<(String, String)> {
+    let mut raw = Vec::new();
+    push_tokens(&mut raw, query);
+    let mut pairs: Vec<(String, String)> = Vec::new();
+    for window in raw.windows(2) {
+        if window[0] == window[1] {
+            continue;
+        }
+        let pair = (window[0].clone(), window[1].clone());
+        if !pairs.contains(&pair) {
+            pairs.push(pair);
+        }
+    }
+    pairs
+}
+
+/// Whether `second` ever appears at the position directly after `first` in this unit.
+fn has_adjacent_pair(unit: &UnitStats, first: &str, second: &str) -> bool {
+    let (Some(first_positions), Some(second_positions)) =
+        (unit.positions.get(first), unit.positions.get(second))
+    else {
+        return false;
+    };
+    let mut i = 0;
+    let mut j = 0;
+    while i < first_positions.len() && j < second_positions.len() {
+        let wanted = first_positions[i] + 1;
+        if second_positions[j] == wanted {
+            return true;
+        }
+        if second_positions[j] < wanted {
+            j += 1;
+        } else {
+            i += 1;
+        }
+    }
+    false
+}
+
+/// Per-document entry held by the index.
+struct DocEntry {
     /// Document path, echoed back in [`ScoredHit`].
     path: String,
-    /// Token → count of that token within this document.
-    counts: HashMap<String, u32>,
-    /// Total token count, used to normalise term frequency.
-    total: u32,
+    /// The document's field-weighted statistics.
+    stats: UnitStats,
 }
 
 /// An in-memory token index over a set of documents.
@@ -45,42 +286,66 @@ struct DocStats {
 /// Build it with [`build_index`], then call [`SearchIndex::search`]. The index keeps the
 /// documents in their supplied order so ties break deterministically.
 pub struct SearchIndex {
-    docs: Vec<DocStats>,
+    docs: Vec<DocEntry>,
+    /// The full corpus size behind a narrowed candidate set; `None` when the indexed
+    /// documents are the whole corpus. See [`SearchIndex::with_corpus_size`].
+    corpus_size: Option<u32>,
 }
 
 impl SearchIndex {
+    /// State the size of the full corpus these documents were narrowed from, so IDF's
+    /// `n` is the real document count rather than the survivor count.
+    ///
+    /// Correct only when the narrowing kept every document containing any query token —
+    /// exactly what token narrowing does — because term document frequencies still count
+    /// over the supplied documents. Without this, a multi-term query ranked over a
+    /// narrowed set sees its common terms as rarer than they are, and the outcome shifts
+    /// with how many unrelated documents happened to be dropped. A stated size smaller
+    /// than the supplied set is clamped up to it.
+    #[must_use]
+    pub fn with_corpus_size(mut self, total_documents: usize) -> Self {
+        self.corpus_size = Some(u32::try_from(total_documents).unwrap_or(u32::MAX));
+        self
+    }
+
     /// Rank documents against `query`, returning hits sorted by descending score.
     ///
-    /// Scoring is the sum, over each distinct query token, of that token's normalised term
-    /// frequency in the document (`occurrences / total_tokens`) plus a small fixed
-    /// coverage bonus of `1.0` per distinct query token that the document contains. The
-    /// coverage bonus makes a document that matches *more* of the query rank above one
-    /// that merely repeats a single query term, while term frequency still separates docs
-    /// that cover the same terms. Documents scoring `0` are omitted.
+    /// Scoring is BM25 over field-weighted term frequencies with IDF computed across the
+    /// indexed set, plus a phrase bonus for query tokens appearing adjacent in query order
+    /// (see the module's Ranking contract). Documents containing none of the query tokens
+    /// are omitted.
     ///
     /// Ties (equal score) are broken stably by ascending `path`, so results are fully
     /// deterministic. An **empty query** (no tokens) returns an empty vector — there is
     /// nothing to rank against.
     ///
-    /// Complexity: `O(q · d)` time, where `q` is the number of distinct query tokens and
-    /// `d` is the number of indexed documents (each token's per-document count is an `O(1)`
-    /// hash-map lookup), plus `O(h log h)` for the final sort over the `h` scored hits.
+    /// Complexity: `O(q · d)` time for the term scores, where `q` is the number of distinct
+    /// query tokens and `d` is the number of indexed documents, plus the phrase pass — a
+    /// linear merge over each matched pair's position lists — and `O(h log h)` for the
+    /// final sort over the `h` scored hits.
     pub fn search(&self, query: &str) -> Vec<ScoredHit> {
         let query_tokens = distinct_tokens(query);
         if query_tokens.is_empty() {
             return Vec::new();
         }
 
-        let mut hits: Vec<ScoredHit> = Vec::new();
-        for doc in &self.docs {
-            let score = score_against(&doc.counts, doc.total, &query_tokens);
-            if score > 0.0 {
-                hits.push(ScoredHit {
-                    path: doc.path.clone(),
-                    score,
-                });
-            }
-        }
+        let units: Vec<&UnitStats> = self.docs.iter().map(|doc| &doc.stats).collect();
+        let scores = rank(
+            &units,
+            &query_tokens,
+            &phrase_pairs(query),
+            self.corpus_size,
+        );
+        let mut hits: Vec<ScoredHit> = self
+            .docs
+            .iter()
+            .zip(scores)
+            .filter(|(_, score)| *score > 0.0)
+            .map(|(doc, score)| ScoredHit {
+                path: doc.path.clone(),
+                score,
+            })
+            .collect();
 
         // Higher score first; equal scores fall back to ascending path for stability.
         hits.sort_by(|a, b| {
@@ -93,27 +358,18 @@ impl SearchIndex {
     }
 }
 
-/// The one scoring rule, at every granularity: per distinct query token present, its
-/// normalised term frequency (`occurrences / total.max(1)`) plus a coverage bonus of `1.0`.
-/// [`SearchIndex::search`] applies it to documents and [`best_block_id`] to single blocks,
-/// so the two rankings cannot drift apart.
-fn score_against(counts: &HashMap<String, u32>, total: u32, query_tokens: &[String]) -> f64 {
-    let mut score = 0.0f64;
-    for token in query_tokens {
-        if let Some(&count) = counts.get(token) {
-            score += f64::from(count) / f64::from(total.max(1)) + 1.0;
-        }
-    }
-    score
-}
-
 /// The id of the block within `document` that best matches `query`, under the same scoring
-/// [`SearchIndex::search`] ranks documents with. Only searchable blocks compete (see the
-/// module contract), the earliest block wins a tie so the answer is deterministic, and
-/// `None` means nothing matched — or the query tokenised to nothing.
+/// [`SearchIndex::search`] ranks documents with — BM25 whose IDF is taken across the
+/// document's own searchable blocks, so a block holding the query's rare word beats one
+/// repeating its common ones. Only searchable blocks compete (see the module contract),
+/// the earliest block wins a tie so the answer is deterministic, and `None` means nothing
+/// matched — or the query tokenised to nothing.
 ///
-/// This is what lets a search hit carry its answer: the caller hands back this one block's
-/// text with the hit, instead of leaving the reader a second read to find it.
+/// A heading is a label, not an answer: when a heading scores best, the winner is the
+/// best-matching non-heading block inside that heading's section (up to the next heading
+/// of the same or higher level), and the heading itself only when its section holds no
+/// match. This is what lets a search hit carry its answer: the caller hands back this one
+/// block's text with the hit, instead of leaving the reader a second read to find it.
 #[must_use]
 pub fn best_block_id(document: &Document, query: &str) -> Option<String> {
     let query_tokens = distinct_tokens(query);
@@ -121,24 +377,49 @@ pub fn best_block_id(document: &Document, query: &str) -> Option<String> {
         return None;
     }
 
-    let mut best: Option<(f64, &Block)> = None;
-    for block in &document.blocks {
-        if !is_searchable(&block.kind) || block.id.is_empty() {
-            continue;
-        }
-        let mut tokens = Vec::new();
-        push_block_tokens(&mut tokens, block);
-        let total = tokens.len() as u32;
-        let mut counts: HashMap<String, u32> = HashMap::new();
-        for token in tokens {
-            *counts.entry(token).or_insert(0) += 1;
-        }
-        let score = score_against(&counts, total, &query_tokens);
-        if score > 0.0 && best.as_ref().is_none_or(|(top, _)| score > *top) {
-            best = Some((score, block));
+    let candidates: Vec<(usize, &Block)> = document
+        .blocks
+        .iter()
+        .enumerate()
+        .filter(|(_, block)| is_searchable(&block.kind) && !block.id.is_empty())
+        .collect();
+    let stats: Vec<UnitStats> = candidates
+        .iter()
+        .map(|(_, block)| block_stats(block))
+        .collect();
+    let units: Vec<&UnitStats> = stats.iter().collect();
+    let scores = rank(&units, &query_tokens, &phrase_pairs(query), None);
+
+    let mut best: Option<(f64, usize)> = None;
+    for (position, score) in scores.iter().enumerate() {
+        if *score > 0.0 && best.is_none_or(|(top, _)| *score > top) {
+            best = Some((*score, position));
         }
     }
-    best.map(|(_, block)| block.id.clone())
+    let (_, winner) = best?;
+    let (heading_index, heading) = candidates[winner];
+
+    if heading.kind == "heading" {
+        let section_end = document.blocks[heading_index + 1..]
+            .iter()
+            .position(|block| block.kind == "heading" && block.level <= heading.level)
+            .map_or(document.blocks.len(), |offset| heading_index + 1 + offset);
+        let mut answer: Option<(f64, usize)> = None;
+        for (position, score) in scores.iter().enumerate() {
+            let (index, block) = candidates[position];
+            let inside = index > heading_index && index < section_end;
+            if !inside || block.kind == "heading" {
+                continue;
+            }
+            if *score > 0.0 && answer.is_none_or(|(top, _)| *score > top) {
+                answer = Some((*score, position));
+            }
+        }
+        if let Some((_, position)) = answer {
+            return Some(candidates[position].1.id.clone());
+        }
+    }
+    Some(heading.id.clone())
 }
 
 /// Build a [`SearchIndex`] over `(path, document)` pairs.
@@ -146,26 +427,26 @@ pub fn best_block_id(document: &Document, query: &str) -> Option<String> {
 /// Paths are stored as-is and echoed in results; the same path may appear more than once
 /// (the caller owns uniqueness). Indexing order is preserved for stable tie-breaking.
 ///
+/// IDF needs two numbers: how many documents hold a term, counted over the documents
+/// supplied here, and how many documents exist. A caller narrowing candidates by token
+/// first (as the store does) still supplies every holder of every query token, so the
+/// first number stays exact — state the second with [`SearchIndex::with_corpus_size`] so
+/// a multi-term query's common terms are not mistaken for rare ones.
+///
 /// Complexity: `O(total tokens)` time and space across every document, since each token is
-/// extracted and tallied into a per-document hash map exactly once.
+/// tallied and its position recorded exactly once.
 pub fn build_index(docs: &[(String, Document)]) -> SearchIndex {
-    let stats = docs
+    let entries = docs
         .iter()
-        .map(|(path, document)| {
-            let tokens = document_tokens(document);
-            let total = tokens.len() as u32;
-            let mut counts: HashMap<String, u32> = HashMap::new();
-            for token in tokens {
-                *counts.entry(token).or_insert(0) += 1;
-            }
-            DocStats {
-                path: path.clone(),
-                counts,
-                total,
-            }
+        .map(|(path, document)| DocEntry {
+            path: path.clone(),
+            stats: document_stats(document),
         })
         .collect();
-    SearchIndex { docs: stats }
+    SearchIndex {
+        docs: entries,
+        corpus_size: None,
+    }
 }
 
 /// Whether a block's text contributes to the search index (see the module contract).
@@ -392,6 +673,144 @@ mod tests {
     }
 
     #[test]
+    fn rare_terms_outvote_ubiquitous_question_words() {
+        // Question words live in every document, the answer's word in one. IDF must make
+        // the one-document term decide the ranking, with no stopword list involved.
+        let noise = |title: &str, text: &str| doc(title, vec![paragraph(text)]);
+        let documents = vec![
+            (
+                "runner.dx".to_string(),
+                noise(
+                    "Runner",
+                    "what does the runner do, what does it do when asked, what to do",
+                ),
+            ),
+            (
+                "loop.dx".to_string(),
+                noise("Loop", "what does the loop do, what does it repeat and do"),
+            ),
+            (
+                "phase.dx".to_string(),
+                noise("Phase", "what does the phase do, and what does it not do"),
+            ),
+            (
+                "confine.dx".to_string(),
+                noise(
+                    "Confinement",
+                    "what confine does: it must do its work inside the sandbox",
+                ),
+            ),
+        ];
+        let index = build_index(&documents);
+        assert_eq!(index.search("what does confine do")[0].path, "confine.dx");
+    }
+
+    #[test]
+    fn a_title_hit_outranks_a_passing_body_mention() {
+        let about = doc(
+            "Confinement",
+            vec![paragraph("something else entirely here")],
+        );
+        let mentions = doc(
+            "Other Notes",
+            vec![paragraph("confinement mentioned once here")],
+        );
+        let index = build_index(&[
+            ("mentions.dx".to_string(), mentions),
+            ("about.dx".to_string(), about),
+        ]);
+        let hits = index.search("confinement");
+        assert_eq!(hits[0].path, "about.dx");
+        assert!(hits[0].score > hits[1].score);
+    }
+
+    #[test]
+    fn an_adjacent_phrase_outranks_the_same_words_scattered() {
+        // Same tokens, same lengths, same document frequencies — only adjacency differs.
+        let phrase = doc("A", vec![paragraph("state the board geometry once")]);
+        let scattered = doc("B", vec![paragraph("geometry rules the board layout")]);
+        let index = build_index(&[
+            ("scattered.dx".to_string(), scattered),
+            ("phrase.dx".to_string(), phrase),
+        ]);
+        let hits = index.search("board geometry");
+        assert_eq!(hits[0].path, "phrase.dx");
+        assert!(hits[0].score > hits[1].score);
+    }
+
+    #[test]
+    fn a_phrase_never_bridges_two_blocks() {
+        // Identical token multisets; only one document holds the phrase inside one block.
+        let joined = doc("J", vec![paragraph("the board geometry rule")]);
+        let split = doc(
+            "S",
+            vec![paragraph("the board"), paragraph("geometry rule")],
+        );
+        let index = build_index(&[
+            ("split.dx".to_string(), split),
+            ("joined.dx".to_string(), joined),
+        ]);
+        let hits = index.search("board geometry");
+        assert_eq!(hits[0].path, "joined.dx");
+        assert!(hits[0].score > hits[1].score);
+    }
+
+    #[test]
+    fn phrase_pairs_come_from_the_query_as_typed_not_its_deduplication() {
+        // Query "wasm rust wasm compile" types the pairs (wasm,rust), (rust,wasm),
+        // (wasm,compile) — never (rust,compile), which deduplication would invent.
+        // Same tokens, same lengths in both documents; only which pair they hold differs.
+        let typed = doc("A", vec![paragraph("rust and wasm compile here")]);
+        let invented = doc("B", vec![paragraph("wasm and rust compile here")]);
+        let index = build_index(&[
+            ("invented.dx".to_string(), invented),
+            ("typed.dx".to_string(), typed),
+        ]);
+        let hits = index.search("wasm rust wasm compile");
+        assert_eq!(hits[0].path, "typed.dx");
+        assert!(hits[0].score > hits[1].score);
+    }
+
+    #[test]
+    fn a_stated_corpus_size_restores_full_corpus_idf_after_narrowing() {
+        // Every document weighs the same, so scores under a stated corpus size must be
+        // byte-identical to ranking the full corpus — narrowing loses no information.
+        let matching = vec![
+            (
+                "alpha.dx".to_string(),
+                doc("T", vec![paragraph("alpha only here")]),
+            ),
+            (
+                "beta1.dx".to_string(),
+                doc("T", vec![paragraph("beta words here")]),
+            ),
+            (
+                "beta2.dx".to_string(),
+                doc("T", vec![paragraph("beta words here")]),
+            ),
+            (
+                "beta3.dx".to_string(),
+                doc("T", vec![paragraph("beta words here")]),
+            ),
+        ];
+        let mut full = matching.clone();
+        for filler in 0..6 {
+            full.push((
+                format!("filler{filler}.dx"),
+                doc("T", vec![paragraph("nothing to see")]),
+            ));
+        }
+        let full_hits = build_index(&full).search("alpha beta");
+        let narrowed_hits = build_index(&matching)
+            .with_corpus_size(full.len())
+            .search("alpha beta");
+        assert_eq!(full_hits, narrowed_hits);
+        // Without the stated size, the survivors masquerade as the corpus and IDF shifts.
+        let unstated_hits = build_index(&matching).search("alpha beta");
+        assert_ne!(full_hits[0].score, unstated_hits[0].score);
+    }
+
+    #[test]
     fn best_block_is_the_block_that_answers_the_query() {
         let source = "::heading level=1 id=top\nGuide\n::end\n\n\
 ::paragraph id=intro\nInstalling is elsewhere.\n::end\n\n\
@@ -411,6 +830,45 @@ mod tests {
         assert_eq!(
             best_block_id(&document, "installing elsewhere").as_deref(),
             Some("covers")
+        );
+    }
+
+    #[test]
+    fn best_block_prefers_the_rare_answer_word_over_question_words() {
+        // Block-level IDF: the block holding the query's one rare token beats the block
+        // repeating its ubiquitous ones.
+        let source = "::paragraph id=chatter\nwhat the engine does, and what the runner \
+does, and what the store does\n::end\n\n\
+::paragraph id=answer\nconfine seals what the block does\n::end\n";
+        let document = crate::format::parse(source);
+        assert_eq!(
+            best_block_id(&document, "what does confine do").as_deref(),
+            Some("answer")
+        );
+    }
+
+    #[test]
+    fn best_block_descends_from_a_winning_heading_to_the_block_that_answers() {
+        // The heading names the topic, so it scores best — but a label is not an answer.
+        let source = "::heading level=3 id=escape-label\nEscaping: what markup survives\n::end\n\n\
+::paragraph id=escape-answer\nMarkup survives only the allow-list of elements.\n::end\n\n\
+::heading level=3 id=next-label\nAnother section\n::end\n\n\
+::paragraph id=stray\nmarkup mentioned far away from the label\n::end\n";
+        let document = crate::format::parse(source);
+        assert_eq!(
+            best_block_id(&document, "what markup survives").as_deref(),
+            Some("escape-answer")
+        );
+    }
+
+    #[test]
+    fn best_block_stays_the_heading_when_its_section_holds_no_match() {
+        let source = "::heading level=2 id=boards\nBoards\n::end\n\n\
+::paragraph id=body\nnothing related here\n::end\n";
+        let document = crate::format::parse(source);
+        assert_eq!(
+            best_block_id(&document, "boards").as_deref(),
+            Some("boards")
         );
     }
 
