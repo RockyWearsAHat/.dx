@@ -18,9 +18,9 @@ import * as vscode from 'vscode';
 
 import { documentText, revisionText } from './changes';
 import { runCli } from './cli';
-import { engine, outlineOf } from './engine';
+import { engine, outlineOf, resourcesFor } from './engine';
 import { makeNonce } from './policy';
-import { blockHtml, previewHtml, sheetHtml, Surface } from './preview';
+import { blockHtml, exportTheme, previewHtml, sheetHtml, Surface } from './preview';
 
 /** View type of the rendered document editor. */
 const VIEW_TYPE = 'dx.document';
@@ -543,14 +543,27 @@ async function runCodeBlocks(uri?: vscode.Uri): Promise<void> {
   }
 }
 
-/** Write the rendered page beside the document as an HTML file. */
+/**
+ * Write the rendered page beside the document as an HTML file.
+ *
+ * The export renders with the document's references resolved — the same `resourcesFor` the
+ * preview uses — because a page that dropped them would be a file whose `::code src=`
+ * listings and `::view` frames were sentences saying the content could not be read. It is
+ * the whole point of exporting: the page, complete, away from the tool that drew it.
+ */
 async function exportHtml(uri?: vscode.Uri): Promise<void> {
   const target = await resolveUri(uri);
   if (!target) {
     return;
   }
   const document = await vscode.workspace.openTextDocument(target);
-  const page = engine().render_html(document.getText(), 'auto', false);
+  const source = document.getText();
+  const page = engine().render_html(
+    source,
+    exportTheme(),
+    false,
+    resourcesFor(source, path.dirname(target.fsPath))
+  );
   const output = target.with({ path: `${stripExtension(target.path)}.html` });
 
   await vscode.workspace.fs.writeFile(output, Buffer.from(page, 'utf8'));

@@ -23,7 +23,7 @@
     "attributes": {
       "patterns": [
         {
-          "match": "\\b(hidden|module|run)\\b",
+          "match": "\\b(hidden|module|open|run)\\b",
           "name": "keyword.control.dx"
         },
         {

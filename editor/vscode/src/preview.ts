@@ -209,6 +209,21 @@ export function blockHtml(source: string, id: string, body: string): string {
 }
 
 /** Map the configured theme onto a palette the renderer understands. */
+/**
+ * The theme an *exported* page takes: the reader's `dx.theme`, and `auto` when that setting
+ * says `match-editor`.
+ *
+ * A page written to disk is read outside VS Code, where there is no editor to match — so
+ * baking in whichever theme happened to be active would hand someone a dark page because
+ * the author was working at night. `auto` lets the file follow its own reader's system.
+ */
+export function exportTheme(): string {
+  const configured = vscode.workspace
+    .getConfiguration('dx')
+    .get<string>('theme', 'match-editor');
+  return configured === 'match-editor' ? 'auto' : configured;
+}
+
 function resolveTheme(configured: string): string {
   if (configured !== 'match-editor') {
     return configured;

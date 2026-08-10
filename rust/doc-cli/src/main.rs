@@ -40,16 +40,14 @@ const ROOT_ENV: &str = "DX_ROOT";
 fn main() -> ExitCode {
     let raw: Vec<String> = std::env::args().skip(1).collect();
     let Some(command) = raw.first().cloned() else {
-        print!("{}", commands::setup::HELP);
-        return ExitCode::SUCCESS;
+        return write_out(commands::setup::HELP);
     };
 
     let parsed = Args::parse(&raw[1..]);
     // Both servers run until they are stopped, so neither returns an `Output` to print —
     // which is exactly why `--help` has to be answered here, before either starts.
     if (command == "mcp" || command == "serve") && parsed.present("help") {
-        print!("{}", commands::setup::HELP);
-        return ExitCode::SUCCESS;
+        return write_out(commands::setup::HELP);
     }
     // The servers cannot go through the dispatch table (they never return an `Output`),
     // but a flag they do not read is refused by the same formatter, never swallowed.
@@ -76,6 +74,27 @@ fn main() -> ExitCode {
     }
 }
 
+/// Write `text` to stdout, treating a reader that walked away as a finished job.
+///
+/// `print!` panics when the pipe it writes into has closed, which is what `dx source big.dx
+/// | head` does the moment `head` has its lines — a normal shell gesture answered with a
+/// Rust backtrace. The reader asked for less than there was and got it; that is a success,
+/// not a crash. Any other write failure is a real one and says so.
+fn write_out(text: &str) -> ExitCode {
+    let mut stdout = io::stdout();
+    match stdout
+        .write_all(text.as_bytes())
+        .and_then(|()| stdout.flush())
+    {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) if error.kind() == io::ErrorKind::BrokenPipe => ExitCode::SUCCESS,
+        Err(error) => {
+            let _ = writeln!(io::stderr(), "cannot write to standard output: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 /// Print a command's output, honoring `--out` for content the caller asked for.
 ///
 /// A report is always printed: it describes files the command already wrote, so
@@ -88,20 +107,13 @@ fn emit(output: &Output, args: &Args) -> ExitCode {
 
     match target {
         Some(path) => match workspace::write_text(&PathBuf::from(path), output.text()) {
-            Ok(()) => {
-                println!("wrote {path}");
-                ExitCode::SUCCESS
-            }
+            Ok(()) => write_out(&format!("wrote {path}\n")),
             Err(message) => {
                 let _ = writeln!(io::stderr(), "{message}");
                 ExitCode::FAILURE
             }
         },
-        None => {
-            print!("{}", output.text());
-            let _ = io::stdout().flush();
-            ExitCode::SUCCESS
-        }
+        None => write_out(output.text()),
     }
 }
 

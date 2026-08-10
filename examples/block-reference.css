@@ -1,0 +1,10 @@
+/* The sibling sheet `block-reference.dx` links with `::stylesheet href= media=print`.
+   The scoping is the block's, not this file's: `media=print` is what keeps these rules off
+   the screen, which is the whole point of the attribute. */
+.dx-doc .dx-board {
+  break-inside: avoid;
+}
+
+.dx-doc pre {
+  white-space: pre-wrap;
+}

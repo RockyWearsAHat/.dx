@@ -68,12 +68,12 @@ pub(crate) const PAGE_NODE_HEIGHT: u32 = DEFAULT_BOARD_HEIGHT;
 const STATIC_COLUMN: f64 = PAGE_NODE_WIDTH as f64;
 
 /// Breathing room between the nodes' bounding box and the viewport's edge, in canvas px.
-const FIT_PADDING: f64 = 24.0;
+pub(crate) const FIT_PADDING: f64 = 24.0;
 
 /// The most a fit may magnify. A board holding three small nodes should use the room it
 /// was given rather than huddle in the middle of it, but past this the type stops looking
 /// like the page's type and starts looking like a zoom.
-const FIT_MAX: f64 = 1.5;
+pub(crate) const FIT_MAX: f64 = 1.5;
 
 /// The smallest fit that still reads. Below a third of drawn size the page's type is
 /// smaller than its own hairlines and the arrangement is a smear — which the render must
@@ -554,9 +554,9 @@ const FIT_CHECK_INDENT: f64 = 40.0;
 /// checklist once grew a ~80px band of empty paper under its last line.
 const FIT_ITEM_LEAD: f64 = 6.0;
 /// The narrowest a `w=fit` node may come out: a sliver cannot hold a grip or a sentence.
-const FIT_MIN_WIDTH: u32 = 120;
+pub(crate) const FIT_MIN_WIDTH: u32 = 120;
 /// The shortest an `h=fit` node may come out: one line under the node's own padding.
-const FIT_MIN_HEIGHT: u32 = 56;
+pub(crate) const FIT_MIN_HEIGHT: u32 = 56;
 /// The tallest an `h=fit` estimate may claim, so a pasted novel cannot stretch a board.
 const FIT_MAX_HEIGHT: u32 = 2400;
 
