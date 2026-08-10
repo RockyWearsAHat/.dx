@@ -18,7 +18,7 @@
 //! [`save`] stores the document as chunks, rewrites its stub, and re-exports the packs, so
 //! canonical form and the on-disk pointer are always what the store says they are.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -148,36 +148,85 @@ pub fn read(path: &Path) -> Result<String, String> {
             .map(|_| buffer)
             .map_err(|error| format!("could not read standard input: {error}"));
     }
+    Sources::open(&workspace_root(path))?.source(path)
+}
 
-    let on_disk = fs::read_to_string(path).ok();
-    let is_pointer = on_disk.as_deref().is_some_and(stub::is_stub);
+/// A workspace's content, opened once: the store, and the packs behind it.
+///
+/// One document resolved on its own is one store open, and that is fine. A *listing* resolves
+/// every document in the tree, and opening SQLite per document is most of what `dx ls` and
+/// `dx search` spend — a quarter of a search's wall clock here, for nineteen documents. The
+/// packs are worse: reading one decodes the whole file, so falling back to them per document
+/// is quadratic in a workspace with no index at all.
+///
+/// So both are opened at most once and shared. The resolution order is [`read`]'s and is
+/// stated there; this type is where it is implemented, so there is one answer to "what is the
+/// text of this document" rather than a fast one and a careful one.
+struct Sources {
+    root: PathBuf,
+    store: Option<Store>,
+    /// Filled on the first pointer the store cannot answer, and never if it always can.
+    packs: std::cell::OnceCell<BTreeMap<String, String>>,
+}
 
-    if let Some(text) = &on_disk {
-        if !is_pointer {
-            return Ok(text.clone());
+impl Sources {
+    /// Open the store for the workspace at `root`, if it has one.
+    fn open(root: &Path) -> Result<Self, String> {
+        Ok(Self {
+            root: root.to_path_buf(),
+            store: open_existing(root)?,
+            packs: std::cell::OnceCell::new(),
+        })
+    }
+
+    /// The canonical source of the document at `path` — see [`read`] for the order.
+    fn source(&self, path: &Path) -> Result<String, String> {
+        let on_disk = fs::read_to_string(path).ok();
+        let is_pointer = on_disk.as_deref().is_some_and(stub::is_stub);
+
+        if let Some(text) = on_disk {
+            if !is_pointer {
+                return Ok(text);
+            }
+        }
+
+        let relative = relative_of(&self.root, path);
+        if let Some(store) = &self.store {
+            match store.source(&relative) {
+                Ok(source) => return Ok(source),
+                // Not in the index yet: fall through to the packs.
+                Err(StoreError::NotFound(_)) => {}
+                Err(error) => return Err(error.to_string()),
+            }
+        }
+
+        match self.packed()?.get(&relative) {
+            Some(source) => Ok(source.clone()),
+            None if is_pointer => Err(format!(
+                "{} is a dx pointer, but its content is not in this workspace's store or packs; \
+                 run `dx sync` to rebuild from .doc/, or restore .doc/repo.dxcp",
+                path.display()
+            )),
+            None => Err(format!("could not read {}", path.display())),
         }
     }
 
-    let root = workspace_root(path);
-    let relative = relative_of(&root, path);
-
-    if let Some(store) = open_existing(&root)? {
-        match store.source(&relative) {
-            Ok(source) => return Ok(source),
-            // Not in the index yet: fall through to the packs.
-            Err(StoreError::NotFound(_)) => {}
-            Err(error) => return Err(error.to_string()),
+    /// Every document the packs carry, decoded once.
+    fn packed(&self) -> Result<&BTreeMap<String, String>, String> {
+        if let Some(loaded) = self.packs.get() {
+            return Ok(loaded);
         }
+        let loaded = pack::load_all(&self.root).map_err(|error| error.to_string())?;
+        Ok(self.packs.get_or_init(|| loaded))
     }
 
-    match pack::source(&root, &relative).map_err(|error| error.to_string())? {
-        Some(source) => Ok(source),
-        None if is_pointer => Err(format!(
-            "{} is a dx pointer, but its content is not in this workspace's store or packs; \
-             run `dx sync` to rebuild from .doc/, or restore .doc/repo.dxcp",
-            path.display()
-        )),
-        None => Err(format!("could not read {}", path.display())),
+    /// The document at `path`, parsed, with the paths a caller reports it by.
+    fn load(&self, path: &Path) -> Result<Loaded, String> {
+        Ok(Loaded {
+            relative: relative_of(&self.root, path),
+            path: path.to_path_buf(),
+            document: parse(&self.source(path)?),
+        })
     }
 }
 
@@ -530,16 +579,18 @@ pub fn load_all(directory: &Path) -> Result<Listing, String> {
     let root = workspace_root(directory);
     let scope = scope_of(&root, directory);
 
+    // One store open for the whole listing, not one per document (`Sources`).
+    let sources = Sources::open(&root)?;
     let mut listing = Listing::default();
     for path in discover(directory) {
-        match load(&path) {
+        match sources.load(&path) {
             Ok(document) => listing.documents.push(document),
             Err(error) => listing.unresolved.push((relative_of(&root, &path), error)),
         }
     }
 
     // Include stored documents whose stub is absent, so nothing stored is invisible.
-    if let Some(store) = open_existing(&root)? {
+    if let Some(store) = &sources.store {
         for summary in store.list().map_err(|error| error.to_string())? {
             let seen = listing
                 .documents
@@ -627,28 +678,64 @@ const MAX_SOURCE_BYTES: u64 = 512 * 1024;
 /// store, hidden directories) are skipped in silence — a search must never fail because some
 /// unrelated file in the tree is a binary.
 ///
-/// Complexity: `O(n)` in the bytes of the files offered.
+/// Reading and chunking a file is per-file work with nothing shared, so it is spread across
+/// the machine's cores ([`in_parallel`]). Output order is the sorted file order regardless of
+/// how the work was split — a search that reordered itself by how busy the machine was would
+/// not be a search anybody could test.
+///
+/// Complexity: `O(n)` in the bytes of the files offered, over the available cores.
 fn source_corpus(directory: &Path) -> Vec<Loaded> {
     let mut files = Vec::new();
     collect_source_files(directory, &mut files);
     files.sort();
-    files
-        .iter()
-        .filter_map(|path| {
-            let relative = path
-                .strip_prefix(directory)
-                .unwrap_or(path)
-                .to_string_lossy()
-                .replace('\\', "/");
-            let text = fs::read_to_string(path).ok()?;
-            let document = doc_core::search::source_document(&relative, &text);
-            (!document.blocks.is_empty()).then(|| Loaded {
-                path: path.clone(),
-                relative,
-                document,
-            })
+    in_parallel(&files, |path| {
+        let relative = path
+            .strip_prefix(directory)
+            .unwrap_or(path)
+            .to_string_lossy()
+            .replace('\\', "/");
+        let text = fs::read_to_string(path).ok()?;
+        let document = doc_core::search::source_document(&relative, &text);
+        (!document.blocks.is_empty()).then(|| Loaded {
+            path: path.clone(),
+            relative,
+            document,
         })
-        .collect()
+    })
+    .into_iter()
+    .flatten()
+    .collect()
+}
+
+/// Apply `work` to every item across the machine's cores, keeping the input's order.
+///
+/// The one concurrency primitive in this crate, and deliberately the plainest one: scoped
+/// threads over contiguous slices, each writing its own `Vec`, joined in slice order. No
+/// channel, no shared mutable state, no dependency — and no reordering, so a parallel run and
+/// a serial one produce the same bytes. A single item, or a machine reporting one core, runs
+/// on the calling thread rather than paying to start one.
+fn in_parallel<T, R>(items: &[T], work: impl Fn(&T) -> R + Sync) -> Vec<R>
+where
+    T: Sync,
+    R: Send,
+{
+    let cores = std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get);
+    let chunk = items.len().div_ceil(cores.max(1)).max(1);
+    if cores <= 1 || items.len() <= 1 {
+        return items.iter().map(work).collect();
+    }
+
+    let work = &work;
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = items
+            .chunks(chunk)
+            .map(|slice| scope.spawn(move || slice.iter().map(work).collect::<Vec<R>>()))
+            .collect();
+        handles
+            .into_iter()
+            .flat_map(|handle| handle.join().unwrap_or_default())
+            .collect()
+    })
 }
 
 /// Recursively collect source files, skipping what the document walker skips.
@@ -712,11 +799,12 @@ pub struct Hit {
 pub fn search(directory: &Path, query: &str, limit: usize) -> Result<Vec<Hit>, String> {
     let mut documents = load_all(directory)?.documents;
     documents.extend(source_corpus(directory));
-    let index = doc_core::search::build_index(
-        documents
-            .iter()
-            .map(|loaded| (loaded.relative.as_str(), &loaded.document)),
-    );
+    // Tokenising is the expensive half of a search, and it is per-document work: index the
+    // slices in parallel and join them (`SearchIndex::merge`). The join is order-preserving,
+    // so the ranking is the ranking a single thread would have produced.
+    let index = doc_core::search::SearchIndex::merge(in_parallel(&documents, |loaded| {
+        doc_core::search::build_index([(loaded.relative.as_str(), &loaded.document)])
+    }));
     let by_path: HashMap<&str, &Loaded> = documents
         .iter()
         .map(|loaded| (loaded.relative.as_str(), loaded))
@@ -803,6 +891,37 @@ mod tests {
     }
 
     const NOTES: &str = "::heading level=1 id=notes\nNotes\n::end\n\n::paragraph id=p\nkubernetes scheduling notes\n::end\n";
+
+    #[test]
+    fn parallel_work_comes_back_in_the_order_it_went_in() {
+        // The whole safety of the parallel corpus build: a search that reordered itself by
+        // how busy the machine was would not be a search anybody could test.
+        let items: Vec<usize> = (0..1000).collect();
+        assert_eq!(
+            in_parallel(&items, |n| n * 2),
+            items.iter().map(|n| n * 2).collect::<Vec<_>>()
+        );
+        assert_eq!(in_parallel(&items[..1], |n| *n), vec![0]);
+        assert!(in_parallel::<usize, usize>(&[], |n| *n).is_empty());
+    }
+
+    #[test]
+    fn a_listing_and_a_single_read_resolve_a_pointer_the_same_way() {
+        // `Sources` exists to open the store once for a listing; the one thing it must not
+        // do is answer differently from the single-document path.
+        let root = scratch("one-answer");
+        save(&root.join("notes.dx"), &parse(NOTES)).expect("save");
+        assert!(stub::is_stub(
+            &fs::read_to_string(root.join("notes.dx")).expect("pointer")
+        ));
+
+        let listed = load_all(&root).expect("listing");
+        assert_eq!(listed.documents.len(), 1);
+        assert_eq!(
+            listed.documents[0].document,
+            parse(&read(&root.join("notes.dx")).expect("read"))
+        );
+    }
 
     #[test]
     fn a_folder_read_walks_sorted_and_skips_hidden_entries_and_build_caches() {
