@@ -560,6 +560,91 @@ pub fn load_all(directory: &Path) -> Result<Listing, String> {
     Ok(listing)
 }
 
+/// File extensions offered to search as source, beyond the `.dx` documents themselves.
+///
+/// An allow-list rather than "everything that decodes as UTF-8": a lock file, a minified
+/// bundle, or a generated blob answers no question anyone asks, and indexing it only dilutes
+/// the ranking of the files that do.
+const SEARCHABLE_SOURCE: &[&str] = &[
+    "rs", "js", "mjs", "cjs", "ts", "tsx", "jsx", "py", "rb", "go", "java", "kt", "swift", "c",
+    "h", "cc", "cpp", "hpp", "cs", "sh", "bash", "zsh", "sql", "toml", "yaml", "yml", "json", "md",
+    "css", "html", "txt",
+];
+
+/// Largest source file offered to the index.
+///
+/// Past this a file is a generated artifact or a data blob, not something a person wrote to be
+/// read — and reading it costs the whole search its latency.
+const MAX_SOURCE_BYTES: u64 = 512 * 1024;
+
+/// Every source file under `directory`, read as a searchable document.
+///
+/// This is what makes "where is this decided?" answerable by the cheap route when the answer
+/// lives in code rather than prose: a miss is what sends a session back to grepping and reading
+/// whole files, which is the expensive route the index exists to replace. Unreadable files,
+/// oversized ones, and anything the walker already refuses (build output, `node_modules`, the
+/// store, hidden directories) are skipped in silence — a search must never fail because some
+/// unrelated file in the tree is a binary.
+///
+/// Complexity: `O(n)` in the bytes of the files offered.
+fn source_corpus(directory: &Path) -> Vec<Loaded> {
+    let mut files = Vec::new();
+    collect_source_files(directory, &mut files);
+    files.sort();
+    files
+        .iter()
+        .filter_map(|path| {
+            let relative = path
+                .strip_prefix(directory)
+                .unwrap_or(path)
+                .to_string_lossy()
+                .replace('\\', "/");
+            let text = fs::read_to_string(path).ok()?;
+            let document = doc_core::search::source_document(&relative, &text);
+            (!document.blocks.is_empty()).then(|| Loaded {
+                path: path.clone(),
+                relative,
+                document,
+            })
+        })
+        .collect()
+}
+
+/// Recursively collect source files, skipping what the document walker skips.
+fn collect_source_files(directory: &Path, found: &mut Vec<PathBuf>) {
+    let Ok(entries) = fs::read_dir(directory) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if name.starts_with('.') {
+            continue;
+        }
+        if path.is_dir() {
+            if !matches!(
+                name,
+                "node_modules" | "target" | "build" | "dist" | "__pycache__"
+            ) {
+                collect_source_files(&path, found);
+            }
+            continue;
+        }
+        let searchable = path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| SEARCHABLE_SOURCE.contains(&extension));
+        let sized = entry
+            .metadata()
+            .is_ok_and(|metadata| metadata.len() <= MAX_SOURCE_BYTES);
+        if searchable && sized {
+            found.push(path);
+        }
+    }
+}
+
 /// One search hit: a document, why it matched, and where the answer is.
 #[derive(Debug, Clone)]
 pub struct Hit {
@@ -572,64 +657,46 @@ pub struct Hit {
     pub block: Option<String>,
 }
 
-/// Search every document under `directory` for `query`, best matches first.
+/// Search a project for `query`, best matches first — its documents *and* its source files.
 ///
-/// The store answers when it has been built — it narrows candidates in SQL before ranking, so
-/// the cost tracks matches rather than corpus size. Otherwise the documents are resolved and
-/// ranked in memory, which keeps search working in a workspace with no index yet. The store
-/// lives at the workspace root even when `directory` is a subdirectory; a scoped search asks
-/// it wide and keeps only hits under the scope, so the limit still means "best `limit` here".
+/// Documents and source rank in one index, which is why the store's own narrowed search is not
+/// consulted here: two indexes would mean two scores with no honest way to order one against
+/// the other, and the answer to "where is this decided?" is as often a `.rs` file as a
+/// document. A miss is the expensive case — it sends the caller back to grepping and reading
+/// whole files — so covering the tree matters more than narrowing it. Narrowing becomes the
+/// store's to offer again once it indexes source too.
+///
+/// Complexity: `O(n)` in the bytes of the project's documents and source files.
 pub fn search(directory: &Path, query: &str, limit: usize) -> Result<Vec<Hit>, String> {
-    let root = workspace_root(directory);
-    let scope = scope_of(&root, directory);
-
-    if let Some(store) = open_existing(&root)? {
-        let fetch = if scope.is_empty() { limit } else { usize::MAX };
-        let mut hits = Vec::new();
-        for scored in store
-            .search(query, fetch)
-            .map_err(|error| error.to_string())?
-        {
-            let path = scored.summary.path;
-            if !in_scope(&path, &scope) {
-                continue;
-            }
-            let document = store
-                .document(&path)
-                .map_err(|error| format!("{path}: {error}"))?;
-            hits.push(Hit {
-                // The store's own ranking index computed this; never a placeholder.
-                score: scored.score,
-                block: doc_core::search::best_block_id(&document, query),
-                document: Loaded {
-                    path: root.join(&path),
-                    relative: path,
-                    document,
-                },
-            });
-            if hits.len() == limit {
-                break;
-            }
-        }
-        if !hits.is_empty() {
-            return Ok(hits);
-        }
-    }
-
-    // No index yet, or nothing stored matched: resolve and rank in memory, which also
-    // covers plain-text documents nothing has adopted.
-    let documents = load_all(directory)?.documents;
+    let mut documents = load_all(directory)?.documents;
+    documents.extend(source_corpus(directory));
     let indexed: Vec<(String, Document)> = documents
         .iter()
         .map(|loaded| (loaded.relative.clone(), loaded.document.clone()))
         .collect();
     let index = doc_core::search::build_index(&indexed);
 
-    Ok(index
+    // `limit` is per corpus, documents first. A project's documents are written to answer
+    // questions and its source files merely contain the answer, so letting one crowd out the
+    // other loses whichever the caller needed: a long file that mentions the words everywhere
+    // outranked the document that explains them, and a question only the code answers had no
+    // way to reach it. Two bounded answers cost a few hundred bytes and lose neither.
+    let mut documents_taken = 0;
+    let mut source_taken = 0;
+    let mut ranked: Vec<Hit> = index
         .search(query)
         .into_iter()
-        .take(limit)
         .filter_map(|result| {
+            let is_document = result.path.ends_with(".dx");
+            let taken = if is_document {
+                &mut documents_taken
+            } else {
+                &mut source_taken
+            };
+            if *taken >= limit {
+                return None;
+            }
+            *taken += 1;
             documents
                 .iter()
                 .find(|loaded| loaded.relative == result.path)
@@ -639,7 +706,12 @@ pub fn search(directory: &Path, query: &str, limit: usize) -> Result<Vec<Hit>, S
                     score: result.score,
                 })
         })
-        .collect())
+        .collect();
+
+    // Documents first, each group still in score order — the ranking decides what is best,
+    // the grouping decides which question is answered first.
+    ranked.sort_by_key(|hit| !hit.document.relative.ends_with(".dx"));
+    Ok(ranked)
 }
 
 #[cfg(test)]
@@ -809,6 +881,68 @@ mod tests {
         fs::write(root.join("a.dx"), NOTES).expect("write");
         let hits = search(&root, "kubernetes", 10).expect("search");
         assert_eq!(hits.len(), 1);
+    }
+
+    /// A question whose answer lives in code used to miss entirely, and a miss is what sends a
+    /// session back to grepping and reading whole files — the expensive route search exists to
+    /// replace.
+    #[test]
+    fn search_reaches_source_files_and_names_the_lines_to_read() {
+        let root = scratch("search-source");
+        fs::write(root.join("a.dx"), NOTES).expect("write");
+        fs::create_dir_all(root.join("src")).expect("dirs");
+        fs::write(
+            root.join("src/confine.rs"),
+            "/// Wrap the command in a deny-by-default seatbelt profile.\npub fn confine() {}\n",
+        )
+        .expect("write");
+
+        let hits = search(&root, "seatbelt profile", 5).expect("search");
+        let hit = hits
+            .iter()
+            .find(|hit| hit.document.relative == "src/confine.rs")
+            .expect("the code answers, so the code is found");
+        assert!(
+            hit.block.as_deref().is_some_and(|id| id.starts_with('L')),
+            "a source hit names the lines to read, got {:?}",
+            hit.block
+        );
+    }
+
+    /// Documents and source are two bounded answers, documents first: a project's documents are
+    /// written to answer questions, and letting a long source file crowd them out loses the
+    /// better answer to the noisier one.
+    #[test]
+    fn documents_answer_before_source_and_neither_crowds_the_other_out() {
+        let root = scratch("search-grouping");
+        fs::write(root.join("a.dx"), NOTES).expect("write");
+        fs::create_dir_all(root.join("src")).expect("dirs");
+        for index in 0..4 {
+            fs::write(
+                root.join(format!("src/n{index}.rs")),
+                "// kubernetes scheduling kubernetes scheduling kubernetes scheduling\n",
+            )
+            .expect("write");
+        }
+
+        let hits = search(&root, "kubernetes scheduling", 2).expect("search");
+        assert_eq!(
+            hits[0].document.relative, "a.dx",
+            "the document answers first"
+        );
+        assert_eq!(
+            hits.iter()
+                .filter(|h| h.document.relative.ends_with(".dx"))
+                .count(),
+            1
+        );
+        assert_eq!(
+            hits.iter()
+                .filter(|h| !h.document.relative.ends_with(".dx"))
+                .count(),
+            2,
+            "source is bounded by the same limit, not by what documents left over"
+        );
     }
 
     #[test]

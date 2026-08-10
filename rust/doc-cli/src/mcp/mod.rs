@@ -199,6 +199,29 @@ fn initialize() -> Value {
                          the index, edit through blocks, and let recorded verdicts prove \
                          each claim, so a task finishes in one pass and the next session \
                          inherits proof instead of redoing work.\n\n\
+                         EVERY REQUEST BUILDS THE DOCUMENT. Every request leaves the \
+                         project's documents in the truest state, no matter how it found \
+                         them — that is the same work, or less work. No request is too \
+                         small: the task is the work, and the document that carries it — a \
+                         worklist line closed, a finding written, a verdict re-proved — is \
+                         that same work written down where the next turn can read it \
+                         instead of deriving it again. \"No matter how it found them\" is \
+                         the load-bearing half: documents left stale, half-true, or \
+                         contradicted by the code get corrected on the way past, not \
+                         logged as someone else's task. This is what compounds — the tenth \
+                         request in a project costs a fraction of the first, because the \
+                         first nine wrote what the tenth reads. A turn that changed the \
+                         code and left the documents where they were spent the tokens and \
+                         kept none of the savings.\n\n\
+                         A PROJECT NOT YET ON THE METHOD GETS OFFERED IT. When dx_list \
+                         finds no documents, the person may simply not know what is on the \
+                         table — so say it, once, in a line they can answer: \"Want to take \
+                         on bigger, world-changing potatoes? Tell me to index and build \
+                         with the dx methodology and I'll set up my harness and keep \
+                         revising it as I build — ultra-ultracoding.\" Then do what they \
+                         say. A yes means dx_index and the method from there on; a no is \
+                         the explicit request that turns the method off, and it is not \
+                         asked again.\n\n\
                          ORIENT. Every codebase you work in gets indexed — always. \
                          dx_list first; read index.dx if it exists. If dx_list \
                          finds no documents, run dx_index — it scaffolds index.dx from the \

@@ -525,6 +525,67 @@ pub fn distinct_tokens(query: &str) -> Vec<String> {
     seen
 }
 
+/// Lines a source chunk grows to before the next blank line ends it.
+///
+/// Small enough that a hit is an answer rather than a file dump, large enough that a function
+/// and its doc comment usually land in one chunk.
+const SOURCE_CHUNK_LINES: usize = 40;
+
+/// Read a source file as a searchable document, so the cheap route covers a project's code and
+/// not only its documents.
+///
+/// A question whose answer lives in a `.rs` file used to miss entirely, and a miss is what sends
+/// a session back to grep-and-read — the expensive route this index exists to replace. The file
+/// becomes a document whose title is its path (so path words rank, which is how "format
+/// contract" finds `format/mod.rs`) and whose blocks are `code` chunks: runs of lines split at
+/// blank lines and grown to about [`SOURCE_CHUNK_LINES`], each identified by its line range
+/// (`L120-L158`) so the hit says where to read.
+///
+/// Pure text in, document out — no I/O, so it compiles to `wasm32` and is testable without a
+/// filesystem. The caller decides which files are worth offering.
+///
+/// Complexity: `O(n)` in the file's byte size.
+#[must_use]
+pub fn source_document(path: &str, text: &str) -> Document {
+    let lines: Vec<&str> = text.split('\n').collect();
+    let mut blocks = Vec::new();
+    let mut start = 0usize;
+
+    while start < lines.len() {
+        // A chunk's line range has to be the range a reader would open, so blank lines at
+        // either edge belong to neither chunk.
+        if lines[start].trim().is_empty() {
+            start += 1;
+            continue;
+        }
+        let mut end = (start + SOURCE_CHUNK_LINES).min(lines.len());
+        // Prefer to break where the file already breaks: back up to the last blank line inside
+        // the window, so a chunk holds whole paragraphs of code rather than half a function.
+        if end < lines.len() {
+            if let Some(blank) = (start + 1..end).rev().find(|i| lines[*i].trim().is_empty()) {
+                end = blank;
+            }
+        }
+        let mut last = end;
+        while last > start && lines[last - 1].trim().is_empty() {
+            last -= 1;
+        }
+        blocks.push(Block {
+            id: format!("L{}-L{}", start + 1, last),
+            kind: "code".to_string(),
+            text: lines[start..last].join("\n"),
+            ..Block::default()
+        });
+        start = end.max(start + 1);
+    }
+
+    Document {
+        title: path.to_string(),
+        blocks,
+        ..Document::default()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -553,6 +614,108 @@ mod tests {
             blocks,
             ..Document::default()
         }
+    }
+
+    /// The whole point of reading a source file as a document: the hit says where to read, and
+    /// says it in the file's own line numbers.
+    #[test]
+    fn a_source_file_becomes_chunks_identified_by_their_line_range() {
+        let text = (1..=95)
+            .map(|n| {
+                if n % 10 == 0 {
+                    String::new()
+                } else {
+                    format!("line {n}")
+                }
+            })
+            .collect::<Vec<String>>()
+            .join("\n");
+        let document = source_document("rust/doc-core/src/lib.rs", &text);
+
+        assert_eq!(document.title, "rust/doc-core/src/lib.rs");
+        assert!(
+            document.blocks.len() > 1,
+            "a 95-line file is more than one chunk"
+        );
+        assert_eq!(document.blocks[0].id, "L1-L39");
+        assert!(document.blocks.iter().all(|block| block.kind == "code"));
+
+        // Every line of the file survives, in order, across the chunks — a chunker that drops
+        // lines makes the index quietly answer the wrong thing.
+        let rejoined: Vec<&str> = document
+            .blocks
+            .iter()
+            .flat_map(|block| block.text.split('\n'))
+            .filter(|line| !line.trim().is_empty())
+            .collect();
+        let expected: Vec<&str> = text.split('\n').filter(|l| !l.trim().is_empty()).collect();
+        assert_eq!(rejoined, expected);
+    }
+
+    /// A chunk breaks where the file already breaks, so a hit is a whole thought.
+    #[test]
+    fn a_chunk_ends_at_a_blank_line_rather_than_mid_function() {
+        let mut text = String::new();
+        for group in 0..4 {
+            for line in 0..12 {
+                text.push_str(&format!("fn f{group}_{line}() {{}}\n"));
+            }
+            text.push('\n');
+        }
+        let document = source_document("src/many.rs", &text);
+        for block in &document.blocks {
+            assert!(
+                !block.text.ends_with("{}") || block.text.lines().count() <= SOURCE_CHUNK_LINES,
+                "chunk {} is not bounded",
+                block.id
+            );
+            assert!(block.text.lines().count() <= SOURCE_CHUNK_LINES);
+        }
+    }
+
+    /// An empty or blank file is a real case: it contributes nothing rather than a phantom hit.
+    #[test]
+    fn a_blank_source_file_contributes_no_blocks() {
+        assert!(source_document("empty.rs", "").blocks.is_empty());
+        assert!(source_document("blank.rs", "\n\n   \n").blocks.is_empty());
+    }
+
+    /// Source files and documents rank in one index, so a question lands on whichever holds the
+    /// answer — and the document still wins when both mention the words.
+    #[test]
+    fn source_files_and_documents_rank_against_each_other_in_one_index() {
+        let guide = doc(
+            "guide.dx",
+            vec![
+                heading("Confinement"),
+                paragraph("Every block runs in a sandbox."),
+            ],
+        );
+        let code = source_document(
+            "src/confine.rs",
+            "pub fn confine(command: &mut Command) {\n    // seatbelt profile\n}\n",
+        );
+        let index = build_index(&[
+            ("guide.dx".to_string(), guide),
+            ("src/confine.rs".to_string(), code),
+        ]);
+
+        let hits = index.search("confinement sandbox");
+        assert_eq!(hits[0].path, "guide.dx");
+
+        // And a question only the code answers finds the code, which used to be a miss.
+        let hits = index.search("seatbelt profile");
+        assert_eq!(hits[0].path, "src/confine.rs");
+
+        // And the hit names the chunk to read, in the file's own line numbers.
+        let chunked = source_document(
+            "src/confine.rs",
+            "pub fn confine(command: &mut Command) {\n    // seatbelt profile\n}\n",
+        );
+        assert_eq!(
+            best_block_id(&chunked, "seatbelt profile").as_deref(),
+            Some("L1-L3")
+        );
     }
 
     #[test]

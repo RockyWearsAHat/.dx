@@ -17,7 +17,7 @@
 #   ./packaging/build-app.sh --safari     also build the Safari extension (needs Xcode)
 #
 # Signing: the bundle is ad-hoc signed, which is enough for it to run on the machine that
-# built it. Distributing it needs a Developer ID and notarization — see packaging/README.md,
+# built it. Distributing it needs a Developer ID and notarization — see packaging/packaging.dx,
 # which has the two commands and nothing else to work out.
 
 set -euo pipefail
@@ -64,7 +64,7 @@ if [[ -f "$root/packaging/signed/dx-firefox.xpi" ]]; then
   cp "$root/packaging/signed/dx-firefox.xpi" "$contents/Resources/dx-firefox.xpi"
   echo "  bundled the signed Firefox add-on"
 else
-  echo "  no signed Firefox add-on — see packaging/README.md (free, one step)"
+  echo "  no signed Firefox add-on — see packaging/packaging.dx (free, one step)"
 fi
 
 # ---------------------------------------------------------------------------------------
@@ -91,7 +91,7 @@ echo "  drawing the icon…"
 #
 # It is one executable with two roles, chosen by what macOS hands the launch — a document to
 # read, or nothing, which is the `dx setup` this app has always run. See packaging/app and
-# packaging/README.md for why that is one application rather than two.
+# packaging/packaging.dx for why that is one application rather than two.
 #
 # It is named `dx-app` and not `DX`, which cost a build to learn: a Mac's filesystem is
 # case-insensitive, so `MacOS/DX` and `MacOS/dx` are one file, and writing the launcher
@@ -198,5 +198,5 @@ printf "  dx    %s bytes\n" "$(stat -f%z "$contents/MacOS/dx")"
 printf "  app   %s bytes\n" "$(stat -f%z "$contents/MacOS/dx-app")"
 echo "  install it: open $app — or run \"$contents/MacOS/dx\" setup"
 if [[ "$identity" == "-" ]]; then
-  echo "  ad-hoc signed: it runs here. Distributing it needs a Developer ID — packaging/README.md"
+  echo "  ad-hoc signed: it runs here. Distributing it needs a Developer ID — packaging/packaging.dx"
 fi
