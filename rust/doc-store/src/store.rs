@@ -20,7 +20,8 @@ use doc_core::format::{parse, stringify};
 use doc_core::model::Document;
 use doc_core::render::outline;
 use doc_core::search::{
-    build_index, distinct_tokens, document_tokens, MAX_LOOSE_VARIANTS, MIN_LOOSE_LEN,
+    build_index, distinct_tokens, document_tokens, vocabulary_kin, MAX_LOOSE_VARIANTS,
+    MIN_LOOSE_LEN,
 };
 use rusqlite::{params, Connection, OptionalExtension};
 
@@ -580,11 +581,13 @@ impl Store {
     }
 
     /// The tokens to narrow the corpus by: each query token, plus — for a token the store
-    /// holds in no document of its own — the stored tokens that contain it.
+    /// holds in no document of its own — the stored tokens that contain it and the other
+    /// names for the same thing ([`doc_core::search::vocabulary_kin`]).
     ///
     /// This is the SQL half of the ranker's loose tier ([`doc_core::search`]): the ranker can
     /// only score documents it was handed, so a narrowing that knows nothing of containing
-    /// words would decide the question before the scorer ever saw it.
+    /// words or of *graphics card* meaning `gpu` would decide the question before the scorer
+    /// ever saw it.
     ///
     /// Complexity: one indexed lookup per token, plus one `LIKE` scan of the token table for
     /// each token that has no holder — the case that would otherwise contribute nothing.
@@ -592,6 +595,10 @@ impl Store {
         let mut narrowing = Vec::new();
         for token in query_tokens {
             narrowing.push(token.clone());
+            // Kin by meaning, always — the ranker scores them whether or not the word itself
+            // is held, so narrowing must hand it those documents either way.
+            narrowing.extend(vocabulary_kin(token));
+
             let held: Option<i64> = self
                 .connection
                 .query_row(
@@ -1278,6 +1285,39 @@ mod tests {
             .expect("empty")
             .is_empty());
         assert!(store.search("", 10).expect("blank").is_empty());
+    }
+
+    #[test]
+    fn narrowing_keeps_the_document_only_the_vocabulary_bridge_reaches() {
+        // Narrowing must never be the reason a hit is missing: a document that says `gpu`
+        // holds no token of "graphics card" at all, so nothing but the bridge puts it in
+        // front of the ranker.
+        let root = scratch("bridge-narrowing");
+        let mut store = Store::open(&root).expect("open");
+        store
+            .ingest(
+                "backend.dx",
+                "::paragraph id=p\nBACKEND_AUTO tries the GPU and falls back to the CPU\n::end\n",
+            )
+            .expect("ingest");
+        store
+            .ingest(
+                "notes.dx",
+                "::paragraph id=p\nwhere the values come from, and where they come from\n::end\n",
+            )
+            .expect("ingest");
+
+        let hits = store
+            .search(
+                "how does it pick between the graphics card and the processor",
+                3,
+            )
+            .expect("search");
+        assert_eq!(
+            hits.first().map(|hit| hit.summary.path.as_str()),
+            Some("backend.dx"),
+            "{hits:?}"
+        );
     }
 
     #[test]

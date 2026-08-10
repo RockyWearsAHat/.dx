@@ -41,6 +41,15 @@
 //! - **IDF** makes rarity worth more than repetition: in "what does confine do", a term
 //!   held by one document outvotes a term held by all of them. Ubiquitous words damp
 //!   themselves, so there is no stopword list to maintain and no language baked in.
+//! - **The selectivity floor** finishes that job where damping alone could not. A term more
+//!   than [`SELECTIVE_SHARE`] of the corpus holds selects nothing — it describes the corpus,
+//!   not the question — so it may add to a score but may not *carry* one: a unit matching
+//!   only such terms scores zero rather than ranking. This is what stops a question the
+//!   corpus cannot answer from returning the shortest files that happen to say "the" and
+//!   "come from", which reads as an answer, costs a read, and is not one. It is measured
+//!   against the corpus rather than a word list, so no language is assumed here either, and
+//!   it stands down entirely when *no* query term is selective — asked only for words
+//!   everything holds, ranking them is the best answer available.
 //! - **Field weights** (title ×3, summary/tags/headings ×2, body ×1, captured output ×0.5)
 //!   land a query on the document *about* a thing rather than one that merely mentions it,
 //!   or that merely printed it.
@@ -53,6 +62,19 @@
 //!   that carry it inside them (`bitpack` for `packed`) and the abbreviation it starts with
 //!   (`mic` for `microphone`). It costs nothing on a query the corpus can answer as asked,
 //!   and it can only add: a token with no holder scored zero before.
+//! - **The vocabulary bridge** ([`VOCABULARY`]) is the same idea for the words that share no
+//!   letters at all. No rule over spelling reaches `gpu` from *graphics card* or `cpu` from
+//!   *processor*, and a reader who does not yet know a project's words is exactly who search
+//!   is for — so a token's kin join the query as terms of their own at [`SYNONYM_WEIGHT`],
+//!   each keeping its own IDF. Terms, not variants, and unlike the loose tier not gated on
+//!   the word being absent: in any corpus of size some file says "graphics" in passing, and
+//!   gating on that would answer the question from whichever file mentioned the word. This
+//!   is the one place a word list is baked in; it is a glossary of general computing
+//!   English, deliberately not project vocabulary.
+//!
+//! The same scorer also chooses *which part* of a long block a hit shows
+//! ([`answering_line`]), so an excerpt states the fact instead of starting at the block's
+//! first line — a hit on the right block showing the wrong sentence reads as a miss.
 //!
 //! Scores stay fully deterministic: no floating-point value depends on hash-map iteration
 //! order, and ties break by ascending path (documents) or earliest block.
@@ -107,6 +129,116 @@ pub const MAX_LOOSE_VARIANTS: usize = 64;
 /// Shortest stored word treated as an abbreviation of a longer query word (`mic` for
 /// `microphone`). Two letters is a preposition, not a shortening.
 const MIN_ABBREVIATION: usize = 3;
+/// Share of an exact match's weight a [`VOCABULARY`] match earns.
+///
+/// Above [`LOOSE_WEIGHT`], and for a reason: one word containing another is a coincidence of
+/// spelling that often means nothing, while a vocabulary group is a stated equivalence — a
+/// file that says `gpu` really is what *graphics card* was asking for. Still below an exact
+/// match, because the word the project chose is the better evidence when it is there.
+const SYNONYM_WEIGHT: f64 = 0.6;
+/// Share of the corpus above which a term is too common to carry a hit on its own.
+///
+/// A word more than half the documents hold describes the corpus rather than the question:
+/// it can refine a ranking among units that already matched something, but a unit whose
+/// whole case rests on it has not answered anything. See the module's Ranking contract.
+const SELECTIVE_SHARE: f64 = 0.5;
+
+/// Words that name the same thing in computing, grouped.
+///
+/// The gap this closes is not spelling, it is vocabulary: a reader asks about the *graphics
+/// card* and the code says `gpu`, asks about a *folder* and the code says `directory`. No
+/// stemmer, substring, or abbreviation rule can cross that — the words share no letters — so
+/// the bridge has to be stated. What belongs here is **general computing English**: the
+/// everyday word, the field's word, and the abbreviation code actually types. What does not
+/// belong is any particular project's vocabulary, which is what the project's own documents
+/// are for.
+///
+/// Groups are consulted only for a query token no unit holds ([`query_terms`]), and only the
+/// members the corpus does hold become variants — so a group naming five things costs a
+/// corpus that mentions none of them exactly nothing. Order within a group carries no
+/// meaning. Keep groups tight: a group is a claim that these words are interchangeable, and
+/// a loose claim shows up as a wrong first hit.
+const VOCABULARY: &[&[&str]] = &[
+    // Hardware a reader names by sight, code names by acronym.
+    &["gpu", "graphics", "videocard"],
+    &["cpu", "processor"],
+    &["ram", "memory"],
+    &["disk", "drive", "storage"],
+    &["screen", "display", "monitor"],
+    &["microphone", "mic"],
+    &["speaker", "playback"],
+    &["mouse", "pointer", "cursor"],
+    &["keyboard", "keypress"],
+    // The filesystem.
+    &["folder", "directory"],
+    &["filename", "path", "basename"],
+    &["delete", "remove", "erase", "unlink"],
+    &["rename", "move"],
+    &["copy", "duplicate", "clone"],
+    // Media.
+    &["picture", "image", "photo", "bitmap"],
+    &["movie", "video"],
+    &["sound", "audio"],
+    &["font", "typeface", "glyph"],
+    &["colour", "color"],
+    // Moving bytes.
+    &["download", "fetch", "retrieve"],
+    &["upload", "publish", "send"],
+    &["network", "internet", "online"],
+    &["server", "host", "backend"],
+    &["client", "frontend"],
+    &["link", "url", "href", "uri"],
+    &["api", "endpoint", "interface"],
+    // Squeezing and scrambling bytes.
+    &["compress", "zip", "deflate", "squeeze"],
+    &["decompress", "unzip", "inflate", "expand"],
+    &["encrypt", "cipher", "encipher"],
+    &["hash", "digest", "checksum", "fingerprint"],
+    // Who is asking.
+    &["login", "signin", "authenticate", "auth"],
+    &["password", "passphrase", "credential", "secret"],
+    &[
+        "permission",
+        "privilege",
+        "access",
+        "authorise",
+        "authorize",
+    ],
+    &["user", "account", "profile"],
+    // Where data sits.
+    &["database", "table", "record"],
+    &["cache", "buffer"],
+    &["queue", "backlog", "pending"],
+    &["list", "array", "vector", "slice"],
+    &["dictionary", "hashmap", "lookup"],
+    &["setting", "config", "preference", "option"],
+    // What the machine is doing.
+    &["thread", "worker", "concurrent", "parallel"],
+    &["lock", "mutex", "exclusive"],
+    &["schedule", "timer", "cron", "interval"],
+    &["random", "rng", "entropy"],
+    &["crash", "panic", "abort", "fatal"],
+    &["bug", "defect", "fault", "failure"],
+    &["log", "trace", "diagnostic"],
+    &["speed", "performance", "latency", "throughput"],
+    // Working on the code.
+    &["build", "compile", "toolchain"],
+    &["test", "spec", "assertion", "check", "verify"],
+    &["library", "package", "module", "crate", "dependency"],
+    &["function", "method", "procedure", "routine"],
+    &["variable", "field", "attribute", "property"],
+    &["install", "setup", "bootstrap"],
+    &["launch", "start", "boot", "spawn"],
+    &["quit", "stop", "shutdown", "terminate"],
+    &["update", "upgrade", "refresh"],
+    &["version", "revision", "release"],
+    // Text and numbers.
+    &["text", "string", "prose"],
+    &["number", "integer", "numeric"],
+    &["date", "timestamp", "datetime"],
+    &["language", "locale", "translation"],
+    &["word", "token", "term"],
+];
 /// What a test chunk's score is multiplied by when choosing a hit's *answering* block.
 ///
 /// A test quotes a fact to check it; the code states it. Asked "what magic bytes does a
@@ -265,11 +397,20 @@ impl QueryTerm {
 /// vocabulary — and building that vocabulary only when a token needs it, which is never for
 /// a query the corpus can answer as asked.
 ///
+/// The returned list can be **longer than `query_tokens`**: a word with kin in [`VOCABULARY`]
+/// contributes those as terms of their own, discounted to [`SYNONYM_WEIGHT`]. They are extra
+/// terms rather than extra variants of the asked word, and the difference is the whole
+/// behaviour. A variant joins its term's document frequency, so bridging *sound* to *audio*
+/// in a corpus full of audio would make the asked word look common and stop it selecting —
+/// the rare word would be diluted by the bridge meant to help it. As separate terms each
+/// keeps its own IDF, nothing already scoring loses a point, and a document that only ever
+/// says `gpu` can still answer *graphics card*.
+///
 /// Complexity: `O(q · u)` for the exact pass over `u` units, plus — only for a token no unit
 /// holds — one `O(total tokens)` vocabulary pass shared by every such token.
 fn query_terms(units: &[&UnitStats], query_tokens: &[String]) -> Vec<QueryTerm> {
     let mut vocabulary: Option<Vec<&str>> = None;
-    query_tokens
+    let mut terms: Vec<QueryTerm> = query_tokens
         .iter()
         .map(|token| {
             let mut variants = vec![(token.clone(), 1.0)];
@@ -308,7 +449,63 @@ fn query_terms(units: &[&UnitStats], query_tokens: &[String]) -> Vec<QueryTerm> 
             }
             QueryTerm { variants }
         })
-        .collect()
+        .collect();
+
+    // The other names for the thing asked about, kept only where the corpus actually uses
+    // one — so a group naming five things costs a corpus that mentions none of them nothing,
+    // and a name the query already carries is never counted twice.
+    let mut bridged: Vec<String> = Vec::new();
+    for token in query_tokens {
+        for kin in vocabulary_kin(token) {
+            if query_tokens.contains(&kin)
+                || bridged.contains(&kin)
+                || !units.iter().any(|unit| unit.entries.contains_key(&kin))
+            {
+                continue;
+            }
+            bridged.push(kin.clone());
+            terms.push(QueryTerm {
+                variants: vec![(kin, SYNONYM_WEIGHT)],
+            });
+        }
+    }
+    terms
+}
+
+/// The stems of every other word grouped with `token` in [`VOCABULARY`], deduplicated.
+///
+/// `token` is already a stem, and the table is written in plain words, so both sides are put
+/// through [`stem`] — the table can never drift out of step with the tokeniser. Empty for the
+/// overwhelming majority of words, and only ever consulted for a token the corpus does not
+/// hold, so the linear scan over a table this size is not on any hot path.
+///
+/// Public for the same reason as [`MIN_LOOSE_LEN`]: a store that narrows a corpus before
+/// ranking it must narrow by every rule the ranker scores by. A document reachable only
+/// through this bridge has to survive narrowing, or the bridge is never crossed.
+#[must_use]
+pub fn vocabulary_kin(token: &str) -> Vec<String> {
+    let mut kin: Vec<String> = Vec::new();
+    for group in VOCABULARY {
+        if !group.iter().any(|word| stem(word) == token) {
+            continue;
+        }
+        for word in *group {
+            let stemmed = stem(word).into_owned();
+            if stemmed != token && !kin.contains(&stemmed) {
+                kin.push(stemmed);
+            }
+        }
+    }
+    kin
+}
+
+/// Whether a ranking applies the selectivity floor — see [`rank`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Floor {
+    /// Ranking a corpus: a unit matching only ubiquitous terms has not answered anything.
+    Apply,
+    /// Ranking the parts of something already found: every part is inside an answer.
+    Off,
 }
 
 /// The one scoring rule, at every granularity: BM25 over field-weighted term frequencies
@@ -322,11 +519,18 @@ fn query_terms(units: &[&UnitStats], query_tokens: &[String]) -> Vec<QueryTerm> 
 /// survivors of a narrowing pass; `None` means `units` *are* the corpus. Term document
 /// frequencies always count over `units` — exact under token narrowing, which keeps every
 /// holder of every query token — so only `n` needs stating to keep IDF honest.
+///
+/// `floor` says whether the selectivity floor applies. It belongs to the corpus-level
+/// question — *does anything here answer this?* — and nowhere else: choosing which block or
+/// which line of an already-relevant document to show is a choice among parts of an answer,
+/// where a floor can only throw information away. The units there also overlap or are few
+/// enough that a document frequency over them measures nothing.
 fn rank(
     units: &[&UnitStats],
     query_tokens: &[String],
     pairs: &[(String, String)],
     corpus_size: Option<u32>,
+    floor: Floor,
 ) -> Vec<f64> {
     let unit_count = units.len() as u32;
     // A stated corpus can only be larger than what survived narrowing.
@@ -337,17 +541,39 @@ fn rank(
     // IDF per query token (Robertson–Spärck Jones, in the always-positive Lucene form):
     // a token held by few units is worth far more than one held by all of them.
     let terms = query_terms(units, query_tokens);
-    let idf: Vec<f64> = terms
+    let document_frequency: Vec<f64> = terms
         .iter()
         .map(|term| {
-            let holders = units
+            units
                 .iter()
                 .filter(|unit| term.frequency_in(unit) > 0.0)
-                .count() as u32;
-            let df = f64::from(holders);
-            ((n - df + 0.5) / (df + 0.5) + 1.0).ln()
+                .count() as f64
         })
         .collect();
+    let idf: Vec<f64> = document_frequency
+        .iter()
+        .map(|df| ((n - df + 0.5) / (df + 0.5) + 1.0).ln())
+        .collect();
+
+    // A term more than SELECTIVE_SHARE of the corpus holds cannot carry a hit by itself —
+    // see the module's Ranking contract. "Answering" means a term that could actually select
+    // a unit: held by something, and held by few enough things to mean anything.
+    let answering: Vec<bool> = document_frequency
+        .iter()
+        .map(|df| *df > 0.0 && *df <= SELECTIVE_SHARE * n)
+        .collect();
+    // With no answering term the query is one of two things, and they end differently. If
+    // every term is at least held, it asked only for words this corpus spreads everywhere —
+    // ranking them is the best answer there is. If some term is held nowhere, the words that
+    // would have selected are simply not here, and saying so beats ranking whatever said
+    // "the".
+    let applies = floor == Floor::Apply;
+    let has_answering = answering.iter().any(|answering| *answering);
+    let every_term_held = document_frequency.iter().all(|df| *df > 0.0);
+    if applies && !has_answering && !every_term_held {
+        return vec![0.0; units.len()];
+    }
+    let floor_applies = applies && has_answering;
     let idf_of: HashMap<&str, f64> = query_tokens
         .iter()
         .map(String::as_str)
@@ -358,15 +584,20 @@ fn rank(
         .iter()
         .map(|unit| {
             let mut score = 0.0f64;
-            for (term, token_idf) in terms.iter().zip(&idf) {
+            let mut answered = false;
+            for ((term, token_idf), answering) in terms.iter().zip(&idf).zip(&answering) {
                 let frequency = term.frequency_in(unit);
                 if frequency <= 0.0 {
                     continue;
                 }
+                answered |= *answering;
                 let saturated = frequency * (BM25_K1 + 1.0)
                     / (frequency
                         + BM25_K1 * (1.0 - BM25_B + BM25_B * unit.length / average_length));
                 score += token_idf * saturated;
+            }
+            if floor_applies && !answered {
+                return 0.0;
             }
             for (first, second) in pairs {
                 if has_adjacent_pair(unit, first, second) {
@@ -378,6 +609,60 @@ fn rank(
             score
         })
         .collect()
+}
+
+/// The line of `text` that answers `query`, or `None` when no line matches at all.
+///
+/// A hit is only cheaper than a read if the excerpt shown *states the fact*, and a block can
+/// be far longer than an excerpt — so something has to choose which part of it to show. That
+/// choice is a ranking, and this repository has exactly one ranker: the line is picked by
+/// [`rank`], with the same stemming and vocabulary bridge that chose the block, so an
+/// excerpt can land on the line saying `GPU` for a question about a graphics card. A second,
+/// weaker matcher in a host is how a hit lands on the right file and shows the wrong
+/// sentence — which reads as a miss, and costs the read it was saving.
+///
+/// Each **line** is one ranked unit, deliberately: ranking overlapping windows instead makes
+/// document frequency meaningless, since one line then belongs to every window around it and
+/// nothing looks rare. The caller decides how many lines to show from here, and what a line
+/// is (one that drops blanks and fence markers passes what it kept). Ties go to the earliest
+/// line, so the excerpt is deterministic.
+///
+/// Complexity: `O(l · q)` for `l` lines and `q` query tokens.
+#[must_use]
+pub fn answering_line(text: &str, query: &str) -> Option<usize> {
+    let query_tokens = distinct_tokens(query);
+    let lines: Vec<&str> = text.lines().collect();
+    if query_tokens.is_empty() || lines.is_empty() {
+        return None;
+    }
+
+    let stats: Vec<UnitStats> = lines
+        .iter()
+        .map(|line| {
+            let mut recorder = Recorder::new();
+            recorder.segment(WEIGHT_BODY, line);
+            recorder.stats
+        })
+        .collect();
+    let units: Vec<&UnitStats> = stats.iter().collect();
+    let scores = rank(
+        &units,
+        &query_tokens,
+        &phrase_pairs(query),
+        None,
+        Floor::Off,
+    );
+
+    scores
+        .iter()
+        .enumerate()
+        .filter(|(_, score)| **score > 0.0)
+        .max_by(|(left_index, left), (right_index, right)| {
+            left.partial_cmp(right)
+                .unwrap_or(core::cmp::Ordering::Equal)
+                .then_with(|| right_index.cmp(left_index))
+        })
+        .map(|(index, _)| index)
 }
 
 /// The word pairs of `query` that were actually typed side by side, in order,
@@ -487,6 +772,7 @@ impl SearchIndex {
             &query_tokens,
             &phrase_pairs(query),
             self.corpus_size,
+            Floor::Apply,
         );
         let mut hits: Vec<ScoredHit> = self
             .docs
@@ -544,7 +830,13 @@ pub fn best_block_id(document: &Document, query: &str) -> Option<String> {
         .map(|(_, block)| block_stats(block))
         .collect();
     let units: Vec<&UnitStats> = stats.iter().collect();
-    let mut scores = rank(&units, &query_tokens, &phrase_pairs(query), None);
+    let mut scores = rank(
+        &units,
+        &query_tokens,
+        &phrase_pairs(query),
+        None,
+        Floor::Off,
+    );
     if !asks_about_tests(&query_tokens) {
         for (score, (_, block)) in scores.iter_mut().zip(&candidates) {
             if is_test_code(&block.text) {
@@ -1001,6 +1293,166 @@ mod tests {
             blocks,
             ..Document::default()
         }
+    }
+
+    /// A corpus shaped like the first-contact battery's hard cases: one file that answers,
+    /// and several that only share the question's ordinary words.
+    fn a_corpus_that_says_it_its_own_way() -> Vec<(String, Document)> {
+        let mut docs = vec![
+            (
+                "backend.c".to_string(),
+                doc(
+                    "backend.c",
+                    vec![paragraph(
+                        "BACKEND_AUTO tries the GPU first and falls back to the CPU \
+                         when no device is present",
+                    )],
+                ),
+            ),
+            (
+                "mic.py".to_string(),
+                doc(
+                    "mic.py",
+                    vec![paragraph("open the mic at 16 kHz and read from the input")],
+                ),
+            ),
+        ];
+        for name in ["a", "b", "c", "d", "e"] {
+            docs.push((
+                format!("note_{name}.md"),
+                doc(
+                    &format!("note_{name}.md"),
+                    vec![paragraph(
+                        "where the values come from, and where they come from next; \
+                         they come from the table above",
+                    )],
+                ),
+            ));
+        }
+        docs
+    }
+
+    #[test]
+    fn a_readers_word_reaches_the_acronym_the_code_writes() {
+        // No rule over spelling gets from "graphics card" to GPU: the words share no
+        // letters. The vocabulary bridge is what carries it.
+        let docs = a_corpus_that_says_it_its_own_way();
+        let hits =
+            indexed(&docs).search("how does it pick between the graphics card and the processor");
+        assert_eq!(
+            hits.first().map(|hit| hit.path.as_str()),
+            Some("backend.c"),
+            "{hits:?}"
+        );
+    }
+
+    #[test]
+    fn a_word_the_corpus_never_says_beats_the_words_it_always_says() {
+        // The long-question failure: five files saying "come from" used to outrank the one
+        // file that answers, because ordinary words repeated often enough to win.
+        let docs = a_corpus_that_says_it_its_own_way();
+        let hits = indexed(&docs).search("where does microphone input come from");
+        assert_eq!(hits.first().map(|hit| hit.path.as_str()), Some("mic.py"));
+        assert!(
+            hits.iter().all(|hit| !hit.path.starts_with("note_")),
+            "a file matching only the question's ordinary words is not an answer: {hits:?}"
+        );
+    }
+
+    #[test]
+    fn a_question_the_corpus_cannot_answer_returns_nothing_rather_than_noise() {
+        // Three plausible-looking hits that answer nothing cost a read and mislead. No
+        // result is the honest answer, and the cheaper one.
+        let docs = a_corpus_that_says_it_its_own_way();
+        let hits = indexed(&docs).search("how do I configure the quantum flux capacitor");
+        assert!(hits.is_empty(), "{hits:?}");
+    }
+
+    #[test]
+    fn a_query_of_only_common_words_still_ranks_them() {
+        // The floor stands down when nothing in the query selects: asked for words
+        // everything holds, ranking on them is the best answer available.
+        let docs = a_corpus_that_says_it_its_own_way();
+        let hits = indexed(&docs).search("come from");
+        assert!(
+            hits.iter().any(|hit| hit.path.starts_with("note_")),
+            "{hits:?}"
+        );
+    }
+
+    #[test]
+    fn the_vocabulary_bridge_stays_out_of_the_way_when_the_corpus_says_the_word() {
+        // Consulted only for a token no unit holds: a corpus that says "folder" must not
+        // have its own word outranked by kin.
+        let docs = vec![
+            (
+                "folders.md".to_string(),
+                doc("folders.md", vec![paragraph("how a folder is created")]),
+            ),
+            (
+                "dirs.md".to_string(),
+                doc(
+                    "dirs.md",
+                    vec![paragraph(
+                        "how a directory is created, and another directory",
+                    )],
+                ),
+            ),
+        ];
+        let hits = indexed(&docs).search("folder");
+        assert_eq!(
+            hits.first().map(|hit| hit.path.as_str()),
+            Some("folders.md")
+        );
+    }
+
+    #[test]
+    fn every_vocabulary_group_is_a_real_group_of_distinct_words() {
+        // The table is a claim that these words are interchangeable. A one-word group
+        // claims nothing, and a word in two groups quietly joins them.
+        let mut seen: Vec<String> = Vec::new();
+        for group in VOCABULARY {
+            assert!(group.len() >= 2, "a group of one states nothing: {group:?}");
+            for word in *group {
+                let stemmed = stem(word).into_owned();
+                assert!(
+                    !seen.contains(&stemmed),
+                    "`{word}` is in two groups, which merges them: {group:?}"
+                );
+                seen.push(stemmed);
+            }
+        }
+    }
+
+    #[test]
+    fn the_answering_line_is_the_one_that_states_the_fact() {
+        // A block far longer than an excerpt: the window must land on the answer, not on
+        // the block's opening, and must find it through the vocabulary bridge too.
+        let text = "an opening paragraph about the project and its goals\n\
+                    more preamble that mentions nothing in particular\n\
+                    TB_BACKEND_AUTO prefers the GPU and falls back to CPU\n\
+                    a closing line";
+        let start = answering_line(text, "how does it pick the graphics card").expect("a line");
+        assert_eq!(
+            text.lines().nth(start),
+            Some("TB_BACKEND_AUTO prefers the GPU and falls back to CPU")
+        );
+    }
+
+    #[test]
+    fn a_block_that_answers_nothing_names_no_line() {
+        let text = "one line\nanother line";
+        assert!(answering_line(text, "quantum flux capacitor").is_none());
+        assert!(answering_line("", "anything").is_none());
+        assert!(answering_line("a line", "").is_none());
+    }
+
+    #[test]
+    fn vocabulary_kin_are_returned_as_stems_and_never_include_the_word_asked_for() {
+        let kin = vocabulary_kin(&stem("processor"));
+        assert!(kin.contains(&"cpu".to_string()), "{kin:?}");
+        assert!(!kin.contains(&stem("processor").into_owned()));
+        assert!(vocabulary_kin("nothinglikethis").is_empty());
     }
 
     /// The whole point of reading a source file as a document: the hit says where to read, and

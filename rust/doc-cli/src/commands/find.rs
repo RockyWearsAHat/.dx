@@ -93,33 +93,20 @@ const EXCERPT_LINES: usize = 3;
 /// The part of a block that answers `query` — the hit's answer, not a label for it.
 ///
 /// A search is only cheaper than a read if the hit carries the answer, so the excerpt starts at
-/// the line covering the most of what was asked (ties to the earliest, keeping the choice
-/// deterministic) and runs on for a couple of lines, because a fact and the sentence that gives
-/// it meaning are rarely the same line. Code-fence markers are skipped: they are how the
-/// renderer draws a listing, never something anybody searched for.
+/// the window of lines the engine's own ranker says answers the question
+/// ([`doc_core::search::answering_line`]) and runs on for a couple of lines, because a fact and
+/// the sentence that gives it meaning are rarely the same line. Code-fence markers are skipped:
+/// they are how the renderer draws a listing, never something anybody searched for.
 fn answer_excerpt(document: &doc_core::model::Document, id: &str, query: &str) -> Option<String> {
     let scoped = doc_core::render::section(document, id)?;
     let text = doc_core::render::text(&scoped, &doc_core::render::TextOptions::default());
-    let tokens = doc_core::search::distinct_tokens(query);
     let lines: Vec<&str> = text
         .lines()
         .map(str::trim)
         .filter(|line| !line.is_empty() && !line.starts_with("```"))
         .collect();
 
-    let covered = |line: &str| {
-        let lowered = line.to_lowercase();
-        tokens
-            .iter()
-            .filter(|token| lowered.contains(token.as_str()))
-            .count()
-    };
-    let start = lines
-        .iter()
-        .enumerate()
-        .max_by_key(|(index, line)| (covered(line), std::cmp::Reverse(*index)))
-        .filter(|(_, line)| covered(line) > 0)
-        .map_or(0, |(index, _)| index);
+    let start = doc_core::search::answering_line(&lines.join("\n"), query).unwrap_or(0);
 
     let excerpt = lines
         .iter()
