@@ -76,6 +76,13 @@
 (function () {
   'use strict';
 
+  // The vocabulary below — which kinds are editable, what a tag line may say, what a node's
+  // smallest box is — is the engine's, stated in `doc-core::surface` and mirrored here
+  // because a completion menu and a drag handle need it before any call goes out. The two
+  // copies are held equal by `editor/vscode/test/vocabulary.test.mjs`, which reads this file
+  // and compares it to `doc-wasm`'s `vocabulary()`. Change a list here and the suite tells
+  // you where the engine says otherwise.
+
   /** Blocks a reader may edit: the ones a person wrote. */
   const EDITABLE = [
     'paragraph',
@@ -188,9 +195,14 @@
   /** How much of the content must stay inside the viewport when panning, in pixels. */
   const PAN_KEEP = 40;
 
-  /** The smallest box a node can be dragged to, in canvas pixels. */
+  /**
+   * The smallest box a node can be dragged to, in canvas pixels — `render::board`'s own
+   * `w=fit`/`h=fit` floor, so the smallest box a reader can make is a box the renderer
+   * would also have chosen. (The height was 60 here against the engine's 56, which is the
+   * drift the vocabulary pin now catches.)
+   */
   const NODE_MIN_WIDTH = 120;
-  const NODE_MIN_HEIGHT = 60;
+  const NODE_MIN_HEIGHT = 56;
 
   /** The host, once attached. */
   let host = null;
@@ -2436,7 +2448,15 @@
       const word = line.match(/([a-z-]*)$/i);
       const typed = word ? word[1] : '';
       if (typed === '' && !force && !/\s$/.test(line)) return null;
-      const pool = (ATTRS[kind] || []).concat(['id', 'class', 'hidden'], learned.keys);
+      // Remembered keys carry across documents, which is the point — but a *flag* belongs
+      // to the kinds that carry it. Offering `run` on a paragraph because the reader once
+      // typed it on a code block completes to a header the format drops on the floor.
+      const own = ATTRS[kind] || [];
+      const universal = ['id', 'class', 'hidden'];
+      const remembered = learned.keys.filter(
+        (key) => !BARE_ATTRS.includes(key) || own.includes(key) || universal.includes(key)
+      );
+      const pool = own.concat(universal, remembered);
       const ranked = matching(pool, typed);
       if (!ranked.length) return null;
       return {

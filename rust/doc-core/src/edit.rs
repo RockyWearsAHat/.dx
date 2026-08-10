@@ -455,10 +455,17 @@ pub struct Insertion<'a> {
     pub deps: &'a str,
 }
 
-/// Refuse a kind [`insert_after`] cannot create, naming the ones it can.
+/// Refuse a kind [`insert_after`] cannot create, naming the ones it can — and the route to
+/// the ones it cannot.
 ///
 /// The one sentence for every surface that authors blocks — `dx append`, `dx insert`, and
 /// the editors — so "what may be written" is answered identically wherever it is asked.
+///
+/// The refusal names the retype route because that route works: a kind whose content lives
+/// in its attributes (`image`, `style`, `stylesheet`, `script`, `nav`) is written by adding
+/// a paragraph and retyping its header, which is exactly what a reader does on the page
+/// when they rewrite a block's tag line. A refusal that only listed what it would accept
+/// left the caller with no way to add a picture and nothing to read about it.
 ///
 /// # Errors
 /// Returns that sentence when `kind` is not one of [`AUTHORABLE`].
@@ -467,7 +474,9 @@ pub fn authorable(kind: &str) -> Result<(), String> {
         return Ok(());
     }
     Err(format!(
-        "cannot add a `{kind}` block. Supported: {}",
+        "cannot add a `{kind}` block directly. Supported: {}. \
+         A kind that lives in its attributes is written by retyping a header instead: add a \
+         paragraph, then `dx set <file> <id> --header '::{kind} …'`.",
         AUTHORABLE.join(", ")
     ))
 }

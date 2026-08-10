@@ -90,11 +90,11 @@ a page
 ::end
 
 ::heading level=2 id=block-reference-live-heading
-Four kinds, worn by this page
+Five kinds, worn by this page
 ::end
 
 ::paragraph id=block-reference-live
-The hairline above is a ::rule block. The figure below is an ::image naming a file beside this document, embedded at render time so the page travels whole. The frame after it is a ::view of site/index.html — a coded page shown as the page it renders to, inside a frame whose sandbox stays empty. And the small caps on the table header are this document's own ::style block at work: a style block renders nothing and dresses everything.
+The hairline above is a ::rule block. The figure below is an ::image naming a file beside this document, embedded at render time so the page travels whole. The frame after it is a ::view of site/index.html — a coded page shown as the page it renders to, inside a frame whose sandbox stays empty. And the small caps on the table header are this document's own ::style block at work: a style block renders nothing and dresses everything. Below it is the other half of that family, a ::stylesheet — the linked form, naming `block-reference.css` beside this file with `media=print`, so the sheet arrives as an `@import` the page honours only when it is printed.
 ::end
 
 ::image id=block-reference-figure src=figures/block-anatomy.png
@@ -107,4 +107,8 @@ The anatomy of one block, exported from this very page by dx png --block.
 
 ::style id=block-reference-style
 .dx-doc table thead th { font-variant-caps: small-caps; letter-spacing: 0.04em; }
+::end
+
+::stylesheet id=block-reference-sheet href=block-reference.css media=print
+
 ::end

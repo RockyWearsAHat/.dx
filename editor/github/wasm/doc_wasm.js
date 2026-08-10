@@ -982,6 +982,34 @@ let wasm_bindgen = (function(exports) {
         }
     }
     exports.toggle_check = toggle_check;
+
+    /**
+     * The authoring vocabulary and node geometry an editing surface offers, as JSON.
+     *
+     * `editor/surface/edit.js` carries these facts as constants because a completion menu and
+     * a drag handle need them before any call goes out. This export is what pins that mirror
+     * to the engine: [`doc_core::surface`] decides the kinds, the attributes, and the smallest
+     * box a node may be, and `editor/vscode/test/vocabulary.test.mjs` fails when the surface
+     * and this answer disagree.
+     * @returns {string}
+     */
+    function vocabulary() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.vocabulary(retptr);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred1_0 = r0;
+            deferred1_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export3(deferred1_0, deferred1_1, 1);
+        }
+    }
+    exports.vocabulary = vocabulary;
     function __wbg_get_imports() {
         const import0 = {
             __proto__: null,

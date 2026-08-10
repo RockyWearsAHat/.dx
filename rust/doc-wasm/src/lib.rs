@@ -242,6 +242,18 @@ pub fn stylesheet() -> String {
     doc_core::render::stylesheet().to_string()
 }
 
+/// The authoring vocabulary and node geometry an editing surface offers, as JSON.
+///
+/// `editor/surface/edit.js` carries these facts as constants because a completion menu and
+/// a drag handle need them before any call goes out. This export is what pins that mirror
+/// to the engine: [`doc_core::surface`] decides the kinds, the attributes, and the smallest
+/// box a node may be, and `editor/vscode/test/vocabulary.test.mjs` fails when the surface
+/// and this answer disagree.
+#[wasm_bindgen]
+pub fn vocabulary() -> String {
+    doc_core::surface::vocabulary()
+}
+
 /// Decompress any `dxz` frame, whichever codec its magic names — including `DXZ1` (LZSS),
 /// which is no longer written but is decoded forever.
 ///
