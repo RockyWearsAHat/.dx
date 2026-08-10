@@ -500,6 +500,7 @@ fn readme_lead(root: &Path) -> Option<String> {
 
 /// A build system the tree names, and where its manifest lives relative to the root
 /// (empty for the root itself — the common case; `rust` for a monorepo's crate folder).
+#[derive(Debug, PartialEq, Eq)]
 enum Build {
     Cargo(String),
     Node,
@@ -546,6 +547,8 @@ fn detect_build(root: &Path) -> Option<Build> {
     if root.join("pyproject.toml").exists()
         || root.join("pytest.ini").exists()
         || root.join("setup.py").exists()
+        || holds_pytest_files(&root.join("tests"))
+        || holds_pytest_files(&root.join("test"))
     {
         return Some(Build::Python);
     }
@@ -558,6 +561,23 @@ fn detect_build(root: &Path) -> Option<Build> {
         return Some(Build::Make);
     }
     None
+}
+
+/// Whether `dir` holds files pytest would collect.
+///
+/// A manifest is the tidy signal and it is not the common one: plenty of real projects are a
+/// `src/` and a `tests/` with no `pyproject.toml` anywhere, and a scaffold that skips the
+/// harness for those hands a new project a map with nothing to prove it. The convention this
+/// reads — `test_*.py` or `*_test.py` under `tests/` — is pytest's own default discovery rule.
+fn holds_pytest_files(dir: &Path) -> bool {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return false;
+    };
+    entries.flatten().any(|entry| {
+        entry.file_name().to_str().is_some_and(|name| {
+            name.ends_with(".py") && (name.starts_with("test_") || name.ends_with("_test.py"))
+        })
+    })
 }
 
 /// The lines every cargo gate starts with: find the rustup toolchain on PATH and point
@@ -829,6 +849,36 @@ mod tests {
         assert!(text.contains("program counter"), "{text}");
         // The method skeleton: recipes are scaffolded as a section to fill.
         assert!(text.contains("How a change flows"), "{text}");
+    }
+
+    /// A `src/` and a `tests/` with no manifest anywhere is an ordinary Python project, and
+    /// a scaffold that skips the harness there hands a new project a map with nothing to
+    /// prove it. pytest's own discovery rule is the signal.
+    #[test]
+    fn a_tests_directory_alone_is_enough_to_scaffold_the_harness() {
+        let root = project("pytest-by-convention");
+        std::fs::create_dir_all(root.join("tests")).expect("dirs");
+        std::fs::write(root.join("tests/test_money.py"), "def test_it(): pass\n").expect("file");
+
+        assert_eq!(detect_build(&root), Some(Build::Python));
+
+        let scaffold = write_scaffold(&root, false).expect("scaffold");
+        let (harness_path, gates) = scaffold.harness.expect("a detected project gets a harness");
+        assert_eq!(gates, 1);
+        assert!(workspace::read(&harness_path)
+            .expect("read")
+            .contains("pytest"));
+    }
+
+    /// The convention is a rule, not a guess: a directory of ordinary modules is not a
+    /// test suite, and claiming a harness for it would scaffold a gate that cannot pass.
+    #[test]
+    fn a_directory_of_plain_modules_is_not_a_test_suite() {
+        let root = project("no-pytest");
+        std::fs::create_dir_all(root.join("tests")).expect("dirs");
+        std::fs::write(root.join("tests/helpers.py"), "VALUE = 1\n").expect("file");
+
+        assert_eq!(detect_build(&root), None);
     }
 
     #[test]
