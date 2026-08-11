@@ -125,11 +125,14 @@ so a defect reported by three sessions is one block with three sightings rather 
 duplicates, and `dx report close <id>` both removes the block and closes the record upstream.
 `dx report drain` is the offline half, for a machine that could not reach the intake.
 
-The intake this build files to is `https://rockywearsahat.com/api/reports` — dx's own, so a
-report reaches the people who fix dx without anybody configuring anything. It receives the
-report's text, the tool version, the platform, and the *name* of the folder you were working
-in, never its path and never its contents. `DX_REPORT_ENDPOINT=<url>` points it somewhere
-else and `DX_REPORT_ENDPOINT=off` turns the push off entirely, leaving the local inbox.
+The intake this build files to is `https://rockywearsahat.com/report?dx` — dx's own, so a
+report reaches the people who fix dx without anybody configuring anything. The service is the
+query and nothing else: another internal service registers by filing to
+`https://rockywearsahat.com/report?<serviceName>`. It receives the report's text, the tool
+version, the platform, and the *name* of the folder you were working in, never its path and
+never its contents. `DX_REPORT_ENDPOINT=<url>` points it somewhere else — with a service on it
+(`…/report?billing`) that names the database too — and `DX_REPORT_ENDPOINT=off` turns the push
+off entirely, leaving the local inbox.
 
 ## What executes, and what does not
 

@@ -819,7 +819,7 @@ fn report(args: &Value, root: &Path) -> ToolResult {
         args,
         root,
         &crate::reports::inbox(),
-        crate::intake::endpoint().as_deref(),
+        crate::intake::setting().as_deref(),
     )
 }
 
@@ -844,10 +844,15 @@ fn report_in(args: &Value, root: &Path, inbox: &Path, endpoint: Option<&str>) ->
     let (id, record) = crate::reports::file_record(&filed, inbox)?;
     let reached = match endpoint {
         Some(endpoint) => {
-            match crate::intake::push(&filed, endpoint, crate::intake::DEFAULT_PROJECT) {
+            // The endpoint carries the service in its query, so the one string states both
+            // where the report goes and which database it joins.
+            let project = crate::intake::split_service(endpoint)
+                .1
+                .unwrap_or_else(|| crate::intake::DEFAULT_PROJECT.to_string());
+            match crate::intake::push(&filed, endpoint, &project) {
                 Ok(filed_as) => {
                     let _ = std::fs::remove_file(&record);
-                    Ok((filed_as, endpoint.to_string()))
+                    Ok((filed_as, crate::intake::address(endpoint, "", &project)))
                 }
                 Err(problem) => Err(problem),
             }
