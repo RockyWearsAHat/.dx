@@ -362,11 +362,15 @@ impl Filed {
     #[must_use]
     pub fn summary(&self, kind: &str, inbox: &Path) -> String {
         match (&self.reached, &self.problem) {
-            (Some(endpoint), _) => format!(
+            (Some(endpoint), problem) => format!(
                 "filed {} ({kind}) — it is in the database at {endpoint} and will be in \
-                 {} the next time this checkout syncs\n",
+                 {} the next time this checkout syncs\n{}",
                 self.id,
-                reports::DOCUMENT
+                reports::DOCUMENT,
+                problem
+                    .as_ref()
+                    .map(|said| format!("{said}\n"))
+                    .unwrap_or_default()
             ),
             (None, Some(problem)) => format!(
                 "filed {} ({kind}) in {} — {} waiting, because the intake could not be \
@@ -411,12 +415,21 @@ pub fn file(report: &Report) -> Result<Filed, String> {
     };
     match push(report, &endpoint, DEFAULT_PROJECT) {
         Ok(filed) => {
-            let _ = std::fs::remove_file(&record);
+            // The intake has it, so this machine no longer needs to — and a record that
+            // cannot be removed is said out loud rather than swallowed: the next sync would
+            // push it again, which costs a duplicate sighting nobody saw twice.
+            let problem = std::fs::remove_file(&record).err().map(|error| {
+                format!(
+                    "{filed} reached the intake but {} could not be removed: {error} — remove \
+                     it by hand, or the next sync files a sighting nobody saw",
+                    record.display()
+                )
+            });
             Ok(Filed {
                 id: filed,
                 reached: Some(endpoint),
                 waiting: reports::read_inbox(&inbox)?.pending.len(),
-                problem: None,
+                problem,
             })
         }
         Err(problem) => Ok(Filed {
