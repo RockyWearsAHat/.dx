@@ -26,6 +26,7 @@ use crate::desktop;
 use crate::extension::{self, Channel, Family, Target};
 use crate::install::{self, Registration};
 use crate::policies;
+use crate::reports;
 use crate::service;
 
 /// `dx doctor` — what is installed, what works, and what is missing.
@@ -124,6 +125,25 @@ pub fn run_doctor(_args: &Args) -> Result<String, String> {
     for line in browser::status_lines() {
         out.push_str(&line);
         out.push('\n');
+    }
+
+    // A filed report reaches the repository only when someone drains it, and the inbox is
+    // the one piece of dx state that lives nowhere a session would trip over. So doctor —
+    // the command a maintainer already runs — says how many are waiting.
+    out.push_str("\nreports\n");
+    let inbox = reports::inbox();
+    match reports::read_inbox(&inbox) {
+        Ok(waiting) if waiting.pending.is_empty() && waiting.unreadable.is_empty() => {
+            out.push_str(&format!("  inbox     empty ({})\n", inbox.display()));
+        }
+        Ok(waiting) => out.push_str(&format!(
+            "  inbox     {} waiting, {} unreadable — run `dx report drain` in the dx \
+             checkout ({})\n",
+            waiting.pending.len(),
+            waiting.unreadable.len(),
+            inbox.display()
+        )),
+        Err(reason) => out.push_str(&format!("  inbox     unreadable — {reason}\n")),
     }
 
     Ok(out)
@@ -538,6 +558,22 @@ WRITE
               [--id ID] [--level N]             name it, or set a heading's level
   dx fmt      <file...> [--check]               rewrite in canonical form
 
+REPORT — what dx itself got wrong
+  dx report   bug|suggestion|observation        file it from any project, the moment
+              --title T --detail D              it happens: what you did, what you
+              [--route R] [--repro X]           expected, what happened instead.
+                                                --route names the tool or command
+                                                involved. It lands in this machine's
+                                                report inbox, outside every repository,
+                                                because the dx checkout is almost never
+                                                the project you are standing in.
+  dx report   list [dir]                        what is waiting, and what <dir>'s
+                                                reports.dx is already carrying
+  dx report   drain [dir]                       fold the inbox into <dir>/reports.dx,
+                                                where a fix is made and committed. The
+                                                same defect filed twice becomes a second
+                                                sighting on one block, never a duplicate.
+
 STORE
   A .dx file on disk is a one-line pointer; its content lives in the workspace
   store (.doc/). Every dx read resolves the pointer to the real document.
@@ -644,9 +680,12 @@ mod tests {
     #[test]
     fn doctor_reports_every_area_it_checks() {
         let report = run_doctor(&args(&[])).expect("doctor");
-        for section in ["binary", "rendering", "code execution", "agents"] {
+        for section in ["binary", "rendering", "code execution", "agents", "reports"] {
             assert!(report.contains(section), "missing section: {section}");
         }
+        // A filed report that nobody drains is a report nobody fixes, so the count is
+        // said here whether or not anything is waiting.
+        assert!(report.contains("inbox"), "{report}");
     }
 
     #[test]

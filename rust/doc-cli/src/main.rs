@@ -22,6 +22,7 @@ mod home;
 mod install;
 mod mcp;
 mod policies;
+mod reports;
 mod service;
 mod state;
 mod workspace;

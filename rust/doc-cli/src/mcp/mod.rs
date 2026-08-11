@@ -296,6 +296,16 @@ fn initialize() -> Value {
                          images proves nothing and is the smell that you have left the \
                          method; prefer the verdict, and keep any embedded image under \
                          8MB (capture at scale 1).\n\n\
+                         REPORT DX ITSELF. You are dx's field test, and the only one it \
+                         has: when a tool misleads you, a message does not say what to do \
+                         next, an answer is not the block that states the fact, or you \
+                         work around something — file it with dx_report in the same turn, \
+                         bug, suggestion, or observation, from whatever project you are \
+                         in. It costs one call, it changes nothing in this workspace, and \
+                         it is the only way dx stops doing that; a workaround nobody filed \
+                         is a defect that stays. Report the same thing twice gladly — \
+                         repeats become sightings on one report, and the count is what \
+                         earns a fix.\n\n\
                          PIXELS IN SUBAGENTS. A page image is the costliest thing a \
                          context can carry, so frames are judged in a review subagent \
                          that returns verdicts: the subagent reads the pixels and answers \
@@ -484,6 +494,13 @@ mod tests {
         assert!(instructions.contains("for=<run-block-id>"));
         assert!(instructions.contains("`header` param"));
         assert!(instructions.contains("hand-managed images proves nothing"));
+        // dx is improved by the agents using it: a defect met in any project is filed in
+        // the same turn, from that project, and repeats are welcome — they are what tell
+        // a fixer which defect is actually costing sessions.
+        assert!(instructions.contains("REPORT DX ITSELF"));
+        assert!(instructions.contains("dx_report"));
+        assert!(instructions.contains("a workaround nobody filed"));
+        assert!(instructions.contains("changes nothing in this workspace"));
         // The visual loop: frames are judged in a review subagent so the operator's
         // context holds verdicts rather than page images, pixels reach the operator only
         // to set direction, every rendered-surface change is reviewed to PASS with the
