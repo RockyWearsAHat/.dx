@@ -30,6 +30,7 @@ pub const TOOL_NAMES: &[&str] = &[
     "dx_board",
     "dx_append",
     "dx_check",
+    "dx_report",
     "dx_run",
 ];
 
@@ -50,6 +51,7 @@ pub fn catalogue() -> Value {
         board_tool(),
         append_tool(),
         check_tool(),
+        report_tool(),
         run_tool(),
     ])
 }
@@ -594,6 +596,72 @@ fn check_tool() -> Value {
     })
 }
 
+/// `dx_report` — file what dx itself got wrong.
+fn report_tool() -> Value {
+    json!({
+        "name": "dx_report",
+        "description": "REPORT DX ITSELF. File a bug, a suggestion, or an observation about \
+                        dx — the tools, the CLI, the format, the editing surfaces — the \
+                        moment it happens, from whatever project you are working in. The \
+                        thing you just worked around, the message that did not say what to \
+                        do next, the call you had to make twice, the answer that was not the \
+                        block stating the fact: that is a report, and a workaround nobody \
+                        filed is a defect that stays. This is the one tool that is not about \
+                        the project you are in — a defect in *that* project's own code \
+                        belongs in its documents, not here.\n\n\
+                        Write `detail` for the person who will fix it: what you did, what \
+                        you expected, what happened instead. `route` names the tool or \
+                        command involved (dx_search, dx_run, dx sync, the VS Code surface) \
+                        and `repro` the smallest sequence that shows it. Which dx, which \
+                        platform, which workspace, and when are recorded for you.\n\n\
+                        The report lands in this machine's report inbox — outside every \
+                        repository, because the dx checkout is almost never the project you \
+                        are in — and `dx report drain` folds it into that checkout's \
+                        reports.dx, where it is fixed and committed. Reporting the same \
+                        thing twice is welcome: reports are keyed by kind, title, and route, \
+                        so a repeat becomes another sighting on the one block rather than a \
+                        duplicate, and that count is how a defect earns its priority.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "kind": {
+                    "type": "string",
+                    "enum": ["bug", "suggestion", "observation"],
+                    "description": "bug: dx did something wrong. suggestion: dx could do \
+                                    something better. observation: how dx behaved, with no \
+                                    claim about whether it is wrong — the most useful kind \
+                                    when you are unsure."
+                },
+                "title": {
+                    "type": "string",
+                    "description": "One line naming the defect. This, the kind, and the \
+                                    route are the report's identity, so write the defect \
+                                    rather than the episode: \"dx_search answers with the \
+                                    heading instead of the block that states the fact\"."
+                },
+                "detail": {
+                    "type": "string",
+                    "description": "What you did, what you expected, and what happened \
+                                    instead — enough for someone who was not here to act on \
+                                    it without asking you."
+                },
+                "route": {
+                    "type": "string",
+                    "description": "The tool, command, or surface involved: dx_search, \
+                                    dx_run, `dx sync`, the editor. Optional, and part of \
+                                    the identity — the same symptom on two routes is two \
+                                    reports."
+                },
+                "repro": {
+                    "type": "string",
+                    "description": "The smallest sequence that shows it, when you have one."
+                }
+            },
+            "required": ["kind", "title", "detail"]
+        }
+    })
+}
+
 /// `dx_run` — execute the document's code.
 fn run_tool() -> Value {
     json!({
@@ -840,6 +908,31 @@ mod tests {
                 "dx_run is missing the `{param}` parameter"
             );
         }
+    }
+
+    /// The reporting tool has to say what it is for — dx, not the project the agent is
+    /// working in — and offer the three kinds, or every field report arrives as a bug.
+    #[test]
+    fn the_report_tool_names_its_subject_and_its_kinds() {
+        let tools = catalogue();
+        let report = tools
+            .as_array()
+            .expect("array")
+            .iter()
+            .find(|tool| tool["name"] == "dx_report")
+            .expect("dx_report");
+        let description = report["description"].as_str().expect("description");
+        assert!(description.starts_with("REPORT DX ITSELF."));
+        assert!(description.contains("workaround"));
+        assert!(description.contains("dx report drain"));
+        assert_eq!(
+            report["inputSchema"]["properties"]["kind"]["enum"],
+            json!(["bug", "suggestion", "observation"])
+        );
+        assert_eq!(
+            report["inputSchema"]["required"],
+            json!(["kind", "title", "detail"])
+        );
     }
 
     #[test]

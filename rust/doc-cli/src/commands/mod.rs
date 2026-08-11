@@ -16,6 +16,7 @@ pub mod exec;
 pub mod find;
 pub mod index;
 pub mod play;
+pub mod report;
 pub mod setup;
 pub mod store;
 pub mod view;
@@ -231,6 +232,12 @@ const COMMANDS: &[Command] = &[
         names: &["fmt", "format"],
         flags: &["check"],
         run: |args| edit::run_fmt(args).map(Output::Report),
+    },
+    // Reporting on dx itself.
+    Command {
+        names: &["report"],
+        flags: &["title", "detail", "route", "repro", "out"],
+        run: report::run,
     },
     // Running.
     Command {

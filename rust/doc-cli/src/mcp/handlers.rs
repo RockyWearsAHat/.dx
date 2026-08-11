@@ -43,6 +43,7 @@ pub fn call(name: &str, args: &Value, root: &Path) -> ToolResult {
         "dx_board" => board(args, root),
         "dx_append" => append(args, root),
         "dx_check" => check(args, root),
+        "dx_report" => report(args, root),
         "dx_run" => run(args, root),
         other => Err(format!("unknown tool: {other}")),
     }
@@ -806,6 +807,40 @@ fn check(args: &Value, root: &Path) -> ToolResult {
     ))])
 }
 
+/// `dx_report` — file a bug, a suggestion, or an observation about dx itself.
+///
+/// The one write that does not touch the workspace it is called in. A report is about dx,
+/// and the agent filing it is almost never standing in the dx checkout, so it goes to this
+/// machine's inbox and reaches the repository through `dx report drain`
+/// ([`crate::reports`] is the authority on why).
+fn report(args: &Value, root: &Path) -> ToolResult {
+    report_in(args, root, &crate::reports::inbox())
+}
+
+/// The body of [`report`], with the inbox stated rather than defaulted, so the suite never
+/// files into the developer's real one.
+fn report_in(args: &Value, root: &Path, inbox: &Path) -> ToolResult {
+    let kind = crate::reports::Kind::parse(required(args, "kind")?)?;
+    let filed = crate::reports::Report::now(
+        kind,
+        required(args, "title")?,
+        required(args, "detail")?,
+        string(args, "route").unwrap_or_default(),
+        string(args, "repro").unwrap_or_default(),
+        root,
+    )?;
+    let id = crate::reports::file(&filed, inbox)?;
+    let waiting = crate::reports::read_inbox(inbox)?.pending.len();
+    Ok(vec![text_content(&format!(
+        "Filed {id} ({}) — {waiting} report(s) waiting in {}. `dx report drain` in the dx \
+         checkout folds them into {}, where they are fixed. Keep working; nothing in this \
+         workspace changed.",
+        kind.as_str(),
+        inbox.display(),
+        crate::reports::DOCUMENT
+    ))])
+}
+
 /// `dx_index` — scaffold `index.dx`, the precursor project map, from the file tree.
 fn index(args: &Value, root: &Path) -> ToolResult {
     let directory = directory_arg(args, root);
@@ -1265,6 +1300,64 @@ mod tests {
             &root,
         );
         assert!(code.expect_err("code is refused").contains("dx_edit"));
+    }
+
+    /// A report is filed from the project the agent is standing in, changes nothing there,
+    /// and waits in the machine's inbox for `dx report drain`.
+    #[test]
+    fn a_report_is_filed_outside_the_workspace_it_was_noticed_in() {
+        let root = project("report");
+        let inbox = root.join("inbox");
+        let before = workspace::read(&root.join("guide.dx")).expect("read");
+
+        let filed = report_in(
+            &json!({
+                "kind": "bug",
+                "title": "dx_search answers with the heading, not the stating block",
+                "detail": "Asked for the sampling rate; got the section heading above it.",
+                "route": "dx_search",
+            }),
+            &root,
+            &inbox,
+        )
+        .expect("file");
+        let answer = text_of(&filed);
+        assert!(answer.starts_with("Filed report-"), "{answer}");
+        assert!(answer.contains("dx report drain"), "{answer}");
+
+        let waiting = crate::reports::read_inbox(&inbox).expect("inbox");
+        assert_eq!(waiting.pending.len(), 1);
+        assert_eq!(waiting.pending[0].report.route, "dx_search");
+        assert_eq!(
+            waiting.pending[0].report.workspace,
+            root.display().to_string()
+        );
+        assert_eq!(
+            workspace::read(&root.join("guide.dx")).expect("read"),
+            before,
+            "filing a report must not touch the workspace it was noticed in"
+        );
+    }
+
+    #[test]
+    fn a_report_that_names_nothing_actionable_is_refused() {
+        let root = project("report-refused");
+        let inbox = root.join("inbox");
+        let kind = report_in(
+            &json!({ "kind": "annoyance", "title": "t", "detail": "d" }),
+            &root,
+            &inbox,
+        )
+        .expect_err("not a kind");
+        assert!(kind.contains("bug, suggestion, or observation"), "{kind}");
+
+        let bare = report_in(&json!({ "kind": "bug", "title": "t" }), &root, &inbox)
+            .expect_err("no detail");
+        assert!(bare.contains("`detail` is required"), "{bare}");
+        assert!(
+            !inbox.exists(),
+            "a refused report must not create an inbox entry"
+        );
     }
 
     #[test]

@@ -957,7 +957,11 @@ fn write_read_models(
 /// Hand-rolled from the epoch seconds so the crate needs no date dependency. A clock that
 /// predates the epoch yields the epoch itself rather than an error, since a timestamp is
 /// metadata and must never be the reason a save fails.
-fn timestamp() -> String {
+///
+/// Public because everything dx stamps — a saved manifest, a filed report — must be
+/// stamped the same way; a second spelling of "now" is a second answer to when.
+#[must_use]
+pub fn timestamp() -> String {
     let seconds = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |elapsed| elapsed.as_secs());

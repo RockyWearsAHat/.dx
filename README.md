@@ -92,6 +92,7 @@ which resolves pointers in place and renders pull requests as document diffs.
 | [`docs/method.dx`](docs/method.dx) | How the project is worked: orientation, read routes, the harness |
 | [`dev.dx`](dev.dx) | The development harness: `dx run dev.dx` proves the repository |
 | [`validation.dx`](validation.dx) | What the method costs and saves, measured by run blocks |
+| [`reports.dx`](reports.dx) | Field reports about dx — filed with `dx_report`, folded in by `dx report drain` |
 | [`docs/dx-format-contract.dx`](docs/dx-format-contract.dx) | The format: every block type, every attribute, canonical form |
 | [`docs/github.dx`](docs/github.dx) | The browser extension and how github.com pages resolve |
 | [`docs/grill-me.dx`](docs/grill-me.dx) | The review checklist for parser, renderer, and save-path changes |
@@ -112,6 +113,13 @@ the tenth request in a project cost a fraction of the first.
 in any host. [`docs/method.dx`](docs/method.dx) is the whole of it: the read routes and what
 each costs, why writing into the document beats holding it in context, and the verify-block
 loop that makes "done" a thing the document proves rather than a thing anyone claims.
+
+The agents using dx are also how it improves. When a tool misleads one, a message does not say
+what to do next, or something has to be worked around, `dx_report` files it — bug, suggestion,
+or observation — from whatever project the agent is in, into this machine's report inbox
+outside every repository. `dx report drain` folds the inbox into [`reports.dx`](reports.dx) in
+this checkout, keyed so a defect reported by three sessions is one block with three sightings
+rather than three duplicates. `dx report list` shows what is waiting and what is still open.
 
 ## What executes, and what does not
 

@@ -35,7 +35,8 @@ mod store;
 pub mod stub;
 
 pub use store::{
-    discover as discover_documents, stale_index, Saved, Stats, Store, Summary, SyncReport,
+    discover as discover_documents, stale_index, timestamp, Saved, Stats, Store, Summary,
+    SyncReport,
 };
 
 use core::fmt;
