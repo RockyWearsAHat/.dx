@@ -11,11 +11,15 @@
 //! else ran into, and nobody has to remember to carry anything across.
 //!
 //! ```text
-//!  file  ──▶ this machine's inbox ──▶ POST <endpoint>        (immediately, best effort)
+//!  file  ──▶ this machine's inbox ──▶ POST <endpoint>?<service>       (immediately, best effort)
 //!                                        │
-//!  sync  ◀── reports.dx, folded ◀── GET <endpoint>/feed      (every subscribed checkout)
-//!  close ──▶ block removed      ──▶ POST <endpoint>/close    (so a fix does not come back)
+//!  sync  ◀── reports.dx, folded ◀── GET <endpoint>/feed?<service>     (every subscribed checkout)
+//!  close ──▶ block removed      ──▶ POST <endpoint>/close?<service>   (so a fix does not return)
 //! ```
+//!
+//! The service is the query and nothing else — `…/report?dx` is dx's own database, and
+//! `…/report?<name>` is how another internal service registers one. [`address`] is the only
+//! place a URL is built, so every call reaches the same box the same way.
 //!
 //! # Why the inbox is still written first
 //!
@@ -52,14 +56,17 @@ use serde_json::{json, Value};
 use crate::reports::{self, Report};
 use crate::workspace;
 
-/// Where reports go when nothing says otherwise.
+/// Where reports go when nothing says otherwise — the base, without a service on it.
 ///
 /// A default rather than a setting, because the whole point is that an agent that has never
-/// heard of this machinery still reaches the people who fix dx. `DX_REPORT_ENDPOINT` overrides
-/// it, and `DX_REPORT_ENDPOINT=off` turns the push off entirely.
-pub const DEFAULT_ENDPOINT: &str = "https://rockywearsahat.com/api/reports";
+/// heard of this machinery still reaches the people who fix dx. The service the report belongs
+/// to is the query [`address`] puts on: dx's own reports are `.../report?dx`.
+/// `DX_REPORT_ENDPOINT` overrides the base — and names the service when it carries one, so
+/// `DX_REPORT_ENDPOINT=https://rockywearsahat.com/report?billing` is the whole of registering
+/// `billing`. `DX_REPORT_ENDPOINT=off` turns the push off entirely.
+pub const DEFAULT_ENDPOINT: &str = "https://rockywearsahat.com/report";
 
-/// The project reports are about when nothing says otherwise.
+/// The project reports are about when nothing says otherwise — the service `?dx` names.
 pub const DEFAULT_PROJECT: &str = "dx";
 
 /// Environment override for the endpoint. `off` disables the push.
@@ -122,10 +129,85 @@ impl Subscription {
     }
 }
 
+/// The URL one call goes to: the intake's base, the route when the call has one, and the
+/// service as the query — `https://rockywearsahat.com/report?dx`, `…/report/feed?dx`,
+/// `…/report/close?dx`.
+///
+/// A bare query key rather than `project=`, because that is the address the intake publishes:
+/// `report?<service>` is what a new internal service registers under. An `endpoint` that
+/// already carries a service is tolerated and its query replaced, so a subscription stored
+/// with the full address and one stored with the base both reach the same place.
+#[must_use]
+pub fn address(endpoint: &str, route: &str, project: &str) -> String {
+    let (base, named) = split_service(endpoint);
+    let service = match project.trim() {
+        "" => named.unwrap_or_else(|| DEFAULT_PROJECT.to_string()),
+        stated => stated.to_string(),
+    };
+    if route.is_empty() {
+        format!("{base}?{service}")
+    } else {
+        format!("{base}/{route}?{service}")
+    }
+}
+
+/// An endpoint split into the base the routes are built from and the service its query names.
+///
+/// `https://rockywearsahat.com/report?billing` splits into that base and `Some("billing")`. A
+/// query that is not a bare service name belongs to nothing this understands and is dropped
+/// rather than carried into a URL that already has a `?` in it.
+#[must_use]
+pub fn split_service(endpoint: &str) -> (String, Option<String>) {
+    let trimmed = endpoint.trim();
+    let (base, query) = trimmed.split_once('?').unwrap_or((trimmed, ""));
+    let named = query
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
+    (
+        base.trim_end_matches('/').to_string(),
+        (named && !query.is_empty()).then(|| query.to_string()),
+    )
+}
+
 /// The endpoint this machine files to, or `None` when the push is turned off.
 #[must_use]
 pub fn endpoint() -> Option<String> {
     endpoint_from(std::env::var(ENDPOINT_ENV).ok().as_deref())
+}
+
+/// The intake this machine files to with its service still on it — `…/report?dx` — or `None`
+/// when the push is turned off.
+///
+/// One string rather than a pair, so a caller that has to carry the setting somewhere (the MCP
+/// handler hands it to its own body, which a test states outright) carries both halves or
+/// neither, and never a base with somebody else's service on it.
+#[must_use]
+pub fn setting() -> Option<String> {
+    let configured = std::env::var(ENDPOINT_ENV).ok();
+    let base = endpoint_from(configured.as_deref())?;
+    Some(match service_from(configured.as_deref()) {
+        Some(service) => format!("{base}?{service}"),
+        None => base,
+    })
+}
+
+/// The service this machine's endpoint setting names, when it names one.
+///
+/// `None` means nothing was said, and the caller's own project key — `dx` for a report about
+/// dx — stands.
+#[must_use]
+pub fn service() -> Option<String> {
+    service_from(std::env::var(ENDPOINT_ENV).ok().as_deref())
+}
+
+/// The service `setting` names in its query, if it names one. Split from [`service`] for the
+/// same reason [`endpoint_from`] is split from [`endpoint`]: a suite must not write a
+/// process-wide variable to test the rule.
+#[must_use]
+pub fn service_from(setting: Option<&str>) -> Option<String> {
+    setting
+        .filter(|value| !value.trim().eq_ignore_ascii_case("off"))
+        .and_then(|value| split_service(value).1)
 }
 
 /// The endpoint `setting` names: itself, or the default when it says nothing, or nothing at
@@ -138,9 +220,7 @@ pub fn endpoint() -> Option<String> {
 pub fn endpoint_from(setting: Option<&str>) -> Option<String> {
     match setting {
         Some(value) if value.trim().eq_ignore_ascii_case("off") => None,
-        Some(value) if !value.trim().is_empty() => {
-            Some(value.trim().trim_end_matches('/').to_string())
-        }
+        Some(value) if !value.trim().is_empty() => Some(split_service(value).0),
         _ => Some(DEFAULT_ENDPOINT.to_string()),
     }
 }
@@ -256,6 +336,7 @@ pub fn push(report: &Report, endpoint: &str, project: &str) -> Result<String, St
     }))
     .map_err(|error| format!("could not encode the report: {error}"))?;
 
+    let url = address(endpoint, "", project);
     let answered = run_curl(
         &[
             "-sS",
@@ -267,21 +348,21 @@ pub fn push(report: &Report, endpoint: &str, project: &str) -> Result<String, St
             "content-type: application/json",
             "--data-binary",
             "@-",
-            endpoint,
+            &url,
         ],
         Some(body.as_bytes()),
     )?;
 
     let value: Value = serde_json::from_str(&answered)
-        .map_err(|_| format!("{endpoint} answered something that is not JSON: {answered}"))?;
+        .map_err(|_| format!("{url} answered something that is not JSON: {answered}"))?;
     if let Some(error) = value.get("error").and_then(Value::as_str) {
-        return Err(format!("{endpoint} refused the report: {error}"));
+        return Err(format!("{url} refused the report: {error}"));
     }
     value
         .get("filed")
         .and_then(Value::as_str)
         .map(str::to_string)
-        .ok_or_else(|| format!("{endpoint} did not say what it filed: {answered}"))
+        .ok_or_else(|| format!("{url} did not say what it filed: {answered}"))
 }
 
 /// Every open report the intake holds for `project`.
@@ -290,23 +371,22 @@ pub fn push(report: &Report, endpoint: &str, project: &str) -> Result<String, St
 /// Returns a sentence when the feed cannot be read — including the token being wrong, which is
 /// the one failure that otherwise reads as "no reports".
 pub fn feed(endpoint: &str, project: &str, token: &str) -> Result<Vec<Value>, String> {
+    let url = address(endpoint, "feed", project);
     if token.trim().is_empty() {
         return Err(format!(
-            "reading {endpoint}/feed needs the owner's token — run `selfhost reports token` on \
-             the box and pass it to `dx report subscribe --token`"
+            "reading {url} needs the owner's token — run `selfhost reports token` on the box and \
+             pass it to `dx report subscribe --token`"
         ));
     }
-    let config = format!(
-        "url = \"{endpoint}/feed?project={project}\"\nheader = \"authorization: Bearer {token}\"\n"
-    );
+    let config = format!("url = \"{url}\"\nheader = \"authorization: Bearer {token}\"\n");
     let answered = run_curl(
         &["-sS", "--max-time", &TIMEOUT_SECONDS.to_string(), "-K", "-"],
         Some(config.as_bytes()),
     )?;
     let value: Value = serde_json::from_str(&answered)
-        .map_err(|_| format!("{endpoint}/feed answered something that is not JSON: {answered}"))?;
+        .map_err(|_| format!("{url} answered something that is not JSON: {answered}"))?;
     if let Some(error) = value.get("error").and_then(Value::as_str) {
-        return Err(format!("{endpoint}/feed refused: {error}"));
+        return Err(format!("{url} refused: {error}"));
     }
     Ok(value
         .get("reports")
@@ -323,13 +403,12 @@ pub fn close(endpoint: &str, project: &str, id: &str, token: &str) -> Result<(),
     if !id.starts_with("report-") || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
         return Err(format!("`{id}` is not a report id"));
     }
+    let url = address(endpoint, "close", project);
     if token.trim().is_empty() {
-        return Err(format!(
-            "closing a report on {endpoint} needs the owner's token"
-        ));
+        return Err(format!("closing a report at {url} needs the owner's token"));
     }
     let config = format!(
-        "url = \"{endpoint}/close\"\nheader = \"authorization: Bearer {token}\"\n\
+        "url = \"{url}\"\nheader = \"authorization: Bearer {token}\"\n\
          header = \"content-type: application/json\"\ndata = \"{{\\\"project\\\":\\\"{project}\\\",\\\"id\\\":\\\"{id}\\\"}}\"\n"
     );
     let answered = run_curl(
@@ -337,9 +416,9 @@ pub fn close(endpoint: &str, project: &str, id: &str, token: &str) -> Result<(),
         Some(config.as_bytes()),
     )?;
     let value: Value = serde_json::from_str(&answered)
-        .map_err(|_| format!("{endpoint}/close answered something that is not JSON: {answered}"))?;
+        .map_err(|_| format!("{url} answered something that is not JSON: {answered}"))?;
     match value.get("error").and_then(Value::as_str) {
-        Some(error) => Err(format!("{endpoint}/close refused: {error}")),
+        Some(error) => Err(format!("{url} refused: {error}")),
         None => Ok(()),
     }
 }
@@ -413,7 +492,8 @@ pub fn file(report: &Report) -> Result<Filed, String> {
             problem: None,
         });
     };
-    match push(report, &endpoint, DEFAULT_PROJECT) {
+    let project = service().unwrap_or_else(|| DEFAULT_PROJECT.to_string());
+    match push(report, &endpoint, &project) {
         Ok(filed) => {
             // The intake has it, so this machine no longer needs to — and a record that
             // cannot be removed is said out loud rather than swallowed: the next sync would
@@ -873,7 +953,7 @@ mod tests {
         let subscription = Subscription {
             workspace: root.clone(),
             project: "dx".to_string(),
-            endpoint: "https://example.com/api/reports".to_string(),
+            endpoint: "https://example.com/report".to_string(),
             token: "a-token".to_string(),
         };
         subscribe(&subscription).expect("subscribe");
@@ -902,13 +982,81 @@ mod tests {
     #[test]
     fn the_endpoint_can_be_pointed_elsewhere_or_turned_off() {
         assert_eq!(
-            endpoint_from(Some("https://elsewhere.example/api/reports/")).as_deref(),
-            Some("https://elsewhere.example/api/reports")
+            endpoint_from(Some("https://elsewhere.example/report/")).as_deref(),
+            Some("https://elsewhere.example/report")
         );
         assert!(endpoint_from(Some("off")).is_none());
         assert!(endpoint_from(Some("OFF")).is_none());
         assert_eq!(endpoint_from(None).as_deref(), Some(DEFAULT_ENDPOINT));
         assert_eq!(endpoint_from(Some("  ")).as_deref(), Some(DEFAULT_ENDPOINT));
+    }
+
+    /// The published address, built from the base: this is what a reporter, a feed, and a
+    /// close actually reach.
+    #[test]
+    fn every_call_reaches_the_service_named_in_the_query() {
+        assert_eq!(
+            address(DEFAULT_ENDPOINT, "", DEFAULT_PROJECT),
+            "https://rockywearsahat.com/report?dx"
+        );
+        assert_eq!(
+            address(DEFAULT_ENDPOINT, "feed", "dx"),
+            "https://rockywearsahat.com/report/feed?dx"
+        );
+        assert_eq!(
+            address(DEFAULT_ENDPOINT, "close", "dx"),
+            "https://rockywearsahat.com/report/close?dx"
+        );
+        // Registering another internal service is the same URL under its own name.
+        assert_eq!(
+            address(DEFAULT_ENDPOINT, "", "billing"),
+            "https://rockywearsahat.com/report?billing"
+        );
+    }
+
+    /// An endpoint that already carries its service — which is how the intake publishes the
+    /// address — is understood rather than pasted into a second `?`.
+    #[test]
+    fn an_endpoint_that_carries_a_service_names_it_rather_than_doubling_the_query() {
+        assert_eq!(
+            split_service("https://rockywearsahat.com/report?billing"),
+            (
+                "https://rockywearsahat.com/report".to_string(),
+                Some("billing".to_string())
+            )
+        );
+        assert_eq!(
+            split_service(DEFAULT_ENDPOINT),
+            (DEFAULT_ENDPOINT.to_string(), None)
+        );
+        // A query that is not a bare service name is not one.
+        assert_eq!(
+            split_service("https://example.com/report?a=b").1,
+            None,
+            "only a bare name is a service"
+        );
+
+        assert_eq!(
+            endpoint_from(Some("https://rockywearsahat.com/report?billing")).as_deref(),
+            Some(DEFAULT_ENDPOINT)
+        );
+        assert_eq!(
+            service_from(Some("https://rockywearsahat.com/report?billing")).as_deref(),
+            Some("billing")
+        );
+        assert_eq!(service_from(Some(DEFAULT_ENDPOINT)), None);
+        assert_eq!(service_from(Some("off")), None);
+        assert_eq!(service_from(None), None);
+
+        // The stored form makes no difference to where a call goes.
+        assert_eq!(
+            address(
+                "https://rockywearsahat.com/report?billing",
+                "feed",
+                "billing"
+            ),
+            address(DEFAULT_ENDPOINT, "feed", "billing")
+        );
     }
 
     #[test]
@@ -920,14 +1068,14 @@ mod tests {
 
     #[test]
     fn reading_a_feed_without_a_token_says_where_to_get_one() {
-        let error = feed("https://example.com/api/reports", "dx", "  ").expect_err("refused");
+        let error = feed("https://example.com/report", "dx", "  ").expect_err("refused");
         assert!(error.contains("selfhost reports token"), "{error}");
     }
 
     #[test]
     fn closing_refuses_an_id_that_is_not_one() {
         let error =
-            close("https://example.com/api/reports", "dx", "../../etc", "t").expect_err("refused");
+            close("https://example.com/report", "dx", "../../etc", "t").expect_err("refused");
         assert!(error.contains("not a report id"), "{error}");
     }
 
@@ -969,7 +1117,7 @@ mod tests {
                     .as_bytes(),
                 )
                 .expect("answer");
-            String::from_utf8_lossy(&body).to_string()
+            (head, String::from_utf8_lossy(&body).to_string())
         });
 
         let report = Report::now(
@@ -984,7 +1132,11 @@ mod tests {
         let id = push(&report, &format!("http://{address}"), "dx").expect("push");
         assert_eq!(id, "report-deadbeef");
 
-        let body = received.join().expect("listener");
+        let (head, body) = received.join().expect("listener");
+        assert!(
+            head.starts_with("POST /?dx "),
+            "the service is the query the intake publishes: {head}"
+        );
         assert!(body.contains("\"project\":\"dx\""), "{body}");
         assert!(
             body.contains("\"title\":\"pushed over a socket\""),

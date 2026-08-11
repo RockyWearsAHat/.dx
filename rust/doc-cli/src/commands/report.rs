@@ -77,15 +77,19 @@ fn sync(args: &Args) -> Result<String, String> {
 /// `dx report subscribe [dir]` — this checkout receives a project's reports from now on.
 fn subscribe(args: &Args) -> Result<String, String> {
     let root = root_for(args.positional(1));
+    let stated = args.value("endpoint");
     let subscription = Subscription {
         workspace: root.clone(),
+        // The service is the endpoint's query, so `--endpoint …/report?billing` registers
+        // `billing` with nothing else said. `--project` still wins when both are given.
         project: args
             .value("project")
-            .unwrap_or(intake::DEFAULT_PROJECT)
-            .to_string(),
-        endpoint: args
-            .value("endpoint")
             .map(str::to_string)
+            .or_else(|| intake::service_from(stated))
+            .or_else(intake::service)
+            .unwrap_or_else(|| intake::DEFAULT_PROJECT.to_string()),
+        endpoint: stated
+            .map(|value| intake::split_service(value).0)
             .or_else(intake::endpoint)
             .unwrap_or_else(|| intake::DEFAULT_ENDPOINT.to_string()),
         token: args.value("token").unwrap_or_default().to_string(),
@@ -96,7 +100,7 @@ fn subscribe(args: &Args) -> Result<String, String> {
         "{} now receives `{}` reports from {}\n",
         subscription.document().display(),
         subscription.project,
-        subscription.endpoint
+        intake::address(&subscription.endpoint, "", &subscription.project)
     );
     if subscription.token.is_empty() && std::env::var("DX_REPORT_TOKEN").is_err() {
         out.push_str(
@@ -148,7 +152,10 @@ fn close(args: &Args) -> Result<String, String> {
         id,
         &intake::token_for(&subscription),
     )?;
-    out.push_str(&format!("closed {id} at {}\n", subscription.endpoint));
+    out.push_str(&format!(
+        "closed {id} at {}\n",
+        intake::address(&subscription.endpoint, "close", &subscription.project)
+    ));
     Ok(out)
 }
 
@@ -198,7 +205,8 @@ fn list(args: &Args) -> Result<String, String> {
     match intake::subscription_for(&workspace::workspace_root(&document_root(args))) {
         Ok(Some(subscription)) => out.push_str(&format!(
             "subscribed to `{}` at {}\n",
-            subscription.project, subscription.endpoint
+            subscription.project,
+            intake::address(&subscription.endpoint, "", &subscription.project)
         )),
         Ok(None) => out.push_str(
             "not subscribed — `dx report subscribe --token <t>` keeps this document current\n",
@@ -310,7 +318,7 @@ mod tests {
             "subscribe",
             root.to_str().expect("path"),
             "--endpoint",
-            "https://example.invalid/api/reports",
+            "https://example.invalid/report",
         ]))
         .expect("subscribe");
         assert!(
@@ -323,6 +331,27 @@ mod tests {
             listed.text().contains("subscribed to `dx`"),
             "{}",
             listed.text()
+        );
+        assert!(
+            listed.text().contains("https://example.invalid/report?dx"),
+            "the address a reader is shown is the one calls go to: {}",
+            listed.text()
+        );
+
+        // Registering another internal service is the address and nothing else.
+        let registered = run(&args(&[
+            "subscribe",
+            root.to_str().expect("path"),
+            "--endpoint",
+            "https://example.invalid/report?billing",
+        ]))
+        .expect("subscribe");
+        assert!(
+            registered
+                .text()
+                .contains("`billing` reports from https://example.invalid/report?billing"),
+            "{}",
+            registered.text()
         );
 
         std::env::remove_var("DX_REPORTS_DIR");
