@@ -20,6 +20,7 @@ mod desktop;
 mod extension;
 mod home;
 mod install;
+mod intake;
 mod mcp;
 mod policies;
 mod reports;

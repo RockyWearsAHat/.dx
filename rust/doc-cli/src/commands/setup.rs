@@ -563,16 +563,25 @@ REPORT — what dx itself got wrong
               --title T --detail D              it happens: what you did, what you
               [--route R] [--repro X]           expected, what happened instead.
                                                 --route names the tool or command
-                                                involved. It lands in this machine's
-                                                report inbox, outside every repository,
-                                                because the dx checkout is almost never
-                                                the project you are standing in.
-  dx report   list [dir]                        what is waiting, and what <dir>'s
-                                                reports.dx is already carrying
-  dx report   drain [dir]                       fold the inbox into <dir>/reports.dx,
-                                                where a fix is made and committed. The
-                                                same defect filed twice becomes a second
-                                                sighting on one block, never a duplicate.
+                                                involved. It goes to the intake, so the
+                                                dx checkout carries it for whoever fixes
+                                                it — and to this machine's inbox first,
+                                                so an unreachable intake loses nothing.
+  dx report   list [dir]                        what is waiting, what <dir>'s reports.dx
+                                                carries, and what it subscribes to
+  dx report   subscribe [dir]                   <dir>/reports.dx receives a project's
+              [--project dx] [--token T]        open reports from then on: every sync
+              [--endpoint URL]                  folds them in, and an MCP session keeps
+                                                them current underneath the agent.
+  dx report   sync [dir]                        push what is waiting, pull what is open
+  dx report   close <id> [dir]                  a fix landed: the block goes and the
+                                                intake is told, so no later sync brings
+                                                it back
+  dx report   drain [dir]                       fold this machine's inbox into
+                                                <dir>/reports.dx with no network at all.
+                                                The same defect filed twice becomes a
+                                                second sighting on one block, never a
+                                                duplicate.
 
 STORE
   A .dx file on disk is a one-line pointer; its content lives in the workspace

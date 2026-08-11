@@ -809,17 +809,27 @@ fn check(args: &Value, root: &Path) -> ToolResult {
 
 /// `dx_report` — file a bug, a suggestion, or an observation about dx itself.
 ///
-/// The one write that does not touch the workspace it is called in. A report is about dx,
-/// and the agent filing it is almost never standing in the dx checkout, so it goes to this
-/// machine's inbox and reaches the repository through `dx report drain`
-/// ([`crate::reports`] is the authority on why).
+/// The one write that does not touch the workspace it is called in. A report is about dx, and
+/// the agent filing it is almost never standing in the dx checkout — so it goes to this
+/// machine's inbox *and* straight to the intake, which is what puts it in the dx checkout's
+/// own `reports.dx` for the next agent ([`crate::intake`] is the authority on the route,
+/// [`crate::reports`] on why the inbox is written first).
 fn report(args: &Value, root: &Path) -> ToolResult {
-    report_in(args, root, &crate::reports::inbox())
+    report_in(
+        args,
+        root,
+        &crate::reports::inbox(),
+        crate::intake::endpoint().as_deref(),
+    )
 }
 
-/// The body of [`report`], with the inbox stated rather than defaulted, so the suite never
-/// files into the developer's real one.
-fn report_in(args: &Value, root: &Path, inbox: &Path) -> ToolResult {
+/// The body of [`report`], with the inbox and the intake stated rather than defaulted.
+///
+/// Both are parameters for the same reason: a test run must never file into the developer's
+/// real inbox, and it must never reach the real intake — an endpoint read from the
+/// environment inside this function would make that a property of how the suite was invoked
+/// rather than of the suite.
+fn report_in(args: &Value, root: &Path, inbox: &Path, endpoint: Option<&str>) -> ToolResult {
     let kind = crate::reports::Kind::parse(required(args, "kind")?)?;
     let filed = crate::reports::Report::now(
         kind,
@@ -829,16 +839,39 @@ fn report_in(args: &Value, root: &Path, inbox: &Path) -> ToolResult {
         string(args, "repro").unwrap_or_default(),
         root,
     )?;
-    let id = crate::reports::file(&filed, inbox)?;
+    // The inbox is stated by the caller so the suite never files into the developer's real
+    // one; the push is the same either way, and is turned off in the suite by the endpoint.
+    let (id, record) = crate::reports::file_record(&filed, inbox)?;
+    let reached = match endpoint {
+        Some(endpoint) => {
+            match crate::intake::push(&filed, endpoint, crate::intake::DEFAULT_PROJECT) {
+                Ok(filed_as) => {
+                    let _ = std::fs::remove_file(&record);
+                    Ok((filed_as, endpoint.to_string()))
+                }
+                Err(problem) => Err(problem),
+            }
+        }
+        None => Err("the report endpoint is turned off on this machine".to_string()),
+    };
     let waiting = crate::reports::read_inbox(inbox)?.pending.len();
-    Ok(vec![text_content(&format!(
-        "Filed {id} ({}) — {waiting} report(s) waiting in {}. `dx report drain` in the dx \
-         checkout folds them into {}, where they are fixed. Keep working; nothing in this \
-         workspace changed.",
-        kind.as_str(),
-        inbox.display(),
-        crate::reports::DOCUMENT
-    ))])
+    Ok(vec![text_content(&match reached {
+        Ok((filed_as, endpoint)) => format!(
+            "Filed {filed_as} ({}) at {endpoint} — it is in the report database, and the dx \
+             checkout carries it in {} on its next sync. Keep working; nothing in this \
+             workspace changed.",
+            kind.as_str(),
+            crate::reports::DOCUMENT
+        ),
+        Err(problem) => format!(
+            "Filed {id} ({}) in {} — {waiting} waiting, because the intake could not be \
+             reached ({problem}). They go out on the next `dx report sync`, and `dx report \
+             drain` folds them in without a network. Keep working; nothing in this workspace \
+             changed.",
+            kind.as_str(),
+            inbox.display()
+        ),
+    })])
 }
 
 /// `dx_index` — scaffold `index.dx`, the precursor project map, from the file tree.
@@ -1319,11 +1352,12 @@ mod tests {
             }),
             &root,
             &inbox,
+            None,
         )
         .expect("file");
         let answer = text_of(&filed);
         assert!(answer.starts_with("Filed report-"), "{answer}");
-        assert!(answer.contains("dx report drain"), "{answer}");
+        assert!(answer.contains("dx report sync"), "{answer}");
 
         let waiting = crate::reports::read_inbox(&inbox).expect("inbox");
         assert_eq!(waiting.pending.len(), 1);
@@ -1339,6 +1373,75 @@ mod tests {
         );
     }
 
+    /// The agent path, end to end against a listener that answers like the intake: a report
+    /// filed through the tool reaches the database, and the record it left in this machine's
+    /// inbox is removed once it has, so the same defect is never filed twice.
+    #[test]
+    fn a_report_reaches_the_intake_and_leaves_no_duplicate_behind() {
+        use std::io::{BufRead, BufReader, Read, Write};
+        use std::net::TcpListener;
+
+        let root = project("report-push");
+        let inbox = root.join("inbox");
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let address = listener.local_addr().expect("address");
+        let served = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+            let mut length = 0usize;
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).expect("head");
+                if let Some(value) = line.to_lowercase().strip_prefix("content-length:") {
+                    length = value.trim().parse().unwrap_or(0);
+                }
+                if line == "\r\n" || line.is_empty() {
+                    break;
+                }
+            }
+            let mut body = vec![0u8; length];
+            reader.read_exact(&mut body).expect("body");
+            let answer = "{\"filed\":\"report-abcd1234\",\"sightings\":1}";
+            stream
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{answer}",
+                        answer.len()
+                    )
+                    .as_bytes(),
+                )
+                .expect("answer");
+            String::from_utf8_lossy(&body).to_string()
+        });
+
+        let filed = report_in(
+            &json!({
+                "kind": "bug",
+                "title": "the intake is reached from the tool an agent actually calls",
+                "detail": "Filed through dx_report rather than the command line.",
+                "route": "dx_report",
+            }),
+            &root,
+            &inbox,
+            Some(&format!("http://{address}")),
+        )
+        .expect("file");
+
+        let answer = text_of(&filed);
+        assert!(answer.contains("report-abcd1234"), "{answer}");
+        assert!(answer.contains("report database"), "{answer}");
+        assert!(
+            crate::reports::read_inbox(&inbox)
+                .expect("inbox")
+                .pending
+                .is_empty(),
+            "a report the intake accepted must not also wait in the inbox"
+        );
+
+        let body = served.join().expect("listener");
+        assert!(body.contains("\"route\":\"dx_report\""), "{body}");
+    }
+
     #[test]
     fn a_report_that_names_nothing_actionable_is_refused() {
         let root = project("report-refused");
@@ -1347,11 +1450,12 @@ mod tests {
             &json!({ "kind": "annoyance", "title": "t", "detail": "d" }),
             &root,
             &inbox,
+            None,
         )
         .expect_err("not a kind");
         assert!(kind.contains("bug, suggestion, or observation"), "{kind}");
 
-        let bare = report_in(&json!({ "kind": "bug", "title": "t" }), &root, &inbox)
+        let bare = report_in(&json!({ "kind": "bug", "title": "t" }), &root, &inbox, None)
             .expect_err("no detail");
         assert!(bare.contains("`detail` is required"), "{bare}");
         assert!(
