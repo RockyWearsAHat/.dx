@@ -55,7 +55,7 @@ const ID_PREFIX: &str = "report-";
 const FINGERPRINT_LENGTH: usize = 8;
 
 /// The document written on the first drain, when the workspace has no `reports.dx` yet.
-const SCAFFOLD: &str = "\
+pub const SCAFFOLD: &str = "\
 ::heading level=1 id=reports
 Reports — what using dx turned up
 ::end
@@ -287,12 +287,15 @@ pub fn inbox() -> PathBuf {
     crate::home::data_dir().join("dx").join("reports")
 }
 
-/// Write `report` into the inbox at `dir`, returning the block id it will land under.
+/// Write `report` into the inbox at `dir`, returning its block id **and the record file**.
+///
+/// The path is what [`crate::intake`] needs: a report the intake has accepted is removed from
+/// this machine's inbox, and removing it means naming the file that holds it.
 ///
 /// # Errors
-/// Returns a sentence naming what could not be written. A report that cannot be filed is
-/// never swallowed: the reporter is told, so it can say so in its own answer.
-pub fn file(report: &Report, dir: &Path) -> Result<String, String> {
+/// Returns a sentence naming what could not be written. A report that cannot be filed is never
+/// swallowed: the reporter is told, so it can say so in its own answer.
+pub fn file_record(report: &Report, dir: &Path) -> Result<(String, PathBuf), String> {
     fs::create_dir_all(dir)
         .map_err(|error| format!("could not create {}: {error}", dir.display()))?;
     let id = report.id();
@@ -310,7 +313,7 @@ pub fn file(report: &Report, dir: &Path) -> Result<String, String> {
         .map_err(|error| format!("could not encode the report: {error}"))?;
     fs::write(&record, format!("{body}\n"))
         .map_err(|error| format!("could not file {}: {error}", record.display()))?;
-    Ok(id)
+    Ok((id, record))
 }
 
 /// One record waiting in the inbox.
@@ -612,10 +615,10 @@ mod tests {
         let dir = scratch("file").join("inbox");
         let one = report("a first defect");
         let two = report("a second defect");
-        assert_eq!(file(&one, &dir).expect("file"), one.id());
-        file(&two, &dir).expect("file");
+        assert_eq!(file_record(&one, &dir).expect("file").0, one.id());
+        file_record(&two, &dir).expect("file");
         // The same defect, the same second: still two sightings, so still two records.
-        file(&one, &dir).expect("file again");
+        file_record(&one, &dir).expect("file again");
 
         let inbox = read_inbox(&dir).expect("read");
         assert_eq!(inbox.pending.len(), 3);
@@ -671,8 +674,8 @@ mod tests {
         let root = scratch("drain");
         let dir = root.join("inbox");
         let document = root.join("reports.dx");
-        file(&report("the first thing"), &dir).expect("file");
-        file(&report("the second thing"), &dir).expect("file");
+        file_record(&report("the first thing"), &dir).expect("file");
+        file_record(&report("the second thing"), &dir).expect("file");
 
         let drained = drain(&dir, &document).expect("drain");
         assert_eq!(drained.filed.len(), 2);
@@ -701,13 +704,13 @@ mod tests {
         let dir = root.join("inbox");
         let document = root.join("reports.dx");
 
-        file(&report("one recurring defect"), &dir).expect("file");
+        file_record(&report("one recurring defect"), &dir).expect("file");
         drain(&dir, &document).expect("first drain");
 
         let mut later = report("one recurring defect");
         later.at = "2030-06-01T09:00:00Z".to_string();
         later.workspace = "/tmp/another-project".to_string();
-        file(&later, &dir).expect("file again");
+        file_record(&later, &dir).expect("file again");
         let second = drain(&dir, &document).expect("second drain");
 
         assert_eq!(second.filed.len(), 0);
@@ -730,7 +733,7 @@ mod tests {
         let document = root.join("reports.dx");
         let mut tricky = report("a block ended early");
         tricky.detail = "Pasting\n::end\ninto a paragraph truncated the document.".to_string();
-        file(&tricky, &dir).expect("file");
+        file_record(&tricky, &dir).expect("file");
         drain(&dir, &document).expect("drain");
 
         let open = open_reports(&document).expect("open");

@@ -49,9 +49,46 @@ mod code {
 /// Returns the first I/O error; a clean end-of-input is success.
 pub fn serve(root: &Path) -> std::io::Result<()> {
     let engine = engine_fingerprint();
+    keep_reports_current(root);
     let mut input = BufReader::new(std::io::stdin().lock());
     let mut output = std::io::stdout().lock();
     serve_buffered(root, &mut input, &mut output, engine.as_ref())
+}
+
+/// How often a subscribed workspace's `reports.dx` is brought up to date underneath the
+/// session.
+///
+/// Long enough that a session costs a handful of requests an hour, short enough that a report
+/// filed by another agent is in the document while the same question is still being asked.
+const SYNC_EVERY: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// Keeps this workspace's `reports.dx` current for as long as the session lasts, if it is
+/// subscribed to a report project.
+///
+/// This is what makes the intake worth having for an agent rather than only for a person: an
+/// agent working in the dx checkout never runs `dx report sync`, and would otherwise read a
+/// document that stopped being true whenever somebody else filed something. A workspace that
+/// is not subscribed costs one file read every five minutes and writes nothing at all.
+///
+/// Failures are written to stderr and never to stdout: stdout is the MCP transport, and a
+/// stray line on it ends the session.
+fn keep_reports_current(root: &Path) {
+    let root = root.to_path_buf();
+    std::thread::spawn(move || loop {
+        match crate::intake::subscription_for(&root) {
+            Ok(Some(subscription)) => match crate::intake::sync(&subscription) {
+                Ok(synced) if synced.changed() => eprintln!(
+                    "dx: {}",
+                    synced.summary(&subscription.document()).replace('\n', "; ")
+                ),
+                Ok(_) => {}
+                Err(reason) => eprintln!("dx: reports could not be synced — {reason}"),
+            },
+            Ok(None) => {}
+            Err(reason) => eprintln!("dx: subscriptions unreadable — {reason}"),
+        }
+        std::thread::sleep(SYNC_EVERY);
+    });
 }
 
 /// The serving loop behind [`serve`]: answer requests line by line — and keep the engine

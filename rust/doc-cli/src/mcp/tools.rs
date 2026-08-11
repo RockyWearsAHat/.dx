@@ -614,13 +614,15 @@ fn report_tool() -> Value {
                         command involved (dx_search, dx_run, dx sync, the VS Code surface) \
                         and `repro` the smallest sequence that shows it. Which dx, which \
                         platform, which workspace, and when are recorded for you.\n\n\
-                        The report lands in this machine's report inbox — outside every \
-                        repository, because the dx checkout is almost never the project you \
-                        are in — and `dx report drain` folds it into that checkout's \
-                        reports.dx, where it is fixed and committed. Reporting the same \
-                        thing twice is welcome: reports are keyed by kind, title, and route, \
-                        so a repeat becomes another sighting on the one block rather than a \
-                        duplicate, and that count is how a defect earns its priority.",
+                        Filing is all you do. The report goes to the intake — the report \
+                        database — and from there into the dx checkout's own reports.dx, \
+                        which every agent working on dx reads; nobody relays it, and it \
+                        waits on nobody's memory. It is written to this machine's inbox \
+                        first, so an intake that cannot be reached delays a report and never \
+                        loses one. Reporting the same thing twice is welcome: reports are \
+                        keyed by kind, title, and route, so a repeat becomes another \
+                        sighting on the one block rather than a duplicate, and that count is \
+                        how a defect earns its priority.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -924,7 +926,10 @@ mod tests {
         let description = report["description"].as_str().expect("description");
         assert!(description.starts_with("REPORT DX ITSELF."));
         assert!(description.contains("workaround"));
-        assert!(description.contains("dx report drain"));
+        // What the tool promises an agent: filing is the whole job, because the report
+        // travels to the checkout by itself.
+        assert!(description.contains("reports.dx"));
+        assert!(description.contains("Filing is all you do"));
         assert_eq!(
             report["inputSchema"]["properties"]["kind"]["enum"],
             json!(["bug", "suggestion", "observation"])

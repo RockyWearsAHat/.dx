@@ -92,7 +92,7 @@ which resolves pointers in place and renders pull requests as document diffs.
 | [`docs/method.dx`](docs/method.dx) | How the project is worked: orientation, read routes, the harness |
 | [`dev.dx`](dev.dx) | The development harness: `dx run dev.dx` proves the repository |
 | [`validation.dx`](validation.dx) | What the method costs and saves, measured by run blocks |
-| [`reports.dx`](reports.dx) | Field reports about dx — filed with `dx_report`, folded in by `dx report drain` |
+| [`reports.dx`](reports.dx) | Field reports about dx — filed with `dx_report` from anywhere, carried here by the intake this checkout subscribes to |
 | [`docs/dx-format-contract.dx`](docs/dx-format-contract.dx) | The format: every block type, every attribute, canonical form |
 | [`docs/github.dx`](docs/github.dx) | The browser extension and how github.com pages resolve |
 | [`docs/grill-me.dx`](docs/grill-me.dx) | The review checklist for parser, renderer, and save-path changes |
@@ -116,10 +116,20 @@ loop that makes "done" a thing the document proves rather than a thing anyone cl
 
 The agents using dx are also how it improves. When a tool misleads one, a message does not say
 what to do next, or something has to be worked around, `dx_report` files it — bug, suggestion,
-or observation — from whatever project the agent is in, into this machine's report inbox
-outside every repository. `dx report drain` folds the inbox into [`reports.dx`](reports.dx) in
-this checkout, keyed so a defect reported by three sessions is one block with three sightings
-rather than three duplicates. `dx report list` shows what is waiting and what is still open.
+or observation — from whatever project the agent is in. It lands in this machine's inbox
+outside every repository *and* is pushed to the intake, a public endpoint holding the report
+database, so [`reports.dx`](reports.dx) in this checkout carries what agents on other machines
+filed: `dx report subscribe` sets that up once, `dx report sync` folds the open reports in, and
+an MCP session keeps them current on its own timer. Reports are keyed by kind, title and route,
+so a defect reported by three sessions is one block with three sightings rather than three
+duplicates, and `dx report close <id>` both removes the block and closes the record upstream.
+`dx report drain` is the offline half, for a machine that could not reach the intake.
+
+The intake this build files to is `https://rockywearsahat.com/api/reports` — dx's own, so a
+report reaches the people who fix dx without anybody configuring anything. It receives the
+report's text, the tool version, the platform, and the *name* of the folder you were working
+in, never its path and never its contents. `DX_REPORT_ENDPOINT=<url>` points it somewhere
+else and `DX_REPORT_ENDPOINT=off` turns the push off entirely, leaving the local inbox.
 
 ## What executes, and what does not
 

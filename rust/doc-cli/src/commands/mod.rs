@@ -236,7 +236,9 @@ const COMMANDS: &[Command] = &[
     // Reporting on dx itself.
     Command {
         names: &["report"],
-        flags: &["title", "detail", "route", "repro", "out"],
+        flags: &[
+            "title", "detail", "route", "repro", "project", "endpoint", "token", "out",
+        ],
         run: report::run,
     },
     // Running.

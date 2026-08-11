@@ -1,37 +1,48 @@
-//! `dx report` — file what dx got wrong, see what is waiting, fold it into the repository.
+//! `dx report` — file what dx got wrong, and let it reach the checkout that fixes it.
 //!
-//! Three moves, one verb. `dx report bug|suggestion|observation` files into this machine's
-//! inbox from whatever project you are standing in; `dx report list` shows what is waiting
-//! there and what the checkout's `reports.dx` is already carrying; `dx report drain` folds
-//! the inbox into that document, where the fixer works and git keeps it.
+//! ```text
+//! dx report bug|suggestion|observation --title T --detail D [--route R] [--repro S]
+//! dx report list [dir]        what is waiting here, and what the checkout carries
+//! dx report sync [dir]        push what is waiting, pull the project's open reports
+//! dx report subscribe [dir] [--project dx] [--endpoint URL] [--token T]
+//! dx report unsubscribe [dir]
+//! dx report close <id> [dir]  a fix: the block goes, and the database is told
+//! dx report drain [dir]       fold this machine's inbox in without a network
+//! ```
 //!
-//! [`crate::reports`] is the authority on why the inbox sits outside every repository and
-//! why the document — not a table — is the database.
+//! Filing goes two ways at once: into this machine's inbox ([`crate::reports`]) and, unless
+//! the endpoint is turned off, straight to the intake ([`crate::intake`]) — so a defect an
+//! agent hits while working on some unrelated project still reaches the dx checkout, where
+//! the next agent reads it in `reports.dx`. `drain` remains the offline route: it folds the
+//! local inbox into the document with no network at all.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::args::Args;
 use crate::commands::Output;
+use crate::intake::{self, Subscription};
 use crate::reports::{self, Kind, Report};
 use crate::workspace;
 
 /// Run `dx report`.
 ///
-/// With no word at all, or `list`, it answers with the triage view — content, so `--out`
-/// may redirect it. `drain` and a filed report are reports about work already done.
-///
 /// # Errors
-/// Returns a sentence when the kind word is not one of the three, when a filed report has
-/// no title or detail, or when the inbox or the document cannot be read or written.
+/// Returns a sentence when the kind word is not one of the three, when a filed report has no
+/// title or detail, or when the inbox, the subscription, or the document cannot be read or
+/// written.
 pub fn run(args: &Args) -> Result<Output, String> {
     match args.positional(0).unwrap_or("list") {
         "list" => list(args).map(Output::Document),
         "drain" => drain(args).map(Output::Report),
+        "sync" => sync(args).map(Output::Report),
+        "subscribe" => subscribe(args).map(Output::Report),
+        "unsubscribe" => unsubscribe(args).map(Output::Report),
+        "close" => close(args).map(Output::Report),
         kind => file(kind, args).map(Output::Report),
     }
 }
 
-/// `dx report <kind> --title T --detail D` — file one report into this machine's inbox.
+/// `dx report <kind> --title T --detail D` — file one report, here and at the intake.
 fn file(kind: &str, args: &Args) -> Result<String, String> {
     let kind = Kind::parse(kind)?;
     let here = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
@@ -44,26 +55,104 @@ fn file(kind: &str, args: &Args) -> Result<String, String> {
         &workspace::workspace_root(&here),
     )?;
 
-    let inbox = reports::inbox();
-    let id = reports::file(&report, &inbox)?;
-    let waiting = reports::read_inbox(&inbox)?.pending.len();
-    Ok(format!(
-        "filed {id} ({}) — {waiting} waiting in {}\nrun `dx report drain` in the dx checkout \
-         to fold them into {}\n",
-        kind.as_str(),
-        inbox.display(),
-        reports::DOCUMENT
-    ))
+    let filed = intake::file(&report)?;
+    Ok(filed.summary(kind.as_str(), &reports::inbox()))
 }
 
-/// `dx report drain [dir]` — fold the inbox into `<dir>/reports.dx`.
+/// `dx report drain [dir]` — fold this machine's inbox into `<dir>/reports.dx`, no network.
 fn drain(args: &Args) -> Result<String, String> {
     let document = document_for(args.positional(1));
     let drained = reports::drain(&reports::inbox(), &document)?;
     Ok(format!("{}\n", drained.summary(&document)))
 }
 
-/// `dx report list` — what is waiting, and what the document is still carrying.
+/// `dx report sync [dir]` — push what is waiting, then fold the project's open reports in.
+fn sync(args: &Args) -> Result<String, String> {
+    let root = root_for(args.positional(1));
+    let subscription = subscription_or_hint(&root)?;
+    let synced = intake::sync(&subscription)?;
+    Ok(format!("{}\n", synced.summary(&subscription.document())))
+}
+
+/// `dx report subscribe [dir]` — this checkout receives a project's reports from now on.
+fn subscribe(args: &Args) -> Result<String, String> {
+    let root = root_for(args.positional(1));
+    let subscription = Subscription {
+        workspace: root.clone(),
+        project: args
+            .value("project")
+            .unwrap_or(intake::DEFAULT_PROJECT)
+            .to_string(),
+        endpoint: args
+            .value("endpoint")
+            .map(str::to_string)
+            .or_else(intake::endpoint)
+            .unwrap_or_else(|| intake::DEFAULT_ENDPOINT.to_string()),
+        token: args.value("token").unwrap_or_default().to_string(),
+    };
+    intake::subscribe(&subscription)?;
+
+    let mut out = format!(
+        "{} now receives `{}` reports from {}\n",
+        subscription.document().display(),
+        subscription.project,
+        subscription.endpoint
+    );
+    if subscription.token.is_empty() && std::env::var("DX_REPORT_TOKEN").is_err() {
+        out.push_str(
+            "no token stored, so this checkout can file but not read — run \
+             `selfhost reports token` on the box and re-run with --token\n",
+        );
+        return Ok(out);
+    }
+    let synced = intake::sync(&subscription)?;
+    out.push_str(&format!("{}\n", synced.summary(&subscription.document())));
+    Ok(out)
+}
+
+/// `dx report unsubscribe [dir]` — stop receiving. The document is left exactly as it is.
+fn unsubscribe(args: &Args) -> Result<String, String> {
+    let root = root_for(args.positional(1));
+    if intake::unsubscribe(&root)? {
+        return Ok(format!("{} no longer receives reports\n", root.display()));
+    }
+    Ok(format!("{} was not subscribed\n", root.display()))
+}
+
+/// `dx report close <id> [dir]` — the fix landed: remove the block and tell the database.
+///
+/// Both halves, because either alone is wrong: a block removed but not closed comes back on
+/// the next sync, and a report closed but not removed leaves the document claiming an open
+/// defect nobody will ever see again.
+fn close(args: &Args) -> Result<String, String> {
+    let id = args
+        .positional(1)
+        .ok_or("`dx report close` needs a report id, e.g. `dx report close report-1a2b3c4d`")?;
+    let root = root_for(args.positional(2));
+    let subscription = subscription_or_hint(&root)?;
+    let document = subscription.document();
+
+    let mut out = String::new();
+    if document.exists() {
+        let source = workspace::read(&document)?;
+        let parsed = doc_core::format::parse(&source);
+        if doc_core::edit::find(&parsed, id).is_ok() {
+            let without = doc_core::edit::remove_block(&source, id)?;
+            workspace::save_source(&document, &without)?;
+            out.push_str(&format!("removed {id} from {}\n", document.display()));
+        }
+    }
+    intake::close(
+        &subscription.endpoint,
+        &subscription.project,
+        id,
+        &intake::token_for(&subscription),
+    )?;
+    out.push_str(&format!("closed {id} at {}\n", subscription.endpoint));
+    Ok(out)
+}
+
+/// `dx report list [dir]` — what is waiting here, and what the checkout is carrying.
 fn list(args: &Args) -> Result<String, String> {
     let inbox = reports::inbox();
     let waiting = reports::read_inbox(&inbox)?;
@@ -75,7 +164,7 @@ fn list(args: &Args) -> Result<String, String> {
         out.push_str(&format!("inbox {} — empty\n", inbox.display()));
     } else {
         out.push_str(&format!(
-            "inbox {} — {} waiting for `dx report drain`\n",
+            "inbox {} — {} waiting for `dx report sync`\n",
             inbox.display(),
             waiting.pending.len()
         ));
@@ -105,16 +194,51 @@ fn list(args: &Args) -> Result<String, String> {
             out.push_str(&format!("  {} {} — {times}\n", report.id, report.headline));
         }
     }
+
+    match intake::subscription_for(&workspace::workspace_root(&document_root(args))) {
+        Ok(Some(subscription)) => out.push_str(&format!(
+            "subscribed to `{}` at {}\n",
+            subscription.project, subscription.endpoint
+        )),
+        Ok(None) => out.push_str(
+            "not subscribed — `dx report subscribe --token <t>` keeps this document current\n",
+        ),
+        Err(reason) => out.push_str(&format!("subscription unreadable — {reason}\n")),
+    }
     Ok(out)
 }
 
-/// The `reports.dx` of the workspace containing `directory`, or of the current directory.
-fn document_for(directory: Option<&str>) -> PathBuf {
+/// The workspace root a command is about: the directory named, or the current one.
+fn root_for(directory: Option<&str>) -> PathBuf {
     let start = directory.map_or_else(
         || std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
         PathBuf::from,
     );
-    workspace::workspace_root(&start).join(reports::DOCUMENT)
+    workspace::workspace_root(&start)
+}
+
+/// The directory a listing is about, before it is resolved to a workspace root.
+fn document_root(args: &Args) -> PathBuf {
+    args.positional(1).map_or_else(
+        || std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+        PathBuf::from,
+    )
+}
+
+/// The `reports.dx` of the workspace containing `directory`, or of the current directory.
+fn document_for(directory: Option<&str>) -> PathBuf {
+    root_for(directory).join(reports::DOCUMENT)
+}
+
+/// The subscription for `root`, or a sentence naming the command that creates one.
+fn subscription_or_hint(root: &Path) -> Result<Subscription, String> {
+    intake::subscription_for(root)?.ok_or_else(|| {
+        format!(
+            "{} is not subscribed to a report project — `dx report subscribe --token <t>` here \
+             makes this checkout receive them",
+            root.display()
+        )
+    })
 }
 
 #[cfg(test)]
@@ -125,14 +249,17 @@ mod tests {
         Args::parse(&tokens.iter().map(|t| (*t).to_string()).collect::<Vec<_>>())
     }
 
-    /// The suite files into a temporary inbox: a test run must never touch the developer's
-    /// real one, and both cases share one process-wide variable, so they share one test.
+    /// The suite files into a temporary inbox with the push turned off: a test run must never
+    /// touch the developer's real inbox, and must never reach the real intake. Both are
+    /// process-wide variables, so the cases that need them share one test.
     #[test]
     fn filing_listing_and_draining_are_one_loop() {
         let root = std::env::temp_dir().join("dx-report-cli-tests");
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).expect("scratch");
         std::env::set_var("DX_REPORTS_DIR", root.join("inbox"));
+        std::env::set_var("DX_REPORT_ENDPOINT", "off");
+        std::env::set_var("DX_SUBSCRIPTIONS_FILE", root.join("subscriptions.json"));
 
         let filed = run(&args(&[
             "bug",
@@ -157,6 +284,11 @@ mod tests {
             "{}",
             waiting.text()
         );
+        assert!(
+            waiting.text().contains("not subscribed"),
+            "{}",
+            waiting.text()
+        );
 
         let drained = run(&args(&["drain", root.to_str().expect("path")])).expect("drain");
         assert!(
@@ -166,7 +298,6 @@ mod tests {
         );
 
         let after = run(&args(&["list", root.to_str().expect("path")])).expect("list");
-        assert!(after.text().contains("inbox"), "{}", after.text());
         assert!(after.text().contains("1 open"), "{}", after.text());
         assert!(after.text().contains("once"), "{}", after.text());
 
@@ -174,7 +305,29 @@ mod tests {
         assert!(matches!(after, Output::Document(_)));
         assert!(matches!(drained, Output::Report(_)));
 
+        // Subscribing without a token says so rather than pretending to sync.
+        let subscribed = run(&args(&[
+            "subscribe",
+            root.to_str().expect("path"),
+            "--endpoint",
+            "https://example.invalid/api/reports",
+        ]))
+        .expect("subscribe");
+        assert!(
+            subscribed.text().contains("no token stored"),
+            "{}",
+            subscribed.text()
+        );
+        let listed = run(&args(&["list", root.to_str().expect("path")])).expect("list");
+        assert!(
+            listed.text().contains("subscribed to `dx`"),
+            "{}",
+            listed.text()
+        );
+
         std::env::remove_var("DX_REPORTS_DIR");
+        std::env::remove_var("DX_REPORT_ENDPOINT");
+        std::env::remove_var("DX_SUBSCRIPTIONS_FILE");
     }
 
     #[test]
@@ -182,5 +335,19 @@ mod tests {
         let error =
             run(&args(&["feature", "--title", "t", "--detail", "d"])).expect_err("not a kind");
         assert!(error.contains("bug, suggestion, or observation"), "{error}");
+    }
+
+    #[test]
+    fn syncing_a_checkout_nobody_subscribed_names_the_command_that_subscribes_it() {
+        let root = std::env::temp_dir().join("dx-report-cli-unsubscribed");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("scratch");
+        std::env::set_var("DX_SUBSCRIPTIONS_FILE", root.join("subscriptions.json"));
+
+        let error =
+            run(&args(&["sync", root.to_str().expect("path")])).expect_err("no subscription");
+        assert!(error.contains("dx report subscribe"), "{error}");
+
+        std::env::remove_var("DX_SUBSCRIPTIONS_FILE");
     }
 }

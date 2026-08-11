@@ -34,8 +34,28 @@ pub fn run_sync(args: &Args) -> Result<String, String> {
     let report = workspace::sync(&root)?;
 
     let mut out = format!("dx sync — {}\n", root.display());
+    // A workspace subscribed to a report project is reconciled with the intake too: `dx sync`
+    // is the command a person runs to make a checkout true, and a `reports.dx` missing what
+    // other agents filed is exactly that kind of untrue. Unsubscribed workspaces read one
+    // file and move on.
+    let reports = match crate::intake::subscription_for(&root) {
+        Ok(Some(subscription)) => match crate::intake::sync(&subscription) {
+            Ok(synced) if synced.changed() || !synced.problems.is_empty() => {
+                Some(synced.summary(&subscription.document()))
+            }
+            Ok(_) => None,
+            Err(reason) => Some(format!("reports could not be synced — {reason}")),
+        },
+        Ok(None) => None,
+        Err(reason) => Some(format!("subscriptions unreadable — {reason}")),
+    };
+    if let Some(said) = &reports {
+        out.push_str(&format!("\n  {}\n", said.replace('\n', "\n  ")));
+    }
     if report.is_clean() {
-        out.push_str("\n  nothing to do; every document already resolves\n");
+        if reports.is_none() {
+            out.push_str("\n  nothing to do; every document already resolves\n");
+        }
         return Ok(out);
     }
 
