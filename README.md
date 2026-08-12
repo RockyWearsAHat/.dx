@@ -93,6 +93,7 @@ which resolves pointers in place and renders pull requests as document diffs.
 | [`dev.dx`](dev.dx) | The development harness: `dx run dev.dx` proves the repository |
 | [`validation.dx`](validation.dx) | What the method costs and saves, measured by run blocks |
 | [`reports.dx`](reports.dx) | Field reports about dx — filed with `dx_report` from anywhere, carried here by the intake this checkout subscribes to |
+| [`docs/intake.dx`](docs/intake.dx) | The report box's wire contract: the three routes, the computed id, what the box owes a reporter |
 | [`docs/dx-format-contract.dx`](docs/dx-format-contract.dx) | The format: every block type, every attribute, canonical form |
 | [`docs/github.dx`](docs/github.dx) | The browser extension and how github.com pages resolve |
 | [`docs/grill-me.dx`](docs/grill-me.dx) | The review checklist for parser, renderer, and save-path changes |
