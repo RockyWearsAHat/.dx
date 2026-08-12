@@ -21,6 +21,10 @@
 //! `…/report?<name>` is how another internal service registers one. [`address`] is the only
 //! place a URL is built, so every call reaches the same box the same way.
 //!
+//! `docs/intake.dx` is the authority on what crosses the wire — the bodies, the answers, and
+//! the computed id both ends have to agree on. This module states when each call is made; it
+//! does not restate the shapes.
+//!
 //! # Why the inbox is still written first
 //!
 //! The POST is best effort by construction: the reporter may be offline, the box may be down,
