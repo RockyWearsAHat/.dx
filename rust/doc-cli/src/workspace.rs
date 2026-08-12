@@ -285,10 +285,12 @@ pub fn resolve_contents(text: &str, search_from: &Path) -> Result<String, String
 
 /// The CLI's [`Resolver`]: a document's own folder on disk.
 ///
-/// `file` reads a sibling file as it is; `document` reads a sibling `.dx` through
-/// [`read`], so a pointer resolves to its true content exactly as every other read does.
-/// The path law lives in `doc_core::resolve` — by the time a path reaches this struct it
-/// is already relative and downward — so this is transport, nothing more.
+/// Both `file` and `document` resolve `.dx` pointers to their true content through
+/// [`read`], so every reference in the document gets the actual text it refers to, never
+/// a pointer. The path law lives in `doc_core::resolve` — by the time a path reaches this
+/// struct it is already relative and downward — so this is transport, nothing more.
+/// The contract the resolver enforces is absolute: a caller gets the true document,
+/// always, and a pointer never passes off as content.
 pub struct FolderResolver {
     /// The folder the document lives in; every reference is joined under it.
     folder: PathBuf,
@@ -303,10 +305,17 @@ pub fn resolver_for(path: &Path) -> FolderResolver {
 }
 
 impl Resolver for FolderResolver {
+    /// Read a file the document references, resolving `.dx` pointers to their true content.
+    ///
+    /// For `.dx` files (pointers), this resolves the pointer through the workspace store
+    /// or packs, exactly as every other read does — the caller never sees a pointer where
+    /// a document belongs. For ordinary files, this returns the file's text as-is. See
+    /// [`read`] for the resolution order.
     fn file(&self, path: &str) -> Option<String> {
-        fs::read_to_string(self.folder.join(path)).ok()
+        read(&self.folder.join(path)).ok()
     }
 
+    /// Read a document (alias for `file`, for compatibility with the `Resolver` trait).
     fn document(&self, path: &str) -> Option<String> {
         read(&self.folder.join(path)).ok()
     }
@@ -997,6 +1006,67 @@ mod tests {
         assert!(
             String::from_utf8_lossy(&[0xFF, 0xFE]) == String::from_utf8_lossy(&[0xFE, 0xFF]),
             "the lossy views really do collide — that is the trap this pins"
+        );
+    }
+
+    #[test]
+    fn resolver_file_resolves_dx_pointers_to_their_true_content() {
+        // A .dx file is a one-line pointer on disk; FolderResolver::file() must hand back
+        // the resolved document, never the pointer bytes. This is especially critical for
+        // blocks declaring reads=some.dx, which use FolderResolver to fingerprint their
+        // inputs — fingerprinting pointer bytes instead of content means changing a document
+        // through the store (its true home) while the pointer stub stays syntactically
+        // identical would not stale the block's verdict, violating the foundational rule
+        // that "the resolver always hands back the true document."
+        let root = scratch("resolver-pointer-resolution");
+
+        // Create and store a document through save(), so it becomes a pointer on disk.
+        let source_path = root.join("data.dx");
+        let initial_content = "::paragraph id=p\nfirst version\n::end\n";
+        save(&source_path, &parse(initial_content)).expect("save source");
+
+        // Verify it is a pointer on disk.
+        let raw_pointer = fs::read_to_string(&source_path).expect("read pointer");
+        assert!(
+            stub::is_stub(&raw_pointer),
+            "save() must create a pointer, got {raw_pointer:?}"
+        );
+        assert!(
+            !raw_pointer.contains("first version"),
+            "pointer must not contain content"
+        );
+
+        // Create a resolver in the root directory and read the pointer through it.
+        let resolver = FolderResolver {
+            folder: root.clone(),
+        };
+        let resolved = resolver
+            .file("data.dx")
+            .expect("resolver must hand back the content");
+        assert_eq!(
+            resolved, initial_content,
+            "FolderResolver::file() must resolve .dx pointers to their true content"
+        );
+        assert!(
+            !resolved.starts_with("~ dx1 "),
+            "resolved content must not be a pointer"
+        );
+
+        // Now update the document through the store while leaving the pointer on disk.
+        let updated_content = "::paragraph id=p\nsecond version\n::end\n";
+        save(&source_path, &parse(updated_content)).expect("save update");
+
+        // Resolve through the resolver again — it must now hand back the updated content.
+        let resolved_updated = resolver
+            .file("data.dx")
+            .expect("resolver must hand back the updated content");
+        assert_eq!(
+            resolved_updated, updated_content,
+            "FolderResolver::file() must reflect updated content from the store"
+        );
+        assert_ne!(
+            resolved, resolved_updated,
+            "changing stored content must change what the resolver hands back"
         );
     }
 
