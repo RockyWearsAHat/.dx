@@ -303,7 +303,9 @@ fn write_tool() -> Value {
     json!({
         "name": "dx_write",
         "description": "Create a .dx document or replace its entire contents with DOCSRC \
-                        source text. The file is written as canonical plain text, so any \
+                        source text. Search dx_search or dx_source first for any related \
+                        existing content the request names or describes — reading saves \
+                        inventing. The file is written as canonical plain text, so any \
                         tool can read it afterwards. To change one block in an existing \
                         document, use dx_edit instead — it is safer and much smaller.\n\n\
                         DOCSRC blocks look like:\n\
@@ -368,14 +370,15 @@ fn edit_tool() -> Value {
     json!({
         "name": "dx_edit",
         "description": "Change one block, leaving every other block byte-for-byte \
-                        unchanged. This is the safe way to edit a long document. Get block ids \
-                        from dx_outline or from dx_source with ids=true. Pass `text` to \
-                        replace the whole body — or, for a small change, `replace`+`with`: \
-                        the exact string `replace` becomes `with` and every other character \
-                        stays, so the call costs the change, not the block. Prefer \
-                        replace for renames, one-line fixes, and cross-cutting edits; a \
-                        whole-body `text` for one changed word is tokens spent retyping \
-                        what already exists. Pass `header` to also \
+                        unchanged. Read the document first via dx_source if the request \
+                        names or describes it — reading saves guessing. This is the safe way \
+                        to edit a long document. Get block ids from dx_outline or from \
+                        dx_source with ids=true. Pass `text` to replace the whole body — or, \
+                        for a small change, `replace`+`with`: the exact string `replace` \
+                        becomes `with` and every other character stays, so the call costs the \
+                        change, not the block. Prefer replace for renames, one-line fixes, \
+                        and cross-cutting edits; a whole-body `text` for one changed word is \
+                        tokens spent retyping what already exists. Pass `header` to also \
                         retype the block's `::kind attrs` opening line — the way to change a \
                         block's kind or any attribute (src=, reads=, writes=, run, for=) in \
                         one call; never rewrite a whole document with dx_write to change one \
@@ -515,7 +518,9 @@ fn append_tool() -> Value {
     json!({
         "name": "dx_append",
         "description": "The cheap write: a small thought lands for the cost of its own \
-                        lines. Think by writing — a finding, a hypothesis, a worklist line \
+                        lines. Read the target document first via dx_source if the request \
+                        names it — that avoids duplicating or contradicting existing content. \
+                        Think by writing — a finding, a hypothesis, a worklist line \
                         goes into the document the moment it forms, not into conversation \
                         memory to be distilled later. Pass `block` to append `text` to that \
                         block's body (a finding onto the ledger, a line onto the `now` \
