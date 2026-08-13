@@ -9,6 +9,7 @@
 //! - [`format`] — DOCSRC (`.dx`) parsing and canonical stringify.
 //! - [`chunk`] — content-addressed per-block chunks and the `DXCP1` pack container.
 //! - [`search`] — the in-memory token search index.
+//! - [`trace`] — the heuristic symbol + reference index.
 //! - [`render`] — the document views: themed HTML, Markdown, outlines, and sections.
 //!
 //! # Storage is lossless by construction
@@ -38,3 +39,4 @@ pub mod render;
 pub mod resolve;
 pub mod search;
 pub mod surface;
+pub mod trace;

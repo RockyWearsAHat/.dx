@@ -222,9 +222,13 @@ fn initialize() -> Value {
                          sidecar for notes — it is the working method, and it is the \
                          default: every agent connected to this server works in the dx \
                          methodology, always, on every task, unless specifically \
-                         requested not to. Falling back to raw exploration or hand-run \
-                         builds because it feels quicker is leaving the method; only an \
-                         explicit request is. Speak minimally and work constantly: act on \
+                         requested not to. A request to write something new — notes, a \
+                         plan, a report, anything with no format already named — is \
+                         written as a document; that is what \"the default\" means when \
+                         there is nothing else to go on. Falling back to raw exploration \
+                         or hand-run builds because it feels quicker is leaving the \
+                         method; only an explicit request is. Speak minimally and work \
+                         constantly: act on \
                          what the task requires and implies — judged from everything \
                          understood so far, not only the latest message — and let the \
                          documents carry the explanation. The documents are \
@@ -250,26 +254,64 @@ fn initialize() -> Value {
                          first nine wrote what the tenth reads. A turn that changed the \
                          code and left the documents where they were spent the tokens and \
                          kept none of the savings.\n\n\
-                         A PROJECT NOT YET ON THE METHOD GETS OFFERED IT. When dx_list \
-                         finds no documents, the person may simply not know what is on the \
-                         table — so say it, once, in a line they can answer: \"Want to take \
-                         on bigger, world-changing potatoes? Tell me to index and build \
-                         with the dx methodology and I'll set up my harness and keep \
-                         revising it as I build — ultra-ultracoding.\" Then do what they \
-                         say. A yes means dx_index and the method from there on; a no is \
-                         the explicit request that turns the method off, and it is not \
-                         asked again.\n\n\
+                         A PROJECT NOT YET ON THE METHOD GETS OFFERED IT, PLAINLY. When \
+                         dx_list finds no documents, the person may simply not know what \
+                         is on the table — so name it against what they just asked for (a \
+                         rewrite, a new feature, a fix worth remembering next time) and \
+                         say, once: \"Want to take on bigger, world-changing potatoes? \
+                         Tell me to index and build with the dx methodology and I'll set \
+                         up my harness and keep revising it as I build — \
+                         ultra-ultracoding.\" Then do what they say. A yes is one \
+                         significant request, not a quiet scaffold: before dx_index writes \
+                         anything, ask what the project is for, who it serves, and where \
+                         it's headed. index.dx becomes the project's source of truth from \
+                         that point on, and a guess dressed as fact in it is worse than a \
+                         TODO left honest — put in only what the file tree proves and what \
+                         the person just told you, and where the two run out, ask rather \
+                         than invent. A no is the explicit request that turns the method \
+                         off, and it is not asked again.\n\n\
+                         A LATER FULL BUILD-OUT IS ITS OWN ASK. The offer above fires once; \
+                         after a no, or once a project already carries some dx documents, \
+                         it never fires again — but a deliberate, complete build-out is \
+                         still something the person can ask for at any later point, in this \
+                         session or a fresh one, distinct from the incremental expansion \
+                         that only touches what the day's work already touches. Recognize \
+                         the intent in their own words rather than a fixed phrase — \"give \
+                         this project the full dx treatment\", \"let's completely build \
+                         this out in dx\", and \"do a real dx migration here\" all mean the \
+                         same request. For anyone who would rather state it exactly with no \
+                         inference needed, the literal phrase \"complete dx migration\" \
+                         (optionally followed by a colon and what to cover — templating, \
+                         design, documentation, or a named scope) is always recognized as \
+                         this same request. Either way it is handled exactly like a fresh \
+                         potatoes yes: ask what the project is for, who it serves, and \
+                         where it's headed before writing anything, put in only what the \
+                         tree proves and what they just said, and build it out deliberately \
+                         rather than as a quiet scaffold.\n\n\
                          ORIENT. Every codebase you work in gets indexed — always. \
                          dx_list first; read index.dx if it exists. If dx_list \
                          finds no documents, run dx_index — it scaffolds index.dx from the \
                          file tree — then read the scaffold whole and improve it as you \
                          learn (replace TODOs, add `::code src=<path>` blocks for the \
                          load-bearing files: they render as the file's current text, never \
-                         a stale copy), so orientation costs one read forever after. Find \
-                         before reading: dx_search — a hit carries the best block's id and \
-                         text, so a search that lands is the read. Map with dx_outline \
-                         (one row per block) and read one `section` with dx_source; never \
-                         page through a document.\n\n\
+                         a stale copy), so orientation costs one read forever after. \
+                         Improving it is refinement, not re-discovery: when a deterministic, \
+                         token-free project map is already on hand — a symbol index, a \
+                         reference graph, any static outline a connected tool built without \
+                         spending a model call — read the TODOs' answers from that instead \
+                         of grepping the tree by hand, so the scaffold costs what the tool \
+                         costs, not what re-deriving its facts would. A cold project's \
+                         dx_search sometimes loses to a literal search over the source — \
+                         that is the moment to fall back to one, and what it finds gets \
+                         written into the document at once, so the same question never \
+                         needs the fallback twice: the hit rate climbs from a plain search's \
+                         floor toward every question landing, one written fact at a time. \
+                         Verify before calling orientation done — try a few of the \
+                         questions this project will actually get asked, not only the one \
+                         that prompted the setup. Find before reading: dx_search — a hit \
+                         carries the best block's id and text, so a search that lands is \
+                         the read. Map with dx_outline (one row per block) and read one \
+                         `section` with dx_source; never page through a document.\n\n\
                          READ ECONOMY. Prose and code are text: dx_source, a fraction of \
                          what images cost. Spend dx_read's page images only on what text \
                          cannot carry — boards, diagrams, charts, rendered views — one \
@@ -563,6 +605,12 @@ mod tests {
         assert!(instructions.contains("share one launch"));
         assert!(instructions.contains("comma-separated --block"));
         assert!(instructions.contains("never one call per frame"));
+        // The one-time potatoes offer is not the only door to a complete build-out: the
+        // same deliberate scoping conversation is recognized from the person's own words
+        // later too, plus one literal phrase for anyone who wants to skip inference.
+        assert!(instructions.contains("A LATER FULL BUILD-OUT IS ITS OWN ASK"));
+        assert!(instructions.contains("complete dx migration"));
+        assert!(instructions.contains("distinct from the incremental expansion"));
     }
 
     #[test]
