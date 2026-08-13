@@ -385,8 +385,11 @@ fn outline_of(args: &Value, root: &Path) -> ToolResult {
 pub(crate) const INDEX_OFFER: &str = "This project has no dx documents yet. Say this once, \
     then do what they answer: \"Want to take on bigger, world-changing potatoes? Tell me to \
     index and build with the dx methodology and I'll set up my harness and keep revising it \
-    as I build — ultra-ultracoding.\" A yes means dx_index and the method from there on; a \
-    no turns the method off for this project and is not asked again.";
+    as I build — ultra-ultracoding.\" A yes is one significant request, not a quiet scaffold: \
+    ask what the project is for and where it's headed before dx_index writes index.dx — that \
+    document becomes the project's source of truth, so put in only what the tree proves and \
+    what the person just said, and ask rather than invent past that. A no turns the method \
+    off for this project and is not asked again.";
 
 /// `dx_list` — every document in a directory, unresolvable ones named rather than hidden.
 fn list(args: &Value, root: &Path) -> ToolResult {

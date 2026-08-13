@@ -52,13 +52,19 @@ const SURVEY_CAP: usize = 600;
 /// Largest file the survey reads; anything bigger is listed without facts.
 const SURVEY_READ_CAP: u64 = 512 * 1024;
 
-/// Extensions the survey counts lines for and searches for references.
-const CODE_EXTENSIONS: &[&str] = &[
+/// Extensions the survey counts lines for and searches for references — also the set
+/// `dx trace` reads (`commands::trace`), so the two stay looking at the same tree.
+pub(crate) const CODE_EXTENSIONS: &[&str] = &[
     "rs", "js", "mjs", "cjs", "ts", "tsx", "jsx", "py", "go", "rb", "java", "kt", "swift", "c",
     "h", "cpp", "hpp", "cc", "cs", "php", "sh", "bash", "lua", "sql",
 ];
 
-/// File names that are an area's front door regardless of what references them.
+/// File names that are an area's front door regardless of what references them. Kept in
+/// step with every framework [`FRAMEWORKS`] recognizes by convention name — a filename
+/// the framework table treats as a real entry file earns the same "— entry point" label
+/// the cheap, framework-agnostic scan already gives `main.rs` and its siblings; letting
+/// the two drift apart is what report `d288e338` caught (`main.tsx`/`App.tsx` seeded by
+/// the React detector but never labeled by this list).
 const ENTRY_POINTS: &[&str] = &[
     "main.rs",
     "lib.rs",
@@ -73,6 +79,11 @@ const ENTRY_POINTS: &[&str] = &[
     "app.js",
     "app.ts",
     "app.py",
+    "main.ts",
+    "main.tsx",
+    "main.jsx",
+    "App.tsx",
+    "App.jsx",
 ];
 
 /// Stems too generic to mean "this file is referenced" when they appear in other files.
@@ -248,18 +259,55 @@ fn scaffold_source(root: &Path, build: Option<&Build>, harness: bool) -> (String
         ));
     }
 
+    body.push_str(&format!(
+        "\n::heading level=2 id=trace\nTraced index\n::end\n\n\
+         ::paragraph id=trace-note\n\
+         `dx trace --brief` maps the tree into a real symbol + reference index — named \
+         functions, structs, classes, and the files that reference each one — ranked by \
+         fan-in, not the file-stem heuristic the areas below use. This run block \
+         re-derives it whenever a file under its `reads=` tree changes; review it, then \
+         approve like any other gate (`dx run {INDEX_FILE} --approve`).\n::end\n\n{}",
+        trace_gate(&trace_reads(&directories, &loose_files))
+    ));
+
     let mut total = loose_files.len();
     let mut areas = 0;
     let mut used_slugs = Vec::new();
+    let framework_entry = detect_framework_entry(root);
 
-    if !loose_files.is_empty() {
+    if !loose_files.is_empty() || framework_entry.is_some() {
         areas += 1;
         body.push_str(&format!(
-            "\n::heading level=2 id=area-root\n./ — {}\n::end\n\n\
-             ::bulleted-list id=area-root-files\n{}::end\n",
-            counted(loose_files.len(), "file", "files"),
-            listing(&loose_files, root, &facts)
+            "\n::heading level=2 id=area-root\n./ — {}\n::end\n\n",
+            counted(loose_files.len(), "file", "files")
         ));
+        if let Some(matched) = &framework_entry {
+            body.push_str(&format!(
+                "::paragraph id=area-root-react\n\
+                 {} entry point detected ({}, plus a conventional entry file present) — \
+                 mirrored live below, always the file's current text.\n::end\n\n",
+                matched.framework, matched.deps_note
+            ));
+            let multiple = matched.files.len() > 1;
+            for (position, entry) in matched.files.iter().enumerate() {
+                let relative = entry.strip_prefix(root).unwrap_or(entry).display();
+                let id = if multiple {
+                    format!("area-root-react-entry-{}", position + 1)
+                } else {
+                    "area-root-react-entry".to_string()
+                };
+                body.push_str(&format!(
+                    "::code id={id} src={relative} lang={}\n::end\n\n",
+                    code_lang_for(entry)
+                ));
+            }
+        }
+        if !loose_files.is_empty() {
+            body.push_str(&format!(
+                "::bulleted-list id=area-root-files\n{}::end\n",
+                listing(&loose_files, root, &facts)
+            ));
+        }
     }
 
     for directory in &directories {
@@ -430,7 +478,9 @@ fn survey(root: &Path) -> HashMap<PathBuf, FileFacts> {
 }
 
 /// Every file under `directory`, recursively, honouring the same skip rules as the map.
-fn collect_files(directory: &Path, into: &mut Vec<PathBuf>) {
+/// Shared with `commands::trace`, which walks the identical tree — one walker, so a
+/// directory the map skips is a directory the tracer skips too.
+pub(crate) fn collect_files(directory: &Path, into: &mut Vec<PathBuf>) {
     for entry in listed(directory) {
         if entry.is_dir() {
             collect_files(&entry, into);
@@ -757,6 +807,347 @@ fn existing(root: &Path, dir: &str, candidates: &[&str]) -> Vec<String> {
         .collect()
 }
 
+// ---------------------------------------------------------------------------------------
+// The traced index: a run gate wired to `dx trace --brief`, and — when the tree
+// unambiguously names one — a live-mirrored React entry point.
+// ---------------------------------------------------------------------------------------
+
+/// The `reads=` set for the `index-trace` gate: the mapped top-level directories, or —
+/// when the tree has none, a single-directory project with code sitting at the root —
+/// the root-level files the survey itself would read. Either way this names real,
+/// existing paths, the same contract [`existing`] enforces for the cargo/npm/etc gates.
+fn trace_reads(directories: &[PathBuf], loose_files: &[PathBuf]) -> Vec<String> {
+    let mut reads: Vec<String> = directories
+        .iter()
+        .filter_map(|d| d.file_name().map(|n| n.to_string_lossy().into_owned()))
+        .collect();
+    if reads.is_empty() {
+        reads = loose_files
+            .iter()
+            .filter(|f| {
+                f.extension()
+                    .is_some_and(|e| CODE_EXTENSIONS.contains(&e.to_string_lossy().as_ref()))
+            })
+            .filter_map(|f| f.file_name().map(|n| n.to_string_lossy().into_owned()))
+            .collect();
+    }
+    reads
+}
+
+/// The `index-trace` gate: `dx trace --brief .`, scaffolded but never approved — same
+/// rule the harness gates already follow, "gates are never approved by scaffolding".
+fn trace_gate(reads: &[String]) -> String {
+    gate("index-trace", reads, "", "dx trace --brief .\n")
+}
+
+/// A manifest format naming a project's dependencies — how [`manifest_declares_all`]
+/// reads a [`Framework`]'s `deps`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Manifest {
+    /// `package.json`'s `dependencies`/`devDependencies` objects — a real JSON parse.
+    PackageJson,
+    /// `requirements.txt`, `pyproject.toml`, or `Pipfile` — no TOML/JSON parser for
+    /// these, just the same leading-package-name-token read a person skimming the file
+    /// would do, which is what [`python_manifest_names`] documents.
+    PythonDeps,
+}
+
+/// One framework this scaffold can recognize from a manifest dependency plus a
+/// conventional entry-file layout — the shape `detect_react_entry` (React-only) used to
+/// hand-write once; every field here generalizes, which is the fix for report
+/// `7f351075`: a new framework is a data row, never a new detector.
+struct Framework {
+    /// Shown in the scaffold's note ("Next.js", "React", "Flask", …).
+    name: &'static str,
+    /// How to read this framework's manifest.
+    manifest: Manifest,
+    /// Dependency names that must ALL be present for a match.
+    deps: &'static [&'static str],
+    /// Entry-file candidate groups, most specific/likely first — the first group whose
+    /// every file exists (verified by exact case, never `Path::is_file` alone — see
+    /// [`existing_exact_case`]) wins, unless a later group's content matches
+    /// `render_markers` first (see [`resolve_framework`]). A group names more than one
+    /// path when the framework's own convention is a pair, such as Next.js's
+    /// `layout`+`page` or `_app`+`index`.
+    entries: &'static [&'static [&'static str]],
+    /// Substrings that mark a candidate's content as the real bootstrap file rather
+    /// than a same-shaped file that merely sits earlier in `entries` — fixes report
+    /// `4c859012`: a default Vite React project ships both `App.tsx` (the component)
+    /// and `main.tsx` (the file that actually calls `createRoot(...).render(...)`), and
+    /// position in a static list cannot tell those apart. Empty when position alone is
+    /// unambiguous for this framework.
+    render_markers: &'static [&'static str],
+}
+
+/// Every framework this scaffold recognizes, most-specific-first: Next.js is checked
+/// before React because every Next.js project also satisfies React's own `deps` (report
+/// `df1d5589`) — Next's shape must win when both would otherwise match.
+const FRAMEWORKS: &[Framework] = &[
+    Framework {
+        name: "Next.js",
+        manifest: Manifest::PackageJson,
+        deps: &["next"],
+        entries: &[
+            &["app/layout.tsx", "app/page.tsx"],
+            &["app/layout.jsx", "app/page.jsx"],
+            &["app/layout.js", "app/page.js"],
+            &["pages/_app.tsx", "pages/index.tsx"],
+            &["pages/_app.jsx", "pages/index.jsx"],
+            &["pages/_app.js", "pages/index.js"],
+        ],
+        render_markers: &[],
+    },
+    Framework {
+        name: "React",
+        manifest: Manifest::PackageJson,
+        deps: &["react", "react-dom"],
+        entries: &[
+            &["src/main.tsx"],
+            &["src/main.jsx"],
+            &["src/index.tsx"],
+            &["src/index.jsx"],
+            &["src/index.js"],
+            &["src/App.tsx"],
+            &["src/App.jsx"],
+        ],
+        render_markers: &["createRoot(", "ReactDOM.render(", "hydrateRoot("],
+    },
+    Framework {
+        name: "Vue",
+        manifest: Manifest::PackageJson,
+        deps: &["vue"],
+        entries: &[&["src/main.ts"], &["src/main.js"]],
+        render_markers: &["createApp("],
+    },
+    Framework {
+        name: "Svelte",
+        manifest: Manifest::PackageJson,
+        deps: &["svelte"],
+        entries: &[&["src/main.ts"], &["src/main.js"]],
+        render_markers: &["new App("],
+    },
+    Framework {
+        name: "Angular",
+        manifest: Manifest::PackageJson,
+        deps: &["@angular/core"],
+        entries: &[&["src/main.ts"]],
+        render_markers: &[],
+    },
+    Framework {
+        name: "Express",
+        manifest: Manifest::PackageJson,
+        deps: &["express"],
+        entries: &[
+            &["src/index.js"],
+            &["src/index.ts"],
+            &["src/app.js"],
+            &["src/app.ts"],
+            &["index.js"],
+            &["app.js"],
+        ],
+        render_markers: &["express("],
+    },
+    Framework {
+        name: "Flask",
+        manifest: Manifest::PythonDeps,
+        deps: &["flask"],
+        entries: &[&["app.py"], &["wsgi.py"], &["main.py"]],
+        render_markers: &["Flask("],
+    },
+    Framework {
+        name: "Django",
+        manifest: Manifest::PythonDeps,
+        deps: &["django"],
+        entries: &[&["manage.py"]],
+        render_markers: &[],
+    },
+    Framework {
+        name: "FastAPI",
+        manifest: Manifest::PythonDeps,
+        deps: &["fastapi"],
+        entries: &[&["main.py"], &["app/main.py"]],
+        render_markers: &["FastAPI("],
+    },
+];
+
+/// A resolved [`Framework`] match: which one, and the entry file(s) it seeded.
+struct FrameworkMatch {
+    /// The matched [`Framework::name`].
+    framework: &'static str,
+    /// The phrase naming the matched dependencies, for the scaffold's note — `` `next`
+    /// in package.json `` or `` `react` and `react-dom` in package.json ``.
+    deps_note: String,
+    /// The entry file(s) this match seeded, root-relative-joined (i.e. absolute-under-
+    /// `root`), in the order they should be mirrored.
+    files: Vec<PathBuf>,
+}
+
+/// The framework entry file(s) to seed, when `root` unambiguously names one of
+/// [`FRAMEWORKS`]: its manifest lists every dependency the framework requires, and one
+/// of its entry-file groups actually exists (verified by exact case). `None` on any
+/// ambiguity — a malformed manifest, a matching dependency with no conventional entry
+/// file, or the reverse — this never guesses. The first framework in table order to
+/// match wins; within a framework, [`resolve_framework`] governs which entry group wins.
+fn detect_framework_entry(root: &Path) -> Option<FrameworkMatch> {
+    FRAMEWORKS
+        .iter()
+        .find_map(|framework| resolve_framework(root, framework))
+}
+
+/// Resolve one [`Framework`] against `root`: `None` when its dependencies are not all
+/// declared, or none of its entry groups exist. Otherwise the first entry group (in
+/// table order) whose content matches one of `render_markers` wins; when no group
+/// matches a marker (including when the framework declares none), the first present
+/// group wins by position — the same "first candidate present" rule this scaffold has
+/// always used, now stated once instead of once per framework.
+fn resolve_framework(root: &Path, framework: &Framework) -> Option<FrameworkMatch> {
+    if !manifest_declares_all(root, framework.manifest, framework.deps) {
+        return None;
+    }
+    let mut fallback: Option<Vec<PathBuf>> = None;
+    for group in framework.entries {
+        let paths: Option<Vec<PathBuf>> = group
+            .iter()
+            .map(|candidate| existing_exact_case(root, candidate))
+            .collect();
+        let Some(paths) = paths else { continue };
+        if fallback.is_none() {
+            fallback = Some(paths.clone());
+        }
+        if !framework.render_markers.is_empty()
+            && paths
+                .iter()
+                .any(|path| content_has_marker(path, framework.render_markers))
+        {
+            return Some(FrameworkMatch {
+                framework: framework.name,
+                deps_note: deps_phrase(framework),
+                files: paths,
+            });
+        }
+    }
+    fallback.map(|files| FrameworkMatch {
+        framework: framework.name,
+        deps_note: deps_phrase(framework),
+        files,
+    })
+}
+
+/// `` `next` in package.json `` / `` `react` and `react-dom` in package.json `` / ``
+/// `flask` in the project's manifest `` — the dependency phrase the scaffold's note
+/// names, built from `framework.deps` rather than hand-written per framework.
+fn deps_phrase(framework: &Framework) -> String {
+    let named: Vec<String> = framework
+        .deps
+        .iter()
+        .map(|dep| format!("`{dep}`"))
+        .collect();
+    let joined = match named.as_slice() {
+        [only] => only.clone(),
+        [first, second] => format!("{first} and {second}"),
+        [init @ .., last] => format!("{}, and {last}", init.join(", ")),
+        [] => String::new(),
+    };
+    let source = match framework.manifest {
+        Manifest::PackageJson => "package.json",
+        Manifest::PythonDeps => "the project's manifest",
+    };
+    format!("{joined} in {source}")
+}
+
+/// Whether `root`'s manifest of the given `kind` declares every one of `deps`.
+fn manifest_declares_all(root: &Path, kind: Manifest, deps: &[&str]) -> bool {
+    match kind {
+        Manifest::PackageJson => {
+            let Ok(text) = std::fs::read_to_string(root.join("package.json")) else {
+                return false;
+            };
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
+                return false;
+            };
+            deps.iter().all(|dep| package_json_lists(&value, dep))
+        }
+        Manifest::PythonDeps => deps.iter().all(|dep| python_manifest_names(root, dep)),
+    }
+}
+
+/// Whether parsed `package.json` `value` lists `package` under `dependencies` or
+/// `devDependencies`.
+fn package_json_lists(value: &serde_json::Value, package: &str) -> bool {
+    ["dependencies", "devDependencies"].iter().any(|section| {
+        value
+            .get(section)
+            .and_then(serde_json::Value::as_object)
+            .is_some_and(|deps| deps.contains_key(package))
+    })
+}
+
+/// Whether `root`'s `requirements.txt`, `pyproject.toml`, or `Pipfile` names `dep` as a
+/// dependency. No TOML parser: each non-empty line, quote-stripped, is read up to its
+/// first character that cannot be part of a package name (`=`, `<`, `>`, `~`, `[`, `;`,
+/// whitespace) — the same leading token `flask==3.0.0` or `"flask>=3.0"` reads to a
+/// person skimming the file. PyPI treats `-`/`_`/`.` as equivalent in a package name, so
+/// [`normalize_package_name`] folds them before comparing.
+fn python_manifest_names(root: &Path, dep: &str) -> bool {
+    let target = normalize_package_name(dep);
+    ["requirements.txt", "pyproject.toml", "Pipfile"]
+        .iter()
+        .filter_map(|name| std::fs::read_to_string(root.join(name)).ok())
+        .any(|text| {
+            text.lines().any(|line| {
+                let line = line.trim().trim_start_matches(['"', '\'']);
+                let name: String = line
+                    .chars()
+                    .take_while(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+                    .collect();
+                !name.is_empty() && normalize_package_name(&name) == target
+            })
+        })
+}
+
+/// Lowercase `name` with `_`/`.` folded to `-`, the way PyPI normalizes a package name
+/// before comparing two spellings of the same dependency.
+fn normalize_package_name(name: &str) -> String {
+    name.to_lowercase().replace(['_', '.'], "-")
+}
+
+/// `root.join(candidate)` when the file exists **and** its filename matches `candidate`'s
+/// case exactly. `Path::is_file` alone answers "does something exist here," which is
+/// true for `app.tsx` when `candidate` says `App.tsx` on a case-insensitive filesystem
+/// (default macOS, Windows) — report `4c859012`. A mirror seeded from that mismatch
+/// breaks the moment the tree is read somewhere case is enforced (Linux CI, most
+/// containers), so this checks the parent directory's real listing instead of trusting
+/// the OS to answer the question it was actually asked.
+fn existing_exact_case(root: &Path, candidate: &str) -> Option<PathBuf> {
+    let path = root.join(candidate);
+    if !path.is_file() {
+        return None;
+    }
+    let want = Path::new(candidate).file_name()?;
+    let parent = path.parent()?;
+    std::fs::read_dir(parent)
+        .ok()?
+        .filter_map(Result::ok)
+        .any(|entry| entry.file_name() == want)
+        .then_some(path)
+}
+
+/// Whether `path`'s content contains any of `markers` — the render/mount-call signal
+/// [`resolve_framework`] uses to prefer a candidate that is actually the bootstrap file
+/// over one that merely sits earlier in a framework's `entries` list.
+fn content_has_marker(path: &Path, markers: &[&str]) -> bool {
+    std::fs::read_to_string(path).is_ok_and(|text| markers.iter().any(|m| text.contains(m)))
+}
+
+/// The `lang=` a `::code src=` block should carry for a seeded entry file, by extension.
+fn code_lang_for(path: &Path) -> &'static str {
+    match path.extension().and_then(|e| e.to_str()) {
+        Some("tsx" | "ts") => "typescript",
+        Some("py") => "python",
+        _ => "javascript",
+    }
+}
+
 /// The entries of `directory` the map shows: sorted by name, hidden and skipped
 /// directories left out.
 fn listed(directory: &Path) -> Vec<PathBuf> {
@@ -1023,5 +1414,277 @@ mod tests {
     fn a_missing_directory_is_a_clear_error() {
         let error = write_scaffold(Path::new("/dx/nowhere"), false).expect_err("should fail");
         assert!(error.contains("not a directory"));
+    }
+
+    /// The scaffold always wires a traced index onto `dx trace --brief`, scaffolded like
+    /// any other gate — a run block naming the mapped source directories in `reads=`, and
+    /// never approved by the scaffold itself.
+    #[test]
+    fn the_scaffold_wires_a_traced_index_run_block() {
+        let root = project("trace-wiring");
+        let scaffold = write_scaffold(&root, false).expect("scaffold");
+        let text = workspace::read(&scaffold.path).expect("read");
+
+        assert!(
+            text.contains("::heading level=2 id=trace\nTraced index"),
+            "{text}"
+        );
+        // `node_modules/` never reaches `directories` — `listed()` skips it like every
+        // other build/vendor directory — so the trace gate reads only `src`.
+        assert!(
+            text.contains("::code id=index-trace lang=bash run reads=src"),
+            "{text}"
+        );
+        assert!(text.contains("dx trace --brief ."), "{text}");
+        // Gates are never approved by scaffolding: no `::output` accompanies the block.
+        assert!(!text.contains("::output id=index-trace-output"), "{text}");
+    }
+
+    /// A tree with no subdirectories still gets a meaningful `reads=`: the root-level
+    /// code files themselves, the same fallback [`trace_reads`] documents.
+    #[test]
+    fn a_flat_tree_reads_its_own_root_files_for_the_trace_gate() {
+        let root = std::env::temp_dir().join("dx-index-tests-trace-flat");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("dir");
+        std::fs::write(root.join("main.py"), "def go():\n    pass\n").expect("file");
+
+        let scaffold = write_scaffold(&root, false).expect("scaffold");
+        let text = workspace::read(&scaffold.path).expect("read");
+        assert!(text.contains("reads=main.py"), "{text}");
+    }
+
+    /// A React project — `react` and `react-dom` in `package.json`, plus a real
+    /// conventional entry file — gets a live `::code src=` block for that file, seeded
+    /// into the root area with a one-line note.
+    #[test]
+    fn a_react_project_gets_its_entry_point_mirrored() {
+        let root = std::env::temp_dir().join("dx-index-tests-react");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("src")).expect("dirs");
+        std::fs::write(
+            root.join("package.json"),
+            "{\"dependencies\": {\"react\": \"18.0.0\", \"react-dom\": \"18.0.0\"}}",
+        )
+        .expect("manifest");
+        std::fs::write(root.join("src/main.tsx"), "export const x = 1;\n").expect("entry");
+
+        let scaffold = write_scaffold(&root, false).expect("scaffold");
+        let text = workspace::read(&scaffold.path).expect("read");
+        // Canonical stringify decides attribute order, not the order the scaffold wrote.
+        assert!(
+            text.contains("::code id=area-root-react-entry lang=typescript src=src/main.tsx"),
+            "{text}"
+        );
+        assert!(text.contains("React entry point detected"), "{text}");
+    }
+
+    /// An ordinary JS project — no `react`/`react-dom` dependency — gets no entry block:
+    /// the shape has to be unambiguous, never guessed.
+    #[test]
+    fn a_non_react_js_project_gets_no_entry_block() {
+        let root = std::env::temp_dir().join("dx-index-tests-plain-js");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("src")).expect("dirs");
+        std::fs::write(
+            root.join("package.json"),
+            "{\"dependencies\": {\"express\": \"4.0.0\"}}",
+        )
+        .expect("manifest");
+        std::fs::write(root.join("src/main.tsx"), "export const x = 1;\n").expect("entry");
+
+        let scaffold = write_scaffold(&root, false).expect("scaffold");
+        let text = workspace::read(&scaffold.path).expect("read");
+        assert!(!text.contains("area-root-react-entry"), "{text}");
+        assert!(!text.contains("React entry point"), "{text}");
+    }
+
+    /// `react` present with no conventional entry file on disk is still ambiguous — no
+    /// guessing a path that does not exist.
+    #[test]
+    fn react_dependency_with_no_conventional_entry_file_seeds_nothing() {
+        let root = std::env::temp_dir().join("dx-index-tests-react-no-entry");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("dir");
+        std::fs::write(
+            root.join("package.json"),
+            "{\"dependencies\": {\"react\": \"18.0.0\", \"react-dom\": \"18.0.0\"}}",
+        )
+        .expect("manifest");
+
+        assert!(detect_framework_entry(&root).is_none());
+    }
+
+    /// report `d288e338`: the framework detector seeds `main.tsx`/`App.tsx`, so the
+    /// area listing's cheap "— entry point" label — driven by `ENTRY_POINTS`, entirely
+    /// independent of framework detection — must know both names too, the same way it
+    /// already knows `main.rs`.
+    #[test]
+    fn entry_point_labels_cover_the_react_filenames_the_detector_seeds() {
+        let root = std::env::temp_dir().join("dx-index-tests-entry-labels");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("src")).expect("dirs");
+        std::fs::write(root.join("src/main.tsx"), "console.log('boot')\n").expect("file");
+        std::fs::write(
+            root.join("src/App.tsx"),
+            "export default function App() { return null }\n",
+        )
+        .expect("file");
+
+        let scaffold = write_scaffold(&root, false).expect("scaffold");
+        let text = workspace::read(&scaffold.path).expect("read");
+        assert!(text.contains("src/main.tsx — entry point"), "{text}");
+        assert!(text.contains("src/App.tsx — entry point"), "{text}");
+    }
+
+    /// report `df1d5589`: Next.js passes the plain React gate (`react`+`react-dom` are
+    /// always present too) but its real entry is `app/layout.tsx` + `app/page.tsx`
+    /// (App Router) — never under `src/`, never one of React's five candidate names.
+    /// `next` itself, already sitting in the same manifest, is the specific signal, and
+    /// Next.js must be matched — and named — ahead of the generic React fallback.
+    #[test]
+    fn a_next_js_app_router_project_is_detected_and_named() {
+        let root = std::env::temp_dir().join("dx-index-tests-nextjs");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("app")).expect("dirs");
+        std::fs::write(
+            root.join("package.json"),
+            "{\"dependencies\": {\"next\": \"14.2.0\", \"react\": \"18.3.1\", \"react-dom\": \"18.3.1\"}}",
+        )
+        .expect("manifest");
+        std::fs::write(
+            root.join("app/layout.tsx"),
+            "export default function RootLayout({children}) { return children }\n",
+        )
+        .expect("layout");
+        std::fs::write(
+            root.join("app/page.tsx"),
+            "export default function Page() { return null }\n",
+        )
+        .expect("page");
+
+        let scaffold = write_scaffold(&root, false).expect("scaffold");
+        let text = workspace::read(&scaffold.path).expect("read");
+        assert!(text.contains("Next.js entry point detected"), "{text}");
+        assert!(text.contains("`next` in package.json"), "{text}");
+        assert!(
+            text.contains("::code id=area-root-react-entry-1 lang=typescript src=app/layout.tsx"),
+            "{text}"
+        );
+        assert!(
+            text.contains("::code id=area-root-react-entry-2 lang=typescript src=app/page.tsx"),
+            "{text}"
+        );
+    }
+
+    /// report `4c859012` (case): `App.tsx` as a literal candidate must never resolve to
+    /// a real file that is actually named `app.tsx` — [`existing_exact_case`] checks the
+    /// directory's own listing rather than trusting `Path::is_file`, which answers yes
+    /// on a case-insensitive filesystem regardless of the case asked for.
+    #[test]
+    fn a_lowercase_file_on_disk_never_satisfies_an_uppercase_candidate() {
+        let root = std::env::temp_dir().join("dx-index-tests-case-exact");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("src")).expect("dirs");
+        std::fs::write(root.join("src/app.tsx"), "export function renderApp() {}\n").expect("file");
+
+        assert!(existing_exact_case(&root, "src/App.tsx").is_none());
+        assert!(existing_exact_case(&root, "src/app.tsx").is_some());
+    }
+
+    /// report `4c859012` (priority): a default Vite React project ships both
+    /// `App.tsx` (the component) and `main.tsx` (the file that actually bootstraps —
+    /// calls `createRoot(...).render(...)`). `main.tsx` must win, never `App.tsx`
+    /// merely because an older candidate order checked it first.
+    #[test]
+    fn vite_s_main_tsx_wins_over_app_tsx_when_both_exist() {
+        let root = std::env::temp_dir().join("dx-index-tests-vite-priority");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("src")).expect("dirs");
+        std::fs::write(
+            root.join("package.json"),
+            "{\"dependencies\": {\"react\": \"18.3.1\", \"react-dom\": \"18.3.1\"}, \
+             \"devDependencies\": {\"vite\": \"5.0.0\"}}",
+        )
+        .expect("manifest");
+        std::fs::write(
+            root.join("src/main.tsx"),
+            "import ReactDOM from 'react-dom/client'\nimport App from './App'\n\
+             ReactDOM.createRoot(document.getElementById('root')).render(<App />)\n",
+        )
+        .expect("main");
+        std::fs::write(
+            root.join("src/App.tsx"),
+            "function App() { return null }\nexport default App\n",
+        )
+        .expect("app");
+
+        let scaffold = write_scaffold(&root, false).expect("scaffold");
+        let text = workspace::read(&scaffold.path).expect("read");
+        assert!(
+            text.contains("::code id=area-root-react-entry lang=typescript src=src/main.tsx"),
+            "{text}"
+        );
+        assert!(
+            !text.contains("::code id=area-root-react-entry lang=typescript src=src/App.tsx"),
+            "{text}"
+        );
+    }
+
+    /// The render-marker preference is content-based, not merely positional: even a
+    /// hand-rolled layout where the file that actually calls the render/mount function
+    /// sits *later* in the candidate list must still win over an earlier, marker-less
+    /// file of the same shape.
+    #[test]
+    fn a_later_candidate_wins_when_it_alone_carries_the_render_marker() {
+        let root = std::env::temp_dir().join("dx-index-tests-marker-override");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("src")).expect("dirs");
+        std::fs::write(
+            root.join("package.json"),
+            "{\"dependencies\": {\"react\": \"18.3.1\", \"react-dom\": \"18.3.1\"}}",
+        )
+        .expect("manifest");
+        // main.tsx exists and is checked first, but carries no render call.
+        std::fs::write(root.join("src/main.tsx"), "// placeholder, unused\n").expect("main");
+        // App.tsx, checked later, is the file that actually bootstraps here.
+        std::fs::write(
+            root.join("src/App.tsx"),
+            "import ReactDOM from 'react-dom/client'\n\
+             ReactDOM.createRoot(document.getElementById('root')).render(null)\n",
+        )
+        .expect("app");
+
+        let scaffold = write_scaffold(&root, false).expect("scaffold");
+        let text = workspace::read(&scaffold.path).expect("read");
+        assert!(
+            text.contains("::code id=area-root-react-entry lang=typescript src=src/App.tsx"),
+            "{text}"
+        );
+    }
+
+    /// report `7f351075`: the framework table is data-driven — a Flask project
+    /// (`requirements.txt` naming `flask`, an `app.py` entry) is exactly as mechanically
+    /// identifiable as a React project, and gets a named, mirrored entry too.
+    #[test]
+    fn a_flask_project_is_detected_from_requirements_txt() {
+        let root = std::env::temp_dir().join("dx-index-tests-flask");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("dir");
+        std::fs::write(root.join("requirements.txt"), "flask==3.0.0\n").expect("manifest");
+        std::fs::write(
+            root.join("app.py"),
+            "from flask import Flask\napp = Flask(__name__)\n\
+             @app.route(\"/\")\ndef index():\n    return \"hi\"\n",
+        )
+        .expect("app");
+
+        let scaffold = write_scaffold(&root, false).expect("scaffold");
+        let text = workspace::read(&scaffold.path).expect("read");
+        assert!(text.contains("Flask entry point detected"), "{text}");
+        assert!(
+            text.contains("::code id=area-root-react-entry lang=python src=app.py"),
+            "{text}"
+        );
     }
 }

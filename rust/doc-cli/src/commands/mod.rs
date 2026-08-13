@@ -19,6 +19,7 @@ pub mod play;
 pub mod report;
 pub mod setup;
 pub mod store;
+pub mod trace;
 pub mod view;
 
 use crate::args::Args;
@@ -120,6 +121,11 @@ const COMMANDS: &[Command] = &[
         names: &["source"],
         flags: &["block", "header", "out"],
         run: |args| edit::run_source(args).map(Output::Document),
+    },
+    Command {
+        names: &["trace"],
+        flags: &["brief", "out"],
+        run: |args| trace::run(args).map(Output::Document),
     },
     Command {
         names: &["help", "--help", "-h"],

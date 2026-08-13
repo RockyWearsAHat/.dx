@@ -123,11 +123,14 @@ fn unsubscribe(args: &Args) -> Result<String, String> {
     Ok(format!("{} was not subscribed\n", root.display()))
 }
 
-/// `dx report close <id> [dir]` — the fix landed: remove the block and tell the database.
+/// `dx report close <id> [dir]` — tell the database, then remove the block.
 ///
 /// Both halves, because either alone is wrong: a block removed but not closed comes back on
 /// the next sync, and a report closed but not removed leaves the document claiming an open
-/// defect nobody will ever see again.
+/// defect nobody will ever see again. The database is told **first**: it is the one call that
+/// can fail on grounds the caller could not see locally (a stale block, a race with another
+/// close), and a failure there must leave the document exactly as it was rather than losing the
+/// record of an open report the server still disagrees about.
 fn close(args: &Args) -> Result<String, String> {
     let id = args
         .positional(1)
@@ -136,7 +139,17 @@ fn close(args: &Args) -> Result<String, String> {
     let subscription = subscription_or_hint(&root)?;
     let document = subscription.document();
 
-    let mut out = String::new();
+    intake::close(
+        &subscription.endpoint,
+        &subscription.project,
+        id,
+        &intake::token_for(&subscription),
+    )?;
+    let mut out = format!(
+        "closed {id} at {}\n",
+        intake::address(&subscription.endpoint, "close", &subscription.project)
+    );
+
     if document.exists() {
         let source = workspace::read(&document)?;
         let parsed = doc_core::format::parse(&source);
@@ -146,16 +159,6 @@ fn close(args: &Args) -> Result<String, String> {
             out.push_str(&format!("removed {id} from {}\n", document.display()));
         }
     }
-    intake::close(
-        &subscription.endpoint,
-        &subscription.project,
-        id,
-        &intake::token_for(&subscription),
-    )?;
-    out.push_str(&format!(
-        "closed {id} at {}\n",
-        intake::address(&subscription.endpoint, "close", &subscription.project)
-    ));
     Ok(out)
 }
 
@@ -284,6 +287,12 @@ mod tests {
             "{}",
             filed.text()
         );
+        let filed_id = filed
+            .text()
+            .split_whitespace()
+            .nth(1)
+            .expect("the summary names the id")
+            .to_string();
 
         let waiting = run(&args(&["list", root.to_str().expect("path")])).expect("list");
         assert!(waiting.text().contains("1 waiting"), "{}", waiting.text());
@@ -353,6 +362,68 @@ mod tests {
             "{}",
             registered.text()
         );
+
+        // A close the intake refuses must not have already thrown the local record away —
+        // that was exactly the bug: the block was removed before the network call answered, so
+        // a refusal (a stale id, a race with another close) silently lost an open report the
+        // intake still disagreed about. The block must survive a refused close untouched.
+        {
+            use std::io::{BufRead, BufReader, Read as _, Write as _};
+            use std::net::TcpListener;
+
+            let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+            let address = listener.local_addr().expect("address");
+            let server = std::thread::spawn(move || {
+                let (mut stream, _) = listener.accept().expect("accept");
+                let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+                let mut length = 0usize;
+                loop {
+                    let mut line = String::new();
+                    reader.read_line(&mut line).expect("head");
+                    if let Some(value) = line.to_lowercase().strip_prefix("content-length:") {
+                        length = value.trim().parse().unwrap_or(0);
+                    }
+                    if line == "\r\n" || line.is_empty() {
+                        break;
+                    }
+                }
+                let mut body = vec![0u8; length];
+                reader.read_exact(&mut body).expect("body");
+                let answer = "{\"error\":\"`dx` holds no such report\"}";
+                stream
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{answer}",
+                            answer.len()
+                        )
+                        .as_bytes(),
+                    )
+                    .expect("answer");
+            });
+
+            let refusing = Subscription {
+                workspace: workspace::workspace_root(&root),
+                project: "dx".to_string(),
+                endpoint: format!("http://{address}"),
+                token: "t".to_string(),
+            };
+            intake::subscribe(&refusing).expect("subscribe");
+            let before = workspace::read(&refusing.document()).expect("read");
+
+            let error = run(&args(&["close", &filed_id, root.to_str().expect("path")]))
+                .expect_err("the intake refused");
+            assert!(error.contains("holds no such report"), "{error}");
+
+            server.join().expect("listener");
+
+            let after = workspace::read(&refusing.document()).expect("read");
+            assert_eq!(before, after, "a refused close must not touch the document");
+            let parsed = doc_core::format::parse(&after);
+            assert!(
+                doc_core::edit::find(&parsed, &filed_id).is_ok(),
+                "the block must still be there after a refused close"
+            );
+        }
 
         std::env::remove_var("DX_REPORTS_DIR");
         std::env::remove_var("DX_REPORT_ENDPOINT");

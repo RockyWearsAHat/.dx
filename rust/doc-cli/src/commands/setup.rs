@@ -520,6 +520,12 @@ READ
                                                 question in your own words: word endings,
                                                 compoundNames, and a word the project spells
                                                 its own way all still land
+  dx trace    [dir] [--brief]                   real symbols and references, by
+                                                heuristic extraction (Rust, JS/TS,
+                                                Python, Go) — definition site and
+                                                referencing files per symbol;
+                                                --brief ranks by fan-in, capped for
+                                                embedding in a document
 
 WRITE
   dx new      <file> [--title T]                create a document
