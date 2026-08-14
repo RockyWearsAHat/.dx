@@ -587,7 +587,7 @@ mod tests {
     /// crate with `dx fmt`.
     ///
     /// These are captured output, not scripture. Regenerating one is correct when a defect is
-    /// being fixed — several of them once encoded genuine data loss — but a fixture edited to
+    /// being fixed — four of them once encoded genuine data loss — but a fixture edited to
     /// make a convenient change pass is how a regression gets blessed. Refresh the pair, read
     /// the diff, and say what changed and why.
     const REAL_DOC_CASES: &[(&str, &str)] = &[
