@@ -29,6 +29,62 @@ use crate::policies;
 use crate::reports;
 use crate::service;
 
+/// Check for `.dx` pointers that are both tracked by git and in git-ignored paths.
+/// Such pointers are unresolvable on other machines since their content never gets committed.
+/// Returns Some with a diagnostic message if any are found, None if documents look healthy.
+fn check_tracked_but_ignored_pointers() -> Result<Option<String>, String> {
+    use doc_store::stub;
+    use std::fs;
+
+    let root = match crate::workspace::workspace_root(&std::path::PathBuf::from(".")) {
+        root if root.is_dir() => root,
+        _ => return Ok(None),
+    };
+
+    // Discover all .dx files to check.
+    let discovered = doc_store::discover_documents(&root);
+    let mut problems = Vec::new();
+
+    for path in discovered {
+        let Ok(relative) = path
+            .strip_prefix(&root)
+            .ok()
+            .and_then(|p| {
+                let s = p.to_string_lossy().into_owned();
+                stub::normalize_path(&s)
+            })
+            .ok_or("could not normalize path")
+        else {
+            continue;
+        };
+
+        // Check if this is a pointer in a tracked-but-ignored state.
+        if let Ok(text) = fs::read_to_string(&path) {
+            if stub::is_stub(&text) && doc_store::git::is_tracked_but_ignored(&root, &relative) {
+                problems.push(relative);
+            }
+        }
+    }
+
+    if problems.is_empty() {
+        Ok(None) // No problems found, let desktop status lines handle it.
+    } else {
+        let mut message = String::from("  WARNING: tracked-but-ignored pointers found\n");
+        for path in problems {
+            message.push_str(&format!(
+                "    {} — force-added to git but in a git-ignored path; content is in \
+                 .doc/local.dxcp and won't reach other machines\n",
+                path
+            ));
+        }
+        message.push_str(
+            "  Run `dx sync` for details on resolving these, or `git rm --cached <path>` \
+             to remove them from git.\n",
+        );
+        Ok(Some(message))
+    }
+}
+
 /// `dx doctor` — what is installed, what works, and what is missing.
 /// One line describing the boundary a code block would run inside on this machine.
 ///
@@ -116,9 +172,16 @@ pub fn run_doctor(_args: &Args) -> Result<String, String> {
     }
 
     out.push_str("\ndocuments\n");
-    for line in desktop::status_lines() {
-        out.push_str(&line);
-        out.push('\n');
+    // Check for tracked-but-ignored pointers, which indicate a diagnosability issue.
+    match check_tracked_but_ignored_pointers() {
+        Ok(Some(message)) => out.push_str(&message),
+        Ok(None) => {
+            for line in desktop::status_lines() {
+                out.push_str(&line);
+                out.push('\n');
+            }
+        }
+        Err(message) => out.push_str(&message),
     }
 
     out.push_str("\ngithub.com\n");
@@ -364,12 +427,21 @@ fn install_extension() -> String {
 }
 
 /// Copy the running binary somewhere on `PATH`, reporting where it landed.
+///
+/// `--no-path` skips only this copy. Every step after it in [`run_setup`], the login
+/// service included, still runs — against `source`, whatever binary happens to be running
+/// right now. A bypass is never silent: the notice below says so, the same way
+/// `doc_run::FORCED_NOTICE` marks a block forced past its approval gate.
 fn install_binary(args: &Args, out: &mut String) -> Result<PathBuf, String> {
     let source = std::env::current_exe()
         .map_err(|error| format!("could not find the running binary: {error}"))?;
 
     if args.present("no-path") {
-        out.push_str(&format!("binary\n  left in place: {}\n", source.display()));
+        out.push_str(&format!(
+            "binary\n  left in place: {}\n  note: --no-path only skips this copy — the \
+             login service below still registers against this binary\n",
+            source.display()
+        ));
         return Ok(source);
     }
 
@@ -583,6 +655,9 @@ REPORT — what dx itself got wrong
   dx report   close <id> [dir]                  a fix landed: the block goes and the
                                                 intake is told, so no later sync brings
                                                 it back
+  dx report   drop <id>                         remove one entry from the local inbox
+                                                by id only, for a stuck entry that
+                                                cannot be synced
   dx report   drain [dir]                       fold this machine's inbox into
                                                 <dir>/reports.dx with no network at all.
                                                 The same defect filed twice becomes a
@@ -765,6 +840,20 @@ mod tests {
         let path = install_binary(&args(&["--no-path"]), &mut out).expect("install");
         assert_eq!(path, std::env::current_exe().expect("exe"));
         assert!(out.contains("left in place"));
+    }
+
+    /// `--no-path` skips the PATH copy, never the login service that runs after it in
+    /// [`run_setup`] — the flag's name once read as "nothing happens", and it still
+    /// registers a real launch agent against whatever binary is running. The notice makes
+    /// that unmissable, the way `FORCED_NOTICE` marks any other bypass.
+    #[test]
+    fn skipping_the_path_copy_says_the_service_still_registers() {
+        let mut out = String::new();
+        install_binary(&args(&["--no-path"]), &mut out).expect("install");
+        assert!(
+            out.contains("login service") && out.contains("still registers"),
+            "{out}"
+        );
     }
 
     #[test]

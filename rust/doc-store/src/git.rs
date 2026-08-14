@@ -81,6 +81,34 @@ fn succeeds(root: &Path, args: &[&str]) -> bool {
         .is_ok_and(|out| out.status.success())
 }
 
+/// Whether `relative` is a tracked `.dx` pointer whose path is git-ignored.
+///
+/// This detects the specific failure mode: a document's pointer was force-added and committed,
+/// but the pointer's path is itself ignored by git. Content for such a pointer stays in the
+/// git-ignored `.doc/local.dxcp` pack, never in the committed artifact, so the pointer is
+/// unresolvable on any other machine.
+#[must_use]
+pub fn is_tracked_but_ignored(root: &Path, relative: &str) -> bool {
+    // Both conditions must be true: the file is tracked by git, AND its path is git-ignored.
+    // We can't use check-ignore directly on a tracked file — git reports it as not ignored
+    // because tracking overrides the ignore pattern. Instead, we check if a sibling path
+    // in the same directory would be ignored. If the directory is in an ignore pattern,
+    // the sibling probe will report as ignored.
+    let is_tracked = succeeds(root, &["ls-files", "--error-unmatch", "--", relative]);
+    if !is_tracked {
+        return false;
+    }
+
+    // Create a hypothetical probe path in the same directory to test if it would be ignored.
+    let path = std::path::PathBuf::from(relative);
+    let parent = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+    let probe = parent.join(".gitignore-probe");
+    succeeds(
+        root,
+        &["check-ignore", "-q", "--", &probe.to_string_lossy()],
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -164,5 +192,91 @@ mod tests {
     fn local_only_is_readable_on_the_route_itself() {
         assert!(Route::Local.is_local_only());
         assert!(!Route::Repo.is_local_only());
+    }
+
+    #[test]
+    fn a_pointer_forced_into_an_ignored_path_is_tracked_but_ignored() {
+        // Create a temporary git repository.
+        let root = std::env::temp_dir().join("dx-git-tracked-but-ignored");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("scratch");
+        if !std::process::Command::new("git")
+            .arg("-C")
+            .arg(&root)
+            .args(["init", "-q"])
+            .status()
+            .is_ok_and(|status| status.success())
+        {
+            return; // No git on this machine.
+        }
+
+        // Create an ignored directory.
+        let ignored_dir = root.join("ignored");
+        std::fs::create_dir_all(&ignored_dir).expect("ignored dir");
+        std::fs::write(root.join(".gitignore"), "ignored/\n").expect("gitignore");
+
+        // Commit the .gitignore.
+        std::process::Command::new("git")
+            .arg("-C")
+            .arg(&root)
+            .args(["add", ".gitignore"])
+            .output()
+            .expect("git add");
+        std::process::Command::new("git")
+            .arg("-C")
+            .arg(&root)
+            .args(["commit", "-q", "-m", "add gitignore"])
+            .output()
+            .expect("git commit");
+
+        // Create a document under the ignored directory.
+        let doc_file = ignored_dir.join("doc.dx");
+        std::fs::write(&doc_file, "::paragraph id=p\nContent\n::end\n").expect("write doc");
+
+        // Verify it's not currently tracked (it's in an ignored directory).
+        assert!(!tracks(&root, "ignored/doc.dx"));
+
+        // Now force-add it to git (simulating the failure mode).
+        std::process::Command::new("git")
+            .arg("-C")
+            .arg(&root)
+            .args(["add", "-f", "ignored/doc.dx"])
+            .output()
+            .expect("git add -f");
+
+        // After force-add, it should be tracked but still in an ignored path.
+        assert!(tracks(&root, "ignored/doc.dx"));
+        assert!(is_tracked_but_ignored(&root, "ignored/doc.dx"));
+
+        // A regular committed file in an ignored path should NOT be both conditions at once.
+        // (This shouldn't happen in practice, but let's be thorough.)
+    }
+
+    #[test]
+    fn a_normal_committed_document_is_not_tracked_but_ignored() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .expect("workspace root");
+        if !succeeds(root, &["rev-parse", "--is-inside-work-tree"]) {
+            return;
+        }
+
+        // `examples/welcome.dx` is committed, so it should not match the condition.
+        assert!(!is_tracked_but_ignored(root, "examples/welcome.dx"));
+    }
+
+    #[test]
+    fn an_ordinary_ignored_document_is_not_tracked_but_ignored() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .expect("workspace root");
+        if !succeeds(root, &["rev-parse", "--is-inside-work-tree"]) {
+            return;
+        }
+
+        // `rust/target/scratch.dx` is ignored but not tracked.
+        assert!(!is_tracked_but_ignored(root, "rust/target/scratch.dx"));
     }
 }

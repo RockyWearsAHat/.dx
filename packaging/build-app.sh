@@ -90,7 +90,8 @@ cp "$root/editor/surface/edit.js" "$root/editor/surface/edit.css" \
 # the application *and* on every .dx file on the disk, so it is what a document looks like.
 # ---------------------------------------------------------------------------------------
 echo "  drawing the icon…"
-"$root/packaging/build-icons.py" --icns "$contents/Resources/dx.icns" >/dev/null
+(cd "$root/rust" && cargo build --release -p doc-shot --bin build-icons >/dev/null)
+"$root/rust/target/release/build-icons" --icns "$contents/Resources/dx.icns" >/dev/null
 
 # ---------------------------------------------------------------------------------------
 # The application itself: AppKit + WKWebView, in packaging/app.

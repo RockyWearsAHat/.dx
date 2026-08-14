@@ -457,13 +457,28 @@ impl Filed {
                     .map(|said| format!("{said}\n"))
                     .unwrap_or_default()
             ),
-            (None, Some(problem)) => format!(
-                "filed {} ({kind}) in {} — {} waiting, because the intake could not be \
-                 reached: {problem}\nthey go out on the next `dx report sync`\n",
-                self.id,
-                inbox.display(),
-                self.waiting
-            ),
+            (None, Some(problem)) => {
+                let is_permanent = problem.contains("refused the report");
+                if is_permanent {
+                    format!(
+                        "filed {} ({kind}) in {} — {} waiting, and this one will not go out \
+                         because the intake refused it: {problem}\nremove it with \
+                         `dx report drop {}`\n",
+                        self.id,
+                        inbox.display(),
+                        self.waiting,
+                        self.id
+                    )
+                } else {
+                    format!(
+                        "filed {} ({kind}) in {} — {} waiting, because the intake could not be \
+                         reached: {problem}\nthey go out on the next `dx report sync`\n",
+                        self.id,
+                        inbox.display(),
+                        self.waiting
+                    )
+                }
+            }
             (None, None) => format!(
                 "filed {} ({kind}) — {} waiting in {}\nrun `dx report drain` in the dx checkout \
                  to fold them into {}\n",
@@ -1245,6 +1260,39 @@ mod tests {
         let error =
             close("https://example.com/report", "dx", "../../etc", "t").expect_err("refused");
         assert!(error.contains("not a report id"), "{error}");
+    }
+
+    #[test]
+    fn filed_summary_distinguishes_permanent_refusal_from_transient_failure() {
+        let inbox = std::env::temp_dir().join("intake-test-inbox");
+        let id = "report-aaaaaaaa".to_string();
+
+        // Permanent refusal: the intake rejected the report
+        let refused = Filed {
+            id: id.clone(),
+            reached: None,
+            waiting: 1,
+            problem: Some(
+                "https://example.com/report refused the report: route is too long".to_string(),
+            ),
+        };
+        let summary = refused.summary("bug", &inbox);
+        assert!(summary.contains("refused it"), "{summary}");
+        assert!(summary.contains("will not go out"), "{summary}");
+        assert!(summary.contains("dx report drop"), "{summary}");
+        assert!(!summary.contains("next `dx report sync`"), "{summary}");
+
+        // Transient failure: network unreachable
+        let unreached = Filed {
+            id,
+            reached: None,
+            waiting: 1,
+            problem: Some("curl could not reach the intake: Connection refused".to_string()),
+        };
+        let summary = unreached.summary("bug", &inbox);
+        assert!(summary.contains("could not be reached"), "{summary}");
+        assert!(summary.contains("next `dx report sync`"), "{summary}");
+        assert!(!summary.contains("will not go out"), "{summary}");
     }
 
     /// The push, end to end, against a listener that answers like the intake. This is the one

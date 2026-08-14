@@ -16,6 +16,7 @@
 //! the next agent reads it in `reports.dx`. `drain` remains the offline route: it folds the
 //! local inbox into the document with no network at all.
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use crate::args::Args;
@@ -38,6 +39,7 @@ pub fn run(args: &Args) -> Result<Output, String> {
         "subscribe" => subscribe(args).map(Output::Report),
         "unsubscribe" => unsubscribe(args).map(Output::Report),
         "close" => close(args).map(Output::Report),
+        "drop" => drop(args).map(Output::Report),
         kind => file(kind, args).map(Output::Report),
     }
 }
@@ -54,6 +56,15 @@ fn file(kind: &str, args: &Args) -> Result<String, String> {
         args.value("repro").unwrap_or_default(),
         &workspace::workspace_root(&here),
     )?;
+
+    // Agents connected over MCP should use the mcp__dx__dx_report tool instead of shelling
+    // out to this CLI command. Print this notice unconditionally: one extra stderr line is
+    // tolerable for the rare case of a person filing by hand, and it is far better than a
+    // condition that silently never fires.
+    let _ = writeln!(
+        std::io::stderr(),
+        "note: MCP-connected agents should prefer the mcp__dx__dx_report tool over this CLI command"
+    );
 
     let filed = intake::file(&report)?;
     Ok(filed.summary(kind.as_str(), &reports::inbox()))
@@ -166,6 +177,42 @@ fn close(args: &Args) -> Result<String, String> {
         }
     }
     Ok(out)
+}
+
+/// `dx report drop <id>` — remove one entry from the local inbox by id only.
+///
+/// Never touches the remote intake. The entry is permanently deleted from this machine's
+/// inbox, for a report that is stuck and cannot be retrieved otherwise.
+fn drop(args: &Args) -> Result<String, String> {
+    let id = args
+        .positional(1)
+        .ok_or("`dx report drop` needs a report id, e.g. `dx report drop report-1a2b3c4d`")?;
+    let inbox = reports::inbox();
+    let inbox_contents = reports::read_inbox(&inbox)?;
+
+    // Find the record file matching this id
+    let record_to_remove = inbox_contents
+        .pending
+        .iter()
+        .find(|pending| pending.report.id() == id)
+        .map(|pending| pending.record.clone());
+
+    match record_to_remove {
+        Some(record) => {
+            std::fs::remove_file(&record).map_err(|error| {
+                format!(
+                    "could not remove {} from {}: {error}",
+                    record.display(),
+                    inbox.display()
+                )
+            })?;
+            Ok(format!("dropped {id} from {}\n", inbox.display()))
+        }
+        None => Err(format!(
+            "{id} is not in the local inbox at {}\nrun `dx report list` to see what is waiting\n",
+            inbox.display()
+        )),
+    }
 }
 
 /// `dx report list [dir]` — what is waiting here, and what the checkout is carrying.
@@ -457,5 +504,86 @@ mod tests {
         assert!(error.contains("dx report subscribe"), "{error}");
 
         std::env::remove_var("DX_SUBSCRIPTIONS_FILE");
+    }
+
+    #[test]
+    fn drop_removes_a_report_from_the_local_inbox() {
+        let _env = crate::env_lock();
+        let root = std::env::temp_dir().join("dx-report-cli-drop");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("scratch");
+        std::env::set_var("DX_REPORTS_DIR", root.join("inbox"));
+        std::env::set_var("DX_REPORT_ENDPOINT", "off");
+
+        // File a report
+        let filed = run(&args(&[
+            "bug",
+            "--title",
+            "test defect",
+            "--detail",
+            "This is a test.",
+            "--route",
+            "dx report",
+        ]))
+        .expect("file");
+        let filed_text = filed.text();
+        let filed_id = filed_text
+            .split_whitespace()
+            .nth(1)
+            .expect("id in summary")
+            .to_string();
+
+        // Verify it is in the inbox
+        let listed = run(&args(&["list", root.to_str().expect("path")])).expect("list");
+        assert!(listed.text().contains("1 waiting"), "{}", listed.text());
+
+        // Drop it
+        let dropped = run(&args(&["drop", &filed_id])).expect("drop");
+        assert!(dropped.text().contains("dropped"), "{}", dropped.text());
+        assert!(dropped.text().contains(&filed_id), "{}", dropped.text());
+
+        // Verify it is gone from the inbox
+        let after = run(&args(&["list", root.to_str().expect("path")])).expect("list after drop");
+        assert!(after.text().contains("empty"), "{}", after.text());
+
+        // Dropping a non-existent id should error
+        let error = run(&args(&["drop", "report-nonexistent"])).expect_err("not in inbox");
+        assert!(error.contains("not in the local inbox"), "{error}");
+
+        std::env::remove_var("DX_REPORTS_DIR");
+        std::env::remove_var("DX_REPORT_ENDPOINT");
+    }
+
+    #[test]
+    fn filing_from_the_cli_always_notes_the_mcp_tool_is_cheaper() {
+        let _env = crate::env_lock();
+        let root = std::env::temp_dir().join("dx-report-cli-mcp-notice");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("scratch");
+        std::env::set_var("DX_REPORTS_DIR", root.join("inbox"));
+        std::env::set_var("DX_REPORT_ENDPOINT", "off");
+        // The CLI always prints a notice to stderr directing agents to use the
+        // mcp__dx__dx_report tool instead of this CLI command, while still completing
+        // the report filing.
+
+        let filed = run(&args(&[
+            "bug",
+            "--title",
+            "test report",
+            "--detail",
+            "Test MCP notice.",
+            "--route",
+            "dx report",
+        ]))
+        .expect("file");
+
+        assert!(
+            filed.text().starts_with("filed report-"),
+            "Command should succeed and return filed report: {}",
+            filed.text()
+        );
+
+        std::env::remove_var("DX_REPORTS_DIR");
+        std::env::remove_var("DX_REPORT_ENDPOINT");
     }
 }

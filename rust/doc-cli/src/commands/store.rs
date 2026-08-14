@@ -59,13 +59,17 @@ pub fn run_sync(args: &Args) -> Result<String, String> {
         return Ok(out);
     }
 
-    let sections: [(&str, &Vec<String>); 6] = [
+    let sections: [(&str, &Vec<String>); 7] = [
         ("adopted from plain text", &report.ingested),
         ("restored from a pack", &report.restored),
         ("pointer rewritten", &report.stubs_written),
         ("pruned (file deleted from the tree)", &report.pruned),
         ("pack rewritten", &report.packs_rewritten),
         ("UNRESOLVED", &report.unresolved),
+        (
+            "UNRESOLVED — pointer forced into git-ignored path",
+            &report.tracked_but_ignored,
+        ),
     ];
     for (label, paths) in sections {
         if paths.is_empty() {
@@ -82,12 +86,22 @@ pub fn run_sync(args: &Args) -> Result<String, String> {
             report.chunks_collected
         ));
     }
-    if !report.unresolved.is_empty() {
-        out.push_str(
-            "\nThe unresolved pointers above have no content in .doc/. Restore \
-             .doc/repo.dxcp from version control, or delete the pointers if the documents \
-             are gone.\n",
-        );
+    if !report.unresolved.is_empty() || !report.tracked_but_ignored.is_empty() {
+        out.push_str("\nUnresolved pointers have no content in .doc/:\n");
+        if !report.unresolved.is_empty() {
+            out.push_str(
+                "  Generic unresolved: restore .doc/repo.dxcp from version control, or delete \
+                 the pointers if the documents are gone.\n",
+            );
+        }
+        if !report.tracked_but_ignored.is_empty() {
+            out.push_str(
+                "  Tracked-but-ignored: these pointers were force-added to git, but their path \
+                 is git-ignored, so content stays in .doc/local.dxcp (never committed). Restore \
+                 .doc/local.dxcp from this machine's backup, remove the pointers, or unforce-add \
+                 them from git: `git rm --cached <path>` + `git commit`.\n",
+            );
+        }
     }
     Ok(out)
 }
@@ -415,7 +429,7 @@ mod tests {
         assert!(report.contains("UNRESOLVED"), "{report}");
         assert!(report.contains("orphan.dx"), "{report}");
         // And it says what to do about it rather than just naming the problem.
-        assert!(report.contains("Restore .doc/repo.dxcp"), "{report}");
+        assert!(report.contains("restore .doc/repo.dxcp"), "{report}");
     }
 
     #[test]
