@@ -9,11 +9,12 @@
 //! add `::code src=` blocks for the load-bearing files — so every later reader orients
 //! for the price of one read.
 //!
-//! When the tree names its own build system (`Cargo.toml`, `package.json`, a pytest
-//! project, `go.mod`, a `Makefile` with a `test:` target), the same command scaffolds
-//! `dev.dx`: the verify harness, with gates written for the sandbox every block runs in —
-//! fresh HOME, no network — so the first `dx run dev.dx --approve` is a review, not a
-//! debugging session. Gates are never approved by scaffolding; the approval gate stands.
+//! When the tree names its own build system — `Cargo.toml`, `package.json`'s own test
+//! script, a pytest project, `go.mod`, a Ruby/Maven/.NET project, or a `Makefile` naming
+//! a test target — the same command scaffolds `dev.dx`: the verify harness, with gates
+//! written for the sandbox every block runs in — fresh HOME, no network — so the first
+//! `dx run dev.dx --approve` is a review, not a debugging session. Gates are never
+//! approved by scaffolding; the approval gate stands.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -60,11 +61,11 @@ pub(crate) const CODE_EXTENSIONS: &[&str] = &[
 ];
 
 /// File names that are an area's front door regardless of what references them. Kept in
-/// step with every framework [`FRAMEWORKS`] recognizes by convention name — a filename
-/// the framework table treats as a real entry file earns the same "— entry point" label
-/// the cheap, framework-agnostic scan already gives `main.rs` and its siblings; letting
-/// the two drift apart is what report `d288e338` caught (`main.tsx`/`App.tsx` seeded by
-/// the React detector but never labeled by this list).
+/// step with every name [`detect_entry`]'s conventions can seed — a filename the entry
+/// detector treats as a real entry file earns the same "— entry point" label the cheap,
+/// convention-agnostic scan already gives `main.rs` and its siblings; letting the two
+/// drift apart is what report `d288e338` caught (`main.tsx`/`App.tsx` seeded by the
+/// entry detector but never labeled by this list).
 const ENTRY_POINTS: &[&str] = &[
     "main.rs",
     "lib.rs",
@@ -76,6 +77,7 @@ const ENTRY_POINTS: &[&str] = &[
     "index.mjs",
     "index.ts",
     "index.tsx",
+    "index.jsx",
     "app.js",
     "app.ts",
     "app.py",
@@ -84,6 +86,9 @@ const ENTRY_POINTS: &[&str] = &[
     "main.jsx",
     "App.tsx",
     "App.jsx",
+    "manage.py",
+    "wsgi.py",
+    "asgi.py",
 ];
 
 /// Stems too generic to mean "this file is referenced" when they appear in other files.
@@ -273,32 +278,32 @@ fn scaffold_source(root: &Path, build: Option<&Build>, harness: bool) -> (String
     let mut total = loose_files.len();
     let mut areas = 0;
     let mut used_slugs = Vec::new();
-    let framework_entry = detect_framework_entry(root);
+    let entry = detect_entry(root);
 
-    if !loose_files.is_empty() || framework_entry.is_some() {
+    if !loose_files.is_empty() || entry.is_some() {
         areas += 1;
         body.push_str(&format!(
             "\n::heading level=2 id=area-root\n./ — {}\n::end\n\n",
             counted(loose_files.len(), "file", "files")
         ));
-        if let Some(matched) = &framework_entry {
+        if let Some(matched) = &entry {
             body.push_str(&format!(
-                "::paragraph id=area-root-react\n\
-                 {} entry point detected ({}, plus a conventional entry file present) — \
-                 mirrored live below, always the file's current text.\n::end\n\n",
-                matched.framework, matched.deps_note
+                "::paragraph id=area-root-entry-note\n\
+                 Entry point detected ({}) — mirrored live below, always the file's \
+                 current text.\n::end\n\n",
+                matched.note
             ));
             let multiple = matched.files.len() > 1;
-            for (position, entry) in matched.files.iter().enumerate() {
-                let relative = entry.strip_prefix(root).unwrap_or(entry).display();
+            for (position, file) in matched.files.iter().enumerate() {
+                let relative = file.strip_prefix(root).unwrap_or(file).display();
                 let id = if multiple {
-                    format!("area-root-react-entry-{}", position + 1)
+                    format!("area-root-entry-{}", position + 1)
                 } else {
-                    "area-root-react-entry".to_string()
+                    "area-root-entry".to_string()
                 };
                 body.push_str(&format!(
                     "::code id={id} src={relative} lang={}\n::end\n\n",
-                    code_lang_for(entry)
+                    code_lang_for(file)
                 ));
             }
         }
@@ -550,13 +555,14 @@ fn readme_lead(root: &Path) -> Option<String> {
 
 /// A build system the tree names, and where its manifest lives relative to the root
 /// (empty for the root itself — the common case; `rust` for a monorepo's crate folder).
+/// Cargo gets its own variant because it earns three gates (test, clippy, fmt) instead
+/// of one; every other system is [`Build::Detected`] — a name plus the [`TestCommand`]
+/// one of [`TEST_SYSTEMS`] discovered from the project's *own* declared test command, so
+/// a new ecosystem is a detection function and a shell body, never a new variant.
 #[derive(Debug, PartialEq, Eq)]
 enum Build {
     Cargo(String),
-    Node,
-    Python,
-    Go,
-    Make,
+    Detected(&'static str, TestCommand),
 }
 
 impl Build {
@@ -564,16 +570,69 @@ impl Build {
     fn name(&self) -> &'static str {
         match self {
             Build::Cargo(_) => "cargo",
-            Build::Node => "npm",
-            Build::Python => "pytest",
-            Build::Go => "go",
-            Build::Make => "make",
+            Build::Detected(name, _) => name,
         }
     }
 }
 
+/// One non-Cargo test system this scaffold can discover: a `detect` function that reads
+/// the project's own manifest or convention for its *real* test command, rather than a
+/// fixed command assumed for every project of that kind — generalizes report
+/// `7f351075`'s "framework is a data row" fix to build systems.
+struct TestSystem {
+    /// Shown as [`Build::name`] and in the scaffold's harness sentence.
+    name: &'static str,
+    detect: fn(&Path) -> Option<TestCommand>,
+}
+
+/// What one gate needs to run a discovered test command: what it reads, what it writes,
+/// and the shell body run after the `cd` into the project root.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TestCommand {
+    reads: Vec<String>,
+    writes: String,
+    body: String,
+}
+
+/// Every non-Cargo system this scaffold recognizes, checked in this order — Make last,
+/// since a Makefile can sit alongside any other manifest and its test-named target is
+/// the most generic signal here.
+const TEST_SYSTEMS: &[TestSystem] = &[
+    TestSystem {
+        name: "npm",
+        detect: detect_node,
+    },
+    TestSystem {
+        name: "pytest",
+        detect: detect_python,
+    },
+    TestSystem {
+        name: "go",
+        detect: detect_go,
+    },
+    TestSystem {
+        name: "rspec/rake",
+        detect: detect_ruby,
+    },
+    TestSystem {
+        name: "maven",
+        detect: detect_maven,
+    },
+    TestSystem {
+        name: "dotnet",
+        detect: detect_dotnet,
+    },
+    TestSystem {
+        name: "make",
+        detect: detect_make,
+    },
+];
+
 /// The build system the tree names, if any. Cargo is looked for at the root and one
-/// directory down (the `rust/` monorepo layout); everything else at the root only.
+/// directory down (the `rust/` monorepo layout) and always wins when present — richer
+/// treatment (three gates) for a system this repository itself runs on. Every other
+/// system in [`TEST_SYSTEMS`] is tried in table order and the first to detect its own
+/// test command wins.
 fn detect_build(root: &Path) -> Option<Build> {
     if root.join("Cargo.toml").exists() {
         return Some(Build::Cargo(String::new()));
@@ -589,28 +648,70 @@ fn detect_build(root: &Path) -> Option<Build> {
                 .unwrap_or_default(),
         ));
     }
-    if let Ok(package) = std::fs::read_to_string(root.join("package.json")) {
-        if package.contains("\"test\"") && !package.contains("no test specified") {
-            return Some(Build::Node);
-        }
+    TEST_SYSTEMS
+        .iter()
+        .find_map(|system| (system.detect)(root).map(|cmd| Build::Detected(system.name, cmd)))
+}
+
+/// The `test` script npm would run, from `package.json`'s own `scripts` — any key whose
+/// name contains "test" (`test`, `test:unit`, `run-tests`), preferring the exact key
+/// `test` when both exist, so a project that names its suite anything but the bare word
+/// still gets a gate. A placeholder script (`npm init`'s "Error: no test specified") is
+/// not a real test suite.
+fn detect_node(root: &Path) -> Option<TestCommand> {
+    let text = std::fs::read_to_string(root.join("package.json")).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&text).ok()?;
+    let scripts = value.get("scripts")?.as_object()?;
+    let mut named: Vec<&String> = scripts.keys().filter(|k| k.contains("test")).collect();
+    named.sort();
+    let key = if scripts.contains_key("test") {
+        "test"
+    } else {
+        named.first()?.as_str()
+    };
+    let script = scripts.get(key)?.as_str()?;
+    if script.contains("no test specified") {
+        return None;
     }
-    if root.join("pyproject.toml").exists()
+    let run = if key == "test" {
+        "npm test".to_string()
+    } else {
+        format!("npm run {key}")
+    };
+    Some(TestCommand {
+        reads: existing(root, "", &["package.json", "src", "lib", "test", "tests"]),
+        writes: "node_modules".to_string(),
+        body: format!(
+            "[ -d node_modules ] || {{ echo \"node_modules missing — install dependencies before running (the sandbox has no network)\"; exit 1; }}\n\
+             log=\"$DX_SANDBOX/test.log\"\n\
+             if {run} --silent >\"$log\" 2>&1; then tail -5 \"$log\"; else echo FAILED; tail -20 \"$log\"; exit 1; fi\n"
+        ),
+    })
+}
+
+/// A Python project's own pytest convention: a manifest naming it, or — the common case
+/// with no manifest at all — `test_*.py`/`*_test.py` files under `tests/` or `test/`,
+/// pytest's own default discovery rule.
+fn detect_python(root: &Path) -> Option<TestCommand> {
+    let present = root.join("pyproject.toml").exists()
         || root.join("pytest.ini").exists()
         || root.join("setup.py").exists()
         || holds_pytest_files(&root.join("tests"))
-        || holds_pytest_files(&root.join("test"))
-    {
-        return Some(Build::Python);
+        || holds_pytest_files(&root.join("test"));
+    if !present {
+        return None;
     }
-    if root.join("go.mod").exists() {
-        return Some(Build::Go);
-    }
-    if std::fs::read_to_string(root.join("Makefile"))
-        .is_ok_and(|text| text.lines().any(|l| l.starts_with("test:")))
-    {
-        return Some(Build::Make);
-    }
-    None
+    Some(TestCommand {
+        reads: existing(
+            root,
+            "",
+            &["pyproject.toml", "pytest.ini", "setup.py", "src", "tests"],
+        ),
+        writes: ".pytest_cache".to_string(),
+        body: "log=\"$DX_SANDBOX/test.log\"\n\
+               if python3 -m pytest -q >\"$log\" 2>&1; then tail -3 \"$log\"; else echo FAILED; tail -20 \"$log\"; exit 1; fi\n"
+            .to_string(),
+    })
 }
 
 /// Whether `dir` holds files pytest would collect.
@@ -627,6 +728,132 @@ fn holds_pytest_files(dir: &Path) -> bool {
         entry.file_name().to_str().is_some_and(|name| {
             name.ends_with(".py") && (name.starts_with("test_") || name.ends_with("_test.py"))
         })
+    })
+}
+
+/// Go's own convention: a `go.mod` names the module, `go test ./...` finds everything
+/// under it.
+fn detect_go(root: &Path) -> Option<TestCommand> {
+    if !root.join("go.mod").exists() {
+        return None;
+    }
+    Some(TestCommand {
+        reads: existing(root, "", &["go.mod", "go.sum", "cmd", "internal", "pkg"]),
+        writes: String::new(),
+        body: "export GOCACHE=\"$HOME/gocache\"\n\
+               [ -d vendor ] && export GOFLAGS=-mod=vendor\n\
+               log=\"$DX_SANDBOX/test.log\"\n\
+               if go test ./... >\"$log\" 2>&1; then tail -5 \"$log\"; else echo FAILED; tail -20 \"$log\"; exit 1; fi\n"
+            .to_string(),
+    })
+}
+
+/// A Ruby project's own test command: `bundle exec rspec` when the project has an rspec
+/// suite (a `.rspec` file, or `*_spec.rb` files under `spec/`), else `bundle exec rake
+/// test` when a `Rakefile` names a test task — Ruby's two competing conventions, read
+/// the way a person skimming the repo would tell them apart.
+fn detect_ruby(root: &Path) -> Option<TestCommand> {
+    if !root.join("Gemfile").exists() {
+        return None;
+    }
+    let reads = existing(
+        root,
+        "",
+        &["Gemfile", "Gemfile.lock", "lib", "spec", "test", "Rakefile"],
+    );
+    let uses_rspec = root.join(".rspec").exists() || holds_spec_files(&root.join("spec"));
+    let body = if uses_rspec {
+        "log=\"$DX_SANDBOX/test.log\"\n\
+         if bundle exec rspec >\"$log\" 2>&1; then tail -5 \"$log\"; else echo FAILED; tail -20 \"$log\"; exit 1; fi\n"
+    } else if std::fs::read_to_string(root.join("Rakefile")).is_ok_and(|t| t.contains("test")) {
+        "log=\"$DX_SANDBOX/test.log\"\n\
+         if bundle exec rake test >\"$log\" 2>&1; then tail -5 \"$log\"; else echo FAILED; tail -20 \"$log\"; exit 1; fi\n"
+    } else {
+        return None;
+    };
+    Some(TestCommand {
+        reads,
+        writes: String::new(),
+        body: body.to_string(),
+    })
+}
+
+/// Whether `dir` holds an rspec spec file.
+fn holds_spec_files(dir: &Path) -> bool {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return false;
+    };
+    entries.flatten().any(|entry| {
+        entry
+            .file_name()
+            .to_str()
+            .is_some_and(|n| n.ends_with("_spec.rb"))
+    })
+}
+
+/// A Maven project's own convention: `pom.xml` at the root, `mvn test` offline.
+fn detect_maven(root: &Path) -> Option<TestCommand> {
+    if !root.join("pom.xml").exists() {
+        return None;
+    }
+    Some(TestCommand {
+        reads: existing(root, "", &["pom.xml", "src"]),
+        writes: "target".to_string(),
+        body: "log=\"$DX_SANDBOX/test.log\"\n\
+               if mvn -o -q test >\"$log\" 2>&1; then tail -10 \"$log\"; else echo FAILED; tail -30 \"$log\"; exit 1; fi\n"
+            .to_string(),
+    })
+}
+
+/// A .NET project's own convention: a solution or project file at the root — `dotnet
+/// test` resolves whichever one it finds without being told which. Assumes packages are
+/// already restored, the same "no network at run time" contract every other gate holds.
+fn detect_dotnet(root: &Path) -> Option<TestCommand> {
+    let projects: Vec<String> = listed(root)
+        .iter()
+        .filter(|p| {
+            p.extension()
+                .is_some_and(|e| matches!(e.to_str(), Some("sln" | "csproj" | "fsproj")))
+        })
+        .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+        .collect();
+    if projects.is_empty() {
+        return None;
+    }
+    let mut reads = projects;
+    reads.extend(existing(root, "", &["src", "tests", "test"]));
+    Some(TestCommand {
+        reads,
+        writes: String::new(),
+        body: "log=\"$DX_SANDBOX/test.log\"\n\
+               if dotnet test --no-restore >\"$log\" 2>&1; then tail -10 \"$log\"; else echo FAILED; tail -30 \"$log\"; exit 1; fi\n"
+            .to_string(),
+    })
+}
+
+/// The first Makefile target whose name contains "test" (`test:`, `unit-test:`,
+/// `test-all:`) — Make has no fixed vocabulary for naming a test target, so matching
+/// only the exact word `test` missed real suites by a name.
+fn detect_make(root: &Path) -> Option<TestCommand> {
+    let text = std::fs::read_to_string(root.join("Makefile")).ok()?;
+    let target = text.lines().find_map(|line| {
+        let (name, _) = line.split_once(':')?;
+        let name = name.trim();
+        let valid = !name.is_empty()
+            && !name.starts_with('.')
+            && !line.starts_with([' ', '\t'])
+            && name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '/'));
+        (valid && name.to_lowercase().contains("test")).then(|| name.to_string())
+    })?;
+    Some(TestCommand {
+        reads: vec!["Makefile".to_string()],
+        writes: String::new(),
+        body: format!(
+            "log=\"$DX_SANDBOX/test.log\"\n\
+             if make {target} >\"$log\" 2>&1; then tail -5 \"$log\"; else echo FAILED; tail -20 \"$log\"; exit 1; fi\n"
+        ),
     })
 }
 
@@ -664,53 +891,12 @@ fn harness_source(root: &Path, build: &Build) -> (String, usize) {
 
     let gates = match build {
         Build::Cargo(dir) => cargo_gates(root, dir, &mut body),
-        Build::Node => {
-            let reads = existing(root, "", &["package.json", "src", "lib", "test", "tests"]);
+        Build::Detected(_, command) => {
             body.push_str(&gate(
                 "gate-test",
-                &reads,
-                "node_modules",
-                "[ -d node_modules ] || { echo \"node_modules missing — install dependencies before running (the sandbox has no network)\"; exit 1; }\n\
-                 log=\"$DX_SANDBOX/test.log\"\n\
-                 if npm test --silent >\"$log\" 2>&1; then tail -5 \"$log\"; else echo FAILED; tail -20 \"$log\"; exit 1; fi\n",
-            ));
-            1
-        }
-        Build::Python => {
-            let reads = existing(
-                root,
-                "",
-                &["pyproject.toml", "pytest.ini", "setup.py", "src", "tests"],
-            );
-            body.push_str(&gate(
-                "gate-test",
-                &reads,
-                ".pytest_cache",
-                "log=\"$DX_SANDBOX/test.log\"\n\
-                 if python3 -m pytest -q >\"$log\" 2>&1; then tail -3 \"$log\"; else echo FAILED; tail -20 \"$log\"; exit 1; fi\n",
-            ));
-            1
-        }
-        Build::Go => {
-            let reads = existing(root, "", &["go.mod", "go.sum", "cmd", "internal", "pkg"]);
-            body.push_str(&gate(
-                "gate-test",
-                &reads,
-                "",
-                "export GOCACHE=\"$HOME/gocache\"\n\
-                 [ -d vendor ] && export GOFLAGS=-mod=vendor\n\
-                 log=\"$DX_SANDBOX/test.log\"\n\
-                 if go test ./... >\"$log\" 2>&1; then tail -5 \"$log\"; else echo FAILED; tail -20 \"$log\"; exit 1; fi\n",
-            ));
-            1
-        }
-        Build::Make => {
-            body.push_str(&gate(
-                "gate-test",
-                &["Makefile".to_string()],
-                "",
-                "log=\"$DX_SANDBOX/test.log\"\n\
-                 if make test >\"$log\" 2>&1; then tail -5 \"$log\"; else echo FAILED; tail -20 \"$log\"; exit 1; fi\n",
+                &command.reads,
+                &command.writes,
+                &command.body,
             ));
             1
         }
@@ -840,275 +1026,228 @@ fn trace_gate(reads: &[String]) -> String {
     gate("index-trace", reads, "", "dx trace --brief .\n")
 }
 
-/// A manifest format naming a project's dependencies — how [`manifest_declares_all`]
-/// reads a [`Framework`]'s `deps`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Manifest {
-    /// `package.json`'s `dependencies`/`devDependencies` objects — a real JSON parse.
-    PackageJson,
-    /// `requirements.txt`, `pyproject.toml`, or `Pipfile` — no TOML/JSON parser for
-    /// these, just the same leading-package-name-token read a person skimming the file
-    /// would do, which is what [`python_manifest_names`] documents.
-    PythonDeps,
-}
-
-/// One framework this scaffold can recognize from a manifest dependency plus a
-/// conventional entry-file layout — the shape `detect_react_entry` (React-only) used to
-/// hand-write once; every field here generalizes, which is the fix for report
-/// `7f351075`: a new framework is a data row, never a new detector.
-struct Framework {
-    /// Shown in the scaffold's note ("Next.js", "React", "Flask", …).
-    name: &'static str,
-    /// How to read this framework's manifest.
-    manifest: Manifest,
-    /// Dependency names that must ALL be present for a match.
-    deps: &'static [&'static str],
-    /// Entry-file candidate groups, most specific/likely first — the first group whose
-    /// every file exists (verified by exact case, never `Path::is_file` alone — see
-    /// [`existing_exact_case`]) wins, unless a later group's content matches
-    /// `render_markers` first (see [`resolve_framework`]). A group names more than one
-    /// path when the framework's own convention is a pair, such as Next.js's
-    /// `layout`+`page` or `_app`+`index`.
-    entries: &'static [&'static [&'static str]],
-    /// Substrings that mark a candidate's content as the real bootstrap file rather
-    /// than a same-shaped file that merely sits earlier in `entries` — fixes report
-    /// `4c859012`: a default Vite React project ships both `App.tsx` (the component)
-    /// and `main.tsx` (the file that actually calls `createRoot(...).render(...)`), and
-    /// position in a static list cannot tell those apart. Empty when position alone is
-    /// unambiguous for this framework.
-    render_markers: &'static [&'static str],
-}
-
-/// Every framework this scaffold recognizes, most-specific-first: Next.js is checked
-/// before React because every Next.js project also satisfies React's own `deps` (report
-/// `df1d5589`) — Next's shape must win when both would otherwise match.
-const FRAMEWORKS: &[Framework] = &[
-    Framework {
-        name: "Next.js",
-        manifest: Manifest::PackageJson,
-        deps: &["next"],
-        entries: &[
-            &["app/layout.tsx", "app/page.tsx"],
-            &["app/layout.jsx", "app/page.jsx"],
-            &["app/layout.js", "app/page.js"],
-            &["pages/_app.tsx", "pages/index.tsx"],
-            &["pages/_app.jsx", "pages/index.jsx"],
-            &["pages/_app.js", "pages/index.js"],
-        ],
-        render_markers: &[],
-    },
-    Framework {
-        name: "React",
-        manifest: Manifest::PackageJson,
-        deps: &["react", "react-dom"],
-        entries: &[
-            &["src/main.tsx"],
-            &["src/main.jsx"],
-            &["src/index.tsx"],
-            &["src/index.jsx"],
-            &["src/index.js"],
-            &["src/App.tsx"],
-            &["src/App.jsx"],
-        ],
-        render_markers: &["createRoot(", "ReactDOM.render(", "hydrateRoot("],
-    },
-    Framework {
-        name: "Vue",
-        manifest: Manifest::PackageJson,
-        deps: &["vue"],
-        entries: &[&["src/main.ts"], &["src/main.js"]],
-        render_markers: &["createApp("],
-    },
-    Framework {
-        name: "Svelte",
-        manifest: Manifest::PackageJson,
-        deps: &["svelte"],
-        entries: &[&["src/main.ts"], &["src/main.js"]],
-        render_markers: &["new App("],
-    },
-    Framework {
-        name: "Angular",
-        manifest: Manifest::PackageJson,
-        deps: &["@angular/core"],
-        entries: &[&["src/main.ts"]],
-        render_markers: &[],
-    },
-    Framework {
-        name: "Express",
-        manifest: Manifest::PackageJson,
-        deps: &["express"],
-        entries: &[
-            &["src/index.js"],
-            &["src/index.ts"],
-            &["src/app.js"],
-            &["src/app.ts"],
-            &["index.js"],
-            &["app.js"],
-        ],
-        render_markers: &["express("],
-    },
-    Framework {
-        name: "Flask",
-        manifest: Manifest::PythonDeps,
-        deps: &["flask"],
-        entries: &[&["app.py"], &["wsgi.py"], &["main.py"]],
-        render_markers: &["Flask("],
-    },
-    Framework {
-        name: "Django",
-        manifest: Manifest::PythonDeps,
-        deps: &["django"],
-        entries: &[&["manage.py"]],
-        render_markers: &[],
-    },
-    Framework {
-        name: "FastAPI",
-        manifest: Manifest::PythonDeps,
-        deps: &["fastapi"],
-        entries: &[&["main.py"], &["app/main.py"]],
-        render_markers: &["FastAPI("],
-    },
-];
-
-/// A resolved [`Framework`] match: which one, and the entry file(s) it seeded.
-struct FrameworkMatch {
-    /// The matched [`Framework::name`].
-    framework: &'static str,
-    /// The phrase naming the matched dependencies, for the scaffold's note — `` `next`
-    /// in package.json `` or `` `react` and `react-dom` in package.json ``.
-    deps_note: String,
-    /// The entry file(s) this match seeded, root-relative-joined (i.e. absolute-under-
-    /// `root`), in the order they should be mirrored.
+/// A project's real entry point, found without knowing what framework produced it —
+/// only the same file-tree and content signals a person skimming the project would use.
+/// A new framework built on these same conventions (a Vite-shaped entry script, an
+/// `app.py`-shaped WSGI app) is detected with no new code here — generalizes report
+/// `7f351075`'s "framework is a data row" fix to "no framework list at all."
+struct EntryMatch {
+    /// What signal found it, for the scaffold's note — e.g. "index.html's script tag",
+    /// "app/layout.tsx + app/page.tsx file-router convention", "`createRoot(` bootstrap
+    /// call", "`Flask(` app construction".
+    note: String,
+    /// The entry file(s) this match seeded, in the order they should be mirrored.
     files: Vec<PathBuf>,
 }
 
-/// The framework entry file(s) to seed, when `root` unambiguously names one of
-/// [`FRAMEWORKS`]: its manifest lists every dependency the framework requires, and one
-/// of its entry-file groups actually exists (verified by exact case). `None` on any
-/// ambiguity — a malformed manifest, a matching dependency with no conventional entry
-/// file, or the reverse — this never guesses. The first framework in table order to
-/// match wins; within a framework, [`resolve_framework`] governs which entry group wins.
-fn detect_framework_entry(root: &Path) -> Option<FrameworkMatch> {
-    FRAMEWORKS
-        .iter()
-        .find_map(|framework| resolve_framework(root, framework))
+/// Generic bootstrap-call substrings that mark a JS/TS file as the thing that actually
+/// mounts an app, across frameworks: React's three render entry points, Vue/Svelte's
+/// `createApp`/`new App`, Angular's `bootstrapApplication`, and any server's `.listen(`.
+/// None of these name a framework — each is the real call a bootstrap file makes, which
+/// is what tells it apart from a component or route handler that merely sits nearby.
+const JS_BOOTSTRAP_MARKERS: &[&str] = &[
+    "createRoot(",
+    "ReactDOM.render(",
+    "hydrateRoot(",
+    "createApp(",
+    "new App(",
+    "bootstrapApplication(",
+    ".listen(",
+];
+
+/// Generic Python web-app construction calls — the object every WSGI/ASGI framework's
+/// entry file instantiates, regardless of which framework: Flask, FastAPI, Bottle,
+/// Falcon, Sanic, Starlette, aiohttp.
+const PY_BOOTSTRAP_MARKERS: &[&str] = &[
+    "Flask(",
+    "FastAPI(",
+    "Bottle(",
+    "falcon.App(",
+    "Sanic(",
+    "Starlette(",
+    "web.Application(",
+];
+
+/// Candidate JS/TS entry filenames, most-conventional first — tried when no stronger
+/// signal (an app-router pair, an `index.html` script tag) already answered.
+const JS_ENTRY_CANDIDATES: &[&str] = &[
+    "src/main.tsx",
+    "src/main.ts",
+    "src/main.jsx",
+    "src/main.js",
+    "src/index.tsx",
+    "src/index.ts",
+    "src/index.jsx",
+    "src/index.js",
+    "src/App.tsx",
+    "src/App.jsx",
+    "index.js",
+    "index.mjs",
+    "app.js",
+    "app.ts",
+];
+
+/// Candidate Python entry filenames, most-conventional first.
+const PY_ENTRY_CANDIDATES: &[&str] = &["wsgi.py", "asgi.py", "app.py", "main.py", "app/main.py"];
+
+/// The project's entry point, tried by decreasing signal strength: a file-router
+/// convention (needs no content check — the pair's existence is the whole signal), a
+/// bundler's own declared entry, Django's generated bootstrap script, then a
+/// conventional filename confirmed by an actual bootstrap call in its content. `None`
+/// when nothing this cheap and this certain fired — never a guess.
+fn detect_entry(root: &Path) -> Option<EntryMatch> {
+    detect_app_router_entry(root)
+        .or_else(|| detect_html_entry(root))
+        .or_else(|| detect_js_marker_entry(root))
+        .or_else(|| detect_manage_py_entry(root))
+        .or_else(|| detect_python_marker_entry(root))
 }
 
-/// Resolve one [`Framework`] against `root`: `None` when its dependencies are not all
-/// declared, or none of its entry groups exist. Otherwise the first entry group (in
-/// table order) whose content matches one of `render_markers` wins; when no group
-/// matches a marker (including when the framework declares none), the first present
-/// group wins by position — the same "first candidate present" rule this scaffold has
-/// always used, now stated once instead of once per framework.
-fn resolve_framework(root: &Path, framework: &Framework) -> Option<FrameworkMatch> {
-    if !manifest_declares_all(root, framework.manifest, framework.deps) {
+/// A file-based router convention: an `app/layout.*`+`app/page.*` pair (App Router) or a
+/// `pages/_app.*`+`pages/index.*` pair (Pages Router), same extension — the shape
+/// Next.js's own convention produces and nothing else is shaped like. No dependency
+/// check needed: no other convention writes this exact pair.
+fn detect_app_router_entry(root: &Path) -> Option<EntryMatch> {
+    if !root.join("package.json").exists() {
         return None;
     }
-    let mut fallback: Option<Vec<PathBuf>> = None;
-    for group in framework.entries {
-        let paths: Option<Vec<PathBuf>> = group
-            .iter()
-            .map(|candidate| existing_exact_case(root, candidate))
-            .collect();
-        let Some(paths) = paths else { continue };
-        if fallback.is_none() {
-            fallback = Some(paths.clone());
-        }
-        if !framework.render_markers.is_empty()
-            && paths
-                .iter()
-                .any(|path| content_has_marker(path, framework.render_markers))
-        {
-            return Some(FrameworkMatch {
-                framework: framework.name,
-                deps_note: deps_phrase(framework),
-                files: paths,
+    for ext in ["tsx", "jsx", "js"] {
+        if let (Some(layout), Some(page)) = (
+            existing_exact_case(root, &format!("app/layout.{ext}")),
+            existing_exact_case(root, &format!("app/page.{ext}")),
+        ) {
+            return Some(EntryMatch {
+                note: format!("app/layout.{ext} + app/page.{ext} file-router convention"),
+                files: vec![layout, page],
             });
         }
     }
-    fallback.map(|files| FrameworkMatch {
-        framework: framework.name,
-        deps_note: deps_phrase(framework),
-        files,
+    for ext in ["tsx", "jsx", "js"] {
+        if let (Some(app), Some(index)) = (
+            existing_exact_case(root, &format!("pages/_app.{ext}")),
+            existing_exact_case(root, &format!("pages/index.{ext}")),
+        ) {
+            return Some(EntryMatch {
+                note: format!("pages/_app.{ext} + pages/index.{ext} file-router convention"),
+                files: vec![app, index],
+            });
+        }
+    }
+    None
+}
+
+/// A bundler's own declared entry: `index.html`'s `<script type="module" src="...">` —
+/// Vite's convention and the one nearly every framework-agnostic scaffold shares, so
+/// reading it once covers React, Vue, Svelte, Solid, and plain-JS templates alike
+/// without naming a single one of them.
+fn detect_html_entry(root: &Path) -> Option<EntryMatch> {
+    if !root.join("package.json").exists() {
+        return None;
+    }
+    let html = std::fs::read_to_string(root.join("index.html")).ok()?;
+    let src = html_script_src(&html)?;
+    let relative = src.trim_start_matches("./").trim_start_matches('/');
+    let path = existing_exact_case(root, relative)?;
+    Some(EntryMatch {
+        note: "index.html's script tag".to_string(),
+        files: vec![path],
     })
 }
 
-/// `` `next` in package.json `` / `` `react` and `react-dom` in package.json `` / ``
-/// `flask` in the project's manifest `` — the dependency phrase the scaffold's note
-/// names, built from `framework.deps` rather than hand-written per framework.
-fn deps_phrase(framework: &Framework) -> String {
-    let named: Vec<String> = framework
-        .deps
-        .iter()
-        .map(|dep| format!("`{dep}`"))
-        .collect();
-    let joined = match named.as_slice() {
-        [only] => only.clone(),
-        [first, second] => format!("{first} and {second}"),
-        [init @ .., last] => format!("{}, and {last}", init.join(", ")),
-        [] => String::new(),
-    };
-    let source = match framework.manifest {
-        Manifest::PackageJson => "package.json",
-        Manifest::PythonDeps => "the project's manifest",
-    };
-    format!("{joined} in {source}")
-}
-
-/// Whether `root`'s manifest of the given `kind` declares every one of `deps`.
-fn manifest_declares_all(root: &Path, kind: Manifest, deps: &[&str]) -> bool {
-    match kind {
-        Manifest::PackageJson => {
-            let Ok(text) = std::fs::read_to_string(root.join("package.json")) else {
-                return false;
-            };
-            let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
-                return false;
-            };
-            deps.iter().all(|dep| package_json_lists(&value, dep))
+/// The `src="..."` of the first `<script type="module" ...>` tag in `html` — a small,
+/// deliberately narrow scan (module scripts only; a classic `<script src=jquery.js>` is
+/// never a bundler entry) rather than a full HTML parser, the same "cheap, bounded,
+/// deterministic" contract the rest of the survey holds itself to.
+fn html_script_src(html: &str) -> Option<String> {
+    let mut rest = html;
+    loop {
+        let start = rest.find("<script")?;
+        let tag_end = rest[start..].find('>')? + start;
+        let tag = &rest[start..=tag_end];
+        if tag.contains("type=\"module\"") || tag.contains("type='module'") {
+            if let Some(src) = attribute_value(tag, "src") {
+                return Some(src);
+            }
         }
-        Manifest::PythonDeps => deps.iter().all(|dep| python_manifest_names(root, dep)),
+        rest = &rest[tag_end + 1..];
     }
 }
 
-/// Whether parsed `package.json` `value` lists `package` under `dependencies` or
-/// `devDependencies`.
-fn package_json_lists(value: &serde_json::Value, package: &str) -> bool {
-    ["dependencies", "devDependencies"].iter().any(|section| {
-        value
-            .get(section)
-            .and_then(serde_json::Value::as_object)
-            .is_some_and(|deps| deps.contains_key(package))
+/// The quoted value of `name="..."` inside one HTML `tag`, `None` when the attribute is
+/// absent or unquoted.
+fn attribute_value(tag: &str, name: &str) -> Option<String> {
+    let needle = format!("{name}=");
+    let at = tag.find(&needle)? + needle.len();
+    let quote = *tag.as_bytes().get(at)?;
+    if quote != b'"' && quote != b'\'' {
+        return None;
+    }
+    let value_start = at + 1;
+    let value_end = tag[value_start..].find(quote as char)? + value_start;
+    Some(tag[value_start..value_end].to_string())
+}
+
+/// The first [`JS_ENTRY_CANDIDATES`] file that exists **and** whose content contains a
+/// [`JS_BOOTSTRAP_MARKERS`] call — the content check is load-bearing here, since without
+/// a dependency manifest to confirm "this is a framework project," a bare candidate
+/// filename with no bootstrap call is exactly as likely to be an unrelated script.
+fn detect_js_marker_entry(root: &Path) -> Option<EntryMatch> {
+    if !root.join("package.json").exists() {
+        return None;
+    }
+    for candidate in JS_ENTRY_CANDIDATES {
+        let Some(path) = existing_exact_case(root, candidate) else {
+            continue;
+        };
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        if let Some(marker) = JS_BOOTSTRAP_MARKERS.iter().find(|m| text.contains(**m)) {
+            return Some(EntryMatch {
+                note: format!("`{marker}` bootstrap call"),
+                files: vec![path],
+            });
+        }
+    }
+    None
+}
+
+/// Django's own generated bootstrap script: `manage.py` invoking
+/// `django.core.management` is machine-written boilerplate, near-identical across every
+/// Django project — its presence and content are the whole signal, no dependency
+/// manifest needed.
+fn detect_manage_py_entry(root: &Path) -> Option<EntryMatch> {
+    let path = existing_exact_case(root, "manage.py")?;
+    let text = std::fs::read_to_string(&path).ok()?;
+    if !text.contains("django.core.management") {
+        return None;
+    }
+    Some(EntryMatch {
+        note: "manage.py's Django bootstrap convention".to_string(),
+        files: vec![path],
     })
 }
 
-/// Whether `root`'s `requirements.txt`, `pyproject.toml`, or `Pipfile` names `dep` as a
-/// dependency. No TOML parser: each non-empty line, quote-stripped, is read up to its
-/// first character that cannot be part of a package name (`=`, `<`, `>`, `~`, `[`, `;`,
-/// whitespace) — the same leading token `flask==3.0.0` or `"flask>=3.0"` reads to a
-/// person skimming the file. PyPI treats `-`/`_`/`.` as equivalent in a package name, so
-/// [`normalize_package_name`] folds them before comparing.
-fn python_manifest_names(root: &Path, dep: &str) -> bool {
-    let target = normalize_package_name(dep);
-    ["requirements.txt", "pyproject.toml", "Pipfile"]
-        .iter()
-        .filter_map(|name| std::fs::read_to_string(root.join(name)).ok())
-        .any(|text| {
-            text.lines().any(|line| {
-                let line = line.trim().trim_start_matches(['"', '\'']);
-                let name: String = line
-                    .chars()
-                    .take_while(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
-                    .collect();
-                !name.is_empty() && normalize_package_name(&name) == target
-            })
-        })
-}
-
-/// Lowercase `name` with `_`/`.` folded to `-`, the way PyPI normalizes a package name
-/// before comparing two spellings of the same dependency.
-fn normalize_package_name(name: &str) -> String {
-    name.to_lowercase().replace(['_', '.'], "-")
+/// The first [`PY_ENTRY_CANDIDATES`] file that exists **and** whose content contains a
+/// [`PY_BOOTSTRAP_MARKERS`] call — the same content-confirms-convention rule
+/// [`detect_js_marker_entry`] uses, so a plain `main.py` CLI script is never mistaken
+/// for a web app's entry.
+fn detect_python_marker_entry(root: &Path) -> Option<EntryMatch> {
+    for candidate in PY_ENTRY_CANDIDATES {
+        let Some(path) = existing_exact_case(root, candidate) else {
+            continue;
+        };
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        if let Some(marker) = PY_BOOTSTRAP_MARKERS.iter().find(|m| text.contains(**m)) {
+            return Some(EntryMatch {
+                note: format!("`{marker}` app construction"),
+                files: vec![path],
+            });
+        }
+    }
+    None
 }
 
 /// `root.join(candidate)` when the file exists **and** its filename matches `candidate`'s
@@ -1130,13 +1269,6 @@ fn existing_exact_case(root: &Path, candidate: &str) -> Option<PathBuf> {
         .filter_map(Result::ok)
         .any(|entry| entry.file_name() == want)
         .then_some(path)
-}
-
-/// Whether `path`'s content contains any of `markers` — the render/mount-call signal
-/// [`resolve_framework`] uses to prefer a candidate that is actually the bootstrap file
-/// over one that merely sits earlier in a framework's `entries` list.
-fn content_has_marker(path: &Path, markers: &[&str]) -> bool {
-    std::fs::read_to_string(path).is_ok_and(|text| markers.iter().any(|m| text.contains(m)))
 }
 
 /// The `lang=` a `::code src=` block should carry for a seeded entry file, by extension.
@@ -1251,7 +1383,7 @@ mod tests {
         std::fs::create_dir_all(root.join("tests")).expect("dirs");
         std::fs::write(root.join("tests/test_money.py"), "def test_it(): pass\n").expect("file");
 
-        assert_eq!(detect_build(&root), Some(Build::Python));
+        assert_eq!(detect_build(&root).map(|b| b.name()), Some("pytest"));
 
         let scaffold = write_scaffold(&root, false).expect("scaffold");
         let (harness_path, gates) = scaffold.harness.expect("a detected project gets a harness");
@@ -1393,6 +1525,104 @@ mod tests {
             .is_none());
     }
 
+    /// A project that names its suite anything but the bare word `test` still gets a
+    /// gate — the npm detector matches any `scripts` key containing "test", not only
+    /// the exact key, and runs it with `npm run <key>`.
+    #[test]
+    fn an_npm_project_with_a_differently_named_test_script_still_gets_a_gate() {
+        let root = project("npm-named");
+        std::fs::write(
+            root.join("package.json"),
+            "{\"scripts\": {\"unit-test\": \"node --test\"}}",
+        )
+        .expect("file");
+        let scaffold = write_scaffold(&root, false).expect("scaffold");
+        let (harness, gates) = scaffold.harness.expect("harness written");
+        assert_eq!(gates, 1);
+        let text = workspace::read(&harness).expect("read");
+        assert!(text.contains("npm run unit-test"), "{text}");
+    }
+
+    /// Make has no fixed vocabulary for a test target's name — `unit-test:` gets a gate
+    /// exactly as `test:` would, not only the literal word.
+    #[test]
+    fn a_makefile_with_a_differently_named_test_target_gets_a_gate() {
+        let root = project("make-named");
+        std::fs::write(
+            root.join("Makefile"),
+            "build:\n\techo building\n\nunit-test:\n\techo testing\n",
+        )
+        .expect("file");
+        let scaffold = write_scaffold(&root, false).expect("scaffold");
+        let (harness, gates) = scaffold.harness.expect("harness written");
+        assert_eq!(gates, 1);
+        let text = workspace::read(&harness).expect("read");
+        assert!(text.contains("make unit-test"), "{text}");
+    }
+
+    /// A Ruby project with an rspec suite gets `bundle exec rspec`.
+    #[test]
+    fn a_ruby_project_with_rspec_gets_a_gate() {
+        let root = project("ruby-rspec");
+        std::fs::write(root.join("Gemfile"), "source 'https://rubygems.org'\n").expect("file");
+        std::fs::create_dir_all(root.join("spec")).expect("dirs");
+        std::fs::write(
+            root.join("spec/thing_spec.rb"),
+            "RSpec.describe 'x' do end\n",
+        )
+        .expect("file");
+        let scaffold = write_scaffold(&root, false).expect("scaffold");
+        let (harness, gates) = scaffold.harness.expect("harness written");
+        assert_eq!(gates, 1);
+        assert!(workspace::read(&harness)
+            .expect("read")
+            .contains("bundle exec rspec"));
+    }
+
+    /// A Ruby project with a Rakefile `test` task and no rspec suite gets `bundle exec
+    /// rake test` instead.
+    #[test]
+    fn a_ruby_project_with_only_a_rake_test_task_gets_a_gate() {
+        let root = project("ruby-rake");
+        std::fs::write(root.join("Gemfile"), "source 'https://rubygems.org'\n").expect("file");
+        std::fs::write(
+            root.join("Rakefile"),
+            "require 'rake/testtask'\nRake::TestTask.new(:test)\n",
+        )
+        .expect("file");
+        let scaffold = write_scaffold(&root, false).expect("scaffold");
+        let (harness, _) = scaffold.harness.expect("harness written");
+        assert!(workspace::read(&harness)
+            .expect("read")
+            .contains("bundle exec rake test"));
+    }
+
+    /// A Maven project (`pom.xml`) gets `mvn test`, run offline.
+    #[test]
+    fn a_maven_project_gets_a_gate() {
+        let root = project("maven");
+        std::fs::write(root.join("pom.xml"), "<project></project>\n").expect("file");
+        let scaffold = write_scaffold(&root, false).expect("scaffold");
+        let (harness, gates) = scaffold.harness.expect("harness written");
+        assert_eq!(gates, 1);
+        assert!(workspace::read(&harness)
+            .expect("read")
+            .contains("mvn -o -q test"));
+    }
+
+    /// A .NET project (a `.csproj` at the root) gets `dotnet test`.
+    #[test]
+    fn a_dotnet_project_gets_a_gate() {
+        let root = project("dotnet");
+        std::fs::write(root.join("app.csproj"), "<Project></Project>\n").expect("file");
+        let scaffold = write_scaffold(&root, false).expect("scaffold");
+        let (harness, gates) = scaffold.harness.expect("harness written");
+        assert_eq!(gates, 1);
+        assert!(workspace::read(&harness)
+            .expect("read")
+            .contains("dotnet test"));
+    }
+
     #[test]
     fn an_existing_index_is_kept_unless_forced() {
         let root = project("keep");
@@ -1454,73 +1684,71 @@ mod tests {
         assert!(text.contains("reads=main.py"), "{text}");
     }
 
-    /// A React project — `react` and `react-dom` in `package.json`, plus a real
-    /// conventional entry file — gets a live `::code src=` block for that file, seeded
-    /// into the root area with a one-line note.
+    /// A JS project with a real bootstrap call (`createRoot(...)`) at a conventional
+    /// path gets a live `::code src=` block for that file, seeded into the root area
+    /// with a one-line note — no dependency on `react` being named anywhere: the
+    /// content is the signal, so a framework this scaffold has never heard of, built on
+    /// the same convention, is detected exactly the same way.
     #[test]
-    fn a_react_project_gets_its_entry_point_mirrored() {
-        let root = std::env::temp_dir().join("dx-index-tests-react");
+    fn a_js_project_gets_its_entry_point_mirrored_from_its_bootstrap_call() {
+        let root = std::env::temp_dir().join("dx-index-tests-js-entry");
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("src")).expect("dirs");
+        std::fs::write(root.join("package.json"), "{}").expect("manifest");
         std::fs::write(
-            root.join("package.json"),
-            "{\"dependencies\": {\"react\": \"18.0.0\", \"react-dom\": \"18.0.0\"}}",
+            root.join("src/main.tsx"),
+            "createRoot(document.getElementById('root')).render(null)\n",
         )
-        .expect("manifest");
-        std::fs::write(root.join("src/main.tsx"), "export const x = 1;\n").expect("entry");
+        .expect("entry");
 
         let scaffold = write_scaffold(&root, false).expect("scaffold");
         let text = workspace::read(&scaffold.path).expect("read");
         // Canonical stringify decides attribute order, not the order the scaffold wrote.
         assert!(
-            text.contains("::code id=area-root-react-entry lang=typescript src=src/main.tsx"),
+            text.contains("::code id=area-root-entry lang=typescript src=src/main.tsx"),
             "{text}"
         );
-        assert!(text.contains("React entry point detected"), "{text}");
+        assert!(
+            text.contains("Entry point detected (`createRoot(` bootstrap call)"),
+            "{text}"
+        );
     }
 
-    /// An ordinary JS project — no `react`/`react-dom` dependency — gets no entry block:
-    /// the shape has to be unambiguous, never guessed.
+    /// A conventionally-named file with no bootstrap call in it gets no entry block:
+    /// without a dependency manifest to lean on, the content check is the whole signal,
+    /// and a bare candidate filename is never enough to guess from.
     #[test]
-    fn a_non_react_js_project_gets_no_entry_block() {
+    fn a_js_file_with_no_bootstrap_marker_gets_no_entry_block() {
         let root = std::env::temp_dir().join("dx-index-tests-plain-js");
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("src")).expect("dirs");
-        std::fs::write(
-            root.join("package.json"),
-            "{\"dependencies\": {\"express\": \"4.0.0\"}}",
-        )
-        .expect("manifest");
+        std::fs::write(root.join("package.json"), "{}").expect("manifest");
         std::fs::write(root.join("src/main.tsx"), "export const x = 1;\n").expect("entry");
 
         let scaffold = write_scaffold(&root, false).expect("scaffold");
         let text = workspace::read(&scaffold.path).expect("read");
-        assert!(!text.contains("area-root-react-entry"), "{text}");
-        assert!(!text.contains("React entry point"), "{text}");
+        assert!(!text.contains("area-root-entry"), "{text}");
+        assert!(!text.contains("Entry point detected"), "{text}");
     }
 
-    /// `react` present with no conventional entry file on disk is still ambiguous — no
-    /// guessing a path that does not exist.
+    /// No conventional entry file on disk at all is still ambiguous — no guessing a
+    /// path that does not exist.
     #[test]
-    fn react_dependency_with_no_conventional_entry_file_seeds_nothing() {
-        let root = std::env::temp_dir().join("dx-index-tests-react-no-entry");
+    fn no_conventional_entry_file_seeds_nothing() {
+        let root = std::env::temp_dir().join("dx-index-tests-no-entry");
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).expect("dir");
-        std::fs::write(
-            root.join("package.json"),
-            "{\"dependencies\": {\"react\": \"18.0.0\", \"react-dom\": \"18.0.0\"}}",
-        )
-        .expect("manifest");
+        std::fs::write(root.join("package.json"), "{}").expect("manifest");
 
-        assert!(detect_framework_entry(&root).is_none());
+        assert!(detect_entry(&root).is_none());
     }
 
-    /// report `d288e338`: the framework detector seeds `main.tsx`/`App.tsx`, so the
-    /// area listing's cheap "— entry point" label — driven by `ENTRY_POINTS`, entirely
-    /// independent of framework detection — must know both names too, the same way it
+    /// report `d288e338`: the entry detector seeds `main.tsx`/`App.tsx`, so the area
+    /// listing's cheap "— entry point" label — driven by `ENTRY_POINTS`, entirely
+    /// independent of entry detection — must know both names too, the same way it
     /// already knows `main.rs`.
     #[test]
-    fn entry_point_labels_cover_the_react_filenames_the_detector_seeds() {
+    fn entry_point_labels_cover_the_conventional_js_filenames() {
         let root = std::env::temp_dir().join("dx-index-tests-entry-labels");
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("src")).expect("dirs");
@@ -1537,21 +1765,16 @@ mod tests {
         assert!(text.contains("src/App.tsx — entry point"), "{text}");
     }
 
-    /// report `df1d5589`: Next.js passes the plain React gate (`react`+`react-dom` are
-    /// always present too) but its real entry is `app/layout.tsx` + `app/page.tsx`
-    /// (App Router) — never under `src/`, never one of React's five candidate names.
-    /// `next` itself, already sitting in the same manifest, is the specific signal, and
-    /// Next.js must be matched — and named — ahead of the generic React fallback.
+    /// report `df1d5589`, generalized: the file-router convention (`app/layout.*` +
+    /// `app/page.*`) is Next.js's own shape, but detecting it needs no dependency named
+    /// `next` at all — the pair's existence on disk is the whole signal, so a project
+    /// naming no framework whatsoever, or an unrelated one, still gets it recognized.
     #[test]
-    fn a_next_js_app_router_project_is_detected_and_named() {
-        let root = std::env::temp_dir().join("dx-index-tests-nextjs");
+    fn an_app_router_file_pair_is_detected_with_no_framework_named_in_the_manifest() {
+        let root = std::env::temp_dir().join("dx-index-tests-app-router");
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("app")).expect("dirs");
-        std::fs::write(
-            root.join("package.json"),
-            "{\"dependencies\": {\"next\": \"14.2.0\", \"react\": \"18.3.1\", \"react-dom\": \"18.3.1\"}}",
-        )
-        .expect("manifest");
+        std::fs::write(root.join("package.json"), "{\"dependencies\": {}}").expect("manifest");
         std::fs::write(
             root.join("app/layout.tsx"),
             "export default function RootLayout({children}) { return children }\n",
@@ -1565,14 +1788,47 @@ mod tests {
 
         let scaffold = write_scaffold(&root, false).expect("scaffold");
         let text = workspace::read(&scaffold.path).expect("read");
-        assert!(text.contains("Next.js entry point detected"), "{text}");
-        assert!(text.contains("`next` in package.json"), "{text}");
         assert!(
-            text.contains("::code id=area-root-react-entry-1 lang=typescript src=app/layout.tsx"),
+            text.contains(
+                "Entry point detected (app/layout.tsx + app/page.tsx file-router convention)"
+            ),
             "{text}"
         );
         assert!(
-            text.contains("::code id=area-root-react-entry-2 lang=typescript src=app/page.tsx"),
+            text.contains("::code id=area-root-entry-1 lang=typescript src=app/layout.tsx"),
+            "{text}"
+        );
+        assert!(
+            text.contains("::code id=area-root-entry-2 lang=typescript src=app/page.tsx"),
+            "{text}"
+        );
+    }
+
+    /// A bundler's own declared entry — `index.html`'s `<script type="module" src=>` —
+    /// is detected directly, which is what makes this work for any Vite-shaped
+    /// frontend regardless of which UI library it renders with.
+    #[test]
+    fn an_index_html_module_script_is_the_entry() {
+        let root = std::env::temp_dir().join("dx-index-tests-html-entry");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("src")).expect("dirs");
+        std::fs::write(root.join("package.json"), "{}").expect("manifest");
+        std::fs::write(
+            root.join("index.html"),
+            "<!doctype html><html><body><div id=\"root\"></div>\n\
+             <script type=\"module\" src=\"/src/main.ts\"></script></body></html>\n",
+        )
+        .expect("html");
+        std::fs::write(root.join("src/main.ts"), "console.log('boot')\n").expect("entry");
+
+        let scaffold = write_scaffold(&root, false).expect("scaffold");
+        let text = workspace::read(&scaffold.path).expect("read");
+        assert!(
+            text.contains("Entry point detected (index.html's script tag)"),
+            "{text}"
+        );
+        assert!(
+            text.contains("::code id=area-root-entry lang=typescript src=src/main.ts"),
             "{text}"
         );
     }
@@ -1592,25 +1848,20 @@ mod tests {
         assert!(existing_exact_case(&root, "src/app.tsx").is_some());
     }
 
-    /// report `4c859012` (priority): a default Vite React project ships both
-    /// `App.tsx` (the component) and `main.tsx` (the file that actually bootstraps —
-    /// calls `createRoot(...).render(...)`). `main.tsx` must win, never `App.tsx`
-    /// merely because an older candidate order checked it first.
+    /// report `4c859012` (priority): a default Vite frontend ships both `App.tsx` (the
+    /// component) and `main.tsx` (the file that actually bootstraps — calls
+    /// `createRoot(...).render(...)`). `main.tsx` must win, never `App.tsx` merely
+    /// because it sits earlier in the candidate list — and no dependency named `react`
+    /// is needed anywhere for that to hold.
     #[test]
-    fn vite_s_main_tsx_wins_over_app_tsx_when_both_exist() {
+    fn main_tsx_wins_over_app_tsx_when_both_exist() {
         let root = std::env::temp_dir().join("dx-index-tests-vite-priority");
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("src")).expect("dirs");
-        std::fs::write(
-            root.join("package.json"),
-            "{\"dependencies\": {\"react\": \"18.3.1\", \"react-dom\": \"18.3.1\"}, \
-             \"devDependencies\": {\"vite\": \"5.0.0\"}}",
-        )
-        .expect("manifest");
+        std::fs::write(root.join("package.json"), "{}").expect("manifest");
         std::fs::write(
             root.join("src/main.tsx"),
-            "import ReactDOM from 'react-dom/client'\nimport App from './App'\n\
-             ReactDOM.createRoot(document.getElementById('root')).render(<App />)\n",
+            "import App from './App'\ncreateRoot(document.getElementById('root')).render(App)\n",
         )
         .expect("main");
         std::fs::write(
@@ -1622,56 +1873,51 @@ mod tests {
         let scaffold = write_scaffold(&root, false).expect("scaffold");
         let text = workspace::read(&scaffold.path).expect("read");
         assert!(
-            text.contains("::code id=area-root-react-entry lang=typescript src=src/main.tsx"),
+            text.contains("::code id=area-root-entry lang=typescript src=src/main.tsx"),
             "{text}"
         );
         assert!(
-            !text.contains("::code id=area-root-react-entry lang=typescript src=src/App.tsx"),
+            !text.contains("::code id=area-root-entry lang=typescript src=src/App.tsx"),
             "{text}"
         );
     }
 
-    /// The render-marker preference is content-based, not merely positional: even a
+    /// The bootstrap-marker preference is content-based, not merely positional: even a
     /// hand-rolled layout where the file that actually calls the render/mount function
     /// sits *later* in the candidate list must still win over an earlier, marker-less
     /// file of the same shape.
     #[test]
-    fn a_later_candidate_wins_when_it_alone_carries_the_render_marker() {
+    fn a_later_candidate_wins_when_it_alone_carries_the_bootstrap_marker() {
         let root = std::env::temp_dir().join("dx-index-tests-marker-override");
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("src")).expect("dirs");
-        std::fs::write(
-            root.join("package.json"),
-            "{\"dependencies\": {\"react\": \"18.3.1\", \"react-dom\": \"18.3.1\"}}",
-        )
-        .expect("manifest");
-        // main.tsx exists and is checked first, but carries no render call.
+        std::fs::write(root.join("package.json"), "{}").expect("manifest");
+        // main.tsx exists and is checked first, but carries no bootstrap call.
         std::fs::write(root.join("src/main.tsx"), "// placeholder, unused\n").expect("main");
         // App.tsx, checked later, is the file that actually bootstraps here.
         std::fs::write(
             root.join("src/App.tsx"),
-            "import ReactDOM from 'react-dom/client'\n\
-             ReactDOM.createRoot(document.getElementById('root')).render(null)\n",
+            "createRoot(document.getElementById('root')).render(null)\n",
         )
         .expect("app");
 
         let scaffold = write_scaffold(&root, false).expect("scaffold");
         let text = workspace::read(&scaffold.path).expect("read");
         assert!(
-            text.contains("::code id=area-root-react-entry lang=typescript src=src/App.tsx"),
+            text.contains("::code id=area-root-entry lang=typescript src=src/App.tsx"),
             "{text}"
         );
     }
 
-    /// report `7f351075`: the framework table is data-driven — a Flask project
-    /// (`requirements.txt` naming `flask`, an `app.py` entry) is exactly as mechanically
-    /// identifiable as a React project, and gets a named, mirrored entry too.
+    /// report `7f351075`, generalized further: a Python web entry needs no dependency
+    /// manifest at all — `app.py` naming a `Flask(` construction is exactly as
+    /// mechanically identifiable with no `requirements.txt` in sight, which is what
+    /// makes an unlisted framework using the same shape detected just the same.
     #[test]
-    fn a_flask_project_is_detected_from_requirements_txt() {
+    fn a_python_web_entry_is_detected_from_its_app_construction_alone() {
         let root = std::env::temp_dir().join("dx-index-tests-flask");
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).expect("dir");
-        std::fs::write(root.join("requirements.txt"), "flask==3.0.0\n").expect("manifest");
         std::fs::write(
             root.join("app.py"),
             "from flask import Flask\napp = Flask(__name__)\n\
@@ -1681,9 +1927,54 @@ mod tests {
 
         let scaffold = write_scaffold(&root, false).expect("scaffold");
         let text = workspace::read(&scaffold.path).expect("read");
-        assert!(text.contains("Flask entry point detected"), "{text}");
         assert!(
-            text.contains("::code id=area-root-react-entry lang=python src=app.py"),
+            text.contains("Entry point detected (`Flask(` app construction)"),
+            "{text}"
+        );
+        assert!(
+            text.contains("::code id=area-root-entry lang=python src=app.py"),
+            "{text}"
+        );
+    }
+
+    /// A plain `main.py` with no web-app construction call is not treated as a web
+    /// entry — the same "content confirms convention" rule that keeps an ordinary CLI
+    /// script from being mistaken for one.
+    #[test]
+    fn a_plain_main_py_with_no_app_construction_seeds_nothing() {
+        let root = std::env::temp_dir().join("dx-index-tests-plain-py");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("dir");
+        std::fs::write(root.join("main.py"), "print('hello')\n").expect("file");
+
+        assert!(detect_entry(&root).is_none());
+    }
+
+    /// Django's `manage.py` is detected from its own generated boilerplate — no
+    /// `requirements.txt` or `pyproject.toml` naming `django` needed, since the script
+    /// itself is the signal.
+    #[test]
+    fn a_django_project_is_detected_from_manage_py_alone() {
+        let root = std::env::temp_dir().join("dx-index-tests-django");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("dir");
+        std::fs::write(
+            root.join("manage.py"),
+            "#!/usr/bin/env python\nimport os\nimport sys\n\n\
+             def main():\n    os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'proj.settings')\n    \
+             from django.core.management import execute_from_command_line\n    \
+             execute_from_command_line(sys.argv)\n",
+        )
+        .expect("manage");
+
+        let scaffold = write_scaffold(&root, false).expect("scaffold");
+        let text = workspace::read(&scaffold.path).expect("read");
+        assert!(
+            text.contains("Entry point detected (manage.py's Django bootstrap convention)"),
+            "{text}"
+        );
+        assert!(
+            text.contains("::code id=area-root-entry lang=python src=manage.py"),
             "{text}"
         );
     }
