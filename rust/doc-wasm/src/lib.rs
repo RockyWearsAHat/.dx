@@ -21,6 +21,7 @@
 #![warn(missing_docs)]
 
 mod dto;
+mod geometry;
 
 use dto::DocumentDto;
 use wasm_bindgen::prelude::*;
@@ -422,6 +423,49 @@ pub fn board_arrange(text: &str, board: &str, spec: &str) -> Result<String, JsVa
 #[wasm_bindgen]
 pub fn field_html(text: &str) -> String {
     doc_core::render::field_html(text)
+}
+
+/// Every edge on a board, routed against boxes an editing surface measured.
+///
+/// This and [`board_edge_preview`] are the whole reason a geometry engine loads inside an
+/// editing surface's own realm at all: `render::board`'s curves are recomputed on every
+/// pointer move a reader makes, which a per-frame round trip through a host bridge cannot
+/// keep up with. Unlike [`board_place`]/[`board_link`]/[`board_arrange`]/[`board_detach`],
+/// this changes no document — it takes boxes a surface measured and answers with numbers,
+/// and calling it a thousand times leaves nothing different.
+///
+/// `spec` is JSON: `{"scale": 0.82, "nodes": [{"id":"a","x":0,"y":0,"w":280,"h":160}, …],
+/// "edges": [{"from":"a","to":"b","fromSide":"b","toSide":null,"label":"then"}, …]}`.
+/// `fromSide`/`toSide` are the ends a reader *pinned* (`data-from-side` on the rendered
+/// path), omitted or `null` for an end the router chooses; on the answer they are what it
+/// chose. Answers a JSON array, one entry per routed edge — an edge naming a `from` or `to`
+/// this call has no node for is silently absent, since there is nothing to route it
+/// against — each carrying its own `from`/`to` so a caller matches an entry back to its
+/// request rather than relying on array order. `docs/board-geometry.dx` is the full account.
+///
+/// Returns an error when `spec` is not valid JSON of the shape above, or names a side that
+/// is not one.
+#[wasm_bindgen]
+pub fn board_edge_layout(spec: &str) -> Result<String, JsValue> {
+    geometry::layout(spec).map_err(js_err)
+}
+
+/// The line a reader is dragging out of a node's side, before it lands.
+///
+/// `spec` is JSON: `{"from":{"box":{"x":0,"y":0,"w":280,"h":160},"side":"r"},
+/// "to":{"box":{...},"side":"t"}}` when the pointer is over a node the line would snap to,
+/// or `"to":{"x":413,"y":220}` while it is following the pointer over open paper.
+/// `obstacles` is an optional array of boxes to dodge — normally omitted, since a preview
+/// that swerved around boxes mid-drag would visibly jump under the pointer.
+///
+/// Answers JSON `{"path": "M … C …, …, … L …"}` — the same shape [`board_edge_layout`]'s
+/// `path` carries, ready to set as an SVG `<path d>` directly.
+///
+/// Returns an error when `spec` is not valid JSON of the shape above, or names a side that
+/// is not one.
+#[wasm_bindgen]
+pub fn board_edge_preview(spec: &str) -> Result<String, JsValue> {
+    geometry::preview(spec).map_err(js_err)
 }
 
 /// JSON shape returned by [`insert_block`].

@@ -392,11 +392,13 @@ pub fn feed(endpoint: &str, project: &str, token: &str) -> Result<Vec<Value>, St
     if let Some(error) = value.get("error").and_then(Value::as_str) {
         return Err(format!("{url} refused: {error}"));
     }
-    Ok(value
-        .get("reports")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default())
+    // An answer with no list is not an empty list. A sync prunes local reports against
+    // this, and "the box said nothing" must never read as "the box said nothing is open" —
+    // that reading would empty a document of every report it holds.
+    let Some(reports) = value.get("reports").and_then(Value::as_array) else {
+        return Err(format!("{url} answered no report list: {answered}"));
+    };
+    Ok(reports.clone())
 }
 
 /// Tells the intake that `id` is fixed, so no later sync folds it back in.
@@ -534,6 +536,9 @@ pub struct Synced {
     pub added: Vec<String>,
     /// Reports whose block changed — another sighting, usually.
     pub updated: Vec<String>,
+    /// Ids the feed no longer lists — closed at the intake, by this machine or another, and
+    /// removed here so the document stops claiming an open defect nobody will ever see again.
+    pub closed: Vec<String>,
     /// What could not be done, each already a sentence. A sync reports these rather than
     /// failing: a feed that is unreachable must not stop the inbox being flushed, or the other
     /// way round.
@@ -548,16 +553,17 @@ impl Synced {
         if !self.pushed.is_empty() {
             lines.push(format!("pushed {} report(s)", self.pushed.len()));
         }
-        if self.added.is_empty() && self.updated.is_empty() {
+        if self.added.is_empty() && self.updated.is_empty() && self.closed.is_empty() {
             lines.push(format!("{} is up to date", document.display()));
         } else {
             lines.push(format!(
-                "{}: {} new, {} updated",
+                "{}: {} new, {} updated, {} closed elsewhere",
                 document.display(),
                 self.added.len(),
-                self.updated.len()
+                self.updated.len(),
+                self.closed.len()
             ));
-            for id in self.added.iter().chain(&self.updated) {
+            for id in self.added.iter().chain(&self.updated).chain(&self.closed) {
                 lines.push(format!("  {id}"));
             }
         }
@@ -570,7 +576,7 @@ impl Synced {
     /// Whether this sync changed the document.
     #[must_use]
     pub fn changed(&self) -> bool {
-        !self.added.is_empty() || !self.updated.is_empty()
+        !self.added.is_empty() || !self.updated.is_empty() || !self.closed.is_empty()
     }
 }
 
@@ -629,6 +635,7 @@ pub fn sync(subscription: &Subscription) -> Result<Synced, String> {
     let folded = fold(&entries, &subscription.document())?;
     synced.added = folded.added;
     synced.updated = folded.updated;
+    synced.closed = folded.closed;
     synced.problems.extend(folded.problems);
     Ok(synced)
 }
@@ -640,20 +647,29 @@ pub struct Folded {
     pub added: Vec<String>,
     /// Ids whose block body changed.
     pub updated: Vec<String>,
+    /// Ids removed because the feed no longer lists them — closed at the intake since this
+    /// checkout last synced, by this machine or another.
+    pub closed: Vec<String>,
     /// Records that could not be folded, each a sentence.
     pub problems: Vec<String>,
 }
 
-/// Writes every report in `entries` into the document at `path`, one block each.
+/// Writes every report in `entries` into the document at `path`, one block each, then removes
+/// any locally open report the feed no longer lists.
 ///
 /// A block whose body already matches is left alone, so this is safe to run on a timer: a fold
-/// with nothing to say touches no file and produces no diff.
+/// with nothing to say touches no file and produces no diff. The reverse direction matters just
+/// as much: a report closed at the intake — by this machine's own `dx report close`, or by
+/// another machine on the same subscription — must stop being open here too, or a document that
+/// claims to be synced quietly disagrees with the database it synced from.
 ///
 /// # Errors
 /// Returns a sentence when the document cannot be read or saved.
 pub fn fold(entries: &[Value], path: &Path) -> Result<Folded, String> {
     let mut folded = Folded::default();
-    if entries.is_empty() {
+    if entries.is_empty() && !path.exists() {
+        // Nothing to write and nothing to prune: a document that does not exist cannot be
+        // holding a report the intake has already closed.
         return Ok(folded);
     }
     if !path.exists() {
@@ -699,6 +715,23 @@ pub fn fold(entries: &[Value], path: &Path) -> Result<Folded, String> {
             }
         };
         workspace::save_source(path, &updated)?;
+    }
+
+    // The converse question, which is what makes this a sync rather than an accumulation:
+    // a block whose id the feed no longer lists was closed at the intake, and the document
+    // is claiming an open defect nobody will ever see again.
+    let listed: std::collections::HashSet<&str> = entries
+        .iter()
+        .filter_map(|entry| entry.get("id").and_then(Value::as_str))
+        .collect();
+    for open in reports::open_reports(path)? {
+        if listed.contains(open.id.as_str()) {
+            continue;
+        }
+        let source = workspace::read(path)?;
+        let without = edit::remove_block(&source, &open.id)?;
+        workspace::save_source(path, &without)?;
+        folded.closed.push(open.id);
     }
     Ok(folded)
 }
@@ -933,6 +966,136 @@ mod tests {
         let text = workspace::read(&document).expect("read");
         assert_eq!(text.matches("**bug — search misses**").count(), 1);
         assert_eq!(text.matches("seen ").count(), 2);
+    }
+
+    #[test]
+    fn a_report_the_feed_no_longer_lists_is_taken_out_of_the_document() {
+        let root = scratch("prune-one");
+        let document = root.join("reports.dx");
+        fold(
+            &[
+                stored(
+                    "report-1a2b3c4d",
+                    "search misses",
+                    &["2026-08-11T00:00:00Z"],
+                ),
+                stored(
+                    "report-2b3c4d5e",
+                    "board draws stale",
+                    &["2026-08-12T00:00:00Z"],
+                ),
+            ],
+            &document,
+        )
+        .expect("first");
+
+        let pruned = fold(
+            &[stored(
+                "report-1a2b3c4d",
+                "search misses",
+                &["2026-08-11T00:00:00Z"],
+            )],
+            &document,
+        )
+        .expect("prune");
+        assert_eq!(pruned.closed, vec!["report-2b3c4d5e"]);
+        assert!(pruned.added.is_empty() && pruned.updated.is_empty());
+
+        let text = workspace::read(&document).expect("read");
+        assert!(text.contains("search misses"), "{text}");
+        assert!(!text.contains("board draws stale"), "{text}");
+    }
+
+    #[test]
+    fn a_feed_with_nothing_open_empties_the_document_of_reports() {
+        let root = scratch("prune-all");
+        let document = root.join("reports.dx");
+        fold(
+            &[stored(
+                "report-1a2b3c4d",
+                "search misses",
+                &["2026-08-11T00:00:00Z"],
+            )],
+            &document,
+        )
+        .expect("first");
+
+        let emptied = fold(&[], &document).expect("empty feed");
+        assert_eq!(emptied.closed, vec!["report-1a2b3c4d"]);
+
+        let text = workspace::read(&document).expect("read");
+        assert!(!text.contains("search misses"), "{text}");
+    }
+
+    #[test]
+    fn folding_the_same_feed_twice_still_rewrites_nothing_on_the_second_pass() {
+        let root = scratch("prune-idle");
+        let document = root.join("reports.dx");
+        let entries = vec![stored(
+            "report-1a2b3c4d",
+            "search misses",
+            &["2026-08-11T00:00:00Z"],
+        )];
+        fold(&entries, &document).expect("first");
+        let text = workspace::read(&document).expect("read");
+
+        let again = fold(&entries, &document).expect("second");
+        assert!(
+            again.added.is_empty() && again.updated.is_empty() && again.closed.is_empty(),
+            "{again:?}"
+        );
+        assert_eq!(
+            workspace::read(&document).expect("read"),
+            text,
+            "a prune pass with nothing to prune must not touch the document"
+        );
+    }
+
+    #[test]
+    fn a_report_the_feed_no_longer_lists_is_a_close_not_an_up_to_date() {
+        let synced = Synced {
+            closed: vec!["report-1a2b3c4d".to_string()],
+            ..Synced::default()
+        };
+        let summary = synced.summary(Path::new("reports.dx"));
+        assert!(!summary.contains("is up to date"), "{summary}");
+        assert!(summary.contains("1 closed elsewhere"), "{summary}");
+        assert!(summary.contains("report-1a2b3c4d"), "{summary}");
+        assert!(synced.changed());
+    }
+
+    #[test]
+    fn an_answer_with_no_report_list_is_a_problem_rather_than_an_empty_feed() {
+        use std::io::{BufRead, BufReader, Write as _};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let address = listener.local_addr().expect("address");
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).expect("head");
+                if line == "\r\n" || line.is_empty() {
+                    break;
+                }
+            }
+            let answer = "{\"ok\":true}";
+            stream
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{answer}",
+                        answer.len()
+                    )
+                    .as_bytes(),
+                )
+                .expect("answer");
+        });
+
+        let error = feed(&format!("http://{address}"), "dx", "t").expect_err("no report list");
+        assert!(error.contains("answered no report list"), "{error}");
+        server.join().expect("listener");
     }
 
     #[test]

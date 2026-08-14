@@ -136,6 +136,69 @@ test('a compare url states both sides of the diff', () => {
   assert.equal(fork.head, 'someone:main');
 });
 
+test('a pull request diff tab states its sides through embedded route data', () => {
+  // Captured shapes from github.com's current "Files changed" tab (2026-08-14): neither
+  // `data-base-sha` nor `data-head-sha` exists on the page any more, and the two commit ids
+  // live nested inside a `<script data-target="react-app.embeddedData">` blob instead, at a
+  // path that has moved more than once across GitHub's own rollout. `routeShasFrom` is handed
+  // the raw script text the way `content.js` collects it — this is the one function GitHub's
+  // next reshuffle is likely to break, so it is the one under test.
+  const changesRoutePayload = JSON.stringify({
+    payload: {
+      pullRequestsChangesRoute: {
+        comparison: {
+          baseOid: 'a'.repeat(40),
+          headOid: 'b'.repeat(40),
+          fullDiff: { baseOid: 'a'.repeat(40), headOid: 'b'.repeat(40) },
+        },
+      },
+    },
+  });
+  assert.deepEqual(globalThis.dxResolve.routeShasFrom([changesRoutePayload]), {
+    base: 'a'.repeat(40),
+    head: 'b'.repeat(40),
+  });
+
+  // An older shape seen on the same route: the ids nested one level deeper, under the pull
+  // request object rather than directly under the comparison. The search has to find them
+  // there too, since which shape is live is not something the extension controls.
+  const nestedUnderPullRequest = JSON.stringify({
+    payload: {
+      pullRequestsChangesRoute: {
+        pullRequest: { comparison: { baseOid: 'c'.repeat(40), headOid: 'd'.repeat(40) } },
+      },
+    },
+  });
+  assert.deepEqual(globalThis.dxResolve.routeShasFrom([nestedUnderPullRequest]), {
+    base: 'c'.repeat(40),
+    head: 'd'.repeat(40),
+  });
+});
+
+test('a commit page has no route shas, so its own strategy still applies', () => {
+  // A commit page's embedded data (when it has any at all) carries no key shaped like
+  // `baseOid`/`headOid` — the parent-commit lookup is a different code path entirely. This
+  // pins that `routeShasFrom` steps aside rather than matching something it should not.
+  const commitPagePayload = JSON.stringify({
+    payload: { commit: { oid: 'e'.repeat(40), author: { name: 'rocky' } } },
+  });
+  assert.equal(globalThis.dxResolve.routeShasFrom([commitPagePayload]), null);
+});
+
+test('route sha extraction tries every script and skips one that will not parse', () => {
+  const unrelated = JSON.stringify({ payload: { something: 'else' } });
+  const malformed = '{not json';
+  const real = JSON.stringify({
+    payload: { pullRequestsChangesRoute: { comparison: { baseOid: 'f'.repeat(40), headOid: '1'.repeat(40) } } },
+  });
+  assert.deepEqual(globalThis.dxResolve.routeShasFrom([unrelated, malformed, real]), {
+    base: 'f'.repeat(40),
+    head: '1'.repeat(40),
+  });
+  assert.equal(globalThis.dxResolve.routeShasFrom([]), null);
+  assert.equal(globalThis.dxResolve.routeShasFrom([malformed]), null);
+});
+
 test('the pack is fetched from github.com itself, so private repos work', () => {
   // raw.githubusercontent.com would need its own host permission and would not carry the
   // reader's session; github.com/<owner>/<repo>/raw/... does both.

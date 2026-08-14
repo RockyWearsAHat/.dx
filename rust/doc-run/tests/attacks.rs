@@ -19,10 +19,20 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::time::Duration;
 
 use doc_core::resolve::Nowhere;
 use doc_run::{run_document, RunOptions};
+
+/// Guards every call into [`confine`](doc_run::confine) made by this file's tests.
+///
+/// `cargo test` runs this file's tests on several threads at once, and [`confine::confine`]
+/// reads the process-global `DX_UNCONFINED` variable. The one test that toggles it
+/// (`dx_unconfined_actually_removes_the_boundary`) has to hold this lock across the toggle and
+/// the run it covers, or an unrelated attack on another thread could observe the boundary
+/// turned off mid-run and fail for a reason that has nothing to do with what it tests.
+static SANDBOX_LOCK: Mutex<()> = Mutex::new(());
 
 /// A scratch document directory, its cache, and a clean slate each time.
 fn scene(label: &str) -> (PathBuf, RunOptions) {
@@ -44,6 +54,15 @@ fn scene(label: &str) -> (PathBuf, RunOptions) {
 
 /// Run one shell block and hand back what it printed.
 fn attack(code: &str, options: &RunOptions) -> String {
+    let _guard = SANDBOX_LOCK
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    attack_unlocked(code, options)
+}
+
+/// [`attack`]'s body, for a caller that already holds [`SANDBOX_LOCK`] itself — taking the
+/// lock twice on one thread would deadlock, since [`Mutex`] here is not reentrant.
+fn attack_unlocked(code: &str, options: &RunOptions) -> String {
     let source = format!("::code id=payload lang=bash run\n{code}\n::end\n");
     let report = run_document(&source, options, &Nowhere).expect("acyclic run");
     report
@@ -394,7 +413,11 @@ fn a_backgrounded_process_does_not_outlive_the_block_that_started_it() {
     let source = "::code id=payload lang=bash run timeout=2\n\
          (sleep 20; echo alive > \"$DX_SANDBOX/still-alive\") &\n\
          sleep 30\n::end\n";
+    let guard = SANDBOX_LOCK
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
     let report = run_document(source, &options, &Nowhere).expect("acyclic run");
+    drop(guard);
     assert_eq!(report.runs[0].status, "error");
     assert!(report.runs[0].output.contains("timed out"));
 
@@ -421,7 +444,11 @@ fn a_write_grant_opens_its_folder_and_nothing_beside_it() {
     let source = "::code id=payload lang=bash run writes=out\n\
          echo built > out/artifact.txt && echo GRANTED\n\
          echo pwned > beside.txt && echo ESCAPED\n::end\n";
+    let guard = SANDBOX_LOCK
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
     let report = run_document(source, &options, &Nowhere).expect("acyclic run");
+    drop(guard);
     let output = &report.runs[0].output;
     assert!(
         output.contains("GRANTED"),
@@ -447,7 +474,11 @@ fn a_write_grant_does_not_hand_back_the_network() {
     let source = "::code id=payload lang=bash run writes=out\n\
          mkdir -p out\n\
          curl -s -m 8 https://example.com > out/loot.txt && echo FETCHED || echo offline\n::end\n";
+    let guard = SANDBOX_LOCK
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
     let report = run_document(source, &options, &Nowhere).expect("acyclic run");
+    drop(guard);
     assert!(
         !report.runs[0].output.contains("FETCHED"),
         "a granted block reached the network: {}",
@@ -465,7 +496,11 @@ fn a_write_grant_naming_the_store_is_refused_before_anything_runs() {
     fs::write(root.join(".doc/repo.dxcp"), "PACK").expect("pack");
     let source = "::code id=payload lang=bash run writes=.doc\n\
          echo tampered > .doc/repo.dxcp\n::end\n";
+    let guard = SANDBOX_LOCK
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
     let report = run_document(source, &options, &Nowhere).expect("acyclic run");
+    drop(guard);
     assert_eq!(report.runs[0].status, "blocked");
     assert!(
         report.runs[0].output.contains(".doc"),
@@ -476,6 +511,39 @@ fn a_write_grant_naming_the_store_is_refused_before_anything_runs() {
         fs::read_to_string(root.join(".doc/repo.dxcp")).expect("read"),
         "PACK"
     );
+}
+
+/// The evidence that every `confined()` test above is actually proving something: the same
+/// write-beside-the-document attack, run with the boundary turned off exactly the way
+/// `DX_UNCONFINED=1` turns it off for a person, must **succeed** — the file must land. If it
+/// does not, nothing above this line was ever stopped by Seatbelt or bubblewrap; it could have
+/// failed for some unrelated reason (a missing binary, a shell quoting bug) and every assertion
+/// would still read green. This is the negative control the rest of the file assumes.
+#[test]
+fn dx_unconfined_actually_removes_the_boundary() {
+    if !confined() {
+        // Nothing imposes a boundary here, so there is nothing whose absence to prove either.
+        return;
+    }
+    let (root, options) = scene("unconfined-proof");
+    let target = root.join("planted.txt");
+    let _ = fs::remove_file(&target);
+
+    let guard = SANDBOX_LOCK
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    std::env::set_var("DX_UNCONFINED", "1");
+    let output = attack_unlocked(&format!("echo pwned > {}", target.display()), &options);
+    std::env::remove_var("DX_UNCONFINED");
+    drop(guard);
+
+    assert!(
+        target.exists(),
+        "DX_UNCONFINED did not remove the boundary — a write beside the document that every \
+         other test in this file expects to fail did not happen here either: {output}. If \
+         this fails, the confined() tests above are not proving the sandbox stops anything."
+    );
+    let _ = fs::remove_file(&target);
 }
 
 /// The first file named `name` anywhere under `root`, or `None`.

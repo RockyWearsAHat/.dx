@@ -36,8 +36,12 @@
 //! [`node_line`] to write) so `crate::edit`'s board operations and this renderer can never
 //! disagree about what a line says — and no editing surface has to grow a copy of it. It
 //! owns the *geometry* the same way: which side an edge leaves, how several edges sharing
-//! one side spread along it, and the curve between them are stated here once and mirrored
-//! by the surface against measured boxes.
+//! one side spread along it, and the curve between them are stated here once, in
+//! [`laid_out`], and asked for again — never re-derived — through [`edge_layout`] and
+//! [`drag_path`], the door `doc-wasm` opens for an editing surface to route a board against
+//! boxes it measured instead of the ones a static render had to guess.
+//! `docs/board-geometry.dx` is the full account of that door and where it lands in each
+//! host.
 
 use super::escape::escape_html;
 use super::html::{block_html, HtmlOptions};
@@ -92,7 +96,7 @@ const FLOW_HEIGHT_MAX: f64 = 1600.0;
 
 /// A side of a node: where an edge leaves it, and where one arrives.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Side {
+pub enum Side {
     /// The left edge; an edge here reaches out to the left.
     Left,
     /// The right edge; an edge here reaches out to the right.
@@ -105,7 +109,7 @@ pub(crate) enum Side {
 
 impl Side {
     /// The letter this side is written as in a node line.
-    pub(crate) fn letter(self) -> char {
+    pub fn letter(self) -> char {
         match self {
             Side::Left => 'l',
             Side::Right => 'r',
@@ -411,9 +415,9 @@ fn one_side(word: &str) -> Option<Side> {
 /// The side a caller names, by letter or by word — `l`, `left`, `t`, `top`, and so on.
 ///
 /// This is the spelling every *host* uses: a link drawn in an editor, a `dx board --link`
-/// run by an agent, and a node line in the document all end up as the same [`Side`], so
-/// there is one vocabulary for which edge of a node a line meets.
-pub(crate) fn side_named(word: &str) -> Option<Side> {
+/// run by an agent, a node line in the document, and a `doc-wasm` geometry call all end up
+/// as the same [`Side`], so there is one vocabulary for which edge of a node a line meets.
+pub fn side_named(word: &str) -> Option<Side> {
     match word.trim().to_ascii_lowercase().as_str() {
         "l" | "left" => Some(Side::Left),
         "r" | "right" => Some(Side::Right),
@@ -698,13 +702,18 @@ fn stripped_lines(text: &str) -> Vec<String> {
         .collect()
 }
 
-/// A node's rectangle on the canvas, in canvas pixels: exactly what its line says.
-#[derive(Debug, Clone, Copy)]
-struct Rect {
-    x: f64,
-    y: f64,
-    w: f64,
-    h: f64,
+/// A node's rectangle on the canvas, in canvas pixels: exactly what its line says — or, from
+/// [`edge_layout`], exactly what an editing surface measured.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Rect {
+    /// Left edge.
+    pub x: f64,
+    /// Top edge.
+    pub y: f64,
+    /// Width.
+    pub w: f64,
+    /// Height.
+    pub h: f64,
 }
 
 impl Rect {
@@ -1435,12 +1444,68 @@ fn cubic_at(from: Anchor, to: Anchor, controls: Run, along: f64) -> (f64, f64) {
     )
 }
 
+/// One edge, laid out: which sides it resolved to, the path it is drawn as, and where its
+/// words sit, in canvas pixels, when it carries any.
+struct Laid {
+    edge: Drawn,
+    path: String,
+    label: Option<(f64, f64, f64)>,
+}
+
+/// One edge, laid out against `rects`: which sides it resolved to, the path it is drawn as,
+/// and where its words sit when it carries any.
+///
+/// This is the whole of the geometry an edge needs — [`edges_svg`] (drawn from a board's
+/// *stated* boxes) and [`edge_layout`] (drawn from an editing surface's *measured* ones)
+/// both call this and nothing else, so the two can never disagree about where a curve goes.
+/// An edge naming a node not on the board never reaches here — [`drawn_edges`] already
+/// skipped it, and the missing *node* renders its own sentence.
+///
+/// `scale` is the fit the whole canvas will display at: a label on a board fitted below
+/// [`EDGE_LABEL_MIN`] states its own larger `font-size`, in canvas pixels, so the words on
+/// an edge never display smaller than the floor however far the fit shrank the plan.
+fn laid_out(list: &[Node], rects: &[Rect], scale: f64) -> Vec<Laid> {
+    let drawn = drawn_edges(list, rects);
+    if drawn.is_empty() {
+        return Vec::new();
+    }
+    let anchored = anchors(&drawn, rects);
+    drawn
+        .into_iter()
+        .zip(anchored)
+        .map(|(edge, (from, to))| {
+            // A node is an obstacle to every edge except the two it joins, which it is
+            // attached to. Passing the whole list and filtering here keeps the rule in one
+            // place.
+            let obstacles: Vec<Rect> = rects
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| *index != edge.from && *index != edge.to)
+                .map(|(_, rect)| *rect)
+                .collect();
+            let path = curve(from, to, &obstacles);
+            let text = edge_label(&list[edge.from], &list[edge.to]);
+            let label = if text.is_empty() {
+                None
+            } else {
+                // For the words, every node is an obstacle — the two the edge joins
+                // included. The curve is attached to them; the label must not sit on them,
+                // which is exactly where a short edge's middle lands.
+                let handover = lead(from, to);
+                let bent = controls(from, handover, &obstacles);
+                Some(label_layout(from, handover, bent, rects, &text, scale))
+            };
+            Laid { edge, path, label }
+        })
+        .collect()
+}
+
 /// The edges, drawn once beneath every node as one SVG of cubic curves.
 ///
 /// The anchors stand on guessed heights (a render cannot measure content); an editing
-/// surface re-lays the same paths, by the same rules, against the measured boxes. An edge
-/// naming a node that is not on the board is skipped — the missing *node* already renders
-/// its own sentence.
+/// surface re-lays the same paths, through [`edge_layout`], against the measured boxes — by
+/// calling [`laid_out`], the very code this does. An edge naming a node that is not on the
+/// board is skipped — the missing *node* already renders its own sentence.
 ///
 /// Every edge ends in an arrowhead, because an edge on a plan is not a connection but a
 /// direction: "this, then that" — and begins in a small tether, the dot that says the line
@@ -1456,11 +1521,10 @@ fn cubic_at(from: Anchor, to: Anchor, controls: Run, along: f64) -> (f64, f64) {
 /// the strokes hold the same law at [`EDGE_STROKE_MIN`], so a fitted plan's edges never
 /// thin into wires.
 fn edges_svg(board_id: &str, list: &[Node], rects: &[Rect], scale: f64) -> (String, String) {
-    let drawn = drawn_edges(list, rects);
-    if drawn.is_empty() {
+    let laid = laid_out(list, rects, scale);
+    if laid.is_empty() {
         return (String::new(), String::new());
     }
-    let anchored = anchors(&drawn, rects);
     let arrow = format!("dx-edge-arrow-{board_id}");
     let tether = format!("dx-edge-tether-{board_id}");
     // The stroke legibility floor: fitted below it, every path carries the canvas-pixel
@@ -1473,22 +1537,12 @@ fn edges_svg(board_id: &str, list: &[Node], rects: &[Rect], scale: f64) -> (Stri
     };
     let mut paths = String::new();
     let mut labels = String::new();
-    for (edge, (from, to)) in drawn.iter().zip(anchored) {
+    for Laid { edge, path, label } in &laid {
         // Only a *pinned* side reaches the page: an editing surface re-routes the rest.
         let pin = |side: Option<Side>, name: &str| match side {
             Some(side) => format!(" data-{name}-side=\"{}\"", side.letter()),
             None => String::new(),
         };
-        // A node is an obstacle to every edge except the two it joins, which it is attached
-        // to. Passing the whole list and filtering here keeps the rule in one place.
-        let obstacles: Vec<Rect> = rects
-            .iter()
-            .enumerate()
-            .filter(|(index, _)| *index != edge.from && *index != edge.to)
-            .map(|(_, rect)| *rect)
-            .collect();
-        let handover = lead(from, to);
-        let bent = controls(from, handover, &obstacles);
         paths.push_str(&format!(
             "<path data-from=\"{}\" data-to=\"{}\"{}{}{stroke} marker-start=\"url(#{})\" \
              marker-end=\"url(#{})\" d=\"{}\"/>\n",
@@ -1498,18 +1552,14 @@ fn edges_svg(board_id: &str, list: &[Node], rects: &[Rect], scale: f64) -> (Stri
             pin(edge.to_pin, "to"),
             escape_html(&tether),
             escape_html(&arrow),
-            curve(from, to, &obstacles),
+            path,
         ));
-        let text = edge_label(&list[edge.from], &list[edge.to]);
-        if !text.is_empty() {
+        if let Some((x, y, font)) = label {
             // The legibility floor: fitted below it, the label carries the canvas-pixel
             // size that displays at [`EDGE_LABEL_MIN`]; at a legible fit nothing extra
             // is written and the theme's own size holds.
-            // For the words, every node is an obstacle — the two the edge joins
-            // included. The curve is attached to them; the label must not sit on them,
-            // which is exactly where a short edge's middle lands.
-            let (x, y, font) = label_layout(from, handover, bent, rects, &text, scale);
-            let floor = if font > EDGE_LABEL_BASE {
+            let text = edge_label(&list[edge.from], &list[edge.to]);
+            let floor = if *font > EDGE_LABEL_BASE {
                 format!(" style=\"font-size:{font:.1}px\"")
             } else {
                 String::new()
@@ -1521,8 +1571,8 @@ fn edges_svg(board_id: &str, list: &[Node], rects: &[Rect], scale: f64) -> (Stri
                  x=\"{}\" y=\"{}\">{}</text>\n",
                 escape_html(&list[edge.from].id),
                 escape_html(&list[edge.to].id),
-                round(x, 100.0),
-                round(y, 100.0),
+                round(*x, 100.0),
+                round(*y, 100.0),
                 escape_html(&text),
             ));
         }
@@ -1639,7 +1689,7 @@ fn edge_label(from: &Node, to: &Node) -> String {
 /// scrolls inside it rather than being lost: a node is a frame onto a block, and the reader
 /// decides how big the frame is.
 fn node_html(node: &Node, document: &Document, options: &HtmlOptions, values: &Values) -> String {
-    let mut node_class = "dx-board-node";
+    let mut node_class = "dx-board-node".to_string();
     let inner = match document.block_index(&node.id) {
         None => missing(&format!("no block named `{}`", node.id)),
         Some(index) => {
@@ -1650,13 +1700,16 @@ fn node_html(node: &Node, document: &Document, options: &HtmlOptions, values: &V
                 // A view fills its stated box edge to edge — it is a screen, and a screen
                 // has no margin. The node drops its padding (`dx-board-node-view`), so the
                 // inner box the frame scales into is the stated box minus the hairline.
-                node_class = "dx-board-node dx-board-node-view";
+                node_class = "dx-board-node dx-board-node-view".to_string();
                 super::html::view_html(
                     referenced,
                     f64::from(node.w.saturating_sub(2)),
                     Some(f64::from(node.h.saturating_sub(2))),
                 )
             } else {
+                if node_run_failed(referenced, document) {
+                    node_class.push_str(" dx-board-node-failed");
+                }
                 let rendered = block_html(referenced, document, options, values);
                 if rendered.is_empty() {
                     missing(&format!("`{}` has nothing to show", node.id))
@@ -1678,12 +1731,186 @@ fn node_html(node: &Node, document: &Document, options: &HtmlOptions, values: &V
     )
 }
 
+/// Whether a node's referenced block is runnable code whose last recorded run failed — the
+/// one status a board calls out on the node itself, mirroring the failure-only rule
+/// `fit_notice` already keeps for the board's frame: a pass or a block that has not run yet
+/// draws the same plain hairline as everything else.
+fn node_run_failed(referenced: &Block, document: &Document) -> bool {
+    if referenced.kind != "code" || !referenced.run {
+        return false;
+    }
+    document
+        .blocks
+        .iter()
+        .find(|other| other.kind == "output" && other.for_block == referenced.id)
+        .is_some_and(|output| output.status == "error" || output.exit != 0)
+}
+
 /// The sentence a node shows when it cannot show a block.
 fn missing(sentence: &str) -> String {
     format!(
         "<div class=\"dx-board-missing\">{}</div>",
         escape_html(sentence)
     )
+}
+
+// -----------------------------------------------------------------------------------------
+// The public door: what an editing surface asks for instead of re-deriving it.
+//
+// Everything above works out a board's geometry from a document's *stated* boxes — the
+// numbers a `w=`/`h=` line carries, which a render cannot help but guess at for a node it
+// has not laid out in a real DOM. An editing surface knows better: it has measured the box
+// a browser actually gave the node. `edge_layout` and `drag_path` are that same geometry —
+// [`laid_out`], [`curve`], nothing new — run again against those better numbers, so a board
+// re-laid under a reader's pointer is never a second opinion about where a curve goes.
+// `docs/board-geometry.dx` is the full account of which host calls these and how.
+// -----------------------------------------------------------------------------------------
+
+/// One node as an editing surface measured it: its id, and the box a browser actually gave it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Measured {
+    /// The node's id — the same one its board line and its `data-node-id` carry.
+    pub id: String,
+    /// The rectangle a browser laid the node out at.
+    pub rect: Rect,
+}
+
+/// One edge a surface asks to have routed: the pair it joins, the ends the reader *pinned*
+/// (`None` re-routes), and the words it carries.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EdgeSpec {
+    /// Id of the node the edge leaves.
+    pub from: String,
+    /// Id of the node the edge arrives at.
+    pub to: String,
+    /// The side of `from` the line pins, or `None` to let the router choose.
+    pub from_pin: Option<Side>,
+    /// The side of `to` the line pins, or `None` to let the router choose.
+    pub to_pin: Option<Side>,
+    /// Words written on the edge — empty when it carries none.
+    pub label: String,
+}
+
+/// Where an edge's words sit, and the canvas-pixel size the fit floor asks them to be.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Label {
+    /// Where the words sit, in canvas pixels.
+    pub x: f64,
+    /// Where the words sit, in canvas pixels.
+    pub y: f64,
+    /// The font size the words are drawn at, in canvas pixels — the theme's own size unless
+    /// the fit has scaled the canvas below [`EDGE_LABEL_MIN`], in which case this is the
+    /// compensating size that keeps the words legible.
+    pub font: f64,
+}
+
+/// Where one edge lands, laid out against boxes an editing surface measured.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EdgeLayout {
+    /// Id of the node the edge leaves — echoed from the [`EdgeSpec`] this answers.
+    pub from: String,
+    /// Id of the node the edge arrives at — echoed from the [`EdgeSpec`] this answers.
+    pub to: String,
+    /// The side of `from` the edge resolved to: the pin, when one was given, or the router's
+    /// own choice.
+    pub from_side: Side,
+    /// The side of `to` the edge resolved to, the same way.
+    pub to_side: Side,
+    /// The path the edge draws as — a cubic and its straight run into the arrowhead, in the
+    /// same `M … C …, …, … L …` shape [`curve`] has always written. Empty when `from` or `to`
+    /// names a node the surface did not measure.
+    pub path: String,
+    /// Where the edge's words sit, when it carries any.
+    pub label: Option<Label>,
+    /// The canvas-pixel stroke width every edge on this board carries when the fit has
+    /// scaled below [`EDGE_STROKE_MIN`] — `None` at a legible fit, where the theme's own
+    /// weight holds.
+    pub stroke: Option<f64>,
+}
+
+/// Every edge on a board, routed against boxes an editing surface measured.
+///
+/// This calls [`laid_out`] — the same pass [`edges_svg`] runs against a board's stated
+/// boxes — so a board cannot be one shape on the page and another under a reader's pointer.
+/// Answers one entry per edge in `edges`, though not necessarily in that order (an edge
+/// naming a `from` this call has no [`Measured`] box for is skipped entirely, since there is
+/// nothing to route it against); a caller matches an entry back to its request by `from`/`to`,
+/// not by position.
+#[must_use]
+pub fn edge_layout(nodes: &[Measured], edges: &[EdgeSpec], scale: f64) -> Vec<EdgeLayout> {
+    let list: Vec<Node> = nodes
+        .iter()
+        .map(|measured| Node {
+            id: measured.id.clone(),
+            x: measured.rect.x.round() as i32,
+            y: measured.rect.y.round() as i32,
+            w: measured.rect.w.max(0.0).round() as u32,
+            h: measured.rect.h.max(0.0).round() as u32,
+            to: edges
+                .iter()
+                .filter(|spec| spec.from.eq_ignore_ascii_case(&measured.id))
+                .map(|spec| Edge {
+                    id: spec.to.clone(),
+                    from: spec.from_pin,
+                    to: spec.to_pin,
+                    label: spec.label.clone(),
+                })
+                .collect(),
+            ..Node::default()
+        })
+        .collect();
+    let rects: Vec<Rect> = nodes.iter().map(|measured| measured.rect).collect();
+    let stroke = if scale > 0.0 && scale * EDGE_STROKE_BASE < EDGE_STROKE_MIN {
+        Some(EDGE_STROKE_MIN / scale)
+    } else {
+        None
+    };
+    laid_out(&list, &rects, scale)
+        .into_iter()
+        .map(|Laid { edge, path, label }| EdgeLayout {
+            from: list[edge.from].id.clone(),
+            to: list[edge.to].id.clone(),
+            from_side: edge.from_side,
+            to_side: edge.to_side,
+            path,
+            label: label.map(|(x, y, font)| Label { x, y, font }),
+            stroke,
+        })
+        .collect()
+}
+
+/// One end of a line an editing surface is routing: attached to a measured node's side, or
+/// following the pointer over open paper.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum DragEnd {
+    /// Attached to a node, on the side named.
+    On(Rect, Side),
+    /// Free, at this point on the canvas.
+    At(f64, f64),
+}
+
+/// The line a reader is dragging from a node's side, before it lands.
+///
+/// This is [`curve`] — the exact function a committed edge is drawn with — called with a
+/// free end's anchor built the way an attached one always is: a free end has no side of its
+/// own, so it reaches back the way the source reaches out, which is what keeps the curve
+/// looking pulled taut out of the node rather than kinked at the pointer. `obstacles` is
+/// normally empty: a preview that dodged boxes while a reader is mid-drag would jump under
+/// the pointer, which reads as broken rather than smart.
+#[must_use]
+pub fn drag_path(from: (Rect, Side), to: DragEnd, obstacles: &[Rect]) -> String {
+    let (from_rect, from_side) = from;
+    let from_anchor = from_rect.anchor(from_side, 0.5);
+    let to_anchor = match to {
+        DragEnd::On(rect, side) => rect.anchor(side, 0.5),
+        DragEnd::At(x, y) => Anchor {
+            x,
+            y,
+            dx: -from_anchor.dx,
+            dy: -from_anchor.dy,
+        },
+    };
+    curve(from_anchor, to_anchor, obstacles)
 }
 
 #[cfg(test)]
@@ -2423,6 +2650,46 @@ mod tests {
         );
     }
 
+    /// A runnable node whose last recorded run failed is called out on the board itself —
+    /// the debugging surface a reader would otherwise have to already know to distrust,
+    /// then scroll past the graph to confirm in the linear listing below it.
+    #[test]
+    fn a_failed_runnable_node_is_called_out_on_the_board() {
+        let document = crate::format::parse(
+            "::code id=broken lang=bash run\necho hi\n::end\n\n\
+             ::output id=broken-output for=broken status=error exit=1\nboom\n::end\n\n\
+             ::code id=fine lang=bash run\necho hi\n::end\n\n\
+             ::output id=fine-output for=fine status=ok\nhi\n::end\n",
+        );
+        let list = [
+            node_at("broken", 0, 0, vec![]),
+            node_at("fine", 500, 0, vec![]),
+        ];
+        let block = Block {
+            kind: "board".to_string(),
+            id: "pipeline".to_string(),
+            text: list.iter().map(node_line).collect::<Vec<_>>().join("\n"),
+            ..Block::default()
+        };
+        let html = board_html(&block, &document, &HtmlOptions::default(), &Values::new());
+        let broken_at = html.find("data-node-id=\"broken\"").expect("broken node");
+        let fine_at = html.find("data-node-id=\"fine\"").expect("fine node");
+        let broken_tag_start = html[..broken_at]
+            .rfind("<section")
+            .expect("broken section start");
+        let fine_tag_start = html[..fine_at]
+            .rfind("<section")
+            .expect("fine section start");
+        assert!(
+            html[broken_tag_start..broken_at].contains("dx-board-node-failed"),
+            "a failed node must carry the failure class: {html}"
+        );
+        assert!(
+            !html[fine_tag_start..fine_at].contains("dx-board-node-failed"),
+            "a passing node must not carry the failure class: {html}"
+        );
+    }
+
     /// A small board's in-flow frame hugs its canvas — width stated, centred, and no
     /// taller than the canvas needs — instead of floating a small drawing in a
     /// mostly-empty full-column box.
@@ -2470,5 +2737,331 @@ mod tests {
             tall.contains("move tall content into the page flow"),
             "{tall}"
         );
+    }
+
+    // ---------------------------------------------------------------------------------
+    // The public door: `edge_layout` and `drag_path` are `laid_out` and `curve` again,
+    // against boxes an editing surface measured instead of a document's stated ones. The
+    // proof these tests exist for is that the door draws the *same* thing the renderer
+    // does — not a plausible-looking second implementation of it.
+    // ---------------------------------------------------------------------------------
+
+    /// The claim the whole door rests on: for a board whose stated boxes are also what an
+    /// editing surface would measure, `edge_layout` answers the exact path `edges_svg`
+    /// rendered for the same edge — obstacle bend and label included — because both call
+    /// [`laid_out`] and nothing else.
+    #[test]
+    fn the_measured_pass_and_the_static_render_are_the_same_pass() {
+        let list = vec![
+            node_at(
+                "a",
+                0,
+                0,
+                vec![Edge {
+                    id: "b".into(),
+                    from: None,
+                    to: None,
+                    label: "then".into(),
+                }],
+            ),
+            node_at("b", 900, 400, vec![]),
+            // An obstacle, so the parity holds for a bent curve, not only a plain one.
+            node_at("wall", 450, 150, vec![]),
+        ];
+        let boxes = rects(&list);
+        let (edges_html, labels_html) = edges_svg("plan", &list, &boxes, 1.0);
+        let static_path = edges_html
+            .split("<path data-from=")
+            .nth(1)
+            .and_then(|edge| edge.split(" d=\"").nth(1))
+            .and_then(|rest| rest.split('"').next())
+            .expect("one edge");
+
+        let measured: Vec<Measured> = list
+            .iter()
+            .zip(&boxes)
+            .map(|(node, rect)| Measured {
+                id: node.id.clone(),
+                rect: *rect,
+            })
+            .collect();
+        let layout = edge_layout(
+            &measured,
+            &[EdgeSpec {
+                from: "a".into(),
+                to: "b".into(),
+                from_pin: None,
+                to_pin: None,
+                label: "then".into(),
+            }],
+            1.0,
+        );
+        assert_eq!(layout.len(), 1);
+        assert_eq!(
+            layout[0].path, static_path,
+            "a measured re-layout must draw the same curve the static render did"
+        );
+        assert!(
+            labels_html.contains(">then</text>"),
+            "the static render carries the label: {labels_html}"
+        );
+        let label = layout[0]
+            .label
+            .as_ref()
+            .expect("the measured pass must carry the label too");
+        assert!(label.font > 0.0);
+    }
+
+    /// A pinned end stays exactly where the reader drew it; an unpinned one is the
+    /// router's own choice, made against the boxes it was given — not the pin's opposite.
+    #[test]
+    fn a_pinned_end_stays_and_an_unpinned_one_is_the_routers_choice() {
+        let measured = vec![
+            Measured {
+                id: "a".into(),
+                rect: rect(0.0, 0.0),
+            },
+            Measured {
+                id: "b".into(),
+                rect: rect(0.0, 400.0),
+            },
+        ];
+        let layout = edge_layout(
+            &measured,
+            &[EdgeSpec {
+                from: "a".into(),
+                to: "b".into(),
+                from_pin: Some(Side::Right),
+                to_pin: None,
+                label: String::new(),
+            }],
+            1.0,
+        );
+        assert_eq!(layout[0].from_side, Side::Right, "the pin must be honoured");
+        // Two boxes stacked vertically face each other top/bottom — `auto_sides` — and an
+        // unpinned end takes that, not the pin's own opposite side.
+        assert_eq!(layout[0].to_side, Side::Top);
+    }
+
+    /// Routed through the public door, an edge still bends clear of a box standing between
+    /// its two ends — the same obstacle avoidance [`controls`] has always done.
+    #[test]
+    fn edge_layout_bends_a_path_around_a_measured_obstacle() {
+        let measured = vec![
+            Measured {
+                id: "left".into(),
+                rect: rect(0.0, 0.0),
+            },
+            Measured {
+                id: "right".into(),
+                rect: rect(700.0, 0.0),
+            },
+            Measured {
+                id: "wall".into(),
+                rect: rect(330.0, 0.0),
+            },
+        ];
+        let layout = edge_layout(
+            &measured,
+            &[EdgeSpec {
+                from: "left".into(),
+                to: "right".into(),
+                from_pin: None,
+                to_pin: None,
+                label: String::new(),
+            }],
+            1.0,
+        );
+        let wall = measured[2].rect;
+        for (x, y) in samples_of(&layout[0].path) {
+            assert!(
+                !wall.holds(x, y, 0.0),
+                "the routed edge runs under `wall` at {x},{y}: {}",
+                layout[0].path
+            );
+        }
+    }
+
+    /// A board fitted below the legibility floors states the same compensating stroke and
+    /// font through the door that [`edges_svg`] states inline — computed once by
+    /// [`edge_layout`], not once per edge.
+    #[test]
+    fn edge_layout_states_the_stroke_and_font_the_fit_floor_asks_for() {
+        let measured = vec![
+            Measured {
+                id: "a".into(),
+                rect: rect(0.0, 0.0),
+            },
+            Measured {
+                id: "b".into(),
+                rect: rect(900.0, 0.0),
+            },
+        ];
+        let scale = 0.3;
+        let layout = edge_layout(
+            &measured,
+            &[EdgeSpec {
+                from: "a".into(),
+                to: "b".into(),
+                from_pin: None,
+                to_pin: None,
+                label: "then".into(),
+            }],
+            scale,
+        );
+        let stroke = layout[0]
+            .stroke
+            .expect("a fit this deep needs the compensating stroke");
+        assert!((stroke - EDGE_STROKE_MIN / scale).abs() < 1e-9, "{stroke}");
+        let label = layout[0].label.as_ref().expect("a labelled edge");
+        assert!(
+            (label.font - EDGE_LABEL_MIN / scale).abs() < 1e-9,
+            "{}",
+            label.font
+        );
+    }
+
+    /// At a legible fit neither floor applies — the theme's own stroke and font hold, so
+    /// the door answers `None` rather than a value nobody asked to override.
+    #[test]
+    fn edge_layout_carries_no_override_at_a_legible_fit() {
+        let measured = vec![
+            Measured {
+                id: "a".into(),
+                rect: rect(0.0, 0.0),
+            },
+            Measured {
+                id: "b".into(),
+                rect: rect(900.0, 0.0),
+            },
+        ];
+        let layout = edge_layout(
+            &measured,
+            &[EdgeSpec {
+                from: "a".into(),
+                to: "b".into(),
+                from_pin: None,
+                to_pin: None,
+                label: "then".into(),
+            }],
+            1.0,
+        );
+        assert!(layout[0].stroke.is_none());
+        let label = layout[0].label.as_ref().expect("a labelled edge");
+        assert!((label.font - EDGE_LABEL_BASE).abs() < 1e-9);
+    }
+
+    /// The three skip rules a document's own board draws by, held through the door too: a
+    /// spec naming a node the surface never measured draws nothing rather than guessing.
+    #[test]
+    fn edge_layout_skips_an_edge_naming_an_unmeasured_node() {
+        let measured = vec![Measured {
+            id: "a".into(),
+            rect: rect(0.0, 0.0),
+        }];
+        let layout = edge_layout(
+            &measured,
+            &[EdgeSpec {
+                from: "a".into(),
+                to: "ghost".into(),
+                from_pin: None,
+                to_pin: None,
+                label: String::new(),
+            }],
+            1.0,
+        );
+        assert!(
+            layout.is_empty(),
+            "an edge to an unmeasured node draws nothing: {layout:?}"
+        );
+    }
+
+    /// A node pointed at itself is not an edge a reader can follow anywhere.
+    #[test]
+    fn edge_layout_does_not_draw_a_node_to_itself() {
+        let measured = vec![Measured {
+            id: "a".into(),
+            rect: rect(0.0, 0.0),
+        }];
+        let layout = edge_layout(
+            &measured,
+            &[EdgeSpec {
+                from: "a".into(),
+                to: "a".into(),
+                from_pin: None,
+                to_pin: None,
+                label: String::new(),
+            }],
+            1.0,
+        );
+        assert!(layout.is_empty(), "a self-edge is not drawn: {layout:?}");
+    }
+
+    /// The same pair stated twice is one arrow, not two stacked on top of each other.
+    #[test]
+    fn edge_layout_draws_a_pair_stated_twice_once() {
+        let measured = vec![
+            Measured {
+                id: "a".into(),
+                rect: rect(0.0, 0.0),
+            },
+            Measured {
+                id: "b".into(),
+                rect: rect(500.0, 0.0),
+            },
+        ];
+        let spec = EdgeSpec {
+            from: "a".into(),
+            to: "b".into(),
+            from_pin: None,
+            to_pin: None,
+            label: String::new(),
+        };
+        let layout = edge_layout(&measured, &[spec.clone(), spec], 1.0);
+        assert_eq!(
+            layout.len(),
+            1,
+            "the same pair stated twice is drawn once: {layout:?}"
+        );
+    }
+
+    /// A line dragged from a node's side, following the pointer rather than attached to
+    /// anywhere, reaches back the way the source reaches out — the same handle a committed
+    /// edge would grow, not a line kinked straight at wherever the pointer happens to be.
+    #[test]
+    fn a_dragged_line_reaches_back_the_way_it_left() {
+        let source = rect(0.0, 0.0);
+        let path = drag_path((source, Side::Right), DragEnd::At(500.0, 200.0), &[]);
+        let numbers = path_numbers(&path);
+        assert!(
+            numbers[2] > numbers[0],
+            "the first handle must reach out to the right, the source's own side: {path}"
+        );
+    }
+
+    /// A line dropped over a node lands exactly where a committed edge into that side
+    /// would: [`drag_path`] is [`curve`], not an approximation of it.
+    #[test]
+    fn a_drag_over_a_node_lands_on_the_side_it_was_dropped_on() {
+        let source = rect(0.0, 0.0);
+        let target = rect(900.0, 0.0);
+        let path = drag_path((source, Side::Right), DragEnd::On(target, Side::Left), &[]);
+        let numbers = path_numbers(&path);
+        let arrival = target.anchor(Side::Left, 0.5);
+        assert!((numbers[8] - arrival.x).abs() < 1e-6, "{path}");
+        assert!((numbers[9] - arrival.y).abs() < 1e-6, "{path}");
+    }
+
+    /// The one vocabulary [`side_named`] and [`Side::letter`] share, round-tripped — the
+    /// spelling a `doc-wasm` geometry call, a node line, and an editor's own link menu all
+    /// have to agree on.
+    #[test]
+    fn side_letters_and_words_round_trip() {
+        for side in [Side::Left, Side::Right, Side::Top, Side::Bottom] {
+            assert_eq!(side_named(&side.letter().to_string()), Some(side));
+        }
+        assert_eq!(side_named("top"), Some(Side::Top));
+        assert_eq!(side_named("."), None);
+        assert_eq!(side_named("nonsense"), None);
     }
 }

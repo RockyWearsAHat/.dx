@@ -26,6 +26,30 @@ test('a rendered document may show inline images and reach nothing else', () => 
   assert.doesNotMatch(policy, /script-src [^;]*'unsafe-inline'/);
 });
 
+test('the geometry engine may compile, and nothing gains the power to eval a string', () => {
+  const policy = scriptPolicy('abc');
+
+  // The one widening this webview carries, and it is asserted explicitly rather than left
+  // to a silent diff: the geometry engine (`editor/surface/doc_wasm.js`, inlined the same
+  // way `edit.js` is) needs `'wasm-unsafe-eval'` to compile at all.
+  assert.match(
+    policy,
+    /script-src [^;]*'wasm-unsafe-eval'/,
+    'the geometry engine is WebAssembly, which will not compile without it'
+  );
+  // `'wasm-unsafe-eval'` is not a script source and grants no origin, no inline script, and
+  // none of `eval`/`Function(string)`/`setTimeout(string)` — those need the unrelated
+  // `'unsafe-eval'`, which a policy carrying only the wasm grant must still refuse. The
+  // substring `'unsafe-eval'` (quote to quote) never appears inside `'wasm-unsafe-eval'`,
+  // so this is the same check as the plain-`'unsafe-eval'` assertion above, stated again
+  // beside the grant it is guarding.
+  assert.doesNotMatch(
+    policy,
+    /script-src [^;]*'unsafe-eval'/,
+    'compiling wasm is not evaluating strings, and the page must get neither'
+  );
+});
+
 test('each render authorizes its scripts with a nonce nobody can guess', () => {
   const nonce = makeNonce();
 

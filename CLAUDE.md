@@ -202,7 +202,12 @@ node --test "editor/vscode/test/*.test.mjs" # the editing calls, across the wasm
 ```
 
 No `unsafe`. Every public item documented. No panics in library code — fallible operations
-return `Result`, and user-facing failures return a sentence saying what to do about it.
+return `Result`, and user-facing failures return a sentence saying what to do about it. This
+forbids a panic reachable from user or document input; it does not forbid `expect()`/`unwrap()`
+on a condition an adjacent check already made impossible (a length just verified, a variant just
+matched) — that is documentation of an invariant, not a missing `Result`. Write the `expect()`
+message as the invariant, so it reads as a proof, not an excuse, and keep the check and the
+`expect()` beside each other so a later edit cannot separate them.
 
 Tests are colocated with the code they test and named for the behavior they pin down. When you
 fix a bug, add the test that would have caught it. Non-ASCII prose, empty input, and missing

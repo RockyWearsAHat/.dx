@@ -48,6 +48,7 @@ function loadSurface(context: vscode.ExtensionContext): Surface | undefined {
     return {
       js: fs.readFileSync(path.join(directory, 'edit.js'), 'utf8'),
       css: fs.readFileSync(path.join(directory, 'edit.css'), 'utf8'),
+      glue: fs.readFileSync(path.join(directory, 'doc_wasm.js'), 'utf8'),
     };
   } catch {
     return undefined;
@@ -58,10 +59,14 @@ function loadSurface(context: vscode.ExtensionContext): Surface | undefined {
 export function activate(context: vscode.ExtensionContext): void {
   const sides = new DxTextProvider();
   context.subscriptions.push(
-    vscode.window.registerCustomEditorProvider(VIEW_TYPE, new DxEditorProvider(loadSurface(context)), {
-      webviewOptions: { retainContextWhenHidden: true },
-      supportsMultipleEditorsPerDocument: true,
-    }),
+    vscode.window.registerCustomEditorProvider(
+      VIEW_TYPE,
+      new DxEditorProvider(loadSurface(context), context.extensionUri),
+      {
+        webviewOptions: { retainContextWhenHidden: true },
+        supportsMultipleEditorsPerDocument: true,
+      }
+    ),
     vscode.workspace.registerTextDocumentContentProvider(TEXT_SCHEME, sides),
     // A comparison the reader keeps typing into has to keep up, or it is quietly showing
     // them a document they no longer have.
@@ -92,15 +97,26 @@ export function deactivate(): void {
  * source control, and external edits all behave normally.
  */
 class DxEditorProvider implements vscode.CustomTextEditorProvider {
-  /** The shared editing surface, read once from the extension's own directory. */
-  public constructor(private readonly surface?: Surface) {}
+  /**
+   * @param surface The shared editing surface, read once from the extension's own directory.
+   * @param extensionUri Where the geometry engine's `.wasm` bytes live — needed only for the
+   *   `engine` op, which reads them fresh per request rather than holding them in memory for
+   *   the life of the extension.
+   */
+  public constructor(
+    private readonly surface: Surface | undefined,
+    private readonly extensionUri: vscode.Uri
+  ) {}
 
   /** Render `document` into `panel` and keep the two in step. */
   public resolveCustomTextEditor(
     document: vscode.TextDocument,
     panel: vscode.WebviewPanel
   ): void {
-    panel.webview.options = { enableScripts: true };
+    // The webview needs nothing outside the extension's own directory — narrower than the
+    // default (every workspace folder), and worth stating now that the page also loads a
+    // WebAssembly module: what it may *reach* stays exactly this small regardless.
+    panel.webview.options = { enableScripts: true, localResourceRoots: [this.extensionUri] };
 
     // The text this webview last wrote. An edit made on the page comes back as a change to
     // the document, and rebuilding the page for it would throw away the caret the reader is
@@ -138,7 +154,7 @@ class DxEditorProvider implements vscode.CustomTextEditorProvider {
         }
         if (message.dxEdit) {
           const call = message.dxEdit;
-          void applyEdit(document, call, (text) => {
+          void applyEdit(document, call, this.extensionUri, (text) => {
             written = text;
           }).then((outcome) => {
             // The change event has already fired by now, if it was going to; an edit that
@@ -202,8 +218,8 @@ interface EditCall {
   /** Correlates this call with its reply. */
   readonly call: number;
   /**
-   * `source`, `parts`, `decorate`, `commit`, `replace`, `remove`, `run`, `check`, or
-   * `board` — the contract `editor/surface/edit.js` documents, and nothing else.
+   * `source`, `parts`, `decorate`, `commit`, `replace`, `remove`, `run`, `check`, `board`,
+   * or `engine` — the contract `editor/surface/edit.js` documents, and nothing else.
    */
   readonly op: string;
   /** The block the call is about. */
@@ -272,6 +288,7 @@ interface EditOutcome {
 async function applyEdit(
   document: vscode.TextDocument,
   call: EditCall,
+  extensionUri: vscode.Uri,
   wrote: (text: string) => void
 ): Promise<EditOutcome> {
   const source = document.getText();
@@ -284,6 +301,17 @@ async function applyEdit(
     switch (call.op) {
       case 'source':
         return { value: engine().block_source(source, id) };
+
+      // The geometry engine's own bytes, read fresh each time rather than cached: this
+      // fires once per page load, and a build that shipped without them (an extension
+      // packaged incorrectly) should say so through the ordinary `catch` below rather than
+      // hold a stale answer from an earlier attempt.
+      case 'engine':
+        return {
+          value: fs
+            .readFileSync(path.join(extensionUri.fsPath, 'wasm', 'doc_wasm_bg.wasm'))
+            .toString('base64'),
+        };
 
       // The block split the way the editing surface shows it: the writer's own
       // `::kind attrs` line above, the editable body beneath.

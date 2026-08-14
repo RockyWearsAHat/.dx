@@ -461,6 +461,14 @@ figcaption {
   background: var(--dx-bg);
   overflow: hidden;
 }
+/* A board is meant to be read as a dashboard mid-debug, not just a diagram: the one status
+   this hairline ever changes color for is a runnable node's last run having failed — the
+   same failure this page already calls out in a listing (`.dx-output-error`) and in a fit
+   notice, and nothing else. A node that passed or has not run yet keeps the plain rule,
+   because a successful run says nothing here either. */
+.dx-board-node-failed {
+  border-color: var(--dx-error);
+}
 /* The body takes whatever the box has left — which is the whole of it on a page nobody can
    click, and the rest of it under the grip bar an editing surface adds. Stating a height
    here instead would put the block's last line under the node's own bottom edge. */

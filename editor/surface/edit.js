@@ -67,6 +67,12 @@
  *   nodes' sides. The host performs it through the engine (`dx board`), because the board's
  *   line grammar is the engine's: this file measures pixels and never writes a line itself.
  *   Without it, a board still pans and zooms — a reader can look, and cannot rearrange.
+ * - `engine()` — optional: the geometry engine's WebAssembly bytes, base64. A board's
+ *   curves are `render::board`'s, recomputed on every pointer move a reader makes — too
+ *   often for a round trip through this bridge, so the engine is instantiated in this
+ *   page's own realm instead and called directly once `engine()` resolves. Without it, a
+ *   board still shows the edges the renderer drew from its own guessed heights — a reader
+ *   can look, and cannot drag a node or a link.
  *
  * `commit`, `replace`, `remove`, `run`, `check`, and `board` resolve with `{ document, focus }`:
  * `document` is the re-rendered `.dx-doc` container, and `focus` is the id to open
@@ -1307,11 +1313,12 @@
   // drag, resize, link — and asks the host to write every line, because the line grammar
   // is the engine's. Blocks inside nodes are edited by the same click everything else is.
   //
-  // The geometry is the engine's as well, restated here against boxes a browser can
-  // measure. `render::board` decides which side of a node an edge meets, how the edges
-  // sharing one side spread along it, and the curve between them — from heights a static
-  // render has to guess. Everything below makes the same decisions from the real ones, so
-  // a board does not change shape the moment a reader can touch it.
+  // The geometry is the engine's too, and stays the engine's: `render::board` decides
+  // which side of a node an edge meets, how the edges sharing one side spread along it,
+  // and the curve between them, and this section asks it again — through `doc-wasm`,
+  // loaded into this page's own realm ([`loadGeometry`]) — against boxes a browser can
+  // measure instead of the heights a static render has to guess. Nothing below decides a
+  // curve; it measures, asks, and writes the answer onto the page.
   // -------------------------------------------------------------------------
 
   /** The four sides of a node, in the letters a node line writes them as. */
@@ -1407,10 +1414,54 @@
     node.appendChild(size);
   }
 
-  // The geometry, mirroring `render::board`: boxes, the sides an edge meets, where along a
-  // side it sits, and the curve between two of those points.
+  /**
+   * The geometry engine, once its bytes have arrived and been instantiated.
+   *
+   * `render::board` owns every curve a board draws — which side an edge meets, where along
+   * that side it sits, the bend between two of those points — and a drag or a resize asks
+   * for it again on every pointer move. That is too often for a round trip through `host`,
+   * so the engine runs *here* instead, in this page's own realm: `doc-wasm`'s
+   * `board_edge_layout`/`board_edge_preview`, called like any other function once loaded.
+   * Nothing about a curve is decided in this file — `docs/board-geometry.dx` is the full
+   * account of the door and what still is decided here (`boxOf`, `sideNearest`, and when to
+   * ask).
+   */
+  let geometry = null;
 
-  /** A node's box on the canvas, in canvas pixels. */
+  /**
+   * Ask the host for the geometry engine's bytes and instantiate it, once.
+   *
+   * Until this resolves, a board shows the edges the renderer already drew from its own
+   * guessed heights — the honest answer computed from stated boxes, never a blank canvas
+   * and never a second implementation kept in step with `render::board` by hand. On arrival
+   * every already-wired board is laid out again against the real ones.
+   */
+  function loadGeometry() {
+    if (geometry || !host || !host.engine || typeof wasm_bindgen !== 'function') return;
+    Promise.resolve(host.engine())
+      .then((base64) => wasm_bindgen({ module_or_path: bytesOf(base64) }))
+      .then(() => {
+        geometry = wasm_bindgen;
+        for (const board of document.querySelectorAll('.dx-board[data-dx-wired]')) {
+          layoutEdges(board);
+        }
+      })
+      .catch(() => {
+        // A board a reader can only look at is still a board; nothing here retries, since
+        // the next page load (the next `attach`) is the next attempt.
+      });
+  }
+
+  /** Decode a base64 string into the bytes `wasm_bindgen` compiles. */
+  function bytesOf(base64) {
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+    return bytes;
+  }
+
+  /** A node's box on the canvas, in canvas pixels — the measurement a static render cannot
+   * make, and the reason this door exists at all. */
   function boxOf(node) {
     return {
       x: node.offsetLeft,
@@ -1420,51 +1471,12 @@
     };
   }
 
-  /** The centre of a box, which is what decides the sides of an unpinned edge. */
-  function centreOf(box) {
-    return { x: box.x + box.w / 2, y: box.y + box.h / 2 };
-  }
-
-  /** Which way an edge's handle reaches out of a side, as a unit vector. */
-  function reachOf(side) {
-    if (side === 'l') return { dx: -1, dy: 0 };
-    if (side === 'r') return { dx: 1, dy: 0 };
-    if (side === 't') return { dx: 0, dy: -1 };
-    return { dx: 0, dy: 1 };
-  }
-
-  /** True for the sides an edge spreads along horizontally — the top and the bottom. */
-  function spansAcross(side) {
-    return side === 't' || side === 'b';
-  }
-
-  /** The point `fraction` of the way along `side` of `box`, and the way it reaches. */
-  function anchorOn(box, side, fraction) {
-    const reach = reachOf(side);
-    const along = {
-      l: { x: box.x, y: box.y + box.h * fraction },
-      r: { x: box.x + box.w, y: box.y + box.h * fraction },
-      t: { x: box.x + box.w * fraction, y: box.y },
-      b: { x: box.x + box.w * fraction, y: box.y + box.h },
-    }[side];
-    return { x: along.x, y: along.y, dx: reach.dx, dy: reach.dy };
-  }
-
   /**
-   * The sides an unpinned edge joins: the facing pair on the axis the two boxes are
-   * furthest apart along, vertical winning a tie — `render::board::auto_sides`, because a
-   * board grows downwards and two boxes that overlap across are one above the other.
+   * The side of `box` nearest a canvas point: which edge a line was dropped on.
+   *
+   * Drop-point snapping during a drag — surface-only UI, with no `render::board`
+   * counterpart, because the engine never sees a pointer.
    */
-  function autoSides(from, to) {
-    const a = centreOf(from);
-    const b = centreOf(to);
-    const dx = b.x - a.x;
-    const dy = b.y - a.y;
-    if (Math.abs(dy) >= Math.abs(dx)) return dy >= 0 ? ['b', 't'] : ['t', 'b'];
-    return dx >= 0 ? ['r', 'l'] : ['l', 'r'];
-  }
-
-  /** The side of `box` nearest a canvas point: which edge a line was dropped on. */
   function sideNearest(box, x, y) {
     const gap = {
       l: Math.abs(x - box.x),
@@ -1473,191 +1485,6 @@
       b: Math.abs(box.y + box.h - y),
     };
     return SIDES.reduce((best, side) => (gap[side] < gap[best] ? side : best), 'l');
-  }
-
-  // How far a path keeps away from a box it is not attached to, and how finely a curve is
-  // sampled when asking. Both `render::board`'s numbers.
-  const EDGE_CLEARANCE = 10;
-  const EDGE_SAMPLES = 32;
-
-  /** Whether a point is inside `box`, with `slack` of margin — `Rect::holds`. */
-  function boxHolds(box, x, y, slack) {
-    return (
-      x > box.x - slack &&
-      x < box.x + box.w + slack &&
-      y > box.y - slack &&
-      y < box.y + box.h + slack
-    );
-  }
-
-  /** Whether the straight run between two points passes through `box`. */
-  function segmentHits(from, to, box) {
-    for (let step = 0; step <= EDGE_SAMPLES; step += 1) {
-      const along = step / EDGE_SAMPLES;
-      const x = from.x + (to.x - from.x) * along;
-      const y = from.y + (to.y - from.y) * along;
-      if (boxHolds(box, x, y, EDGE_CLEARANCE)) return true;
-    }
-    return false;
-  }
-
-  /**
-   * Where two runs cross, as the sine of the angle they meet at, or `null` if they do not —
-   * `render::board::crossing_sine`. Square crossings read as one line passing over another;
-   * shallow ones read as a fork, so they are scored differently.
-   */
-  function crossingSine(a, b) {
-    const r = { x: a[1].x - a[0].x, y: a[1].y - a[0].y };
-    const s = { x: b[1].x - b[0].x, y: b[1].y - b[0].y };
-    const denominator = r.x * s.y - r.y * s.x;
-    if (Math.abs(denominator) < 1e-12) return null;
-    const dx = b[0].x - a[0].x;
-    const dy = b[0].y - a[0].y;
-    const along = (dx * s.y - dy * s.x) / denominator;
-    const across = (dx * r.y - dy * r.x) / denominator;
-    if (along < 0.02 || along > 0.98 || across < 0.02 || across > 0.98) return null;
-    const length = Math.max(1e-12, Math.hypot(r.x, r.y) * Math.hypot(s.x, s.y));
-    return Math.abs(denominator / length);
-  }
-
-  /** The middle of one side of a box — where a candidate route is measured from. */
-  function midpointOn(box, side) {
-    return anchorOn(box, side, 0.5);
-  }
-
-  /**
-   * The pair of sides an unpinned edge should join — `render::board::clearest_sides`.
-   *
-   * A box over a line beats any number of crossings, a shallow crossing costs more than a
-   * square one, and the facing pair breaks the tie so a clear run keeps the arrangement a
-   * board has always had.
-   */
-  function clearestSides(fromBox, toBox, obstacles, pins, settled) {
-    const OCCLUSION = 100;
-    const CROSSING = 4;
-    const preferred = autoSides(fromBox, toBox);
-    const outs = pins[0] ? [pins[0]] : SIDES;
-    const intos = pins[1] ? [pins[1]] : SIDES;
-
-    let best = { cost: Infinity, sides: preferred };
-    for (const out of outs) {
-      for (const into of intos) {
-        const start = midpointOn(fromBox, out);
-        const end = midpointOn(toBox, into);
-        const blocked = obstacles.filter((box) => segmentHits(start, end, box)).length;
-        let tangle = 0;
-        for (const other of settled) {
-          const square = crossingSine([start, end], other);
-          if (square !== null) tangle += CROSSING * (1.25 - square * 0.75);
-        }
-        const habit = (out !== preferred[0] ? 1 : 0) + (into !== preferred[1] ? 1 : 0);
-        const cost = blocked * OCCLUSION + tangle + habit;
-        if (cost < best.cost) best = { cost, sides: [out, into] };
-      }
-    }
-    return best.sides;
-  }
-
-  /**
-   * The two control points of an edge's cubic, bent aside if the plain curve would hide
-   * behind a box — `render::board::controls`.
-   *
-   * The plain curve is tried first and is what almost every edge gets. Each handle reaches
-   * a share of the span, but never more than half the distance the run advances along that
-   * handle's own normal — handles that overshoot each other across a short gap wobble the
-   * cubic into an S-hook. When a box is in the
-   * way the handles are pushed square to the line between the ends, in growing steps and
-   * both directions — far past the span itself, because a wall of a node can stand taller
-   * than the whole run — and the first arrangement that clears every box wins. When nothing
-   * clears, the attempt that hid the fewest points of the line wins instead.
-   */
-  function controlsFor(from, to, obstacles) {
-    const STEPS = [0, 0.35, 0.7, 1.1, 1.6, 2.2, 3.0, 4.0, 5.5, 7.5];
-    const span = Math.hypot(to.x - from.x, to.y - from.y);
-    const reach = Math.min(160, Math.max(30, span * 0.42));
-    const capped = (end, other) => {
-      const advance = (other.x - end.x) * end.dx + (other.y - end.y) * end.dy;
-      return advance > 0 ? Math.min(reach, Math.max(advance * 0.5, 10)) : reach;
-    };
-    const fromReach = capped(from, to);
-    const toReach = capped(to, from);
-    const base = [
-      { x: from.x + fromReach * from.dx, y: from.y + fromReach * from.dy },
-      { x: to.x + toReach * to.dx, y: to.y + toReach * to.dy },
-    ];
-    if (!obstacles || !obstacles.length) return base;
-
-    const length = Math.max(1e-12, span);
-    const square = { x: -(to.y - from.y) / length, y: (to.x - from.x) / length };
-    let least = { hidden: Infinity, candidate: base };
-    for (const step of STEPS) {
-      for (const direction of [1, -1]) {
-        const push = step * reach * direction;
-        const candidate = [
-          { x: base[0].x + square.x * push, y: base[0].y + square.y * push },
-          { x: base[1].x + square.x * push, y: base[1].y + square.y * push },
-        ];
-        const hidden = hiddenSamples(from, to, candidate, obstacles);
-        if (!hidden) return candidate;
-        if (hidden < least.hidden) least = { hidden, candidate };
-        if (step === 0) break;
-      }
-    }
-    return least.candidate;
-  }
-
-  /** How many sampled points of a cubic with these controls sit inside an obstacle. */
-  function hiddenSamples(from, to, controls, obstacles) {
-    let hidden = 0;
-    for (let step = 2; step < EDGE_SAMPLES - 1; step += 1) {
-      const at = cubicAt(from, to, controls, step / EDGE_SAMPLES);
-      if (obstacles.some((box) => boxHolds(box, at.x, at.y, EDGE_CLEARANCE))) hidden += 1;
-    }
-    return hidden;
-  }
-
-  /** A point `along` a cubic, 0 at `from` and 1 at `to`. */
-  function cubicAt(from, to, controls, along) {
-    const rest = 1 - along;
-    const a = rest * rest * rest;
-    const b = 3 * rest * rest * along;
-    const c = 3 * rest * along * along;
-    const d = along * along * along;
-    return {
-      x: a * from.x + b * controls[0].x + c * controls[1].x + d * to.x,
-      y: a * from.y + b * controls[0].y + c * controls[1].y + d * to.y,
-    };
-  }
-
-  /**
-   * The point the curve hands over to the arrowhead — `render::board::lead`, same numbers:
-   * up to 16px out from the arrival anchor along its side's own normal. The cubic ends
-   * here and a straight segment carries the line the rest of the way in, so the head sits
-   * square to the side it arrives on and the line enters it dead down its axis — a bent
-   * cubic is still turning as it arrives, and without the tail the line met the head off
-   * its centre.
-   */
-  function leadOf(from, to) {
-    const span = Math.hypot(to.x - from.x, to.y - from.y);
-    const run = Math.min(16, Math.max(4, span * 0.25));
-    return { x: to.x + run * to.dx, y: to.y + run * to.dy, dx: to.dx, dy: to.dy };
-  }
-
-  /**
-   * The path an edge is drawn as: a cubic from the source to the lead point, then the
-   * straight run into the arrowhead — `render::board::curve`, same numbers, so the line a
-   * reader drags settles into the line the engine draws. `obstacles` are the boxes it must
-   * not disappear behind; a drag in progress passes none.
-   */
-  function curveBetween(from, to, obstacles) {
-    const lead = leadOf(from, to);
-    const controls = controlsFor(from, lead, obstacles);
-    return (
-      `M ${from.x} ${from.y} ` +
-      `C ${controls[0].x} ${controls[0].y}, ` +
-      `${controls[1].x} ${controls[1].y}, ${lead.x} ${lead.y} ` +
-      `L ${to.x} ${to.y}`
-    );
   }
 
   /** Fit the view to the nodes: all of them, on both axes, centred where they fit. */
@@ -1940,12 +1767,15 @@
    * connection stays on the edges it was drawn between however the board is rearranged.
    */
   function dragEdge(board, canvas, view, node, port, event) {
+    // The live preview is `board_edge_preview`, called on every pointer move; a drag that
+    // starts before the geometry engine lands has no way to draw its own line.
+    if (!geometry) return;
     const svg = edgesSvg(canvas);
     const probe = document.createElementNS('http://www.w3.org/2000/svg', 'path');
     probe.setAttribute('class', 'dx-linking');
     svg.appendChild(probe);
     const fromSide = port.dataset.side || 'r';
-    const from = anchorOn(boxOf(node), fromSide, 0.5);
+    const fromBox = boxOf(node);
     let target = null;
     let targetSide = '';
     track(
@@ -1957,16 +1787,21 @@
         const over = nodeUnder(step.clientX, step.clientY);
         if (target && target !== over) target.classList.remove('dx-link-target');
         target = over && over !== node && canvas.contains(over) ? over : null;
-        let to = { x, y, dx: -from.dx, dy: -from.dy };
+        let to = { x, y };
         if (target) {
           target.classList.add('dx-link-target');
           const box = boxOf(target);
           targetSide = sideNearest(box, x, y);
-          to = anchorOn(box, targetSide, 0.5);
+          to = { box, side: targetSide };
         } else {
           targetSide = '';
         }
-        probe.setAttribute('d', curveBetween(from, to));
+        const preview = JSON.parse(
+          geometry.board_edge_preview(
+            JSON.stringify({ from: { box: fromBox, side: fromSide }, to })
+          )
+        );
+        probe.setAttribute('d', preview.path);
       },
       (went) => {
         probe.remove();
@@ -2188,17 +2023,15 @@
 
   /**
    * Redraw every edge against the measured boxes: which side of each node it meets, where
-   * along that side it sits, and the curve between the two.
+   * along that side it sits, and the curve between the two — `doc-wasm`'s
+   * `board_edge_layout`, called once for the whole board.
    *
    * The engine draws the same edges from guessed heights — it cannot measure content — and
    * this replaces them with the truth. A *pinned* end (`data-from-side`, written only when
    * the node line pins one) stays on the edge the reader drew it from; an unpinned end
    * takes the facing side, so an edge nobody placed re-routes as the board is rearranged.
-   *
-   * A side is a whole connection edge, not a point: the lines meeting one take an even
-   * share of its length, ordered by where their other ends are, so a node with four
-   * connections fans them out instead of stacking them on one spot and crossing them on
-   * the way in.
+   * Until the geometry engine has landed, the sheet keeps the edges the page already shows
+   * — [`loadGeometry`] re-runs this once it does.
    */
   function layoutEdges(board) {
     const canvas = board.querySelector('.dx-board-canvas');
@@ -2207,130 +2040,58 @@
     if (!svg) return;
     // The sheet the edges are drawn on grows to cover the nodes, so a path stays
     // clickable — a browser only promises hit-testing inside the element's own box.
-    const nodes = canvas.querySelectorAll('.dx-board-node');
-    if (nodes.length) {
-      const box = contentBox(nodes);
+    const nodeEls = canvas.querySelectorAll('.dx-board-node');
+    if (nodeEls.length) {
+      const box = contentBox(nodeEls);
       svg.setAttribute('width', String(Math.max(1, box.x1 + 200)));
       svg.setAttribute('height', String(Math.max(1, box.y1 + 200)));
     }
+    if (!geometry) return;
 
-    // Every box on the canvas, so an edge can be routed clear of the ones it does not join.
-    const obstacles = new Map();
-    for (const node of nodes) {
-      obstacles.set(node.getAttribute('data-node-id'), boxOf(node));
-    }
-
-    const drawn = [];
-    const settled = [];
-    for (const path of svg.querySelectorAll('path[data-from]')) {
+    const nodes = [...nodeEls].map((node) => {
+      const measured = boxOf(node);
+      return { id: node.getAttribute('data-node-id'), ...measured };
+    });
+    const paths = [...svg.querySelectorAll('path[data-from]')];
+    const edges = paths.map((path) => {
       const fromId = path.getAttribute('data-from');
       const toId = path.getAttribute('data-to');
-      const from = nodeOn(canvas, fromId);
-      const to = nodeOn(canvas, toId);
-      if (!from || !to || from === to) continue;
-      const boxes = [boxOf(from), boxOf(to)];
-      const between = [...obstacles.entries()]
-        .filter(([id]) => id !== fromId && id !== toId)
-        .map(([, box]) => box);
-      const sides = clearestSides(
-        boxes[0],
-        boxes[1],
-        between,
-        [path.getAttribute('data-from-side'), path.getAttribute('data-to-side')],
-        settled
-      );
-      settled.push([midpointOn(boxes[0], sides[0]), midpointOn(boxes[1], sides[1])]);
-      drawn.push({ path, boxes, between, ids: [fromId, toId], sides });
-    }
-
-    const shared = new Map();
-    drawn.forEach((edge, index) => {
-      for (const end of [0, 1]) {
-        const key = `${edge.ids[end]}|${edge.sides[end]}`;
-        const other = centreOf(edge.boxes[1 - end]);
-        if (!shared.has(key)) shared.set(key, []);
-        shared.get(key).push({
-          index,
-          end,
-          along: spansAcross(edge.sides[end]) ? other.x : other.y,
-        });
-      }
-    });
-
-    const ends = drawn.map(() => [null, null]);
-    for (const bucket of shared.values()) {
-      bucket.sort((a, b) => a.along - b.along || a.index - b.index);
-      bucket.forEach((slot, position) => {
-        const edge = drawn[slot.index];
-        ends[slot.index][slot.end] = anchorOn(
-          edge.boxes[slot.end],
-          edge.sides[slot.end],
-          (position + 1) / (bucket.length + 1)
-        );
-      });
-    }
-    drawn.forEach((edge, index) => {
-      const [from, to] = ends[index];
-      edge.path.setAttribute('d', curveBetween(from, to, edge.between));
-      // A label rides the clearest point of the curve it belongs to. Only labelled edges
-      // carry one, so it is found by the pair it names rather than by counting — on the
-      // canvas, not the edge sheet: labels live on their own sheet painted above the
-      // nodes, so a box the curve runs against can never slice the words, and the spot
-      // search (mirroring render::board::label_spot) keeps the words off a node's own ink.
       const label = canvas.querySelector(
-        `.dx-board-edge-label[data-from="${cssEscape(edge.ids[0])}"]` +
-          `[data-to="${cssEscape(edge.ids[1])}"]`
+        `.dx-board-edge-label[data-from="${cssEscape(fromId)}"][data-to="${cssEscape(toId)}"]`
       );
-      if (label) {
-        const lead = leadOf(from, to);
-        // For the words every node is an obstacle, the edge's own two included — the
-        // curve is attached to them, the label must not sit on them.
-        const spot = labelSpot(
-          from,
-          lead,
-          controlsFor(from, lead, edge.between),
-          [...edge.boxes, ...edge.between],
-          label
-        );
-        label.setAttribute('x', String(spot.x));
-        label.setAttribute('y', String(spot.y));
-      }
+      return {
+        from: fromId,
+        to: toId,
+        fromSide: path.getAttribute('data-from-side'),
+        toSide: path.getAttribute('data-to-side'),
+        label: label ? label.textContent || '' : '',
+      };
     });
-  }
+    const id = board.getAttribute('data-block-id');
+    const scale = (boardViews.get(id) || {}).s || 1;
+    const layout = JSON.parse(geometry.board_edge_layout(JSON.stringify({ scale, nodes, edges })));
 
-  /**
-   * Where along its curve an edge's words sit — `render::board::label_spot`, same
-   * numbers: from the middle outward, the first sample whose estimated label box covers
-   * none of the boxes it paints over wins (labels ride above the nodes), else the sample
-   * covering least.
-   */
-  function labelSpot(from, lead, run, boxes, label) {
-    const font = parseFloat(label.style.fontSize) || 11.5;
-    const text = label.textContent || '';
-    const width = font * 0.62 * text.length + font * 0.5;
-    const height = font * 1.3;
-    let best = cubicAt(from, lead, run, 0.5);
-    let least = Infinity;
-    for (const along of [0.5, 0.42, 0.58, 0.34, 0.66, 0.26, 0.74, 0.18, 0.82]) {
-      const point = cubicAt(from, lead, run, along);
-      let covered = 0;
-      for (const box of boxes) {
-        const w = Math.min(point.x + width / 2, box.x + box.w) - Math.max(point.x - width / 2, box.x);
-        const h = Math.min(point.y + height / 2, box.y + box.h) - Math.max(point.y - height / 2, box.y);
-        if (w > 0 && h > 0) covered += w * h;
-      }
-      if (covered < least) {
-        least = covered;
-        best = point;
-      }
-      if (!covered) break;
+    for (const entry of layout) {
+      const path = paths.find(
+        (candidate) =>
+          candidate.getAttribute('data-from') === entry.from &&
+          candidate.getAttribute('data-to') === entry.to
+      );
+      if (!path) continue;
+      path.setAttribute('d', entry.path);
+      path.style.strokeWidth = entry.stroke ? String(entry.stroke) : '';
+      if (!entry.label) continue;
+      // On its own sheet, painted above the nodes: an edge's label is content, and a box
+      // the curve runs against must never slice it.
+      const label = canvas.querySelector(
+        `.dx-board-edge-label[data-from="${cssEscape(entry.from)}"]` +
+          `[data-to="${cssEscape(entry.to)}"]`
+      );
+      if (!label) continue;
+      label.setAttribute('x', String(entry.label.x));
+      label.setAttribute('y', String(entry.label.y));
+      label.style.fontSize = `${entry.label.font}px`;
     }
-    return best;
-  }
-
-  /** The node element showing `id` on this canvas, if it is there. */
-  function nodeOn(canvas, id) {
-    return id ? canvas.querySelector(`.dx-board-node[data-node-id="${cssEscape(id)}"]`) : null;
   }
 
   /** This canvas's edge sheet, created when the board has no edges drawn yet. */
@@ -2714,5 +2475,9 @@
     setTimeout(() => note.remove(), 6000);
   }
 
-  window.dxEditor = { attach };
+  // `engine` is a second entry point rather than folded into `attach` (a second argument, a
+  // property on the bridge) because `host-contract.test.mjs` parses `attach({…})` as one
+  // literal object naming the host's ops — a host offers `engine` as one of those, the same
+  // as any other optional call, and this page calls it back once attaching is done.
+  window.dxEditor = { attach, engine: loadGeometry };
 })();

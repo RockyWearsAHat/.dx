@@ -550,6 +550,14 @@
     const head = document.querySelector('[data-head-sha]')?.getAttribute('data-head-sha');
     if (base && head) return { base, head };
 
+    // The pull request diff tab's current layout: neither attribute above exists, and both
+    // ids live in the page's own embedded route data instead.
+    const embeddedTexts = Array.from(
+      document.querySelectorAll('script[data-target="react-app.embeddedData"]'),
+    ).map((script) => script.textContent);
+    const embedded = globalThis.dxResolve.routeShasFrom(embeddedTexts);
+    if (embedded) return embedded;
+
     const carriers = revisionCarriers();
 
     // A commit page compares the commit with its parent, and states both without ambiguity:
