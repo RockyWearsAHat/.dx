@@ -144,7 +144,13 @@ fn close(args: &Args) -> Result<String, String> {
         &subscription.project,
         id,
         &intake::token_for(&subscription),
-    )?;
+    )
+    .map_err(|error| {
+        format!(
+            "{error} — run `dx report sync`, which removes a report the intake has already \
+             closed elsewhere"
+        )
+    })?;
     let mut out = format!(
         "closed {id} at {}\n",
         intake::address(&subscription.endpoint, "close", &subscription.project)

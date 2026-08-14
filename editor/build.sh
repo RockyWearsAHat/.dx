@@ -42,14 +42,23 @@ echo "building the engine"
 build no-modules "$here/github/wasm"
 build nodejs "$here/vscode/wasm"
 
+# The geometry engine's glue, into the surface itself: `edit.js` instantiates this in its
+# own realm (the webview, DX.app's content world) so a board's curves are a direct function
+# call, not a message round trip to wherever the rest of the engine lives. The no-modules
+# build is the one glue that runs in either realm — it defines a plain `wasm_bindgen`
+# global, which is what a `WKUserScript`/inline `<script>` needs. Only the glue is copied
+# here; the `.wasm` bytes themselves reach each host over its own message bridge
+# (`docs/board-geometry.dx` says why), never inlined into a page that re-renders often.
+cp "$here/github/wasm/doc_wasm.js" "$here/surface/doc_wasm.js"
+
 # The editing surface, into the extension that packs it. `editor/surface` is the one source;
-# `packaging/build-app.sh` copies the same two files into DX.app. github/ gets nothing —
+# `packaging/build-app.sh` copies the same files into DX.app. github/ gets nothing —
 # github.com shows other people's repositories, which are read there and edited nowhere.
 echo "copying the editing surface"
 mkdir -p "$here/vscode/surface"
-cp "$here/surface/edit.js" "$here/surface/edit.css" "$here/vscode/surface/"
+cp "$here/surface/edit.js" "$here/surface/edit.css" "$here/surface/doc_wasm.js" "$here/vscode/surface/"
 printf "  %-10s %8d bytes  %s\n" "surface" \
-  "$(cat "$here/surface/edit.js" "$here/surface/edit.css" | wc -c | tr -d ' ')" \
+  "$(cat "$here/surface/edit.js" "$here/surface/edit.css" "$here/surface/doc_wasm.js" | wc -c | tr -d ' ')" \
   "$here/vscode/surface"
 
 cat <<NEXT

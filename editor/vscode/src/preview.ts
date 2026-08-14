@@ -23,6 +23,13 @@ export interface Surface {
   readonly js: string;
   /** `editor/surface/edit.css`. */
   readonly css: string;
+  /**
+   * `editor/surface/doc_wasm.js` — the geometry engine's glue, the `no-modules` build that
+   * defines a plain `wasm_bindgen` global. Static code, unlike the engine's own bytes: it
+   * ships with `edit.js` the same way, inlined once per page rather than fetched, and never
+   * crosses the `postMessage` bridge — only the `.wasm` bytes do, on request.
+   */
+  readonly glue: string;
 }
 
 /**
@@ -68,7 +75,13 @@ if (window.dxEditor) {
     run: (id) => dxCall({ op: 'run', id }),
     check: (id, item) => dxCall({ op: 'check', id, item }),
     board: (id, action, spec) => dxCall({ op: 'board', id, action, spec }),
+    engine: () => dxCall({ op: 'engine' }),
   });
+  // The geometry engine loads once, after attach: its bytes come over this same bridge
+  // (one request, not inlined into the page), and a board is fully usable before it lands
+  // — the fitted page's own curves are the honest answer until the truer, measured ones
+  // are ready to replace them.
+  window.dxEditor.engine();
 }
 `;
 
@@ -164,9 +177,13 @@ export function previewHtml(
   );
   // The editor goes after the toolbar's script, because the bridge it installs calls
   // `acquireVsCodeApi()` — which may be called exactly once per page, and the toolbar
-  // already did.
+  // already did. The geometry glue goes before `edit.js`, in its own nonce'd script: it
+  // defines the `wasm_bindgen` global `edit.js`'s `window.dxEditor.engine()` instantiates
+  // once the bridge hands it the `.wasm` bytes.
   const editing = surface
-    ? `<style>${surface.css}</style>\n<script nonce="${nonce}">${surface.js}\n${BRIDGE}</script>`
+    ? `<style>${surface.css}</style>\n` +
+      `<script nonce="${nonce}">${surface.glue}</script>\n` +
+      `<script nonce="${nonce}">${surface.js}\n${BRIDGE}</script>`
     : '';
 
   return injectHead(page, `<meta http-equiv="Content-Security-Policy" content="${policy}">`)

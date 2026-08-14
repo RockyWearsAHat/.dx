@@ -817,6 +817,81 @@ mod tests {
     }
 
     #[test]
+    fn escape_style_blanks_a_remote_url_fetch() {
+        let clean = escape_style("div { background: url(https://evil.example/spy.png); }");
+        assert!(!clean.contains("evil.example"), "{clean}");
+        assert!(clean.contains("url()"), "{clean}");
+    }
+
+    #[test]
+    fn escape_style_keeps_a_data_image_url() {
+        let css = "div { background: url(data:image/png;base64,QQ==); }";
+        assert_eq!(escape_style(css), css);
+    }
+
+    #[test]
+    fn escape_style_keeps_a_relative_path_url() {
+        let css = "div { background: url(../art/tile.png); }";
+        assert_eq!(escape_style(css), css);
+    }
+
+    #[test]
+    fn escape_style_neutralizes_import() {
+        let clean = escape_style("@import url(https://evil.example/x.css);");
+        assert!(!clean.contains("@import"), "{clean}");
+    }
+
+    #[test]
+    fn escape_style_neutralizes_expression() {
+        let clean = escape_style("width: expression(alert(1));");
+        assert!(!clean.contains("expression("), "{clean}");
+    }
+
+    #[test]
+    fn escape_style_neutralizes_behavior() {
+        let clean = escape_style("behavior: url(evil.htc);");
+        assert!(!clean.contains("behavior:"), "{clean}");
+    }
+
+    #[test]
+    fn escape_style_neutralizes_moz_binding() {
+        let clean = escape_style("-moz-binding: url(evil.xml#x);");
+        assert!(!clean.contains("-moz-binding"), "{clean}");
+    }
+
+    #[test]
+    fn escape_style_neutralizes_case_and_whitespace_variants() {
+        for payload in [
+            "@IMPORT url(x.css);",
+            "EXPRESSION(alert(1));",
+            "BEHAVIOR:url(x.htc);",
+            "-MOZ-BINDING:url(x.xml);",
+        ] {
+            let clean = escape_style(payload).to_ascii_lowercase();
+            assert!(
+                !clean.contains("@import")
+                    && !clean.contains("expression(")
+                    && !clean.contains("behavior:")
+                    && !clean.contains("-moz-binding"),
+                "{clean}"
+            );
+        }
+    }
+
+    #[test]
+    fn escape_style_escapes_a_closing_style_tag() {
+        let clean = escape_style("p { color: red } </style><script>alert(1)</script>");
+        assert!(!clean.contains("</style>"), "{clean}");
+        assert!(clean.contains("<\\/style>"), "{clean}");
+    }
+
+    #[test]
+    fn escape_style_leaves_ordinary_css_untouched() {
+        let css = "p { color: red; font-size: 14px; }";
+        assert_eq!(escape_style(css), css);
+    }
+
+    #[test]
     fn presentation_markup_survives() {
         assert_eq!(
             sanitize_markup("<p class=\"note\">hi <b>there</b></p>"),

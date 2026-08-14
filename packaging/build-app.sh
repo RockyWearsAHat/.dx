@@ -73,10 +73,16 @@ fi
 # Copied, never rewritten. What clicking a paragraph does is one behavior, and a Mac and an
 # editor disagreeing about it would be two products wearing one name. `Editor.swift` reads
 # these files out of the bundle at launch.
+#
+# `doc_wasm.js` is the geometry engine's glue (`editor/build.sh` copies it into
+# `editor/surface` from the `no-modules` build); `doc_wasm_bg.wasm` is its bytes, read fresh
+# per page load rather than embedded in a script — the same reason the VS Code extension
+# ships them as a separate file instead of inlining them.
 # ---------------------------------------------------------------------------------------
 echo "  bundling the editing surface…"
 mkdir -p "$contents/Resources/surface"
 cp "$root/editor/surface/edit.js" "$root/editor/surface/edit.css" \
+  "$root/editor/surface/doc_wasm.js" "$root/editor/github/wasm/doc_wasm_bg.wasm" \
   "$contents/Resources/surface/"
 
 # ---------------------------------------------------------------------------------------

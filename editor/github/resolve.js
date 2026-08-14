@@ -284,6 +284,58 @@ function collapse(rows, context = 3) {
   return out;
 }
 
+/// The two sides of a diff, found inside GitHub's own client-side route data.
+///
+/// A pull request's "Files changed" tab (`/pull/<n>/files`, which GitHub's own router
+/// immediately replaces with `/pull/<n>/changes`) renders its diff from React state rather
+/// than server HTML: no element on the page carries `data-base-sha`/`data-head-sha`, and no
+/// URL on it carries `base_commit_oid=`, `end_commit_oid=`, or a `/diffs/<a>..<b>` pair — the
+/// attributes and query parameters the older layout's detection reads. What the page still
+/// embeds, in every layout seen so far, is one or more `<script
+/// data-target="react-app.embeddedData">` elements holding the page's initial props as JSON,
+/// with the two commit ids somewhere inside under a key ending `Oid` or `Sha` that starts
+/// `base` or `head`. `texts` is the `textContent` of each such script — `content.js` does
+/// the (trivial, stable) DOM query and hands the strings here, so the part that has to keep
+/// up with GitHub's own reshaping — the shape of the JSON, not the DOM query that finds it —
+/// is the part under test. The exact path (`comparison.baseOid`, `comparison.fullDiff.baseOid`,
+/// `pullRequest.comparison.baseOid`, …) has moved more than once across GitHub's own rollout,
+/// which is why this searches for the shape of the answer rather than one fixed path.
+///
+/// Returns `null` when no script parses as JSON, or none of them carries both ids — a commit
+/// page's embedded data, for instance, holds neither key, so this correctly steps aside and
+/// lets the caller's other strategies (the commit page's own `.sha` elements) apply instead.
+function routeShasFrom(texts) {
+  const oid = /^[0-9a-f]{40}$/;
+  for (const text of texts) {
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      continue; // Not every embedded blob is the route payload; a bad parse just skips it.
+    }
+    let base = null;
+    let head = null;
+    const visit = (value, depth) => {
+      if ((base && head) || depth > 8 || value === null || typeof value !== 'object') return;
+      if (Array.isArray(value)) {
+        for (const item of value) visit(item, depth + 1);
+        return;
+      }
+      for (const [key, child] of Object.entries(value)) {
+        if (typeof child === 'string' && oid.test(child)) {
+          if (!base && /^base(oid|sha)$/i.test(key)) base = child;
+          if (!head && /^head(oid|sha)$/i.test(key)) head = child;
+        } else if (typeof child === 'object') {
+          visit(child, depth + 1);
+        }
+      }
+    };
+    visit(data, 0);
+    if (base && head) return { base, head };
+  }
+  return null;
+}
+
 // The public surface, published on `globalThis` — the one global every host agrees on. A
 // content script's `window` is the *page's* window in Firefox and the sandbox's own in
 // Chrome, so a reader that says `window` works in one browser and finds nothing in the
@@ -298,4 +350,5 @@ globalThis.dxResolve = {
   rawUrl,
   resolveDocument,
   resolved,
+  routeShasFrom,
 };

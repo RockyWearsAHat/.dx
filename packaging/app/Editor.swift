@@ -58,6 +58,17 @@ final class Editor: NSObject, WKScriptMessageHandlerWithReply {
                     forMainFrameOnly: true,
                     in: world))
         }
+        // The geometry engine's glue, ahead of `edit.js`: a plain `wasm_bindgen` global that
+        // `edit.js` instantiates once it has the engine's own bytes (the `engine` message
+        // below). Static code, not a document's content, so it lives in this world the same
+        // way `edit.js` does — this is `editor/surface/doc_wasm.js`, the same `no-modules`
+        // build the browser extension's service worker loads.
+        if let glue = resource("doc_wasm", "js") {
+            scripts.append(
+                WKUserScript(
+                    source: glue, injectionTime: .atDocumentEnd, forMainFrameOnly: true,
+                    in: world))
+        }
         if let js = resource("edit", "js") {
             scripts.append(
                 WKUserScript(
@@ -89,8 +100,11 @@ final class Editor: NSObject, WKScriptMessageHandlerWithReply {
           check: (id, item) => window.webkit.messageHandlers.\(channel).postMessage(
             { op: 'check', id, item }),
           board: (id, action, spec) => window.webkit.messageHandlers.\(channel).postMessage(
-            { op: 'board', id, action, spec })
+            { op: 'board', id, action, spec }),
+          engine: () => window.webkit.messageHandlers.\(channel).postMessage(
+            { op: 'engine' })
         });
+        window.dxEditor && window.dxEditor.engine();
         """
 
     /// A stylesheet, as a statement that adds it to the page it is evaluated in.
@@ -238,6 +252,20 @@ final class Editor: NSObject, WKScriptMessageHandlerWithReply {
                     on: try id(call), in: url,
                     spec: call["spec"] as? [String: Any] ?? [:])
                 replyHandler(try sheet(focusing: focus), nil)
+            case "engine":
+                // The geometry engine's own bytes, read fresh each call rather than cached —
+                // this fires once per page load, and a bundle built without them should say
+                // so through the ordinary "resource missing" failure below, not hold a stale
+                // answer from an earlier attempt.
+                guard
+                    let wasmURL = Bundle.main.url(
+                        forResource: "doc_wasm_bg", withExtension: "wasm", subdirectory: "surface"),
+                    let bytes = try? Data(contentsOf: wasmURL)
+                else {
+                    replyHandler(nil, "the geometry engine is not in this bundle")
+                    return
+                }
+                replyHandler(bytes.base64EncodedString(), nil)
             default:
                 replyHandler(nil, "unknown editor operation `\(op)`")
             }
