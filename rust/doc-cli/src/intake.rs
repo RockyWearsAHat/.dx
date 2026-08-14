@@ -951,6 +951,7 @@ mod tests {
 
     #[test]
     fn a_subscription_round_trips_through_the_file_it_is_stored_in() {
+        let _env = crate::env_lock();
         let root = scratch("subscribe");
         std::env::set_var(SUBSCRIPTIONS_ENV, root.join("subscriptions.json"));
 

@@ -254,7 +254,8 @@ fn search_tool() -> Value {
     json!({
         "name": "dx_search",
         "description": "Search a project — its .dx documents *and* its source files — best \
-                        matches first, documents before code. Each hit carries its answer: \
+                        matches first; a corpus with a real answer is never shut out \
+                        entirely by the other. Each hit carries its answer: \
                         the id of the block that best matches and that block's text (a \
                         heading brings its section, capped; a source file's block id is the \
                         line range to open) — so a search that lands needs no follow-up \

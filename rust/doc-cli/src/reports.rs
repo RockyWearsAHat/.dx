@@ -754,6 +754,7 @@ mod tests {
 
     #[test]
     fn the_inbox_is_outside_every_repository_and_overridable_for_a_test_run() {
+        let _env = crate::env_lock();
         std::env::set_var(INBOX_ENV, "/tmp/dx-report-inbox-override");
         assert_eq!(inbox(), PathBuf::from("/tmp/dx-report-inbox-override"));
 

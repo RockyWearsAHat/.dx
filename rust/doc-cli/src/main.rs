@@ -38,6 +38,21 @@ use commands::Output;
 /// Environment variable that overrides the workspace root the MCP server serves.
 const ROOT_ENV: &str = "DX_ROOT";
 
+/// Serializes tests that touch process environment variables (`DX_ROOT`, `DX_REPORTS_DIR`,
+/// `DX_REPORT_ENDPOINT`, `DX_REPORT_TOKEN`, `DX_SUBSCRIPTIONS_FILE`).
+///
+/// The environment is process-global, so a test that sets one of these races every
+/// concurrently running sibling that sets or reads the same name — `commands::report`,
+/// `reports`, and `intake` each have tests that do. Any test that sets, removes, or asserts
+/// on one of these variables must hold this lock for its whole body.
+#[cfg(test)]
+pub(crate) fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+    static ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    // Poison-tolerant: a failed sibling must not cascade into every later env test.
+    ENV.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 /// Parse the command line, run the command, and report the outcome.
 fn main() -> ExitCode {
     let raw: Vec<String> = std::env::args().skip(1).collect();
@@ -183,6 +198,7 @@ mod tests {
     /// test runner.
     #[test]
     fn the_workspace_root_prefers_the_override_and_otherwise_exists() {
+        let _env = env_lock();
         std::env::set_var(ROOT_ENV, "/dx/explicit");
         assert_eq!(workspace_root(), PathBuf::from("/dx/explicit"));
 

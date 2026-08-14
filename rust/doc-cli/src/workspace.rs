@@ -815,6 +815,13 @@ pub struct Hit {
 /// whole files — so covering the tree matters more than narrowing it. Narrowing becomes the
 /// store's to offer again once it indexes source too.
 ///
+/// `limit` is the caller's whole budget — "Maximum hits", not one per corpus — so the result
+/// never holds more than `limit` entries. Within that budget the ranking decides order; the
+/// one thing it does not decide is whether a corpus is heard from at all, so a corpus holding
+/// a real (above-[`drop_noise`]) answer is never shut out completely by the other — see
+/// [`cap_without_shutout`] for how a seat is found for it without disturbing anyone's score
+/// order.
+///
 /// Complexity: `O(n)` in the bytes of the project's documents and source files.
 pub fn search(directory: &Path, query: &str, limit: usize) -> Result<Vec<Hit>, String> {
     let mut documents = load_all(directory)?.documents;
@@ -830,14 +837,15 @@ pub fn search(directory: &Path, query: &str, limit: usize) -> Result<Vec<Hit>, S
         .map(|loaded| (loaded.relative.as_str(), loaded))
         .collect();
 
-    // `limit` is per corpus, documents first. A project's documents are written to answer
-    // questions and its source files merely contain the answer, so letting one crowd out the
-    // other loses whichever the caller needed: a long file that mentions the words everywhere
-    // outranked the document that explains them, and a question only the code answers had no
-    // way to reach it. Two bounded answers cost a few hundred bytes and lose neither.
+    // Each corpus offers at most `limit` *candidates* here — plenty to fill the caller's
+    // budget from either side, and enough to hold a rescue candidate in reserve for
+    // `cap_without_shutout` — without letting a single sprawling corpus (a hundred source
+    // files each mentioning the query once) cost more ranking work than the caller asked for.
+    // This walk only skips over-cap results; it never reorders what `index.search` already
+    // sorted, so `ranked` stays best-score-first across both corpora, interleaved.
     let mut documents_taken = 0;
     let mut source_taken = 0;
-    let mut ranked: Vec<Hit> = index
+    let ranked: Vec<Hit> = index
         .search(query)
         .into_iter()
         .filter_map(|result| {
@@ -859,10 +867,56 @@ pub fn search(directory: &Path, query: &str, limit: usize) -> Result<Vec<Hit>, S
         })
         .collect();
 
-    // Documents first, each group still in score order — the ranking decides what is best,
-    // the grouping decides which question is answered first.
-    ranked.sort_by_key(|hit| !hit.document.relative.ends_with(".dx"));
-    Ok(drop_noise(ranked))
+    Ok(cap_without_shutout(drop_noise(ranked), limit))
+}
+
+/// Truncate `ranked` (already best-score-first) to `limit` hits, without letting that cut
+/// erase one corpus entirely when it holds a surviving, above-noise answer.
+///
+/// The naive top slice is score-honest but can still repeat the bug this replaced: a corpus
+/// with only mediocre hits can still hold every one of the first `limit` seats when the other
+/// corpus's one real answer sits at position `limit + 1` — a long file that mentions the query
+/// everywhere used to crowd out the document that explains it, and a question only the code
+/// answers had no seat left by the time documents were done filling the list. So: take the top
+/// slice, and if it wholly excludes a corpus that has a real hit waiting just past the cut,
+/// that hit takes the weakest seat held by a corpus that is not down to its own last one —
+/// never the sole seat of the *other* minority corpus, or the trade would just relocate the
+/// shutout instead of fixing it.
+fn cap_without_shutout(ranked: Vec<Hit>, limit: usize) -> Vec<Hit> {
+    if limit == 0 || ranked.len() <= limit {
+        return ranked;
+    }
+    let is_document = |hit: &Hit| hit.document.relative.ends_with(".dx");
+    let mut kept: Vec<Hit> = ranked[..limit].to_vec();
+    let rest = &ranked[limit..];
+
+    for wanted in [true, false] {
+        if kept.iter().any(|hit| is_document(hit) == wanted) {
+            continue;
+        }
+        let Some(rescue) = rest.iter().find(|hit| is_document(hit) == wanted) else {
+            continue;
+        };
+        let victim = kept.iter().rposition(|hit| {
+            is_document(hit) != wanted
+                && kept
+                    .iter()
+                    .filter(|other| is_document(other) == is_document(hit))
+                    .count()
+                    > 1
+        });
+        if let Some(position) = victim {
+            kept[position] = rescue.clone();
+        }
+    }
+
+    kept.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(core::cmp::Ordering::Equal)
+            .then_with(|| a.document.relative.cmp(&b.document.relative))
+    });
+    kept
 }
 
 /// Share of the best hit's score a hit must reach to be worth a caller's attention.
@@ -1277,6 +1331,123 @@ mod tests {
         );
     }
 
+    /// The parameter's contract is "Maximum hits" (`rust/doc-cli/src/mcp/tools.rs`), not
+    /// "maximum hits per corpus" — `search` used to return up to `2 * limit` (`limit`
+    /// documents plus `limit` source hits) whenever both corpora had enough matches, which
+    /// silently broke that contract for any caller who trusted `--limit N` to mean N results.
+    #[test]
+    fn search_never_returns_more_than_the_limit_across_both_corpora() {
+        let root = scratch("search-total-cap");
+        for name in ["a", "b", "c"] {
+            fs::write(
+                root.join(format!("{name}.dx")),
+                format!("# {name}\n\nrollout notes\n"),
+            )
+            .expect("doc");
+        }
+        fs::create_dir_all(root.join("src")).expect("dirs");
+        for name in ["x", "y", "z"] {
+            fs::write(
+                root.join(format!("src/{name}.rs")),
+                "// rollout notes\nfn rollout() {}\n",
+            )
+            .expect("source");
+        }
+
+        let hits = search(&root, "rollout", 2).expect("search");
+        assert!(
+            hits.len() <= 2,
+            "limit is the caller's whole budget, not one per corpus: {hits:?}"
+        );
+    }
+
+    /// Reported (`reports.dx`): grouping every document ahead of every source hit, regardless
+    /// of score, buried a source file that answered a question none of the documents did
+    /// behind several documents that only shared the question's ordinary words — past
+    /// `--limit 5` in the report, so the answer never reached the caller. `cap_without_shutout`
+    /// is what replaced the grouping; pinned directly with synthetic hits, the way
+    /// `search_drops_hits_far_below_the_best_one` pins `drop_noise`, so the test states the
+    /// rule rather than depending on a real corpus's exact BM25 arithmetic.
+    #[test]
+    fn cap_without_shutout_rescues_a_shut_out_corpus_without_moving_the_best_hits() {
+        let hit = |relative: &str, score: f64| Hit {
+            document: Loaded {
+                path: PathBuf::from(relative),
+                relative: relative.to_string(),
+                document: parse("# A document\n"),
+            },
+            score,
+            block: None,
+        };
+
+        let ranked = vec![
+            hit("doc-1.dx", 9.0),
+            hit("doc-2.dx", 8.0),
+            hit("doc-3.dx", 7.0),
+            hit("answer.rs", 6.0),
+        ];
+
+        let kept = cap_without_shutout(ranked, 3);
+        let names: Vec<&str> = kept
+            .iter()
+            .map(|hit| hit.document.relative.as_str())
+            .collect();
+        assert_eq!(
+            names,
+            vec!["doc-1.dx", "doc-2.dx", "answer.rs"],
+            "the weakest document gives up its seat to the only code hit, which a naive \
+             top-3-by-score slice would otherwise have shut out entirely"
+        );
+    }
+
+    /// When the naive top slice already includes both corpora — the ordinary, common case —
+    /// nothing should move: the rescue only ever fires on an actual shutout.
+    #[test]
+    fn cap_without_shutout_leaves_an_already_mixed_slice_alone() {
+        let hit = |relative: &str, score: f64| Hit {
+            document: Loaded {
+                path: PathBuf::from(relative),
+                relative: relative.to_string(),
+                document: parse("# A document\n"),
+            },
+            score,
+            block: None,
+        };
+
+        let ranked = vec![
+            hit("answer.rs", 20.0),
+            hit("doc-1.dx", 9.0),
+            hit("doc-2.dx", 8.0),
+            hit("doc-3.dx", 7.0),
+        ];
+
+        let kept = cap_without_shutout(ranked, 2);
+        let names: Vec<&str> = kept
+            .iter()
+            .map(|hit| hit.document.relative.as_str())
+            .collect();
+        assert_eq!(names, vec!["answer.rs", "doc-1.dx"]);
+    }
+
+    /// A budget of one seat cannot represent two corpora, so the rescue must not fire — it
+    /// would only empty the seat the better hit already earned.
+    #[test]
+    fn cap_without_shutout_never_empties_a_single_seat_budget() {
+        let hit = |relative: &str, score: f64| Hit {
+            document: Loaded {
+                path: PathBuf::from(relative),
+                relative: relative.to_string(),
+                document: parse("# A document\n"),
+            },
+            score,
+            block: None,
+        };
+
+        let kept = cap_without_shutout(vec![hit("doc-1.dx", 9.0), hit("answer.rs", 8.0)], 1);
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].document.relative, "doc-1.dx");
+    }
+
     /// A hit far below the best one matched an incidental word. Printing it costs the caller a
     /// paragraph to conclude what the score already said. The rule is tested on the ranking it
     /// governs rather than through BM25, so it pins the contract and not a scorer's arithmetic.
@@ -1347,7 +1518,10 @@ mod tests {
     /// written to answer questions, and letting a long source file crowd them out loses the
     /// better answer to the noisier one.
     #[test]
-    fn documents_answer_before_source_and_neither_crowds_the_other_out() {
+    fn search_caps_the_limit_and_still_rescues_a_corpus_it_would_otherwise_shut_out() {
+        // Four source files each repeat the query three times — enough BM25 saturation to
+        // outscore the document's single, plainer mention — so a pure top-2-by-score slice
+        // would fill both seats from source and lose the document's only candidate entirely.
         let root = scratch("search-grouping");
         fs::write(root.join("a.dx"), NOTES).expect("write");
         fs::create_dir_all(root.join("src")).expect("dirs");
@@ -1361,21 +1535,17 @@ mod tests {
 
         let hits = search(&root, "kubernetes scheduling", 2).expect("search");
         assert_eq!(
-            hits[0].document.relative, "a.dx",
-            "the document answers first"
-        );
-        assert_eq!(
-            hits.iter()
-                .filter(|h| h.document.relative.ends_with(".dx"))
-                .count(),
-            1
-        );
-        assert_eq!(
-            hits.iter()
-                .filter(|h| !h.document.relative.ends_with(".dx"))
-                .count(),
+            hits.len(),
             2,
-            "source is bounded by the same limit, not by what documents left over"
+            "limit is the caller's whole budget, not one per corpus: {hits:?}"
+        );
+        assert!(
+            hits.iter().any(|h| h.document.relative == "a.dx"),
+            "the document is its corpus's only candidate; a shutout would lose it: {hits:?}"
+        );
+        assert!(
+            hits.iter().any(|h| !h.document.relative.ends_with(".dx")),
+            "source is not crowded out either — it is what earned the best score here: {hits:?}"
         );
     }
 

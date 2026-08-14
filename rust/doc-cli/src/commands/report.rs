@@ -265,6 +265,7 @@ mod tests {
     /// process-wide variables, so the cases that need them share one test.
     #[test]
     fn filing_listing_and_draining_are_one_loop() {
+        let _env = crate::env_lock();
         let root = std::env::temp_dir().join("dx-report-cli-tests");
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).expect("scratch");
@@ -439,6 +440,7 @@ mod tests {
 
     #[test]
     fn syncing_a_checkout_nobody_subscribed_names_the_command_that_subscribes_it() {
+        let _env = crate::env_lock();
         let root = std::env::temp_dir().join("dx-report-cli-unsubscribed");
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).expect("scratch");
