@@ -187,15 +187,16 @@ fn refresh_property() -> Value {
 fn source_tool() -> Value {
     json!({
         "name": "dx_source",
-        "description": "READ a .dx document as text: exact Markdown with headings, lists, \
-                        code fences, and captured run output preserved. This is the cheap \
-                        way to read prose and code — a fraction of the tokens of dx_read's \
-                        page images — and the exact characters, for quoting or preparing a \
-                        dx_edit. Pass `section` (any block id) to read one part instead of \
-                        the whole document; set `ids` to true for the block ids dx_edit and \
-                        section selection need. The read is live: stale output of approved \
-                        code is refreshed first. Reach for dx_read only when the page \
-                        carries what text cannot: boards, diagrams, charts, layout.",
+        "description": "READ a .dx document as text — the default before dx_read, not \
+                        Grep or Read. Exact Markdown with headings, lists, code fences, and \
+                        captured run output preserved. This is the cheap way to read prose \
+                        and code — a fraction of the tokens of dx_read's page images — and \
+                        the exact characters, for quoting or preparing a dx_edit. Pass \
+                        `section` (any block id) to read one part instead of the whole \
+                        document; set `ids` to true for the block ids dx_edit and section \
+                        selection need. The read is live: stale output of approved code is \
+                        refreshed first. Reach for dx_read only when the page carries what \
+                        text cannot: boards, diagrams, charts, layout.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -216,10 +217,11 @@ fn source_tool() -> Value {
 fn outline_tool() -> Value {
     json!({
         "name": "dx_outline",
-        "description": "Map a .dx document without reading all of it: one row per block with \
-                        its id, kind, heading level, size, a preview, and whether it is \
-                        runnable code. Call this first on a long document, then fetch only \
-                        the sections you need with dx_read.",
+        "description": "Map a document first — the default way to get ids and structure, \
+                        not Grep. One row per block with its id, kind, heading level, size, \
+                        a preview, and whether it is runnable code. Call this first on a \
+                        long document, then fetch only the sections you need with dx_source \
+                        or dx_read.",
         "inputSchema": {
             "type": "object",
             "properties": { "path": path_property() },
@@ -253,18 +255,20 @@ fn list_tool() -> Value {
 fn search_tool() -> Value {
     json!({
         "name": "dx_search",
-        "description": "Search a project — its .dx documents *and* its source files — best \
-                        matches first; a corpus with a real answer is never shut out \
-                        entirely by the other. Each hit carries its answer: \
-                        the id of the block that best matches and that block's text (a \
-                        heading brings its section, capped; a source file's block id is the \
-                        line range to open) — so a search that lands needs no follow-up \
-                        read. When you do need more, dx_source with `section` on the hit's \
-                        block is the cheap route. Ask in a whole question and in your own \
-                        words: matching folds word endings (packed finds pack), splits \
-                        compound names (packWeights is reachable as pack and weights), and \
-                        falls back to a word's kin when the project never says it on its \
-                        own (packed reaches bitpack.c, microphone reaches mic.py).",
+        "description": "Search first in a project with dx documents — this is the default \
+                        before reaching for Grep or Bash. This tool searches the .dx \
+                        documents *and* its source files — best matches first; a corpus with \
+                        a real answer is never shut out entirely by the other. Each hit \
+                        carries its answer: the id of the block that best matches and that \
+                        block's text (a heading brings its section, capped; a source file's \
+                        block id is the line range to open) — so a search that lands needs \
+                        no follow-up read. When you do need more, dx_source with `section` \
+                        on the hit's block is the cheap route. Ask in a whole question and \
+                        in your own words: matching folds word endings (packed finds pack), \
+                        splits compound names (packWeights is reachable as pack and \
+                        weights), and falls back to a word's kin when the project never says \
+                        it on its own (packed reaches bitpack.c, microphone reaches \
+                        mic.py).",
         "inputSchema": {
             "type": "object",
             "properties": {

@@ -375,6 +375,17 @@ fn initialize() -> Value {
                          images proves nothing and is the smell that you have left the \
                          method; prefer the verdict, and keep any embedded image under \
                          8MB (capture at scale 1).\n\n\
+                         REPORT INTAKE IS HOW A PROJECT GETS ITS DEFECTS BACK. Reports are \
+                         filed from any project into the intake, and every project with dx \
+                         documents should be wired to pull its own reports back into a \
+                         local reports.dx — so the agent working on it reads what the field \
+                         tests filed, without re-asking or forgetting the detail. When a \
+                         project has documents but no reports.dx, or one that was never \
+                         subscribed, name it once during orientation: \"This project isn't \
+                         wired up to receive its own dx defect reports — want me to run `dx \
+                         report subscribe` to set it up?\" Then do what they say. A yes is \
+                         one command and one-time setup; afterwards the project reads its own \
+                         intake and stays current for the life of the session.\n\n\
                          REPORT DX ITSELF. You are dx's field test, and the only one it \
                          has: when a tool misleads you, a message does not say what to do \
                          next, an answer is not the block that states the fact, or you \
@@ -579,6 +590,9 @@ mod tests {
         assert!(instructions.contains("REPORT DX ITSELF"));
         assert!(instructions.contains("dx_report"));
         assert!(instructions.contains("a workaround nobody filed"));
+        // Projects with dx documents should be wired to receive their own reports from
+        // the intake, and the guidance offers to set that up during orientation.
+        assert!(instructions.contains("report subscribe"));
         assert!(instructions.contains("changes nothing in this workspace"));
         // The visual loop: frames are judged in a review subagent so the operator's
         // context holds verdicts rather than page images, pixels reach the operator only

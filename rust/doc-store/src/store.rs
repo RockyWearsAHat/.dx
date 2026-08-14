@@ -135,6 +135,9 @@ pub struct SyncReport {
     pub restored: Vec<String>,
     /// Stubs that could not be resolved from any source.
     pub unresolved: Vec<String>,
+    /// Unresolved pointers whose path is force-added but git-ignored — their content stays
+    /// in the local pack and cannot reach other machines.
+    pub tracked_but_ignored: Vec<String>,
     /// Index rows dropped because their `.dx` file was deleted from the tree.
     pub pruned: Vec<String>,
     /// Pack files whose bytes on disk changed, `.doc/`-relative. A pack can be rewritten with
@@ -153,6 +156,7 @@ impl SyncReport {
             && self.stubs_written.is_empty()
             && self.restored.is_empty()
             && self.unresolved.is_empty()
+            && self.tracked_but_ignored.is_empty()
             && self.pruned.is_empty()
             && self.packs_rewritten.is_empty()
             && self.chunks_collected == 0
@@ -838,7 +842,13 @@ impl Store {
                             self.ingest(&relative, source)?;
                             report.restored.push(relative);
                         }
-                        None => report.unresolved.push(relative),
+                        None => {
+                            if crate::git::is_tracked_but_ignored(&self.root, &relative) {
+                                report.tracked_but_ignored.push(relative);
+                            } else {
+                                report.unresolved.push(relative);
+                            }
+                        }
                     }
                 }
             }

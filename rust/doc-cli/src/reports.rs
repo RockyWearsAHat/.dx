@@ -148,7 +148,8 @@ impl Report {
     ///
     /// # Errors
     /// Returns a sentence when the title or the detail is empty: a report nobody can act on
-    /// is worse than no report, because it still costs a fixer the read.
+    /// is worse than no report, because it still costs a fixer the read. Also returns a
+    /// sentence when the route field exceeds 120 characters, which the remote intake rejects.
     pub fn now(
         kind: Kind,
         title: &str,
@@ -167,11 +168,15 @@ impl Report {
                     .to_string(),
             );
         }
+        let route = collapse(route);
+        if route.len() > 120 {
+            return Err("`route` is longer than 120 characters".to_string());
+        }
         Ok(Self {
             kind,
             title,
             detail: detail.trim().to_string(),
-            route: collapse(route),
+            route,
             repro: repro.trim().to_string(),
             at: doc_store::timestamp(),
             dx: env!("CARGO_PKG_VERSION").to_string(),
@@ -576,6 +581,23 @@ mod tests {
         assert!(Report::now(Kind::Bug, "title", "\n\n", "", "", workspace)
             .expect_err("empty detail")
             .contains("detail"));
+    }
+
+    #[test]
+    fn a_route_field_over_120_characters_is_refused() {
+        let workspace = Path::new("/tmp/p");
+        let long_route = "x".repeat(121);
+        let error = Report::now(Kind::Bug, "title", "detail", &long_route, "", workspace)
+            .expect_err("route over 120 chars");
+        assert!(
+            error.contains("route") && error.contains("120"),
+            "error must mention the route limit: {error}"
+        );
+
+        // 120 characters should be accepted
+        let route_120 = "x".repeat(120);
+        Report::now(Kind::Bug, "title", "detail", &route_120, "", workspace)
+            .expect("120 chars should work");
     }
 
     #[test]

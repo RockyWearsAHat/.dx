@@ -51,9 +51,9 @@ pub struct Asset {
 /// way round renders nothing at all, on every page. [`manifest_names_only_shipped_files`]
 /// checks that what the manifest lists and what this names are the same set.
 ///
-/// The icons are rendered from `packaging/icon.svg` by `packaging/build-icons.py`. Four sizes
-/// because that is what asks: 16 in a toolbar, 32 on Windows, 48 in the extensions list, 128
-/// in both stores — and a submission without the 128 is rejected outright.
+/// The icons are rendered from `packaging/icon.svg` by the `build-icons` binary (`doc-shot`).
+/// Four sizes because that is what asks: 16 in a toolbar, 32 on Windows, 48 in the extensions
+/// list, 128 in both stores — and a submission without the 128 is rejected outright.
 pub const ASSET_PATHS: &[&str] = &[
     "resolve.js",
     "content.js",
