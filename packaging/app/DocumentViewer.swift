@@ -1,4 +1,5 @@
 import AppKit
+import Dispatch
 import WebKit
 
 /// One window showing one document.
@@ -20,6 +21,13 @@ final class DocumentViewer: NSObject, NSWindowDelegate, WKNavigationDelegate {
 
     /// The bridge from the page's editing script to the file on disk.
     private var editor: Editor!
+
+    /// Watches the pointer file on disk and reloads this window when it changes, so an edit
+    /// made anywhere else — another window, `dx_edit`, `dx set`, a plain-text write `dx sync`
+    /// later adopts — reaches an already-open viewer with no manual reload. The pointer's
+    /// digest changes exactly when the document's content does (`doc-core::pointer`), so
+    /// watching the file is watching the document.
+    private var watcher: DispatchSourceFileSystemObject?
 
     /// The paper tone the page itself uses, so the window matches it before the page loads.
     ///
@@ -132,6 +140,27 @@ final class DocumentViewer: NSObject, NSWindowDelegate, WKNavigationDelegate {
         } catch {
             web.loadHTMLString(Self.notice(error.localizedDescription), baseURL: nil)
         }
+        watch()
+    }
+
+    /// (Re)arm the file watch on `url`.
+    ///
+    /// A write/rename/delete event closes and reopens the descriptor before reloading: many
+    /// writers replace a file rather than writing into it in place, which invalidates the
+    /// descriptor a watch was opened against — reopening on every event, from inside load(),
+    /// is what keeps the watch alive past the very first external edit.
+    private func watch() {
+        watcher?.cancel()
+        let descriptor = open(url.path, O_EVTONLY)
+        guard descriptor >= 0 else { return }
+        let source = DispatchSource.makeFileSystemObjectSource(
+            fileDescriptor: descriptor,
+            eventMask: [.write, .rename, .delete, .extend],
+            queue: .main)
+        source.setEventHandler { [weak self] in self?.load() }
+        source.setCancelHandler { close(descriptor) }
+        source.resume()
+        watcher = source
     }
 
     /// A page carrying one sentence: the app's own voice, not a rendered document.
@@ -173,6 +202,7 @@ final class DocumentViewer: NSObject, NSWindowDelegate, WKNavigationDelegate {
 
     /// Let the application release this viewer once its window is gone.
     func windowWillClose(_ notification: Notification) {
+        watcher?.cancel()
         onClose(self)
     }
 }
