@@ -371,7 +371,12 @@ fn initialize() -> Value {
                          fingerprinted in place. A picture a run produces — a screenshot, \
                          a rendered frame — is an `::image src=<file> for=<run-block-id>` \
                          so the page itself vouches for its freshness: a failed or unrun \
-                         producer is called out on the figure. A gallery of hand-managed \
+                         producer is called out on the figure. The automation that makes the picture \
+                         belongs in that block, not beside it: write it as a `run` block or a \
+                         `lang=capture` block and execute it through `dx_run`, never as a script run \
+                         outside dx whose output gets pasted in afterward — an external producer is \
+                         one `for=` cannot see, so the freshness it claims to vouch for is fiction. \
+                         A gallery of hand-managed \
                          images proves nothing and is the smell that you have left the \
                          method; prefer the verdict, and keep any embedded image under \
                          8MB (capture at scale 1).\n\n\
@@ -594,6 +599,9 @@ mod tests {
         assert!(instructions.contains("for=<run-block-id>"));
         assert!(instructions.contains("`header` param"));
         assert!(instructions.contains("hand-managed images proves nothing"));
+        assert!(instructions.contains("belongs in that block, not beside it"));
+        assert!(instructions.contains("never as a script run outside dx"));
+        assert!(instructions.contains("freshness it claims to vouch for is fiction"));
         // dx is improved by the agents using it: a defect met in any project is filed in
         // the same turn, from that project, and repeats are welcome — they are what tell
         // a fixer which defect is actually costing sessions.
