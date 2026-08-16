@@ -83,6 +83,10 @@ pub struct BlockDto {
     /// Whether a `code` block's listing starts expanded (the bare `open` attribute).
     #[serde(default)]
     pub open: bool,
+    /// Whether a `lang=capture` block's body is the action shorthand rather than raw
+    /// JavaScript (the bare `actions` attribute).
+    #[serde(default)]
+    pub actions: bool,
     /// Libraries an executable `code` block needs.
     #[serde(default)]
     pub deps: String,
@@ -93,6 +97,13 @@ pub struct BlockDto {
     /// document's own folder.
     #[serde(default)]
     pub writes: String,
+    /// The live URL a `lang=capture` block opens (`target=` attribute).
+    #[serde(default)]
+    pub target: String,
+    /// A shell command a `lang=capture` block runs first, before it opens `target`
+    /// (`setup=` attribute).
+    #[serde(default)]
+    pub setup: String,
     /// Seconds an executable `code` block may run before it is killed; `0` means default.
     #[serde(default)]
     pub timeout: u32,
@@ -111,12 +122,12 @@ pub struct BlockDto {
     /// How a run's output is displayed: empty, `svg`, or `html`.
     #[serde(default)]
     pub format: String,
-    /// Viewport height in CSS pixels of a `board` block, or of the framed page of a
-    /// `view` block; `0` means the renderer's default.
+    /// Viewport height in CSS pixels of a `board` block, the framed page of a `view`
+    /// block, or the browser a `lang=capture` block opens; `0` means the default.
     #[serde(default)]
     pub height: u32,
-    /// Viewport width in CSS pixels the framed page of a `view` block is laid out at;
-    /// `0` means the renderer's default.
+    /// Viewport width in CSS pixels the framed page of a `view` block, or the browser a
+    /// `lang=capture` block opens, is laid out at; `0` means the default.
     #[serde(default)]
     pub width: u32,
 }
@@ -186,9 +197,12 @@ impl From<&Block> for BlockDto {
             items: block.items.iter().map(ItemDto::from).collect(),
             run: block.run,
             open: block.open,
+            actions: block.actions,
             deps: block.deps.clone(),
             reads: block.reads.clone(),
             writes: block.writes.clone(),
+            target: block.target.clone(),
+            setup: block.setup.clone(),
             timeout: block.timeout,
             for_block: block.for_block.clone(),
             status: block.status.clone(),
@@ -221,9 +235,12 @@ impl From<&BlockDto> for Block {
             items: dto.items.iter().map(Item::from).collect(),
             run: dto.run,
             open: dto.open,
+            actions: dto.actions,
             deps: dto.deps.clone(),
             reads: dto.reads.clone(),
             writes: dto.writes.clone(),
+            target: dto.target.clone(),
+            setup: dto.setup.clone(),
             timeout: dto.timeout,
             for_block: dto.for_block.clone(),
             status: dto.status.clone(),

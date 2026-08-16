@@ -88,13 +88,26 @@ pub struct Block {
     /// when the code prints markup that should be rendered as a picture rather than
     /// quoted as source. Set on the `code` block; carried onto its `output`.
     pub format: String,
-    /// Viewport height in CSS pixels of a `board` block, or of the framed page of a
-    /// `view` block; `0` means the renderer's default.
+    /// Viewport height in CSS pixels of a `board` block, the framed page of a `view`
+    /// block, or the browser a `lang=capture` block opens; `0` means the renderer's (or
+    /// capture's own) default.
     pub height: u32,
-    /// Viewport width in CSS pixels the framed page of a `view` block is laid out at;
-    /// `0` means the renderer's default. The *displayed* width is the column or the
-    /// board node's stated box — the frame is scaled into it uniformly.
+    /// Viewport width in CSS pixels the framed page of a `view` block, or the browser a
+    /// `lang=capture` block opens, is laid out at; `0` means the default. For a `view`
+    /// the *displayed* width is the column or the board node's stated box — the frame is
+    /// scaled into it uniformly; a capture's screenshot is saved at this width exactly.
     pub width: u32,
+    /// The live URL a `lang=capture` block opens (`target=` attribute), never resolved
+    /// as a sibling file the way `src` is. Empty for every other `code` block.
+    pub target: String,
+    /// A shell command a `lang=capture` block runs first, network allowed, before it
+    /// opens `target` — most often what starts the server `target` names (`setup=`
+    /// attribute). Empty for every other `code` block, and optional even for capture.
+    pub setup: String,
+    /// Whether a `lang=capture` block's body is the action shorthand (`wait`, `click`,
+    /// `hover`, `type`, `key`, `scroll`, `eval` — the bare `actions` attribute) rather
+    /// than raw JavaScript. Ignored outside `lang=capture`.
+    pub actions: bool,
 }
 
 /// Names of the language runners the platform can execute, in catalogue order.
@@ -114,6 +127,7 @@ pub const RUNNERS: &[&str] = &[
     "cpp",
     "java",
     "swift",
+    "capture",
 ];
 
 /// Map a `code` block's `language` to the runner that executes it, or `None` when the
@@ -123,7 +137,8 @@ pub const RUNNERS: &[&str] = &[
 /// `python3` both run under `python`, `js`/`javascript` under `node`, `ts` under
 /// `typescript` (the machine's own Node toolchain — `deno` stays its own explicit
 /// choice), `sh`/`shell`/`zsh` under `bash`, `rs` under `rust`, and `c++`/`cc`/`cxx`
-/// under `cpp`.
+/// under `cpp`. `capture` names itself: it is not a language, it is dx's own driver for
+/// a `target=` URL, so there is no alias to fold.
 #[must_use]
 pub fn runner_for_language(language: &str) -> Option<&'static str> {
     match language.trim().to_ascii_lowercase().as_str() {
@@ -139,6 +154,7 @@ pub fn runner_for_language(language: &str) -> Option<&'static str> {
         "cpp" | "c++" | "cc" | "cxx" => Some("cpp"),
         "java" => Some("java"),
         "swift" => Some("swift"),
+        "capture" => Some("capture"),
         _ => None,
     }
 }

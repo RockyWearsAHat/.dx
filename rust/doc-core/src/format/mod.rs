@@ -480,6 +480,37 @@ mod tests {
     }
 
     #[test]
+    fn a_capture_blocks_target_setup_and_viewport_round_trip() {
+        let input = "::code id=shot lang=capture run writes=out target=http://127.0.0.1:5173/ \
+                     setup=\"npm run dev\" width=1280 height=800\n\
+                     return document.title;\n::end\n";
+        assert_eq!(round_trip(input), input);
+        let block = &parse(input).blocks[0];
+        assert_eq!(block.target, "http://127.0.0.1:5173/");
+        assert_eq!(block.setup, "npm run dev");
+        assert_eq!(block.width, 1280);
+        assert_eq!(block.height, 800);
+        // Additive: a capture block naming neither serializes exactly as any other code
+        // block always has, and every non-capture block's `width`/`height` stay unaffected.
+        let bare = "::code id=shot lang=capture run writes=out target=http://127.0.0.1:5173/\n\
+                    return 1;\n::end\n";
+        assert_eq!(round_trip(bare), bare);
+    }
+
+    #[test]
+    fn a_captures_actions_flag_round_trips() {
+        let input = "::code id=shot lang=capture run actions writes=out \
+                     target=http://127.0.0.1:5173/\n\
+                     click #go\n::end\n";
+        assert_eq!(round_trip(input), input);
+        assert!(parse(input).blocks[0].actions);
+        // Additive: unset stays unset, and it never leaks onto a plain (non-capture) block.
+        let bare = "::code id=c lang=js\nconst x = 1;\n::end\n";
+        assert_eq!(round_trip(bare), bare);
+        assert!(!parse(bare).blocks[0].actions);
+    }
+
+    #[test]
     fn plain_code_gains_no_execution_attributes() {
         // Non-runnable code must serialize exactly as before, or every existing doc drifts.
         let input = "::code id=c lang=js\nconst x = 1;\n::end\n";

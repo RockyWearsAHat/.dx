@@ -57,6 +57,9 @@ pub mod plan;
 pub mod process;
 pub mod toolchain;
 
+mod live;
+mod live_actions;
+mod live_proxy;
 mod order;
 mod workdir;
 
@@ -307,7 +310,8 @@ pub fn run_document(
                 continue;
             }
         };
-        let fingerprint = fingerprint(runner, &block.text, &deps, &reads, &writes);
+        let material = approval_material(block);
+        let fingerprint = fingerprint(runner, &material, &deps, &reads, &writes);
         // Approval names the *declared* paths, never a directory's current expansion —
         // a file appearing under a declared folder is new data, not a new power.
         let read_paths = match declared_read_paths(&block.reads) {
@@ -317,7 +321,7 @@ pub fn run_document(
                 continue;
             }
         };
-        let approval = approval_fingerprint(runner, &block.text, &deps, &read_paths, &writes);
+        let approval = approval_fingerprint(runner, &material, &deps, &read_paths, &writes);
         let existing = existing_output(&document, index, &block.id);
 
         // Review mode: show what would run without executing — and without recording
@@ -328,12 +332,7 @@ pub fn run_document(
                 language: block.language.clone(),
                 status: "review".to_string(),
                 exit: 0,
-                output: review_text(
-                    &block.text,
-                    &approval,
-                    ledger.is_approved(&approval),
-                    &writes,
-                ),
+                output: review_text(&material, &approval, ledger.is_approved(&approval), &writes),
                 duration_ms: 0,
             });
             continue;
@@ -539,6 +538,30 @@ fn declared_read_paths(reads: &str) -> Result<Vec<String>, String> {
             })
         })
         .collect()
+}
+
+/// The text a block's fingerprint and review actually cover.
+///
+/// A `capture` block's `target=`, `setup=`, and `actions` decide what it does exactly as
+/// much as its script body does — where it reaches, what it runs to get there before the
+/// script ever evaluates, and whether that body is raw JavaScript or the `actions`
+/// shorthand compiled into JavaScript behind the reviewer's back — so they are prepended
+/// the same way [`fingerprint`] prepends a `writes=` grant: reviewing the code reviews the
+/// whole power, not just the part written as a script. Toggling `actions` with the body
+/// left untouched must re-open review too, or an approved raw-JS fingerprint would stay
+/// "approved" once reinterpreted as a wholly different compiled program. Every other
+/// block's `target` and `setup` are always empty and `actions` is always false, so this
+/// returns their body completely unchanged — no fingerprint computed before this field
+/// existed moves.
+fn approval_material(block: &Block) -> std::borrow::Cow<'_, str> {
+    if block.target.is_empty() && block.setup.is_empty() && !block.actions {
+        std::borrow::Cow::Borrowed(block.text.as_str())
+    } else {
+        std::borrow::Cow::Owned(format!(
+            "target={}\u{1f}setup={}\u{1f}actions={}\u{1f}{}",
+            block.target, block.setup, block.actions, block.text
+        ))
+    }
 }
 
 /// Fingerprint the inputs that decide a block's output: runner, code, dependencies, the
@@ -775,6 +798,21 @@ fn execute(
         return blocked("execution is disabled (DX_NO_EXEC is set); no code was run");
     }
 
+    let timeout = if block.timeout > 0 {
+        Duration::from_secs(u64::from(block.timeout))
+    } else {
+        options.default_timeout
+    };
+
+    // `capture` reaches a live `target=`, on purpose — see [`live`]'s module doc for why
+    // that is not the `plan`/`confine` pipeline every other runner goes through below.
+    if runner == "capture" {
+        return match granted_writes(writes, &options.document_dir) {
+            Ok(granted) => live::execute(block, &granted, &options.document_dir, timeout),
+            Err(message) => blocked(&message),
+        };
+    }
+
     let dirs = plan::Dirs {
         block: options.cache_root.join(runner).join(fingerprint),
         toolchains: options.cache_root.join("toolchains"),
@@ -782,12 +820,6 @@ fn execute(
     let prepared = match plan::build(runner, &block.text, deps, &dirs) {
         Ok(prepared) => prepared,
         Err(message) => return blocked(&message),
-    };
-
-    let timeout = if block.timeout > 0 {
-        Duration::from_secs(u64::from(block.timeout))
-    } else {
-        options.default_timeout
     };
 
     // Installing declared libraries is the one phase that may reach the network, and it is

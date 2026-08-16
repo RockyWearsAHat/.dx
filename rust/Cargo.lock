@@ -71,6 +71,7 @@ name = "doc-run"
 version = "0.1.0"
 dependencies = [
  "doc-core",
+ "doc-shot",
 ]
 
 [[package]]

@@ -816,14 +816,14 @@ fn check(args: &Value, root: &Path) -> ToolResult {
 /// the agent filing it is almost never standing in the dx checkout — so it goes to this
 /// machine's inbox *and* straight to the intake, which is what puts it in the dx checkout's
 /// own `reports.dx` for the next agent ([`crate::intake`] is the authority on the route,
-/// [`crate::reports`] on why the inbox is written first).
+/// [`crate::reports`] on why the inbox is written first). Which project `root` is — even one
+/// subscribed to its own service, wired up with `dx report subscribe` — has no say in this:
+/// that subscription decides what `dx report sync` reads back locally, never where a report
+/// filed here is sent, so [`crate::intake::project_for`] never looks at `root` at all.
 fn report(args: &Value, root: &Path) -> ToolResult {
-    report_in(
-        args,
-        root,
-        &crate::reports::inbox(),
-        crate::intake::setting().as_deref(),
-    )
+    let endpoint =
+        crate::intake::endpoint().map(|base| format!("{base}?{}", crate::intake::project_for()));
+    report_in(args, root, &crate::reports::inbox(), endpoint.as_deref())
 }
 
 /// The body of [`report`], with the inbox and the intake stated rather than defaulted.
@@ -1448,6 +1448,92 @@ mod tests {
 
         let body = served.join().expect("listener");
         assert!(body.contains("\"route\":\"dx_report\""), "{body}");
+    }
+
+    /// A workspace subscribed to another project's own service (`dx report subscribe
+    /// --project lvlup`, so `dx report sync` can read *that* project's reports back into its
+    /// local reports.dx) must not thereby redirect where `dx_report` files: `dx_report` is
+    /// always about dx itself, so it always reaches dx's own shared database, no matter which
+    /// project's reports the calling workspace happens to be subscribed to read back.
+    #[test]
+    fn a_report_filed_from_a_subscribed_workspace_still_reaches_dxs_own_database() {
+        use std::io::{BufRead, BufReader, Read, Write};
+        use std::net::TcpListener;
+
+        let _env = crate::env_lock();
+        let root = project("report-subscribed");
+        let inbox = root.join("inbox");
+        let subscriptions = root.join("subscriptions.json");
+        std::env::set_var("DX_REPORTS_DIR", &inbox);
+        std::env::set_var("DX_SUBSCRIPTIONS_FILE", &subscriptions);
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let address = listener.local_addr().expect("address");
+        std::env::set_var("DX_REPORT_ENDPOINT", format!("http://{address}"));
+
+        crate::intake::subscribe(&crate::intake::Subscription {
+            workspace: root.clone(),
+            project: "lvlup".to_string(),
+            endpoint: format!("http://{address}"),
+            token: "t".to_string(),
+        })
+        .expect("subscribe");
+
+        let served = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+            let mut head = String::new();
+            let mut length = 0usize;
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).expect("head");
+                if let Some(value) = line.to_lowercase().strip_prefix("content-length:") {
+                    length = value.trim().parse().unwrap_or(0);
+                }
+                if line == "\r\n" || line.is_empty() {
+                    break;
+                }
+                head.push_str(&line);
+            }
+            let mut body = vec![0u8; length];
+            reader.read_exact(&mut body).expect("body");
+            let answer = "{\"filed\":\"report-1eadbeef\",\"sightings\":1}";
+            stream
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{answer}",
+                        answer.len()
+                    )
+                    .as_bytes(),
+                )
+                .expect("answer");
+            (head, String::from_utf8_lossy(&body).to_string())
+        });
+
+        let filed = call(
+            "dx_report",
+            &json!({
+                "kind": "bug",
+                "title": "dx_search answered with the heading",
+                "detail": "This is about dx itself, filed from a workspace subscribed to lvlup.",
+                "route": "dx_search",
+            }),
+            &root,
+        )
+        .expect("file");
+        assert!(text_of(&filed).contains("report-1eadbeef"), "{filed:?}");
+
+        let (head, body) = served.join().expect("listener");
+        assert!(
+            head.starts_with("POST /?dx "),
+            "dx_report is always about dx, so it must reach dx's own database even from a \
+             workspace subscribed to another project's: {head}"
+        );
+        assert!(body.contains("\"project\":\"dx\""), "{body}");
+
+        std::env::remove_var("DX_REPORTS_DIR");
+        std::env::remove_var("DX_SUBSCRIPTIONS_FILE");
+        std::env::remove_var("DX_REPORT_ENDPOINT");
     }
 
     #[test]

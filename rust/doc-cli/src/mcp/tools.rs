@@ -134,10 +134,16 @@ fn play_tool() -> Value {
                         overflow), `hover <target>`. A target is a block id from dx_outline \
                         or an x,y pixel pair — viewport pixels, unless `node` is set. Set \
                         `node` to clip every frame to one block's box and read x,y inside \
-                        that box (0,0 its corner), so controls inside an embedded ::view \
-                        are targetable. Nothing in the document executes — this drives the same static \
-                        render dx_read photographs. Use dx_read for a plain look; use `dx play \
-                        --out` from a shell to keep every frame as files.",
+                        that box (0,0 its corner), so a native control inside an embedded \
+                        ::view (a checkbox, a <details>) is targetable. Nothing in the \
+                        document executes — this drives the same static render dx_read \
+                        photographs, and a ::view's own script never runs even here (it is \
+                        an inert iframe, on purpose). A live app's own JS-driven \
+                        interactivity is not reachable this way at all — dx_run's \
+                        lang=capture block is what drives a real, running page (real \
+                        clicks, real state, real navigation) and captures it. Use dx_read \
+                        for a plain look; use `dx play --out` from a shell to keep every \
+                        frame as files.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -696,8 +702,36 @@ fn run_tool() -> Value {
                         shows it and widening it re-opens review. It grants folders, never \
                         loose files, so a tool that rewrites one beside the document needs \
                         the flag that tells it not to (`cargo test --locked`). The sandbox \
-                        otherwise keeps the folder read-only, and the network stays gone \
-                        either way. What a block reads it declares with reads=src,data.csv \
+                        otherwise keeps the folder read-only, and the network stays gone — \
+                        with one deliberate exception: lang=capture. A block \
+                        `::code lang=capture run target=<url> writes=out` opens a live, \
+                        real URL (a running dev server, any page) in dx's own trusted \
+                        browser, not the block's own code, and reaches only that one URL — \
+                        every other host and port stays refused, the same way every other \
+                        capture in this codebase refuses one. Its body is JavaScript, \
+                        evaluated in that live page once it settles, so this is how a page \
+                        is driven into a state before it is captured — fill a form, call \
+                        the app's own API, wait for a condition — not only ever whatever \
+                        renders on load; the last non-null value it returns is recorded. \
+                        Give it a `setup=` shell command when the target needs starting \
+                        first (most often the dev server itself) — that command gets the \
+                        network too, same as any other runner's own deps= install, and is \
+                        killed the moment the capture finishes. Add the bare `actions` \
+                        attribute to write the body as a short action script instead of \
+                        raw JavaScript — one statement per line or `;`-separated: \
+                        `wait 500ms`, `click <selector>`, `hover <selector>`, \
+                        `type <selector> \"text\"`, `key <name>`, `scroll <pixels>` or \
+                        `scroll <selector> <pixels>`, and `eval <js>` to drop back into \
+                        raw JavaScript for anything else — `<selector>` is a CSS selector \
+                        (the target is not this document, so there is no block id to \
+                        target). The screenshot lands in \
+                        writes= as `<block id>.png`; reference it with \
+                        `::image src=<block id>.png for=<block id>` the same as any other \
+                        run's picture. This is the answer to \"::view only shows a static \
+                        local file\" — ::view stays that way on purpose (it is a read, and \
+                        reads never execute); a live app's current, driven-into-a-state \
+                        rendering is what lang=capture is for. What a block reads it \
+                        declares with reads=src,data.csv \
                         — files or folders; a folder covers every file under it (hidden \
                         entries, target/node_modules, and the block's own writes= folders \
                         left out). Declared content joins the run fingerprint, so an \

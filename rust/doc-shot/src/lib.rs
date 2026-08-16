@@ -401,7 +401,8 @@ fn capture_block_pages(
     let scale = scale(options);
     let oversample = oversample(options);
 
-    let mut session = cdp::Cdp::launch(browser, &profile, options.width, MEASURE_HEIGHT)?;
+    let mut session =
+        cdp::Cdp::launch(browser, &profile, options.width, MEASURE_HEIGHT, None, None)?;
     let mut shots = Vec::with_capacity(pages.len());
     for (index, page) in pages.iter().enumerate() {
         let page_file = workspace.join(format!("block-{index}.html"));
@@ -516,7 +517,8 @@ fn capture_all_pages(
     let profile = workspace.join("profile");
     std::fs::create_dir_all(&profile)
         .map_err(|error| format!("could not create {}: {error}", profile.display()))?;
-    let mut session = cdp::Cdp::launch(browser, &profile, options.width, MEASURE_HEIGHT)?;
+    let mut session =
+        cdp::Cdp::launch(browser, &profile, options.width, MEASURE_HEIGHT, None, None)?;
 
     let page_file = workspace.join("measure.html");
     write(&page_file, page)?;
@@ -852,7 +854,8 @@ fn capture_page(
     let profile = workspace.join("profile");
     std::fs::create_dir_all(&profile)
         .map_err(|error| format!("could not create {}: {error}", profile.display()))?;
-    let mut session = cdp::Cdp::launch(browser, &profile, options.width, MEASURE_HEIGHT)?;
+    let mut session =
+        cdp::Cdp::launch(browser, &profile, options.width, MEASURE_HEIGHT, None, None)?;
 
     let page_file = workspace.join("page.html");
     write(&page_file, page)?;

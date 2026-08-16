@@ -86,6 +86,24 @@ impl Cdp {
     /// remote debugging on a default profile, and an owned profile keeps the session away
     /// from the reader's real browsing state.
     ///
+    /// `allow_host` is `None` for every reading capture (`dx_read`, `dx_play`, `dx png`):
+    /// the browser resolves no hostname at all, ever — a capture is a read, and a document
+    /// must not reach the network by being looked at. A `::view` naming an external
+    /// stylesheet was both a phone-home channel and a hang: the render-blocking fetch never
+    /// completed in this session, so the sandboxed frame never painted and shipped as empty
+    /// paper. NXDOMAIN fails the fetch instantly; the page paints with what it carries.
+    /// `file://` needs no resolution and is untouched either way.
+    ///
+    /// `doc-run`'s live-capture runner is the one caller that passes `Some(host)`: a
+    /// document names a `target=` on purpose, so the resolver maps exactly that one
+    /// hostname and still refuses every other. This alone does *not* scope an IP literal
+    /// target (Chromium never consults the host resolver for one), which is what `proxy`
+    /// is for: when set, every connection — hostname or literal alike — is forced through
+    /// a local proxy that opens a socket only to the one destination it was told to allow,
+    /// checked against the literal destination requested rather than anything DNS-shaped.
+    /// `doc-run` is the proxy's own implementation and its authority on why a resolver rule
+    /// alone was not enough.
+    ///
     /// # Errors
     /// Returns a sentence naming what failed — launch, announcement, or handshake.
     pub fn launch(
@@ -93,26 +111,33 @@ impl Cdp {
         profile_dir: &Path,
         width: u32,
         height: u32,
+        allow_host: Option<&str>,
+        proxy: Option<u16>,
     ) -> Result<Self, String> {
-        let mut child = Command::new(browser)
-            .args([
-                "--headless",
-                "--disable-gpu",
-                "--no-sandbox",
-                "--hide-scrollbars",
-                "--no-first-run",
-                "--disable-extensions",
-                "--force-device-scale-factor=1",
-                "--remote-debugging-port=0",
-                // The capture browser resolves no hostnames, ever. A capture is a read,
-                // and a document must not reach the network by being looked at — a
-                // `::view` naming an external stylesheet was both a phone-home channel
-                // and a hang: the render-blocking fetch never completed in this session,
-                // so the sandboxed frame never painted and shipped as empty paper.
-                // NXDOMAIN fails the fetch instantly; the page paints with what it
-                // carries. `file://` needs no resolution and is untouched.
-                "--host-resolver-rules=MAP * ~NOTFOUND",
-            ])
+        let resolver_rules = match allow_host {
+            Some(host) => format!("MAP {host} {host}, MAP * ~NOTFOUND"),
+            None => "MAP * ~NOTFOUND".to_string(),
+        };
+        let mut command = Command::new(browser);
+        command.args([
+            "--headless",
+            "--disable-gpu",
+            "--no-sandbox",
+            "--hide-scrollbars",
+            "--no-first-run",
+            "--disable-extensions",
+            "--force-device-scale-factor=1",
+            "--remote-debugging-port=0",
+        ]);
+        command.arg(format!("--host-resolver-rules={resolver_rules}"));
+        if let Some(port) = proxy {
+            command.arg(format!("--proxy-server=127.0.0.1:{port}"));
+            // Chromium bypasses any configured proxy for loopback destinations by
+            // default — exactly the case this proxy exists to scope. Negating it forces
+            // every destination, loopback included, through the proxy.
+            command.arg("--proxy-bypass-list=<-loopback>");
+        }
+        let mut child = command
             .arg(format!("--user-data-dir={}", profile_dir.display()))
             .arg(format!("--window-size={width},{height}"))
             .arg("about:blank")
@@ -253,9 +278,29 @@ impl Cdp {
     /// # Errors
     /// Returns the thrown exception's description when the expression throws.
     pub fn evaluate(&mut self, expression: &str) -> Result<Value, String> {
+        self.evaluate_with(expression, false)
+    }
+
+    /// [`Self::evaluate`], but awaits a returned promise before answering — for
+    /// [`crate::capture`]'s state-loading scripts, which are routinely asynchronous
+    /// (`await fetch(...)`, poll until a condition holds, wait for a login round trip).
+    ///
+    /// # Errors
+    /// Returns the thrown exception's description when the expression throws, or the
+    /// rejection's description when its promise rejects.
+    pub fn evaluate_async(&mut self, expression: &str) -> Result<Value, String> {
+        self.evaluate_with(expression, true)
+    }
+
+    /// The shared body of [`Self::evaluate`] and [`Self::evaluate_async`].
+    fn evaluate_with(&mut self, expression: &str, await_promise: bool) -> Result<Value, String> {
         let result = self.command(
             "Runtime.evaluate",
-            json!({ "expression": expression, "returnByValue": true }),
+            json!({
+                "expression": expression,
+                "returnByValue": true,
+                "awaitPromise": await_promise,
+            }),
         )?;
         if let Some(details) = result.get("exceptionDetails") {
             return Err(format!(

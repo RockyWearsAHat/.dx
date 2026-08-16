@@ -349,7 +349,7 @@ fn drive(
     std::fs::create_dir_all(&profile)
         .map_err(|error| format!("could not create {}: {error}", profile.display()))?;
 
-    let mut cdp = Cdp::launch(browser, &profile, options.width, options.height)?;
+    let mut cdp = Cdp::launch(browser, &profile, options.width, options.height, None, None)?;
     cdp.open(&crate::file_url(&page_file))?;
 
     let clip = match options.node.as_deref() {

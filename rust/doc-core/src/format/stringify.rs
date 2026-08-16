@@ -42,6 +42,9 @@ pub(crate) fn block_header(block: &Block) -> String {
             if block.open {
                 attributes.push("open".to_string());
             }
+            if block.actions {
+                attributes.push("actions".to_string());
+            }
             if !block.deps.is_empty() {
                 attributes.push(format!("deps={}", format_attribute_value(&block.deps)));
             }
@@ -50,6 +53,18 @@ pub(crate) fn block_header(block: &Block) -> String {
             }
             if !block.writes.is_empty() {
                 attributes.push(format!("writes={}", format_attribute_value(&block.writes)));
+            }
+            if !block.target.is_empty() {
+                attributes.push(format!("target={}", format_attribute_value(&block.target)));
+            }
+            if !block.setup.is_empty() {
+                attributes.push(format!("setup={}", format_attribute_value(&block.setup)));
+            }
+            if block.width > 0 {
+                attributes.push(format!("width={}", block.width));
+            }
+            if block.height > 0 {
+                attributes.push(format!("height={}", block.height));
             }
             if block.timeout > 0 {
                 attributes.push(format!("timeout={}", block.timeout));
