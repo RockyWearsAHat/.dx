@@ -179,22 +179,6 @@ pub fn endpoint() -> Option<String> {
     endpoint_from(std::env::var(ENDPOINT_ENV).ok().as_deref())
 }
 
-/// The intake this machine files to with its service still on it — `…/report?dx` — or `None`
-/// when the push is turned off.
-///
-/// One string rather than a pair, so a caller that has to carry the setting somewhere (the MCP
-/// handler hands it to its own body, which a test states outright) carries both halves or
-/// neither, and never a base with somebody else's service on it.
-#[must_use]
-pub fn setting() -> Option<String> {
-    let configured = std::env::var(ENDPOINT_ENV).ok();
-    let base = endpoint_from(configured.as_deref())?;
-    Some(match service_from(configured.as_deref()) {
-        Some(service) => format!("{base}?{service}"),
-        None => base,
-    })
-}
-
 /// The service this machine's endpoint setting names, when it names one.
 ///
 /// `None` means nothing was said, and the caller's own project key — `dx` for a report about
@@ -202,6 +186,19 @@ pub fn setting() -> Option<String> {
 #[must_use]
 pub fn service() -> Option<String> {
     service_from(std::env::var(ENDPOINT_ENV).ok().as_deref())
+}
+
+/// The project a filed report belongs to — always `dx`, unless this machine's own
+/// `DX_REPORT_ENDPOINT` names something else on purpose.
+///
+/// A report is about dx itself, filed from whatever project the reporter happens to be
+/// standing in ([`crate::mcp::tools`]'s `dx_report` description is the authority on that), so
+/// the workspace it was filed from has no say in where it goes — a workspace's own
+/// subscription (`dx report subscribe --project lvlup`) only decides what `dx report sync`
+/// reads back into its local reports.dx, never where a report just filed here is sent.
+#[must_use]
+pub fn project_for() -> String {
+    service().unwrap_or_else(|| DEFAULT_PROJECT.to_string())
 }
 
 /// The service `setting` names in its query, if it names one. Split from [`service`] for the
@@ -513,7 +510,7 @@ pub fn file(report: &Report) -> Result<Filed, String> {
             problem: None,
         });
     };
-    let project = service().unwrap_or_else(|| DEFAULT_PROJECT.to_string());
+    let project = project_for();
     match push(report, &endpoint, &project) {
         Ok(filed) => {
             // The intake has it, so this machine no longer needs to — and a record that
@@ -1159,6 +1156,44 @@ mod tests {
 
         assert!(unsubscribe(&root).expect("unsubscribe"));
         assert!(subscription_for(&root).expect("read").is_none());
+        std::env::remove_var(SUBSCRIPTIONS_ENV);
+    }
+
+    /// The bug this closes: a workspace subscribed to another project's own service (`dx
+    /// report subscribe --project lvlup`, run so `dx report sync` can read that project's
+    /// reports back) must not thereby redirect *dx's own* reports — filed with `dx_report`
+    /// from inside that workspace — into the subscribed project's database. `dx_report`
+    /// always reports on dx, so it always defaults to dx's own shared database, no matter
+    /// which project's reports the workspace happens to be subscribed to read back.
+    #[test]
+    fn project_for_defaults_to_dx_regardless_of_the_workspaces_own_subscription() {
+        let _env = crate::env_lock();
+        let root = scratch("project-for");
+        std::env::set_var(SUBSCRIPTIONS_ENV, root.join("subscriptions.json"));
+        std::env::remove_var(ENDPOINT_ENV);
+
+        // Nothing subscribed yet: the shared `dx` database stands.
+        assert_eq!(project_for(), DEFAULT_PROJECT);
+
+        subscribe(&Subscription {
+            workspace: root.clone(),
+            project: "lvlup".to_string(),
+            endpoint: DEFAULT_ENDPOINT.to_string(),
+            token: "t".to_string(),
+        })
+        .expect("subscribe");
+        assert_eq!(
+            project_for(),
+            DEFAULT_PROJECT,
+            "a workspace's own subscription reads reports back locally — it must not \
+             redirect where dx_report's own filings go"
+        );
+
+        // An explicit override still wins — this machine named somewhere else on purpose.
+        std::env::set_var(ENDPOINT_ENV, "https://elsewhere.example/report?billing");
+        assert_eq!(project_for(), "billing");
+
+        std::env::remove_var(ENDPOINT_ENV);
         std::env::remove_var(SUBSCRIPTIONS_ENV);
     }
 

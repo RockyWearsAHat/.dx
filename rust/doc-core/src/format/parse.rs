@@ -69,9 +69,14 @@ fn push_block(blocks: &mut Vec<Block>, block_type: &str, attrs: &[Attr], content
             block.src = js_trim(attr(attrs, "src")).to_string();
             block.run = parse_boolean_attribute(attr(attrs, "run"));
             block.open = parse_boolean_attribute(attr(attrs, "open"));
+            block.actions = parse_boolean_attribute(attr(attrs, "actions"));
             block.deps = js_trim(attr(attrs, "deps")).to_string();
             block.reads = js_trim(attr(attrs, "reads")).to_string();
             block.writes = js_trim(attr(attrs, "writes")).to_string();
+            block.target = js_trim(attr(attrs, "target")).to_string();
+            block.setup = js_trim(attr(attrs, "setup")).to_string();
+            block.width = attr(attrs, "width").trim().parse().unwrap_or(0);
+            block.height = attr(attrs, "height").trim().parse().unwrap_or(0);
             block.timeout = attr(attrs, "timeout").trim().parse().unwrap_or(0);
             block.format = js_trim(attr(attrs, "format")).to_lowercase();
             block.text = strip_trailing_newlines(&content_lines.join("\n")).to_string();

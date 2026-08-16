@@ -375,6 +375,26 @@ fn initialize() -> Value {
                          images proves nothing and is the smell that you have left the \
                          method; prefer the verdict, and keep any embedded image under \
                          8MB (capture at scale 1).\n\n\
+                         REPORT DX ITSELF. You are dx's field test, and the only one it \
+                         has: when a tool misleads you, a message does not say what to do \
+                         next, an answer is not the block that states the fact, or you \
+                         work around something — file it with dx_report in the same turn, \
+                         bug, suggestion, or observation, from whatever project you are \
+                         in. It costs one call, it changes nothing in this workspace, and \
+                         it is the only way dx stops doing that; a workaround nobody filed \
+                         is a defect that stays. Report the same thing twice gladly — \
+                         repeats become sightings on one report, and the count is what \
+                         earns a fix. This tool is never the place for a defect in the \
+                         project you are actually working on, however convenient it is to \
+                         reach for — that belongs in that project's own documents (or its \
+                         own issue tracker), filed there the same way everything else in \
+                         this method is: written down where the next session reads it, not \
+                         phoned into dx's database because dx_report happened to be the \
+                         tool already in hand. Which project you are standing in never \
+                         changes where this lands, either: dx_report always files to dx's \
+                         own shared database. A workspace's subscription decides what `dx \
+                         report sync` reads back into its local reports.dx, never where a \
+                         report just filed here goes.\n\n\
                          REPORT INTAKE IS HOW A PROJECT GETS ITS DEFECTS BACK. Reports are \
                          filed from any project into the intake, and every project with dx \
                          documents should be wired to pull its own reports back into a \
@@ -386,16 +406,6 @@ fn initialize() -> Value {
                          report subscribe` to set it up?\" Then do what they say. A yes is \
                          one command and one-time setup; afterwards the project reads its own \
                          intake and stays current for the life of the session.\n\n\
-                         REPORT DX ITSELF. You are dx's field test, and the only one it \
-                         has: when a tool misleads you, a message does not say what to do \
-                         next, an answer is not the block that states the fact, or you \
-                         work around something — file it with dx_report in the same turn, \
-                         bug, suggestion, or observation, from whatever project you are \
-                         in. It costs one call, it changes nothing in this workspace, and \
-                         it is the only way dx stops doing that; a workaround nobody filed \
-                         is a defect that stays. Report the same thing twice gladly — \
-                         repeats become sightings on one report, and the count is what \
-                         earns a fix.\n\n\
                          PIXELS IN SUBAGENTS. A page image is the costliest thing a \
                          context can carry, so frames are judged in a review subagent \
                          that returns verdicts: the subagent reads the pixels and answers \

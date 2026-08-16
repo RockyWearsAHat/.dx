@@ -122,6 +122,11 @@ crates and the surfaces; `rust/engine.dx` is the crate-by-crate responsibility l
   impose the boundary **does not run the block**; `DX_UNCONFINED=1` is the only way past and
   says so in the output it produces. `doc-run/tests/attacks.rs` is the evidence — if you change
   this area, run it, and check it still *can* fail by running the same payload unconfined.
+  `lang=capture` is the one deliberate exception, and does not weaken this: there is no
+  interpreter and no subprocess of the block's own code, so `confine`'s boundary is not what
+  is protecting anything there — `live.rs`'s module doc is the authority on what scopes it
+  instead (a browser that resolves and proxies only the one `target=` host, hostname or IP
+  literal alike), and `capture_network.rs` is its own attack evidence.
 - **Unreviewed code does not run at all — but a local edit is the review.**
   `doc-run::approvals` (module doc is the authority) is a ledger of fingerprints *this machine*
   recorded, never inside a repository. The identity is the code and its powers — runner, deps,

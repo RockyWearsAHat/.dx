@@ -65,11 +65,11 @@ pub(super) fn attr<'a>(attrs: &'a [Attr], key: &str) -> &'a str {
 
 /// The bare boolean attributes a block of `kind` may carry. Scoped per kind so a bare
 /// word opening an inline body — `::heading id=h Open questions ::end` — stays prose
-/// instead of being swallowed as an attribute: `run` and `open` belong to code,
-/// `module` to script, and `hidden` to every block.
+/// instead of being swallowed as an attribute: `run`, `open`, and `actions` belong to
+/// code, `module` to script, and `hidden` to every block.
 fn bare_booleans(kind: &str) -> &'static [&'static str] {
     match kind.to_ascii_lowercase().as_str() {
-        "code" => &["hidden", "run", "open"],
+        "code" => &["hidden", "run", "open", "actions"],
         "script" => &["hidden", "module"],
         _ => &["hidden"],
     }
