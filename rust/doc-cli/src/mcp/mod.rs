@@ -367,19 +367,25 @@ fn initialize() -> Value {
                          holds the project, only the current move. Scratch promotes: \
                          when a note hardens, move it into the durable section it \
                          belongs to and delete the scratch.\n\n\
-                         RESULTS LIVE IN THE DOCUMENT. Run output folds in as ::output, \
-                         fingerprinted in place. A picture a run produces — a screenshot, \
-                         a rendered frame — is an `::image src=<file> for=<run-block-id>` \
-                         so the page itself vouches for its freshness: a failed or unrun \
-                         producer is called out on the figure. The automation that makes the picture \
-                         belongs in that block, not beside it: write it as a `run` block or a \
-                         `lang=capture` block and execute it through `dx_run`, never as a script run \
-                         outside dx whose output gets pasted in afterward — an external producer is \
-                         one `for=` cannot see, so the freshness it claims to vouch for is fiction. \
-                         A gallery of hand-managed \
-                         images proves nothing and is the smell that you have left the \
-                         method; prefer the verdict, and keep any embedded image under \
-                         8MB (capture at scale 1).\n\n\
+                         RESULTS LIVE IN THE DOCUMENT. Any automation — a script, a build, \
+                         a browsing session — is written as a `run` block or a `lang=capture` \
+                         block and executed through `dx_run`, never run outside dx with its \
+                         output pasted in afterward: reading the document should show real \
+                         work, not a report of work done elsewhere. Run output folds in as \
+                         `::output`, fingerprinted in place. A picture a run produces is an \
+                         `::image src=<file> for=<run-block-id>`, so the page vouches for its \
+                         own freshness — a failed or unrun producer is called out on the \
+                         figure. That only holds for a block in this document: an external \
+                         producer is one `for=` cannot see, so the freshness it claims to \
+                         vouch for is fiction. The automation belongs in that block, not \
+                         beside it — a gallery of hand-managed images proves nothing and is \
+                         the smell that you have left the method; prefer the verdict, and \
+                         keep any embedded image under 8MB (capture at scale 1). Exception: a \
+                         task that has to see each step before choosing the next — driving an \
+                         interface with no fixed script — cannot be one block; write what it \
+                         found back into the document with dx_edit/dx_append once you are \
+                         done, so the result still lands in the document, not only in your \
+                         conversation.\n\n\
                          REPORT DX ITSELF. You are dx's field test, and the only one it \
                          has: when a tool misleads you, a message does not say what to do \
                          next, an answer is not the block that states the fact, or you \
@@ -600,8 +606,10 @@ mod tests {
         assert!(instructions.contains("`header` param"));
         assert!(instructions.contains("hand-managed images proves nothing"));
         assert!(instructions.contains("belongs in that block, not beside it"));
-        assert!(instructions.contains("never as a script run outside dx"));
+        assert!(instructions.contains("never run outside dx"));
         assert!(instructions.contains("freshness it claims to vouch for is fiction"));
+        assert!(instructions.contains("Any automation"));
+        assert!(instructions.contains("not only in your conversation"));
         // dx is improved by the agents using it: a defect met in any project is filed in
         // the same turn, from that project, and repeats are welcome — they are what tell
         // a fixer which defect is actually costing sessions.
