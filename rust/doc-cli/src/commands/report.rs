@@ -5,6 +5,9 @@
 //! dx report list [dir]        what is waiting here, and what the checkout carries
 //! dx report sync [dir]        push what is waiting, pull the project's open reports
 //! dx report subscribe [dir] [--project dx] [--endpoint URL] [--token T]
+//! dx report setup [dir] [--project N] [--endpoint URL] [--token T]
+//!                             one command: subscribe this repository
+//! dx report token [T]         store the owner's token once, machine-wide
 //! dx report unsubscribe [dir]
 //! dx report close <id> [dir]  a fix: the block goes, and the database is told
 //! dx report drain [dir]       fold this machine's inbox in without a network
@@ -37,6 +40,8 @@ pub fn run(args: &Args) -> Result<Output, String> {
         "drain" => drain(args).map(Output::Report),
         "sync" => sync(args).map(Output::Report),
         "subscribe" => subscribe(args).map(Output::Report),
+        "setup" => setup(args).map(Output::Report),
+        "token" => token(args).map(Output::Report),
         "unsubscribe" => unsubscribe(args).map(Output::Report),
         "close" => close(args).map(Output::Report),
         "drop" => drop(args).map(Output::Report),
@@ -113,7 +118,7 @@ fn subscribe(args: &Args) -> Result<String, String> {
         subscription.project,
         intake::address(&subscription.endpoint, "", &subscription.project)
     );
-    if subscription.token.is_empty() && std::env::var("DX_REPORT_TOKEN").is_err() {
+    if intake::token_for(&subscription).is_empty() {
         out.push_str(
             "no token stored, so this checkout can file but not read — run \
              `selfhost reports token` on the box and re-run with --token\n",
@@ -212,6 +217,153 @@ fn drop(args: &Args) -> Result<String, String> {
             "{id} is not in the local inbox at {}\nrun `dx report list` to see what is waiting\n",
             inbox.display()
         )),
+    }
+}
+
+/// `dx report setup [dir]` — one command: subscribe this repository to its own reports.
+fn setup(args: &Args) -> Result<String, String> {
+    let root = root_for(args.positional(1));
+
+    let project = if let Some(stated) = args.value("project") {
+        if stated
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+        {
+            stated.to_string()
+        } else {
+            return Err(format!(
+                "`{stated}` has a character not allowed in a service name; use letters, digits, \
+                 dot, dash, and underscore only"
+            ));
+        }
+    } else {
+        let folder_name = root
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("report")
+            .to_string();
+        let sanitized = folder_name
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') {
+                    c
+                } else {
+                    '-'
+                }
+            })
+            .collect::<String>();
+        let trimmed = sanitized.trim_matches('-').to_string();
+        if trimmed.is_empty() {
+            return Err(format!(
+                "the folder name `{folder_name}` does not contain characters for a service name; \
+                 pass --project explicitly"
+            ));
+        }
+        trimmed
+    };
+
+    let endpoint = args
+        .value("endpoint")
+        .map(|value| intake::split_service(value).0)
+        .or_else(intake::endpoint)
+        .unwrap_or_else(|| intake::DEFAULT_ENDPOINT.to_string());
+
+    let mut out = String::new();
+
+    if let Some(stated_token) = args.value("token") {
+        let path = intake::store_token(stated_token)?;
+        out.push_str(&format!(
+            "token stored at {} — it is never shown again\n",
+            path.display()
+        ));
+    } else if intake::stored_token().is_none() {
+        if let Ok(existing_subs) = intake::subscriptions() {
+            if let Some(existing) = existing_subs
+                .iter()
+                .find(|s| s.endpoint == endpoint && !s.token.is_empty())
+            {
+                intake::store_token(&existing.token)?;
+                out.push_str(&format!(
+                    "adopted token from existing subscription at {}\n",
+                    existing.workspace.display()
+                ));
+            }
+        }
+    }
+
+    if let Ok(existing_subs) = intake::subscriptions() {
+        for subscription in existing_subs {
+            if !subscription.workspace.exists() {
+                intake::unsubscribe(&subscription.workspace)?;
+                out.push_str(&format!(
+                    "pruned subscription for {} (no longer exists)\n",
+                    subscription.workspace.display()
+                ));
+            }
+        }
+    }
+
+    let subscription = Subscription {
+        workspace: root.clone(),
+        project: project.clone(),
+        endpoint: endpoint.clone(),
+        token: String::new(),
+    };
+    intake::subscribe(&subscription)?;
+
+    out.push_str(&format!(
+        "{} now receives `{project}` reports from {}\n",
+        subscription.document().display(),
+        intake::address(&subscription.endpoint, "", &project)
+    ));
+
+    if intake::token_for(&subscription).is_empty() {
+        out.push_str(
+            "filing works from here, but reading the feed needs the owner's token — run \
+             `selfhost reports token` on the box and pass it with `dx report token <t>`\n",
+        );
+        return Ok(out);
+    }
+
+    let synced = intake::sync(&subscription)?;
+    out.push_str(&format!("{}\n", synced.summary(&subscription.document())));
+
+    if synced
+        .problems
+        .iter()
+        .any(|p| p.contains("unknown project"))
+    {
+        out.push_str(
+            "the service will be created at the intake the first time a report is filed to it — \
+             an empty feed for a new service is normal\n",
+        );
+    }
+
+    Ok(out)
+}
+
+/// `dx report token [T]` — store the owner's token once, machine-wide, or query what is stored.
+fn token(args: &Args) -> Result<String, String> {
+    if let Some(stated_token) = args.positional(1) {
+        let path = intake::store_token(stated_token)?;
+        Ok(format!(
+            "token stored at {} — it is never shown again\n",
+            path.display()
+        ))
+    } else {
+        match intake::stored_token() {
+            Some(_) => {
+                let path = intake::token_file();
+                Ok(format!("a token is stored at {}\n", path.display()))
+            }
+            None => {
+                let path = intake::token_file();
+                Ok(format!(
+                    "no token stored — run `dx report token <t>` to store one at {}\n",
+                    path.display()
+                ))
+            }
+        }
     }
 }
 
@@ -325,6 +477,7 @@ mod tests {
         std::env::set_var("DX_REPORTS_DIR", root.join("inbox"));
         std::env::set_var("DX_REPORT_ENDPOINT", "off");
         std::env::set_var("DX_SUBSCRIPTIONS_FILE", root.join("subscriptions.json"));
+        std::env::set_var("DX_REPORT_TOKEN_FILE", root.join("token"));
 
         let filed = run(&args(&[
             "bug",
@@ -482,6 +635,7 @@ mod tests {
         std::env::remove_var("DX_REPORTS_DIR");
         std::env::remove_var("DX_REPORT_ENDPOINT");
         std::env::remove_var("DX_SUBSCRIPTIONS_FILE");
+        std::env::remove_var("DX_REPORT_TOKEN_FILE");
     }
 
     #[test]
@@ -498,12 +652,14 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).expect("scratch");
         std::env::set_var("DX_SUBSCRIPTIONS_FILE", root.join("subscriptions.json"));
+        std::env::set_var("DX_REPORT_TOKEN_FILE", root.join("token"));
 
         let error =
             run(&args(&["sync", root.to_str().expect("path")])).expect_err("no subscription");
         assert!(error.contains("dx report subscribe"), "{error}");
 
         std::env::remove_var("DX_SUBSCRIPTIONS_FILE");
+        std::env::remove_var("DX_REPORT_TOKEN_FILE");
     }
 
     #[test]
@@ -585,5 +741,243 @@ mod tests {
 
         std::env::remove_var("DX_REPORTS_DIR");
         std::env::remove_var("DX_REPORT_ENDPOINT");
+    }
+
+    #[test]
+    fn setup_with_no_token_anywhere_subscribes_and_says_filing_works() {
+        let _env = crate::env_lock();
+        let root = std::env::temp_dir().join("dx-report-cli-setup-no-token");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("scratch");
+        let root_canonical = workspace::workspace_root(&root);
+        std::env::set_var("DX_SUBSCRIPTIONS_FILE", root.join("subscriptions.json"));
+        std::env::set_var("DX_REPORT_TOKEN_FILE", root.join("token"));
+
+        let result = run(&args(&[
+            "setup",
+            root.to_str().expect("path"),
+            "--endpoint",
+            "https://example.invalid/report",
+        ]))
+        .expect("setup");
+
+        let text = result.text();
+        assert!(text.contains("now receives"), "should subscribe: {}", text);
+        assert!(
+            text.contains("filing works"),
+            "should say filing works: {}",
+            text
+        );
+        assert!(
+            !text.contains("folded") && !text.contains("new, "),
+            "should not attempt a sync: {}",
+            text
+        );
+
+        // Verify the subscription has an empty token field
+        let sub = intake::subscription_for(&root_canonical)
+            .expect("read")
+            .expect("subscription exists");
+        assert!(
+            sub.token.is_empty(),
+            "subscription should have empty token field"
+        );
+
+        std::env::remove_var("DX_SUBSCRIPTIONS_FILE");
+        std::env::remove_var("DX_REPORT_TOKEN_FILE");
+    }
+
+    #[test]
+    fn token_stores_and_never_echoes_it_in_output() {
+        let _env = crate::env_lock();
+        let root = std::env::temp_dir().join("dx-report-cli-token");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("scratch");
+        std::env::set_var("DX_REPORT_TOKEN_FILE", root.join("token"));
+
+        let result = run(&args(&["token", "my-secret-value"])).expect("token");
+        let text = result.text();
+        assert!(
+            text.contains("stored at"),
+            "should confirm storage: {}",
+            text
+        );
+        assert!(
+            !text.contains("my-secret-value"),
+            "should never echo the token: {}",
+            text
+        );
+        assert!(intake::stored_token().is_some(), "token should be stored");
+
+        std::env::remove_var("DX_REPORT_TOKEN_FILE");
+    }
+
+    #[test]
+    fn setup_adopts_a_token_from_existing_same_endpoint_subscription() {
+        let _env = crate::env_lock();
+        let root = std::env::temp_dir().join("dx-report-cli-setup-adopt");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("scratch");
+        std::env::set_var("DX_SUBSCRIPTIONS_FILE", root.join("subscriptions.json"));
+        std::env::set_var("DX_REPORT_TOKEN_FILE", root.join("token"));
+        std::env::set_var("DX_REPORT_ENDPOINT", "off");
+
+        let existing_root = root.join("existing");
+        std::fs::create_dir_all(&existing_root).expect("create");
+        let existing_sub = Subscription {
+            workspace: existing_root,
+            project: "dx".to_string(),
+            endpoint: "https://example.invalid/report".to_string(),
+            token: "existing-token".to_string(),
+        };
+        intake::subscribe(&existing_sub).expect("subscribe existing");
+
+        let new_root = root.join("new");
+        std::fs::create_dir_all(&new_root).expect("create");
+
+        let result = run(&args(&[
+            "setup",
+            new_root.to_str().expect("path"),
+            "--endpoint",
+            "https://example.invalid/report",
+        ]))
+        .expect("setup");
+
+        let text = result.text();
+        assert!(
+            text.contains("adopted token"),
+            "should say token was adopted: {}",
+            text
+        );
+        assert_eq!(
+            intake::stored_token().expect("token exists"),
+            "existing-token",
+            "should have adopted the token"
+        );
+
+        std::env::remove_var("DX_SUBSCRIPTIONS_FILE");
+        std::env::remove_var("DX_REPORT_TOKEN_FILE");
+        std::env::remove_var("DX_REPORT_ENDPOINT");
+    }
+
+    #[test]
+    fn setup_prunes_subscriptions_whose_workspace_no_longer_exists() {
+        let _env = crate::env_lock();
+        let root = std::env::temp_dir().join("dx-report-cli-setup-prune");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("scratch");
+        std::env::set_var("DX_SUBSCRIPTIONS_FILE", root.join("subscriptions.json"));
+        std::env::set_var("DX_REPORT_TOKEN_FILE", root.join("token"));
+        std::env::set_var("DX_REPORT_ENDPOINT", "off");
+
+        let dead_root = root.join("dead");
+        let dead_sub = Subscription {
+            workspace: dead_root.clone(),
+            project: "dx".to_string(),
+            endpoint: "https://example.invalid/report".to_string(),
+            token: String::new(),
+        };
+        intake::subscribe(&dead_sub).expect("subscribe dead");
+
+        let new_root = root.join("new");
+        std::fs::create_dir_all(&new_root).expect("create");
+
+        let result = run(&args(&[
+            "setup",
+            new_root.to_str().expect("path"),
+            "--endpoint",
+            "https://example.invalid/report",
+        ]))
+        .expect("setup");
+
+        let text = result.text();
+        assert!(
+            text.contains("pruned subscription"),
+            "should say subscription was pruned: {}",
+            text
+        );
+        assert!(
+            intake::subscription_for(&dead_root)
+                .expect("read")
+                .is_none(),
+            "dead subscription should be gone"
+        );
+
+        std::env::remove_var("DX_SUBSCRIPTIONS_FILE");
+        std::env::remove_var("DX_REPORT_TOKEN_FILE");
+        std::env::remove_var("DX_REPORT_ENDPOINT");
+    }
+
+    #[test]
+    fn folder_name_with_spaces_and_slashes_derives_sanitized_project_name() {
+        let _env = crate::env_lock();
+        let root = std::env::temp_dir().join("dx-report-cli-setup-sanitize");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("scratch");
+        std::env::set_var("DX_SUBSCRIPTIONS_FILE", root.join("subscriptions.json"));
+        std::env::set_var("DX_REPORT_TOKEN_FILE", root.join("token"));
+
+        let messy_root = root.join("my folder/with/slashes");
+        std::fs::create_dir_all(&messy_root).expect("create");
+        let messy_canonical = workspace::workspace_root(&messy_root);
+
+        let result = run(&args(&[
+            "setup",
+            messy_root.to_str().expect("path"),
+            "--endpoint",
+            "https://example.invalid/report",
+        ]))
+        .expect("setup");
+
+        let text = result.text();
+        assert!(
+            text.contains("slashes"),
+            "sanitized name should not have slashes: {}",
+            text
+        );
+
+        let sub = intake::subscription_for(&messy_canonical)
+            .expect("read")
+            .expect("subscription exists");
+        assert_eq!(
+            sub.project, "slashes",
+            "project should be sanitized folder name"
+        );
+
+        std::env::remove_var("DX_SUBSCRIPTIONS_FILE");
+        std::env::remove_var("DX_REPORT_TOKEN_FILE");
+    }
+
+    #[test]
+    fn token_query_says_whether_one_is_stored() {
+        let _env = crate::env_lock();
+        let root = std::env::temp_dir().join("dx-report-cli-token-query");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("scratch");
+        std::env::set_var("DX_REPORT_TOKEN_FILE", root.join("token"));
+
+        let result = run(&args(&["token"])).expect("token query");
+        let text = result.text();
+        assert!(
+            text.contains("no token"),
+            "should say no token stored: {}",
+            text
+        );
+
+        intake::store_token("test-token").expect("store");
+        let result = run(&args(&["token"])).expect("token query again");
+        let text = result.text();
+        assert!(
+            text.contains("a token is stored"),
+            "should say a token is stored: {}",
+            text
+        );
+        assert!(
+            !text.contains("test-token"),
+            "should never show the token: {}",
+            text
+        );
+
+        std::env::remove_var("DX_REPORT_TOKEN_FILE");
     }
 }

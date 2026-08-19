@@ -651,6 +651,13 @@ REPORT — what dx itself got wrong
               [--project dx] [--token T]        open reports from then on: every sync
               [--endpoint URL]                  folds them in, and an MCP session keeps
                                                 them current underneath the agent.
+  dx report   setup [dir]                       one command: subscribe this repository
+              [--project N]                     to its own reports, naming the service
+              [--endpoint URL] [--token T]      after the folder unless --project says,
+                                                reusing this machine's stored token
+  dx report   token [T]                         store the owner's token once,
+                                                machine-wide; with no T, say whether
+                                                one is stored
   dx report   sync [dir]                        push what is waiting, pull what is open
   dx report   close <id> [dir]                  a fix landed: the block goes and the
                                                 intake is told, so no later sync brings
