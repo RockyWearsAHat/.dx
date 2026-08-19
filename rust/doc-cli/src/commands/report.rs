@@ -305,6 +305,7 @@ fn write_mcp_config(
 
     std::fs::write(&mcp_json, format!("{formatted}\n"))
         .map_err(|e| format!("could not write .mcp.json: {e}"))?;
+    intake::restrict(&mcp_json);
 
     Ok(())
 }
@@ -695,6 +696,7 @@ fn handle_mcp_request(line: &str, endpoint: &str, project: &str, token: &str) ->
 
     // Dispatch to tools
     let result = match method {
+        "initialize" => Ok(mcp_initialize()),
         "tools/list" => mcp_tools_list(),
         "tools/call" => mcp_tools_call(params, endpoint, project, token),
         _ => {
@@ -733,6 +735,18 @@ fn handle_mcp_request(line: &str, endpoint: &str, project: &str, token: &str) ->
             .unwrap_or_else(|_| "null".to_string()),
         ),
     }
+}
+
+/// The `initialize` handshake every conformant MCP client sends before anything else — without
+/// this, a real client (Claude Code included) gets "Method not found" on its first message and
+/// never connects. Mirrors `crate::mcp::initialize`'s shape, under a distinct server name so a
+/// log or a client's server list can tell this scoped server apart from the primary `dx mcp`.
+fn mcp_initialize() -> serde_json::Value {
+    serde_json::json!({
+        "protocolVersion": crate::mcp::PROTOCOL_VERSION,
+        "capabilities": { "tools": {} },
+        "serverInfo": { "name": "dx-report", "version": crate::mcp::SERVER_VERSION }
+    })
 }
 
 /// Return the tools/list catalogue for this scoped MCP server.
@@ -1609,6 +1623,25 @@ mod tests {
         assert!(response.contains("report_file"));
         assert!(response.contains("report_feed"));
         assert!(response.contains("report_close"));
+    }
+
+    #[test]
+    fn mcp_handle_request_answers_the_initialize_handshake() {
+        // Regression: every conformant MCP client (Claude Code included) sends `initialize`
+        // as its very first message and refuses to proceed without a valid answer. Before this
+        // test existed, `initialize` fell through to the "Method not found" arm, so this
+        // server could never actually connect to a real client — only the tools it hoped
+        // nobody would call before initializing were ever exercised.
+        let response = handle_mcp_request(
+            r#"{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}"#,
+            "http://example.com",
+            "proj",
+            "tok",
+        )
+        .expect("should return response");
+        assert!(!response.contains("Method not found"), "{response}");
+        assert!(response.contains("protocolVersion"));
+        assert!(response.contains("serverInfo"));
     }
 
     #[test]
