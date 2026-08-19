@@ -259,56 +259,102 @@ pub fn token_file() -> PathBuf {
     crate::home::data_dir().join("dx").join("report-token")
 }
 
-/// Reads the raw token and endpoint base from the stored token file, or `None` when missing
-/// or empty.
+/// Reads all stored tokens from the file, as (base, service, token) tuples.
 ///
-/// This is the internal reader; callers should use [`stored_token_for`] to get a token bound
-/// to an endpoint.
-fn read_stored_token_pair() -> Option<(String, String)> {
+/// Supports both legacy format (single or two-line plain text) and new format (JSON with entries).
+/// Legacy single-line tokens are treated as (DEFAULT_ENDPOINT, None) pairs.
+/// Legacy two-line tokens are treated as (endpoint_on_line_2, None) pairs.
+fn read_stored_tokens() -> Vec<(String, Option<String>, String)> {
     let path = token_file();
-    std::fs::read_to_string(&path).ok().and_then(|text| {
-        if text.trim().is_empty() {
-            return None;
+    let text = match std::fs::read_to_string(&path) {
+        Ok(t) => t,
+        Err(_) => return Vec::new(),
+    };
+
+    if text.trim().is_empty() {
+        return Vec::new();
+    }
+
+    // Try to parse as new JSON format first
+    if let Ok(value) = serde_json::from_str::<Value>(&text) {
+        if let Some(obj) = value.as_object() {
+            if let Some(entries) = obj.get("entries").and_then(Value::as_array) {
+                let mut result = Vec::new();
+                for entry in entries {
+                    if let (Some(base), Some(token)) = (
+                        entry.get("base").and_then(Value::as_str),
+                        entry.get("token").and_then(Value::as_str),
+                    ) {
+                        let service = entry
+                            .get("service")
+                            .and_then(Value::as_str)
+                            .map(|s| s.to_string());
+                        if !token.trim().is_empty() && !base.trim().is_empty() {
+                            result.push((base.to_string(), service, token.to_string()));
+                        }
+                    }
+                }
+                // Return immediately if we recognized JSON format, even if empty
+                return result;
+            }
         }
-        let mut lines = text.lines();
-        let token = lines.next()?.trim().to_string();
-        if token.is_empty() {
-            return None;
+    }
+
+    // Fall back to legacy format: "token\n" or "token\nendpoint\n"
+    let mut lines = text.lines();
+    if let Some(token_line) = lines.next() {
+        let token = token_line.trim().to_string();
+        if !token.is_empty() {
+            let endpoint = lines
+                .next()
+                .map(|line| line.trim().to_string())
+                .unwrap_or_else(|| DEFAULT_ENDPOINT.to_string());
+            return vec![(endpoint, None, token)];
         }
-        let endpoint = lines
-            .next()
-            .map(|line| line.trim().to_string())
-            .unwrap_or_else(|| DEFAULT_ENDPOINT.to_string());
-        Some((token, endpoint))
-    })
+    }
+    Vec::new()
 }
 
 /// The token this machine has stored for reading feeds when it belongs to `endpoint`, or
-/// `None` when the token file is missing, holds only whitespace, or was stored for a
-/// different endpoint.
+/// `None` when the token file is missing, holds only whitespace, or no token was stored for
+/// that endpoint and service.
 ///
-/// Tokens are bound to the endpoint they were stored for: a machine-wide token always goes
-/// to a specific database. A token stored for the default endpoint will not travel to
-/// anywhere else, and a foreign endpoint gets no token this machine ever acquired.
+/// Tokens are bound to the (endpoint base, service) pair they were stored for. For a given
+/// endpoint, the most specific token is returned: first, one stored for that endpoint's service,
+/// then falling back to the endpoint owner's master token (no service qualifier). A token stored
+/// for the default endpoint will not travel to a different endpoint base, and a foreign endpoint
+/// gets no token this machine ever acquired.
 #[must_use]
 pub fn stored_token_for(endpoint: &str) -> Option<String> {
-    let (token, stored_base) = read_stored_token_pair()?;
-    let (request_base, _) = split_service(endpoint);
-    if stored_base == request_base {
-        Some(token)
-    } else {
-        None
+    let (request_base, request_service) = split_service(endpoint);
+    let stored = read_stored_tokens();
+
+    // First, try to find an exact match for (base, service)
+    for (base, service, token) in &stored {
+        if base == &request_base && service.as_ref() == request_service.as_ref() {
+            return Some(token.clone());
+        }
     }
+
+    // Fall back to master token at the same base (no service qualifier)
+    for (base, service, token) in &stored {
+        if base == &request_base && service.is_none() {
+            return Some(token.clone());
+        }
+    }
+
+    None
 }
 
 /// Stores a token for this machine to use reading feeds from `endpoint`.
 ///
-/// The token is bound to the endpoint base it was stored for — only requests to the same
-/// endpoint will see it. This prevents a token acquired for one database from traveling to
-/// another through [`token_for`]'s precedence.
+/// The token is bound to the (endpoint base, service) pair it was stored for — only requests
+/// to the same endpoint with the same service will see it. This prevents a token acquired for
+/// one database or service from traveling to another through [`token_for`]'s precedence.
 ///
-/// Creates the parent directory if needed, writes the token on the first line and the
-/// endpoint base on the second, and restricts the file to the owning user.
+/// Creates the parent directory if needed, reads any existing tokens, adds or replaces the
+/// token for this (base, service) pair, writes the updated list in JSON format, and restricts
+/// the file to the owning user.
 ///
 /// # Errors
 /// Returns a sentence naming the path when the parent cannot be created or the file cannot
@@ -319,9 +365,35 @@ pub fn store_token(token: &str, endpoint: &str) -> Result<PathBuf, String> {
         std::fs::create_dir_all(parent)
             .map_err(|error| format!("could not create {}: {error}", parent.display()))?;
     }
+
     let trimmed_token = token.trim();
-    let (base, _) = split_service(endpoint);
-    std::fs::write(&path, format!("{trimmed_token}\n{base}\n"))
+    let (base, service) = split_service(endpoint);
+
+    // Read existing tokens and preserve them
+    let mut tokens = read_stored_tokens();
+
+    // Remove any existing entry for this (base, service) pair
+    tokens.retain(|(b, s, _)| !(b == &base && s.as_ref() == service.as_ref()));
+
+    // Add the new token (only if non-empty)
+    if !trimmed_token.is_empty() {
+        tokens.push((base, service, trimmed_token.to_string()));
+    }
+
+    // Write as JSON format
+    let entries: Vec<Value> = tokens
+        .iter()
+        .map(|(b, s, t)| {
+            json!({
+                "base": b,
+                "service": s,
+                "token": t
+            })
+        })
+        .collect();
+
+    let content = json!({"entries": entries});
+    std::fs::write(&path, format!("{content}\n"))
         .map_err(|error| format!("could not write {}: {error}", path.display()))?;
     restrict(&path);
     Ok(path)
@@ -1508,7 +1580,7 @@ mod tests {
     }
 
     #[test]
-    fn store_token_and_stored_token_for_round_trip_with_two_line_format() {
+    fn store_token_and_stored_token_for_round_trip_with_new_json_format() {
         let _env = crate::env_lock();
         let root = scratch("store-token");
         std::env::set_var(TOKEN_FILE_ENV, root.join("token"));
@@ -1517,9 +1589,22 @@ mod tests {
         let stored_path = store_token("my-secret-token", endpoint).expect("store");
         assert!(stored_path.exists(), "token file was created");
         let text = std::fs::read_to_string(&stored_path).expect("read");
-        assert_eq!(
-            text, "my-secret-token\nhttps://rockywearsahat.com/report\n",
-            "token stored on first line, endpoint base on second line"
+        // Verify JSON format with entries array
+        assert!(
+            text.contains("\"entries\""),
+            "new format uses JSON with entries: {text}"
+        );
+        assert!(
+            text.contains("\"base\""),
+            "JSON includes base field: {text}"
+        );
+        assert!(
+            text.contains("\"token\""),
+            "JSON includes token field: {text}"
+        );
+        assert!(
+            text.contains("\"service\""),
+            "JSON includes service field: {text}"
         );
 
         let retrieved = stored_token_for(endpoint).expect("retrieve");
@@ -1650,6 +1735,97 @@ mod tests {
         );
 
         std::env::remove_var(TOKEN_ENV);
+        std::env::remove_var(TOKEN_FILE_ENV);
+    }
+
+    #[test]
+    fn storing_a_token_for_one_service_does_not_leak_to_a_different_service_at_same_endpoint() {
+        let _env = crate::env_lock();
+        let root = scratch("token-service-isolation");
+        std::env::set_var(TOKEN_FILE_ENV, root.join("token"));
+
+        let base = "https://rockywearsahat.com/report";
+        let endpoint_dx = format!("{base}?dx");
+        let endpoint_lvlup = format!("{base}?lvlup");
+
+        // Store a token for the "dx" service
+        store_token("dx-token", &endpoint_dx).expect("store dx token");
+
+        // The dx service should get its token
+        let retrieved_dx = stored_token_for(&endpoint_dx).expect("retrieve dx token");
+        assert_eq!(retrieved_dx, "dx-token", "dx service gets its own token");
+
+        // The lvlup service should NOT get the dx token
+        let retrieved_lvlup = stored_token_for(&endpoint_lvlup);
+        assert!(
+            retrieved_lvlup.is_none(),
+            "lvlup service must not leak the dx service's token"
+        );
+
+        // Now store a token for lvlup
+        store_token("lvlup-token", &endpoint_lvlup).expect("store lvlup token");
+
+        // Both should now have their own tokens
+        let retrieved_dx2 = stored_token_for(&endpoint_dx).expect("retrieve dx token again");
+        assert_eq!(
+            retrieved_dx2, "dx-token",
+            "dx service still has its original token after lvlup is stored"
+        );
+
+        let retrieved_lvlup2 = stored_token_for(&endpoint_lvlup).expect("retrieve lvlup token");
+        assert_eq!(
+            retrieved_lvlup2, "lvlup-token",
+            "lvlup service now has its own token"
+        );
+
+        std::env::remove_var(TOKEN_FILE_ENV);
+    }
+
+    #[test]
+    fn storing_a_token_for_a_service_falls_back_to_endpoint_owner_when_none_stored() {
+        let _env = crate::env_lock();
+        let root = scratch("token-service-fallback");
+        std::env::set_var(TOKEN_FILE_ENV, root.join("token"));
+
+        let base = "https://rockywearsahat.com/report";
+        let endpoint_master = base;
+        let endpoint_dx = format!("{base}?dx");
+        let endpoint_lvlup = format!("{base}?lvlup");
+
+        // Store a master token (no service qualifier)
+        store_token("master-token", endpoint_master).expect("store master token");
+
+        // Both services should fall back to the master token
+        let retrieved_dx = stored_token_for(&endpoint_dx).expect("retrieve dx token via fallback");
+        assert_eq!(
+            retrieved_dx, "master-token",
+            "dx service falls back to master token when no service-specific token exists"
+        );
+
+        let retrieved_lvlup =
+            stored_token_for(&endpoint_lvlup).expect("retrieve lvlup token via fallback");
+        assert_eq!(
+            retrieved_lvlup, "master-token",
+            "lvlup service falls back to master token when no service-specific token exists"
+        );
+
+        // Now store a service-specific token for dx
+        store_token("dx-specific-token", &endpoint_dx).expect("store dx-specific token");
+
+        // dx should now get its specific token, but lvlup should still fall back
+        let retrieved_dx2 = stored_token_for(&endpoint_dx).expect("retrieve dx-specific token");
+        assert_eq!(
+            retrieved_dx2, "dx-specific-token",
+            "dx service prefers its own token over the master token"
+        );
+
+        let retrieved_lvlup2 =
+            stored_token_for(&endpoint_lvlup).expect("retrieve lvlup fallback again");
+        assert_eq!(
+            retrieved_lvlup2, "master-token",
+            "lvlup service still falls back to master token"
+        );
+
         std::env::remove_var(TOKEN_FILE_ENV);
     }
 }
