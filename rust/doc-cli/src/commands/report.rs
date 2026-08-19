@@ -271,18 +271,18 @@ fn setup(args: &Args) -> Result<String, String> {
     let mut out = String::new();
 
     if let Some(stated_token) = args.value("token") {
-        let path = intake::store_token(stated_token)?;
+        let path = intake::store_token(stated_token, &endpoint)?;
         out.push_str(&format!(
             "token stored at {} — it is never shown again\n",
             path.display()
         ));
-    } else if intake::stored_token().is_none() {
+    } else if intake::stored_token_for(&endpoint).is_none() {
         if let Ok(existing_subs) = intake::subscriptions() {
             if let Some(existing) = existing_subs
                 .iter()
                 .find(|s| s.endpoint == endpoint && !s.token.is_empty())
             {
-                intake::store_token(&existing.token)?;
+                intake::store_token(&existing.token, &endpoint)?;
                 out.push_str(&format!(
                     "adopted token from existing subscription at {}\n",
                     existing.workspace.display()
@@ -342,27 +342,34 @@ fn setup(args: &Args) -> Result<String, String> {
     Ok(out)
 }
 
-/// `dx report token [T]` — store the owner's token once, machine-wide, or query what is stored.
+/// `dx report token [T]` — store the owner's token for a specific endpoint, or query what is stored.
 fn token(args: &Args) -> Result<String, String> {
+    let endpoint = args
+        .value("endpoint")
+        .map(|value| intake::split_service(value).0)
+        .or_else(intake::endpoint)
+        .unwrap_or_else(|| intake::DEFAULT_ENDPOINT.to_string());
+
     if let Some(stated_token) = args.positional(1) {
-        let path = intake::store_token(stated_token)?;
+        let path = intake::store_token(stated_token, &endpoint)?;
         Ok(format!(
-            "token stored at {} — it is never shown again\n",
-            path.display()
+            "token stored at {} for {}\n",
+            path.display(),
+            endpoint
         ))
     } else {
-        match intake::stored_token() {
-            Some(_) => {
-                let path = intake::token_file();
-                Ok(format!("a token is stored at {}\n", path.display()))
-            }
-            None => {
-                let path = intake::token_file();
-                Ok(format!(
-                    "no token stored — run `dx report token <t>` to store one at {}\n",
-                    path.display()
-                ))
-            }
+        let path = intake::token_file();
+        match intake::stored_token_for(&endpoint) {
+            Some(_) => Ok(format!(
+                "a token is stored at {} for {}\n",
+                path.display(),
+                endpoint
+            )),
+            None => Ok(format!(
+                "no token stored for {} — run `dx report token <t>` to store one at {}\n",
+                endpoint,
+                path.display()
+            )),
         }
     }
 }
@@ -807,7 +814,10 @@ mod tests {
             "should never echo the token: {}",
             text
         );
-        assert!(intake::stored_token().is_some(), "token should be stored");
+        assert!(
+            intake::stored_token_for(intake::DEFAULT_ENDPOINT).is_some(),
+            "token should be stored for default endpoint"
+        );
 
         std::env::remove_var("DX_REPORT_TOKEN_FILE");
     }
@@ -822,12 +832,13 @@ mod tests {
         std::env::set_var("DX_REPORT_TOKEN_FILE", root.join("token"));
         std::env::set_var("DX_REPORT_ENDPOINT", "off");
 
+        let endpoint = "https://example.invalid/report";
         let existing_root = root.join("existing");
         std::fs::create_dir_all(&existing_root).expect("create");
         let existing_sub = Subscription {
             workspace: existing_root,
             project: "dx".to_string(),
-            endpoint: "https://example.invalid/report".to_string(),
+            endpoint: endpoint.to_string(),
             token: "existing-token".to_string(),
         };
         intake::subscribe(&existing_sub).expect("subscribe existing");
@@ -839,7 +850,7 @@ mod tests {
             "setup",
             new_root.to_str().expect("path"),
             "--endpoint",
-            "https://example.invalid/report",
+            endpoint,
         ]))
         .expect("setup");
 
@@ -850,9 +861,9 @@ mod tests {
             text
         );
         assert_eq!(
-            intake::stored_token().expect("token exists"),
+            intake::stored_token_for(endpoint).expect("token exists"),
             "existing-token",
-            "should have adopted the token"
+            "should have adopted the token for the endpoint"
         );
 
         std::env::remove_var("DX_SUBSCRIPTIONS_FILE");
@@ -949,7 +960,7 @@ mod tests {
     }
 
     #[test]
-    fn token_query_says_whether_one_is_stored() {
+    fn token_query_says_whether_one_is_stored_for_the_endpoint() {
         let _env = crate::env_lock();
         let root = std::env::temp_dir().join("dx-report-cli-token-query");
         let _ = std::fs::remove_dir_all(&root);
@@ -964,7 +975,7 @@ mod tests {
             text
         );
 
-        intake::store_token("test-token").expect("store");
+        intake::store_token("test-token", intake::DEFAULT_ENDPOINT).expect("store");
         let result = run(&args(&["token"])).expect("token query again");
         let text = result.text();
         assert!(
