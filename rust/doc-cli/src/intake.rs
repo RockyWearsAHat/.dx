@@ -994,7 +994,11 @@ pub fn token_for(subscription: &Subscription) -> String {
     if !subscription.token.is_empty() {
         return subscription.token.clone();
     }
-    stored_token_for(&subscription.endpoint).unwrap_or_default()
+    // `subscription.endpoint` is always the bare base (every constructor strips the query via
+    // `split_service`) — the service lives in `subscription.project`, so it has to be joined
+    // back on here or a token stored scoped to this exact service can never be found again.
+    let scoped = format!("{}?{}", subscription.endpoint, subscription.project);
+    stored_token_for(&scoped).unwrap_or_default()
 }
 
 /// Runs `curl` with `arguments`, writing `input` to its standard input.
@@ -1043,7 +1047,7 @@ fn run_curl(arguments: &[&str], input: Option<&[u8]>) -> Result<String, String> 
 }
 
 /// Restricts a file holding a token to its owner, where the platform has such a concept.
-fn restrict(path: &Path) {
+pub(crate) fn restrict(path: &Path) {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -1735,6 +1739,40 @@ mod tests {
         );
 
         std::env::remove_var(TOKEN_ENV);
+        std::env::remove_var(TOKEN_FILE_ENV);
+    }
+
+    #[test]
+    fn token_for_finds_a_token_stored_scoped_to_the_subscriptions_own_service() {
+        // Regression: `token_for` used to look up `stored_token_for(&subscription.endpoint)`
+        // alone — `.endpoint` is always the bare base (every Subscription constructor strips
+        // the query), so a token stored scoped to one service could never be found again
+        // through a real Subscription, only through the lower-level `stored_token_for` a test
+        // calls directly. `dx report setup` claims and stores exactly such a scoped token, then
+        // `dx report sync` reads it back through `token_for` — this is that real path.
+        let _env = crate::env_lock();
+        let root = scratch("token-for-scoped");
+        std::env::set_var(TOKEN_FILE_ENV, root.join("token"));
+
+        let base = "https://rockywearsahat.com/report";
+        store_token("dx-scoped-token", &format!("{base}?dx")).expect("store");
+        store_token("lvlup-scoped-token", &format!("{base}?lvlup")).expect("store");
+
+        let dx_sub = Subscription {
+            workspace: root.clone(),
+            project: "dx".to_string(),
+            endpoint: base.to_string(),
+            token: String::new(),
+        };
+        let lvlup_sub = Subscription {
+            workspace: root.clone(),
+            project: "lvlup".to_string(),
+            endpoint: base.to_string(),
+            token: String::new(),
+        };
+        assert_eq!(token_for(&dx_sub), "dx-scoped-token");
+        assert_eq!(token_for(&lvlup_sub), "lvlup-scoped-token");
+
         std::env::remove_var(TOKEN_FILE_ENV);
     }
 
