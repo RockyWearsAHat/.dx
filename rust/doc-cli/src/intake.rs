@@ -79,6 +79,8 @@ const ENDPOINT_ENV: &str = "DX_REPORT_ENDPOINT";
 const TOKEN_ENV: &str = "DX_REPORT_TOKEN";
 /// Environment override for the subscriptions file, so the suite never touches the real one.
 const SUBSCRIPTIONS_ENV: &str = "DX_SUBSCRIPTIONS_FILE";
+/// Environment override for the machine-wide token file, so the suite never touches the real one.
+const TOKEN_FILE_ENV: &str = "DX_REPORT_TOKEN_FILE";
 
 /// How long any one call to the intake may take.
 ///
@@ -240,6 +242,57 @@ pub fn subscriptions_file() -> PathBuf {
     crate::home::data_dir()
         .join("dx")
         .join("subscriptions.json")
+}
+
+/// The file this machine's stored report token lives in.
+///
+/// One token, machine-wide, beside the subscriptions — every subscription on this machine reads
+/// the same box, so the token is a property of the machine, not of any one checkout; stored
+/// once, and setup in any repository needs nothing further.
+#[must_use]
+pub fn token_file() -> PathBuf {
+    if let Some(explicit) = std::env::var_os(TOKEN_FILE_ENV) {
+        if !explicit.is_empty() {
+            return PathBuf::from(explicit);
+        }
+    }
+    crate::home::data_dir().join("dx").join("report-token")
+}
+
+/// The token this machine has stored for reading feeds — `None` when the token file is
+/// missing or holds only whitespace.
+#[must_use]
+pub fn stored_token() -> Option<String> {
+    let path = token_file();
+    std::fs::read_to_string(&path).ok().and_then(|text| {
+        let trimmed = text.trim().to_string();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        }
+    })
+}
+
+/// Stores a token for this machine to use reading feeds.
+///
+/// Creates the parent directory if needed, writes the token with a trailing newline, and
+/// restricts it to the owning user.
+///
+/// # Errors
+/// Returns a sentence naming the path when the parent cannot be created or the file cannot
+/// be written.
+pub fn store_token(token: &str) -> Result<PathBuf, String> {
+    let path = token_file();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("could not create {}: {error}", parent.display()))?;
+    }
+    let trimmed = token.trim();
+    std::fs::write(&path, format!("{trimmed}\n"))
+        .map_err(|error| format!("could not write {}: {error}", path.display()))?;
+    restrict(&path);
+    Ok(path)
 }
 
 /// Every subscription this machine holds.
@@ -636,7 +689,7 @@ pub fn sync(subscription: &Subscription) -> Result<Synced, String> {
     let entries = match feed(
         &subscription.endpoint,
         &subscription.project,
-        &subscription.token,
+        &token_for(subscription),
     ) {
         Ok(entries) => entries,
         Err(reason) => {
@@ -821,13 +874,23 @@ fn nonempty(value: &str, fallback: &str) -> String {
     }
 }
 
-/// The token for `subscription`, letting the environment override the stored one.
+/// The token for `subscription`, with precedence: the TOKEN_ENV environment variable, else the
+/// subscription's own token, else the machine-wide stored token, else empty.
+///
+/// A subscription written before the machine store existed keeps working — its own token is
+/// carried and used. One written after needs no token of its own; the machine's stored token
+/// reaches it via this precedence.
 #[must_use]
 pub fn token_for(subscription: &Subscription) -> String {
-    std::env::var(TOKEN_ENV)
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| subscription.token.clone())
+    if let Ok(value) = std::env::var(TOKEN_ENV) {
+        if !value.trim().is_empty() {
+            return value;
+        }
+    }
+    if !subscription.token.is_empty() {
+        return subscription.token.clone();
+    }
+    stored_token().unwrap_or_default()
 }
 
 /// Runs `curl` with `arguments`, writing `input` to its standard input.
@@ -1398,5 +1461,94 @@ mod tests {
             !body.contains("/tmp/"),
             "a path must never leave the machine: {body}"
         );
+    }
+
+    #[test]
+    fn token_file_honors_the_env_override() {
+        let _env = crate::env_lock();
+        let root = scratch("token-file-env");
+        std::env::set_var(TOKEN_FILE_ENV, root.join("custom-token"));
+
+        let path = token_file();
+        assert!(path.to_string_lossy().contains("custom-token"), "{path:?}");
+
+        std::env::remove_var(TOKEN_FILE_ENV);
+    }
+
+    #[test]
+    fn store_token_and_stored_token_round_trip() {
+        let _env = crate::env_lock();
+        let root = scratch("store-token");
+        std::env::set_var(TOKEN_FILE_ENV, root.join("token"));
+
+        let stored_path = store_token("my-secret-token").expect("store");
+        assert!(stored_path.exists(), "token file was created");
+        let text = std::fs::read_to_string(&stored_path).expect("read");
+        assert_eq!(
+            text, "my-secret-token\n",
+            "token stored with trailing newline"
+        );
+
+        let retrieved = stored_token().expect("retrieve");
+        assert_eq!(retrieved, "my-secret-token", "token round-trips");
+
+        std::env::remove_var(TOKEN_FILE_ENV);
+    }
+
+    #[test]
+    fn stored_token_reads_as_none_when_file_missing_or_blank() {
+        let _env = crate::env_lock();
+        let root = scratch("stored-token-none");
+        std::env::set_var(TOKEN_FILE_ENV, root.join("no-token"));
+
+        assert!(stored_token().is_none(), "missing file reads as None");
+
+        store_token("").expect("store blank");
+        assert!(stored_token().is_none(), "blank file reads as None");
+
+        std::env::remove_var(TOKEN_FILE_ENV);
+    }
+
+    #[test]
+    fn token_for_precedence_is_env_over_subscription_over_stored() {
+        let _env = crate::env_lock();
+        let root = scratch("token-for-precedence");
+        std::env::set_var(TOKEN_FILE_ENV, root.join("token"));
+
+        let subscription = Subscription {
+            workspace: root.clone(),
+            project: "dx".to_string(),
+            endpoint: "https://example.com/report".to_string(),
+            token: "subscription-token".to_string(),
+        };
+
+        assert_eq!(
+            token_for(&subscription),
+            "subscription-token",
+            "subscription token when no env or stored"
+        );
+
+        store_token("stored-token").expect("store");
+        let empty_sub = Subscription {
+            workspace: root.clone(),
+            project: "dx".to_string(),
+            endpoint: "https://example.com/report".to_string(),
+            token: String::new(),
+        };
+        assert_eq!(
+            token_for(&empty_sub),
+            "stored-token",
+            "stored token when subscription empty"
+        );
+
+        std::env::set_var(TOKEN_ENV, "env-token");
+        assert_eq!(
+            token_for(&subscription),
+            "env-token",
+            "env token takes precedence"
+        );
+
+        std::env::remove_var(TOKEN_ENV);
+        std::env::remove_var(TOKEN_FILE_ENV);
     }
 }

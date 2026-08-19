@@ -135,6 +135,11 @@ never its contents. `DX_REPORT_ENDPOINT=<url>` points it somewhere else — with
 (`…/report?billing`) that names the database too — and `DX_REPORT_ENDPOINT=off` turns the push
 off entirely, leaving the local inbox.
 
+`dx report setup` wires any repository in one command — it names the service after the folder,
+reuses the machine's stored token, subscribes the checkout, and syncs. `dx report token <t>`
+stores the owner's token once per machine (mint it with `selfhost reports token` on the box),
+after which setup anywhere on the machine needs nothing.
+
 ## What executes, and what does not
 
 Rendering never executes and never writes. Code runs in exactly three places — `dx run` (or
