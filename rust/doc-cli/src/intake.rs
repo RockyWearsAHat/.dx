@@ -259,37 +259,69 @@ pub fn token_file() -> PathBuf {
     crate::home::data_dir().join("dx").join("report-token")
 }
 
-/// The token this machine has stored for reading feeds — `None` when the token file is
-/// missing or holds only whitespace.
-#[must_use]
-pub fn stored_token() -> Option<String> {
+/// Reads the raw token and endpoint base from the stored token file, or `None` when missing
+/// or empty.
+///
+/// This is the internal reader; callers should use [`stored_token_for`] to get a token bound
+/// to an endpoint.
+fn read_stored_token_pair() -> Option<(String, String)> {
     let path = token_file();
     std::fs::read_to_string(&path).ok().and_then(|text| {
-        let trimmed = text.trim().to_string();
-        if trimmed.is_empty() {
-            None
-        } else {
-            Some(trimmed)
+        if text.trim().is_empty() {
+            return None;
         }
+        let mut lines = text.lines();
+        let token = lines.next()?.trim().to_string();
+        if token.is_empty() {
+            return None;
+        }
+        let endpoint = lines
+            .next()
+            .map(|line| line.trim().to_string())
+            .unwrap_or_else(|| DEFAULT_ENDPOINT.to_string());
+        Some((token, endpoint))
     })
 }
 
-/// Stores a token for this machine to use reading feeds.
+/// The token this machine has stored for reading feeds when it belongs to `endpoint`, or
+/// `None` when the token file is missing, holds only whitespace, or was stored for a
+/// different endpoint.
 ///
-/// Creates the parent directory if needed, writes the token with a trailing newline, and
-/// restricts it to the owning user.
+/// Tokens are bound to the endpoint they were stored for: a machine-wide token always goes
+/// to a specific database. A token stored for the default endpoint will not travel to
+/// anywhere else, and a foreign endpoint gets no token this machine ever acquired.
+#[must_use]
+pub fn stored_token_for(endpoint: &str) -> Option<String> {
+    let (token, stored_base) = read_stored_token_pair()?;
+    let (request_base, _) = split_service(endpoint);
+    if stored_base == request_base {
+        Some(token)
+    } else {
+        None
+    }
+}
+
+/// Stores a token for this machine to use reading feeds from `endpoint`.
+///
+/// The token is bound to the endpoint base it was stored for — only requests to the same
+/// endpoint will see it. This prevents a token acquired for one database from traveling to
+/// another through [`token_for`]'s precedence.
+///
+/// Creates the parent directory if needed, writes the token on the first line and the
+/// endpoint base on the second, and restricts the file to the owning user.
 ///
 /// # Errors
 /// Returns a sentence naming the path when the parent cannot be created or the file cannot
 /// be written.
-pub fn store_token(token: &str) -> Result<PathBuf, String> {
+pub fn store_token(token: &str, endpoint: &str) -> Result<PathBuf, String> {
     let path = token_file();
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|error| format!("could not create {}: {error}", parent.display()))?;
     }
-    let trimmed = token.trim();
-    std::fs::write(&path, format!("{trimmed}\n"))
+    let trimmed_token = token.trim();
+    let (base, _) = split_service(endpoint);
+    std::fs::write(&path, format!("{trimmed_token}\n{base}\n"))
         .map_err(|error| format!("could not write {}: {error}", path.display()))?;
     restrict(&path);
     Ok(path)
@@ -875,11 +907,11 @@ fn nonempty(value: &str, fallback: &str) -> String {
 }
 
 /// The token for `subscription`, with precedence: the TOKEN_ENV environment variable, else the
-/// subscription's own token, else the machine-wide stored token, else empty.
+/// subscription's own token, else the machine-wide stored token bound to its endpoint, else empty.
 ///
 /// A subscription written before the machine store existed keeps working — its own token is
 /// carried and used. One written after needs no token of its own; the machine's stored token
-/// reaches it via this precedence.
+/// reaches it via this precedence, but only if it was stored for the same endpoint.
 #[must_use]
 pub fn token_for(subscription: &Subscription) -> String {
     if let Ok(value) = std::env::var(TOKEN_ENV) {
@@ -890,7 +922,7 @@ pub fn token_for(subscription: &Subscription) -> String {
     if !subscription.token.is_empty() {
         return subscription.token.clone();
     }
-    stored_token().unwrap_or_default()
+    stored_token_for(&subscription.endpoint).unwrap_or_default()
 }
 
 /// Runs `curl` with `arguments`, writing `input` to its standard input.
@@ -1476,35 +1508,103 @@ mod tests {
     }
 
     #[test]
-    fn store_token_and_stored_token_round_trip() {
+    fn store_token_and_stored_token_for_round_trip_with_two_line_format() {
         let _env = crate::env_lock();
         let root = scratch("store-token");
         std::env::set_var(TOKEN_FILE_ENV, root.join("token"));
 
-        let stored_path = store_token("my-secret-token").expect("store");
+        let endpoint = "https://rockywearsahat.com/report";
+        let stored_path = store_token("my-secret-token", endpoint).expect("store");
         assert!(stored_path.exists(), "token file was created");
         let text = std::fs::read_to_string(&stored_path).expect("read");
         assert_eq!(
-            text, "my-secret-token\n",
-            "token stored with trailing newline"
+            text, "my-secret-token\nhttps://rockywearsahat.com/report\n",
+            "token stored on first line, endpoint base on second line"
         );
 
-        let retrieved = stored_token().expect("retrieve");
-        assert_eq!(retrieved, "my-secret-token", "token round-trips");
+        let retrieved = stored_token_for(endpoint).expect("retrieve");
+        assert_eq!(
+            retrieved, "my-secret-token",
+            "token round-trips for matching endpoint"
+        );
 
         std::env::remove_var(TOKEN_FILE_ENV);
     }
 
     #[test]
-    fn stored_token_reads_as_none_when_file_missing_or_blank() {
+    fn legacy_single_line_token_file_binds_to_default_endpoint() {
+        let _env = crate::env_lock();
+        let root = scratch("legacy-token");
+        std::env::set_var(TOKEN_FILE_ENV, root.join("token"));
+
+        let path = token_file();
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).expect("create parent");
+        }
+        // Write a legacy single-line token file (as the old code would have)
+        std::fs::write(&path, "legacy-token\n").expect("write legacy file");
+
+        // Legacy token should bind to DEFAULT_ENDPOINT
+        let retrieved = stored_token_for(DEFAULT_ENDPOINT).expect("retrieve from default");
+        assert_eq!(
+            retrieved, "legacy-token",
+            "legacy single-line token reads from default"
+        );
+
+        // But not from a different endpoint
+        let other = stored_token_for("https://elsewhere.example/report");
+        assert!(
+            other.is_none(),
+            "legacy token should not apply to different endpoint"
+        );
+
+        std::env::remove_var(TOKEN_FILE_ENV);
+    }
+
+    #[test]
+    fn stored_token_for_reads_as_none_when_file_missing_or_blank() {
         let _env = crate::env_lock();
         let root = scratch("stored-token-none");
         std::env::set_var(TOKEN_FILE_ENV, root.join("no-token"));
 
-        assert!(stored_token().is_none(), "missing file reads as None");
+        assert!(
+            stored_token_for(DEFAULT_ENDPOINT).is_none(),
+            "missing file reads as None"
+        );
 
-        store_token("").expect("store blank");
-        assert!(stored_token().is_none(), "blank file reads as None");
+        store_token("", DEFAULT_ENDPOINT).expect("store blank");
+        assert!(
+            stored_token_for(DEFAULT_ENDPOINT).is_none(),
+            "blank file reads as None"
+        );
+
+        std::env::remove_var(TOKEN_FILE_ENV);
+    }
+
+    #[test]
+    fn a_machine_token_never_travels_to_an_endpoint_it_was_not_stored_for() {
+        let _env = crate::env_lock();
+        let root = scratch("token-endpoint-leak");
+        std::env::set_var(TOKEN_FILE_ENV, root.join("token"));
+
+        // Store a token for the default endpoint
+        store_token("default-endpoint-token", DEFAULT_ENDPOINT).expect("store for default");
+
+        // Build a subscription to a foreign endpoint with no token of its own
+        let foreign_endpoint = "https://elsewhere.example/report";
+        let subscription = Subscription {
+            workspace: root.clone(),
+            project: "dx".to_string(),
+            endpoint: foreign_endpoint.to_string(),
+            token: String::new(),
+        };
+
+        // The stored token must not be used for the foreign endpoint
+        let token = token_for(&subscription);
+        assert!(
+            token.is_empty(),
+            "machine token for default endpoint must not travel to foreign endpoint"
+        );
 
         std::env::remove_var(TOKEN_FILE_ENV);
     }
@@ -1515,10 +1615,11 @@ mod tests {
         let root = scratch("token-for-precedence");
         std::env::set_var(TOKEN_FILE_ENV, root.join("token"));
 
+        let endpoint = "https://example.com/report";
         let subscription = Subscription {
             workspace: root.clone(),
             project: "dx".to_string(),
-            endpoint: "https://example.com/report".to_string(),
+            endpoint: endpoint.to_string(),
             token: "subscription-token".to_string(),
         };
 
@@ -1528,11 +1629,11 @@ mod tests {
             "subscription token when no env or stored"
         );
 
-        store_token("stored-token").expect("store");
+        store_token("stored-token", endpoint).expect("store");
         let empty_sub = Subscription {
             workspace: root.clone(),
             project: "dx".to_string(),
-            endpoint: "https://example.com/report".to_string(),
+            endpoint: endpoint.to_string(),
             token: String::new(),
         };
         assert_eq!(
