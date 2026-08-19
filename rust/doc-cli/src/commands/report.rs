@@ -45,6 +45,7 @@ pub fn run(args: &Args) -> Result<Output, String> {
         "unsubscribe" => unsubscribe(args).map(Output::Report),
         "close" => close(args).map(Output::Report),
         "drop" => drop(args).map(Output::Report),
+        "mcp" => mcp_serve(args).map(Output::Report),
         kind => file(kind, args).map(Output::Report),
     }
 }
@@ -463,6 +464,326 @@ fn subscription_or_hint(root: &Path) -> Result<Subscription, String> {
             root.display()
         )
     })
+}
+
+/// `dx report mcp` — MCP server bound to one project and scoped reader token.
+///
+/// Reads DX_REPORT_PROJECT and DX_REPORT_TOKEN environment variables at startup and serves a
+/// minimal MCP stdio server with three report tools (report_file, report_feed, report_close).
+/// Unlike the machine-wide `dx mcp` server, this server always talks about the ONE project it
+/// was launched for, and can be registered as a project-local MCP server.
+fn mcp_serve(_args: &Args) -> Result<String, String> {
+    // Resolve configuration from environment
+    let project = std::env::var("DX_REPORT_PROJECT")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .ok_or("DX_REPORT_PROJECT environment variable must be set and non-empty")?;
+
+    let token = std::env::var("DX_REPORT_TOKEN")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .ok_or("DX_REPORT_TOKEN environment variable must be set and non-empty")?;
+
+    // Resolve the endpoint using existing intake helpers
+    let endpoint = intake::endpoint().unwrap_or_else(|| intake::DEFAULT_ENDPOINT.to_string());
+
+    // Run the MCP server loop
+    mcp_serve_loop(&endpoint, &project, &token)?;
+    Ok("MCP server exited cleanly".to_string())
+}
+
+/// The MCP server loop: read JSON-RPC requests from stdin, dispatch to tools, write responses.
+fn mcp_serve_loop(endpoint: &str, project: &str, token: &str) -> Result<(), String> {
+    use std::io::{BufRead, BufReader, Write};
+
+    let mut input = BufReader::new(std::io::stdin().lock());
+    let mut output = std::io::stdout().lock();
+    let mut line = String::new();
+
+    loop {
+        line.clear();
+        match input.read_line(&mut line) {
+            Ok(0) => return Ok(()), // clean EOF
+            Ok(_) => {
+                if let Some(response) = handle_mcp_request(&line, endpoint, project, token) {
+                    if writeln!(output, "{response}").is_err() {
+                        return Ok(()); // stdout closed; client disconnected
+                    }
+                    if output.flush().is_err() {
+                        return Ok(());
+                    }
+                }
+            }
+            Err(_) => return Ok(()), // read error, exit
+        }
+    }
+}
+
+/// Parse and handle one MCP JSON-RPC request. Returns None for blank lines or notifications.
+fn handle_mcp_request(line: &str, endpoint: &str, project: &str, token: &str) -> Option<String> {
+    use serde_json::{json, Value};
+
+    if line.trim().is_empty() {
+        return None;
+    }
+
+    let request: Value = match serde_json::from_str(line) {
+        Ok(v) => v,
+        Err(_) => {
+            return Some(
+                serde_json::to_string(&json!({
+                    "jsonrpc": "2.0",
+                    "id": Value::Null,
+                    "error": {
+                        "code": -32700,
+                        "message": "Parse error"
+                    }
+                }))
+                .unwrap_or_else(|_| "null".to_string()),
+            );
+        }
+    };
+
+    if request.get("jsonrpc").and_then(Value::as_str) != Some("2.0") {
+        return Some(
+            serde_json::to_string(&json!({
+                "jsonrpc": "2.0",
+                "id": request.get("id"),
+                "error": {
+                    "code": -32600,
+                    "message": "Invalid Request"
+                }
+            }))
+            .unwrap_or_else(|_| "null".to_string()),
+        );
+    }
+
+    let id = request.get("id")?.clone();
+    let method = request.get("method").and_then(Value::as_str)?;
+    let default_params = json!({});
+    let params = request.get("params").unwrap_or(&default_params);
+
+    // Dispatch to tools
+    let result = match method {
+        "tools/list" => mcp_tools_list(),
+        "tools/call" => mcp_tools_call(params, endpoint, project, token),
+        _ => {
+            return Some(
+                serde_json::to_string(&json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "error": {
+                        "code": -32601,
+                        "message": "Method not found"
+                    }
+                }))
+                .unwrap_or_else(|_| "null".to_string()),
+            );
+        }
+    };
+
+    match result {
+        Ok(content) => Some(
+            serde_json::to_string(&json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": content
+            }))
+            .unwrap_or_else(|_| "null".to_string()),
+        ),
+        Err(error) => Some(
+            serde_json::to_string(&json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "error": {
+                    "code": -32603,
+                    "message": error
+                }
+            }))
+            .unwrap_or_else(|_| "null".to_string()),
+        ),
+    }
+}
+
+/// Return the tools/list catalogue for this scoped MCP server.
+fn mcp_tools_list() -> Result<serde_json::Value, String> {
+    use serde_json::json;
+
+    Ok(json!({
+        "tools": [
+            {
+                "name": "report_file",
+                "description": "File a new report (bug, suggestion, or observation) to the intake for this project.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "kind": {
+                            "type": "string",
+                            "enum": ["bug", "suggestion", "observation"],
+                            "description": "The type of report."
+                        },
+                        "title": {
+                            "type": "string",
+                            "description": "Short headline for the report."
+                        },
+                        "detail": {
+                            "type": "string",
+                            "description": "Detailed explanation of the issue."
+                        },
+                        "route": {
+                            "type": "string",
+                            "description": "Optional: where in the project this was found (e.g., 'build system', 'format parser')."
+                        },
+                        "repro": {
+                            "type": "string",
+                            "description": "Optional: steps to reproduce, or a code snippet that shows the problem."
+                        }
+                    },
+                    "required": ["kind", "title", "detail"]
+                }
+            },
+            {
+                "name": "report_feed",
+                "description": "Fetch all open reports for this project from the intake.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {},
+                    "required": []
+                }
+            },
+            {
+                "name": "report_close",
+                "description": "Close a report by id (report has been fixed). Requires the project's reader token.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "id": {
+                            "type": "string",
+                            "description": "The report id to close (e.g., 'report-1a2b3c4d')."
+                        }
+                    },
+                    "required": ["id"]
+                }
+            }
+        ]
+    }))
+}
+
+/// Dispatch a tool call in this scoped MCP server.
+fn mcp_tools_call(
+    params: &serde_json::Value,
+    endpoint: &str,
+    project: &str,
+    token: &str,
+) -> Result<serde_json::Value, String> {
+    use serde_json::json;
+
+    let name = params
+        .get("name")
+        .and_then(serde_json::Value::as_str)
+        .ok_or("tool name required")?;
+
+    let default_args = json!({});
+    let args = params.get("arguments").unwrap_or(&default_args);
+
+    match name {
+        "report_file" => {
+            let kind_str = args
+                .get("kind")
+                .and_then(serde_json::Value::as_str)
+                .ok_or("kind is required")?;
+            let kind = reports::Kind::parse(kind_str)?;
+
+            let title = args
+                .get("title")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
+
+            let detail = args
+                .get("detail")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
+
+            let route = args
+                .get("route")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
+
+            let repro = args
+                .get("repro")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
+
+            if title.is_empty() || detail.is_empty() {
+                return Err("title and detail are required".to_string());
+            }
+
+            let workspace = std::env::current_dir()
+                .ok()
+                .map(|d| workspace::workspace_root(&d))
+                .unwrap_or_else(|| PathBuf::from("."));
+
+            let report = reports::Report::now(kind, title, detail, route, repro, &workspace)?;
+
+            // Push directly to the endpoint with the explicitly supplied project
+            let filed_id = intake::push(&report, endpoint, project)
+                .map_err(|e| format!("filing failed: {e}"))?;
+
+            Ok(json!({
+                "content": [{
+                    "type": "text",
+                    "text": format!("Filed report {filed_id} for project '{project}' at {endpoint}")
+                }]
+            }))
+        }
+        "report_feed" => {
+            let reports = intake::feed(endpoint, project, token)
+                .map_err(|e| format!("failed to fetch feed: {e}"))?;
+
+            let report_texts: Vec<String> = reports
+                .iter()
+                .filter_map(|r| {
+                    let id = r.get("id").and_then(serde_json::Value::as_str)?;
+                    let title = r.get("title").and_then(serde_json::Value::as_str)?;
+                    Some(format!("{} — {}", id, title))
+                })
+                .collect();
+
+            let summary = if report_texts.is_empty() {
+                format!("No open reports for '{project}'")
+            } else {
+                format!(
+                    "{} open report(s) for '{project}':\n{}",
+                    report_texts.len(),
+                    report_texts.join("\n")
+                )
+            };
+
+            Ok(json!({
+                "content": [{
+                    "type": "text",
+                    "text": summary
+                }]
+            }))
+        }
+        "report_close" => {
+            let id = args
+                .get("id")
+                .and_then(serde_json::Value::as_str)
+                .ok_or("id is required")?;
+
+            intake::close(endpoint, project, id, token)
+                .map_err(|e| format!("close failed: {e}"))?;
+
+            Ok(json!({
+                "content": [{
+                    "type": "text",
+                    "text": format!("Closed report {id} for project '{project}'")
+                }]
+            }))
+        }
+        other => Err(format!("unknown tool: {other}")),
+    }
 }
 
 #[cfg(test)]
@@ -1062,5 +1383,113 @@ mod tests {
         );
 
         std::env::remove_var("DX_REPORT_TOKEN_FILE");
+    }
+
+    #[test]
+    fn mcp_serve_requires_project_env_var() {
+        let _env = crate::env_lock();
+        std::env::remove_var("DX_REPORT_PROJECT");
+        std::env::set_var("DX_REPORT_TOKEN", "test-token");
+
+        let result = mcp_serve(&args(&[]));
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("DX_REPORT_PROJECT"));
+    }
+
+    #[test]
+    fn mcp_serve_requires_token_env_var() {
+        let _env = crate::env_lock();
+        std::env::set_var("DX_REPORT_PROJECT", "test-project");
+        std::env::remove_var("DX_REPORT_TOKEN");
+
+        let result = mcp_serve(&args(&[]));
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("DX_REPORT_TOKEN"));
+    }
+
+    #[test]
+    fn mcp_serve_rejects_empty_env_vars() {
+        let _env = crate::env_lock();
+        std::env::set_var("DX_REPORT_PROJECT", "  ");
+        std::env::set_var("DX_REPORT_TOKEN", "test-token");
+
+        let result = mcp_serve(&args(&[]));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn mcp_tools_list_returns_three_tools() {
+        let result = mcp_tools_list().expect("tools list");
+        let tools = result
+            .get("tools")
+            .and_then(serde_json::Value::as_array)
+            .expect("tools array");
+        assert_eq!(tools.len(), 3);
+        let names: Vec<&str> = tools
+            .iter()
+            .filter_map(|t| t.get("name").and_then(serde_json::Value::as_str))
+            .collect();
+        assert!(names.contains(&"report_file"));
+        assert!(names.contains(&"report_feed"));
+        assert!(names.contains(&"report_close"));
+    }
+
+    #[test]
+    fn mcp_handle_request_rejects_blank_lines() {
+        assert_eq!(
+            handle_mcp_request("", "http://example.com", "proj", "tok"),
+            None
+        );
+        assert_eq!(
+            handle_mcp_request("  \n", "http://example.com", "proj", "tok"),
+            None
+        );
+    }
+
+    #[test]
+    fn mcp_handle_request_handles_parse_error() {
+        let response = handle_mcp_request("{invalid json", "http://example.com", "proj", "tok")
+            .expect("should return error response");
+        assert!(response.contains("Parse error"));
+    }
+
+    #[test]
+    fn mcp_handle_request_handles_invalid_jsonrpc() {
+        let response = handle_mcp_request(
+            r#"{"jsonrpc": "1.0", "id": 1, "method": "tools/list"}"#,
+            "http://example.com",
+            "proj",
+            "tok",
+        )
+        .expect("should return error response");
+        assert!(response.contains("Invalid Request"));
+    }
+
+    #[test]
+    fn mcp_handle_request_returns_tools_list() {
+        let response = handle_mcp_request(
+            r#"{"jsonrpc": "2.0", "id": 1, "method": "tools/list"}"#,
+            "http://example.com",
+            "proj",
+            "tok",
+        )
+        .expect("should return response");
+        assert!(response.contains("report_file"));
+        assert!(response.contains("report_feed"));
+        assert!(response.contains("report_close"));
+    }
+
+    #[test]
+    fn mcp_handle_request_rejects_unknown_method() {
+        let response = handle_mcp_request(
+            r#"{"jsonrpc": "2.0", "id": 1, "method": "unknown/method"}"#,
+            "http://example.com",
+            "proj",
+            "tok",
+        )
+        .expect("should return error response");
+        assert!(response.contains("Method not found"));
     }
 }
