@@ -331,11 +331,12 @@ fn setup(args: &Args) -> Result<String, String> {
     if synced
         .problems
         .iter()
-        .any(|p| p.contains("unknown project"))
+        .any(|p| p.contains("is not a service this box hosts"))
     {
         out.push_str(
-            "the service will be created at the intake the first time a report is filed to it — \
-             an empty feed for a new service is normal\n",
+            "no service exists for this project yet — a registered account or the operator \
+             (`selfhost reports project add`) has to create it before reports flow through; \
+             filing still queues in this machine's inbox until then\n",
         );
     }
 
@@ -917,6 +918,77 @@ mod tests {
         std::env::remove_var("DX_SUBSCRIPTIONS_FILE");
         std::env::remove_var("DX_REPORT_TOKEN_FILE");
         std::env::remove_var("DX_REPORT_ENDPOINT");
+    }
+
+    #[test]
+    fn setup_against_an_unregistered_service_explains_how_to_create_it() {
+        // The box no longer brings a service into existence on first file (docs/intake.dx,
+        // 2026-08-19) — creation is a registered act. `setup` used to reassure the caller that
+        // filing would create it anyway; that string never matches what the box actually
+        // answers, so this pins the guidance setup gives instead.
+        let _env = crate::env_lock();
+        let root = std::env::temp_dir().join("dx-report-cli-setup-unregistered");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("scratch");
+        std::env::set_var("DX_SUBSCRIPTIONS_FILE", root.join("subscriptions.json"));
+        std::env::set_var("DX_REPORT_TOKEN_FILE", root.join("token"));
+
+        use std::io::{BufRead, BufReader, Write as _};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let address = listener.local_addr().expect("address");
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).expect("head");
+                if line == "\r\n" || line.is_empty() {
+                    break;
+                }
+            }
+            let answer = "{\"error\":\"`brand-new` is not a service this box hosts — a \
+                           registered account creates one, or the operator does with `selfhost \
+                           reports project add brand-new`\"}";
+            stream
+                .write_all(
+                    format!(
+                        "HTTP/1.1 404 Not Found\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{answer}",
+                        answer.len()
+                    )
+                    .as_bytes(),
+                )
+                .expect("answer");
+        });
+
+        let result = run(&args(&[
+            "setup",
+            root.to_str().expect("path"),
+            "--project",
+            "brand-new",
+            "--endpoint",
+            &format!("http://{address}"),
+            "--token",
+            "t",
+        ]))
+        .expect("setup");
+
+        server.join().expect("listener");
+
+        let text = result.text();
+        assert!(
+            text.contains("no service exists for this project yet"),
+            "should explain the service needs creating rather than claim it will \
+             auto-create: {text}"
+        );
+        assert!(
+            text.contains("selfhost reports project add"),
+            "should name the operator's creation door: {text}"
+        );
+
+        std::env::remove_var("DX_SUBSCRIPTIONS_FILE");
+        std::env::remove_var("DX_REPORT_TOKEN_FILE");
     }
 
     #[test]
