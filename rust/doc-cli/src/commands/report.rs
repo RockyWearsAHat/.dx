@@ -11,6 +11,7 @@
 //! dx report unsubscribe [dir]
 //! dx report close <id> [dir]  a fix: the block goes, and the database is told
 //! dx report drain [dir]       fold this machine's inbox in without a network
+//! dx report mcp               serve a project-scoped report tool over MCP
 //! ```
 //!
 //! Filing goes two ways at once: into this machine's inbox ([`crate::reports`]) and, unless

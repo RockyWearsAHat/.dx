@@ -246,14 +246,20 @@ pub const METHOD: &str = "This project works through .dx documents: block docume
                          wired up to receive its own dx defect reports — want me to run `dx \
                          report setup` to wire it up?\" Then do what they say. A yes is \
                          `dx report setup` — one command, no arguments: it names the service \
-                         after the repository's folder, reuses the token this machine already \
-                         stores, subscribes the checkout, and syncs. If the service does not \
-                         exist on the box yet, filing still queues in this machine's inbox and \
-                         setup says so — a registered account or the operator (`selfhost \
-                         reports project add`) has to create the service before reports flow \
-                         through; a stranger's filing no longer brings one into existence. \
-                         Afterwards the project reads its own intake and stays current for the \
-                         life of the session.\n\n\
+                         after the repository's folder, subscribes the checkout, and syncs. \
+                         On a machine running the box (with `selfhost` installed), setup also \
+                         claims a per-service reader token via the operator and registers a \
+                         project-local MCP server at `.mcp.json` — so agents in that repo get \
+                         a report tool already bound to that project, no token to remember or \
+                         leak across projects, and the credential stays scoped. On machines \
+                         without local operator access, setup falls back to token adoption: \
+                         reusing what this machine already stores or adopting one from an \
+                         existing subscription. If the service does not exist on the box yet, \
+                         filing still queues in this machine's inbox and setup says so — a \
+                         registered account or the operator (`selfhost reports project add`) \
+                         has to create the service before reports flow through; a stranger's \
+                         filing no longer brings one into existence. Afterwards the project \
+                         reads its own intake and stays current for the life of the session.\n\n\
                          PIXELS IN SUBAGENTS. A page image is the costliest thing a \
                          context can carry, so frames are judged in a review subagent \
                          that returns verdicts: the subagent reads the pixels and answers \

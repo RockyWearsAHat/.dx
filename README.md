@@ -137,7 +137,10 @@ never its contents. `DX_REPORT_ENDPOINT=<url>` points it somewhere else — with
 off entirely, leaving the local inbox.
 
 `dx report setup` wires any repository in one command — it names the service after the folder,
-reuses the machine's stored token, subscribes the checkout, and syncs. `dx report token <t>`
+reuses the machine's stored token, subscribes the checkout, and syncs. On a machine running the
+box (with local `selfhost` operator access), setup claims a per-service reader token and
+registers a project-scoped MCP server at `.mcp.json`, so agents working in that repo get a
+report tool already bound to that project with no token to remember or leak. `dx report token <t>`
 stores the owner's token once per machine (mint it with `selfhost reports token` on the box),
 after which setup anywhere on the machine needs nothing.
 
