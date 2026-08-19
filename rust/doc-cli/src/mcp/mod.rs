@@ -664,7 +664,8 @@ mod tests {
         let method = METHOD;
         assert!(method.contains("REVISE BEFORE IMPLEMENTING"));
         assert!(method.contains("paying twice"));
-        assert!(method.contains("reuses the token this machine already stores"));
+        assert!(method.contains("claims a per-service reader token via the operator"));
+        assert!(method.contains("reusing what this machine already stores"));
         // The original long assertions now apply to METHOD instead of the short instructions.
         assert!(method.contains("dx_source"));
         assert!(method.contains("dx_read"));
