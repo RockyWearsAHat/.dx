@@ -221,6 +221,115 @@ fn drop(args: &Args) -> Result<String, String> {
     }
 }
 
+/// Try to claim a scoped reader token from the local operator via `selfhost reports project add`.
+///
+/// Returns (token, was_operator_detected) tuple. If the selfhost binary is not found or the
+/// command fails for any reason, returns (empty_string, false) to fall back to the default path.
+fn try_claim_scoped_token(project: &str) -> (String, bool) {
+    let output = match std::process::Command::new("selfhost")
+        .arg("reports")
+        .arg("project")
+        .arg("add")
+        .arg(project)
+        .output()
+    {
+        Ok(output) => output,
+        Err(_) => return (String::new(), false), // selfhost not found or exec error
+    };
+
+    if !output.status.success() {
+        return (String::new(), false); // command failed
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for line in stdout.lines() {
+        let trimmed = line.trim();
+        if let Some(token_part) = trimmed.strip_prefix("reader token: ") {
+            let token = token_part.trim();
+            // Validate it looks like lowercase hex
+            if token.len() == 64 && token.chars().all(|c| c.is_ascii_hexdigit()) {
+                return (token.to_string(), true);
+            }
+            // Token format didn't match; fall back to non-operator path
+            return (String::new(), false);
+        }
+    }
+
+    // Token line not found in output
+    (String::new(), false)
+}
+
+/// Write or merge a project-local MCP configuration file at `.mcp.json`.
+///
+/// Creates a new file or merges into an existing one, preserving other MCP server entries.
+/// Does NOT print the token to stdout.
+fn write_mcp_config(
+    root: &Path,
+    project: &str,
+    token: &str,
+    dx_binary: &Path,
+) -> Result<(), String> {
+    let mcp_json = root.join(".mcp.json");
+
+    // Read existing config if it exists
+    let mut config: serde_json::Value = if mcp_json.exists() {
+        let content = std::fs::read_to_string(&mcp_json)
+            .map_err(|e| format!("could not read .mcp.json: {e}"))?;
+        serde_json::from_str(&content).map_err(|e| format!("could not parse .mcp.json: {e}"))?
+    } else {
+        serde_json::json!({"mcpServers": {}})
+    };
+
+    // Ensure mcpServers object exists
+    if !config.get("mcpServers").is_some_and(|v| v.is_object()) {
+        config["mcpServers"] = serde_json::json!({});
+    }
+
+    // Set the "report" MCP server entry
+    let dx_path = dx_binary
+        .to_str()
+        .ok_or("dx binary path is not valid UTF-8")?;
+
+    config["mcpServers"]["report"] = serde_json::json!({
+        "command": dx_path,
+        "args": ["report", "mcp"],
+        "env": {
+            "DX_REPORT_PROJECT": project,
+            "DX_REPORT_TOKEN": token
+        }
+    });
+
+    let formatted = serde_json::to_string_pretty(&config)
+        .map_err(|e| format!("could not serialize .mcp.json: {e}"))?;
+
+    std::fs::write(&mcp_json, format!("{formatted}\n"))
+        .map_err(|e| format!("could not write .mcp.json: {e}"))?;
+
+    Ok(())
+}
+
+/// Ensure `.mcp.json` is in `.gitignore`.
+fn add_to_gitignore(root: &Path) -> Result<(), String> {
+    let gitignore = root.join(".gitignore");
+    let entry = ".mcp.json\n";
+
+    if !gitignore.exists() {
+        std::fs::write(&gitignore, entry)
+            .map_err(|e| format!("could not create .gitignore: {e}"))?;
+        return Ok(());
+    }
+
+    let content = std::fs::read_to_string(&gitignore)
+        .map_err(|e| format!("could not read .gitignore: {e}"))?;
+
+    if !content.contains(".mcp.json") {
+        std::fs::write(&gitignore, format!("{content}{entry}"))
+            .map_err(|e| format!("could not update .gitignore: {e}"))?;
+    }
+
+    Ok(())
+}
+
 /// `dx report setup [dir]` — one command: subscribe this repository to its own reports.
 fn setup(args: &Args) -> Result<String, String> {
     let root = root_for(args.positional(1));
@@ -271,23 +380,43 @@ fn setup(args: &Args) -> Result<String, String> {
 
     let mut out = String::new();
 
-    if let Some(stated_token) = args.value("token") {
-        let path = intake::store_token(stated_token, &endpoint)?;
+    // Try to claim a scoped token from the local operator
+    let (scoped_token, operator_detected) = try_claim_scoped_token(&project);
+
+    if operator_detected && !scoped_token.is_empty() {
+        // Store the scoped token with the project as the service qualifier
+        let scoped_endpoint = format!("{}?{}", endpoint, project);
+        let path = intake::store_token(&scoped_token, &scoped_endpoint)?;
         out.push_str(&format!(
-            "token stored at {} — it is never shown again\n",
+            "claimed scoped reader token for `{project}` at {}\n",
             path.display()
         ));
-    } else if intake::stored_token_for(&endpoint).is_none() {
-        if let Ok(existing_subs) = intake::subscriptions() {
-            if let Some(existing) = existing_subs
-                .iter()
-                .find(|s| s.endpoint == endpoint && !s.token.is_empty())
-            {
-                intake::store_token(&existing.token, &endpoint)?;
-                out.push_str(&format!(
-                    "adopted token from existing subscription at {}\n",
-                    existing.workspace.display()
-                ));
+
+        // Write the project-local MCP server configuration
+        let dx_binary = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("dx"));
+        write_mcp_config(&root, &project, &scoped_token, &dx_binary)?;
+        add_to_gitignore(&root)?;
+        out.push_str("registered project-local MCP server at .mcp.json\n");
+    } else {
+        // Fallback: use existing token logic
+        if let Some(stated_token) = args.value("token") {
+            let path = intake::store_token(stated_token, &endpoint)?;
+            out.push_str(&format!(
+                "token stored at {} — it is never shown again\n",
+                path.display()
+            ));
+        } else if intake::stored_token_for(&endpoint).is_none() {
+            if let Ok(existing_subs) = intake::subscriptions() {
+                if let Some(existing) = existing_subs
+                    .iter()
+                    .find(|s| s.endpoint == endpoint && !s.token.is_empty())
+                {
+                    intake::store_token(&existing.token, &endpoint)?;
+                    out.push_str(&format!(
+                        "adopted token from existing subscription at {}\n",
+                        existing.workspace.display()
+                    ));
+                }
             }
         }
     }
@@ -1491,5 +1620,274 @@ mod tests {
         )
         .expect("should return error response");
         assert!(response.contains("Method not found"));
+    }
+
+    #[test]
+    fn parse_scoped_token_extracts_64_char_hex_token() {
+        let stdout =
+            "reader token: abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789\n";
+        let (token, detected) = try_claim_scoped_token_from_output(stdout);
+        assert!(detected);
+        assert_eq!(
+            token,
+            "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+        );
+    }
+
+    #[test]
+    fn parse_scoped_token_ignores_malformed_token() {
+        let stdout = "reader token: too-short\n";
+        let (token, detected) = try_claim_scoped_token_from_output(stdout);
+        assert!(!detected);
+        assert!(token.is_empty());
+    }
+
+    #[test]
+    fn parse_scoped_token_ignores_non_hex_token() {
+        let stdout =
+            "reader token: zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz\n";
+        let (token, detected) = try_claim_scoped_token_from_output(stdout);
+        assert!(!detected);
+        assert!(token.is_empty());
+    }
+
+    #[test]
+    fn parse_scoped_token_ignores_missing_line() {
+        let stdout = "some other output\nwithout the token line\n";
+        let (token, detected) = try_claim_scoped_token_from_output(stdout);
+        assert!(!detected);
+        assert!(token.is_empty());
+    }
+
+    #[test]
+    fn mcp_json_shape_is_correct() {
+        let _env = crate::env_lock();
+        let root = std::env::temp_dir().join("dx-report-mcp-json-shape");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("scratch");
+
+        let dx_binary = PathBuf::from("/usr/local/bin/dx");
+        let project = "test-project";
+        let token = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+        write_mcp_config(&root, project, token, &dx_binary).expect("write config");
+
+        let mcp_json = root.join(".mcp.json");
+        assert!(
+            mcp_json.exists(),
+            ".mcp.json should be created at repo root"
+        );
+
+        let content = std::fs::read_to_string(&mcp_json).expect("read mcp.json");
+        let value: serde_json::Value = serde_json::from_str(&content).expect("parse as JSON");
+
+        // Verify structure
+        assert!(
+            value.get("mcpServers").is_some(),
+            "should have mcpServers object"
+        );
+        let report_server = value
+            .get("mcpServers")
+            .and_then(|v| v.get("report"))
+            .expect("should have report server");
+
+        assert_eq!(
+            report_server.get("command").and_then(|v| v.as_str()),
+            Some("/usr/local/bin/dx"),
+            "command should be dx binary path"
+        );
+
+        let args = report_server
+            .get("args")
+            .and_then(|v| v.as_array())
+            .expect("args should be array");
+        assert_eq!(args.len(), 2);
+        assert_eq!(args[0].as_str(), Some("report"));
+        assert_eq!(args[1].as_str(), Some("mcp"));
+
+        let env = report_server.get("env").expect("should have env");
+        assert_eq!(
+            env.get("DX_REPORT_PROJECT").and_then(|v| v.as_str()),
+            Some(project),
+            "should set DX_REPORT_PROJECT"
+        );
+        assert_eq!(
+            env.get("DX_REPORT_TOKEN").and_then(|v| v.as_str()),
+            Some(token),
+            "should set DX_REPORT_TOKEN"
+        );
+
+        // Token should not appear in the content as plaintext anywhere except in the JSON value
+        let content_without_json = content.split('{').next().unwrap_or("");
+        assert!(
+            !content_without_json.contains(token),
+            "token should not appear in output before JSON"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn mcp_json_merges_with_existing_config() {
+        let _env = crate::env_lock();
+        let root = std::env::temp_dir().join("dx-report-mcp-merge");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("scratch");
+
+        // Create initial config with another server
+        let mcp_json = root.join(".mcp.json");
+        std::fs::write(
+            &mcp_json,
+            r#"{"mcpServers": {"existing": {"command": "other", "args": []}}}"#,
+        )
+        .expect("write initial");
+
+        let dx_binary = PathBuf::from("/usr/bin/dx");
+        let project = "test";
+        let token = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+        write_mcp_config(&root, project, token, &dx_binary).expect("write config");
+
+        let content = std::fs::read_to_string(&mcp_json).expect("read");
+        let value: serde_json::Value = serde_json::from_str(&content).expect("parse");
+
+        // Both servers should exist
+        let servers = value
+            .get("mcpServers")
+            .and_then(|v| v.as_object())
+            .expect("mcpServers");
+        assert!(
+            servers.contains_key("existing"),
+            "existing server should be preserved"
+        );
+        assert!(
+            servers.contains_key("report"),
+            "report server should be added"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn gitignore_is_created_if_missing() {
+        let _env = crate::env_lock();
+        let root = std::env::temp_dir().join("dx-report-gitignore-create");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("scratch");
+
+        add_to_gitignore(&root).expect("add to gitignore");
+
+        let gitignore = root.join(".gitignore");
+        assert!(gitignore.exists(), ".gitignore should be created");
+
+        let content = std::fs::read_to_string(&gitignore).expect("read");
+        assert!(
+            content.contains(".mcp.json"),
+            "should contain .mcp.json entry"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn gitignore_is_updated_if_entry_missing() {
+        let _env = crate::env_lock();
+        let root = std::env::temp_dir().join("dx-report-gitignore-update");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("scratch");
+
+        let gitignore = root.join(".gitignore");
+        std::fs::write(&gitignore, "*.swp\nnode_modules/\n").expect("write initial");
+
+        add_to_gitignore(&root).expect("add to gitignore");
+
+        let content = std::fs::read_to_string(&gitignore).expect("read");
+        assert!(content.contains(".mcp.json"), "should add .mcp.json entry");
+        assert!(
+            content.contains("*.swp"),
+            "should preserve existing entries"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn gitignore_is_not_updated_if_entry_exists() {
+        let _env = crate::env_lock();
+        let root = std::env::temp_dir().join("dx-report-gitignore-idempotent");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("scratch");
+
+        let gitignore = root.join(".gitignore");
+        let original = "*.swp\n.mcp.json\nnode_modules/\n";
+        std::fs::write(&gitignore, original).expect("write initial");
+
+        add_to_gitignore(&root).expect("add to gitignore");
+
+        let content = std::fs::read_to_string(&gitignore).expect("read");
+        assert_eq!(
+            content, original,
+            "should not modify .gitignore if entry already exists"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn setup_without_operator_access_falls_back_to_existing_behavior() {
+        let _env = crate::env_lock();
+        let root = std::env::temp_dir().join("dx-report-setup-no-operator");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("scratch");
+        std::env::set_var("DX_SUBSCRIPTIONS_FILE", root.join("subscriptions.json"));
+        std::env::set_var("DX_REPORT_TOKEN_FILE", root.join("token"));
+
+        let result = run(&args(&[
+            "setup",
+            root.to_str().expect("path"),
+            "--endpoint",
+            "https://example.invalid/report",
+        ]))
+        .expect("setup");
+
+        let text = result.text();
+        // Should follow existing path: no mention of scoped token or MCP registration
+        assert!(
+            text.contains("now receives"),
+            "should subscribe normally: {}",
+            text
+        );
+        assert!(
+            !text.contains("claimed scoped"),
+            "should not claim scoped token: {}",
+            text
+        );
+        assert!(
+            !text.contains("MCP server"),
+            "should not register MCP server: {}",
+            text
+        );
+
+        // .mcp.json should not exist (no operator to claim token from)
+        let mcp_json = root.join(".mcp.json");
+        assert!(!mcp_json.exists(), ".mcp.json should not be created");
+
+        std::env::remove_var("DX_SUBSCRIPTIONS_FILE");
+        std::env::remove_var("DX_REPORT_TOKEN_FILE");
+    }
+
+    /// Helper to test token parsing without needing the selfhost binary.
+    fn try_claim_scoped_token_from_output(stdout: &str) -> (String, bool) {
+        for line in stdout.lines() {
+            let trimmed = line.trim();
+            if let Some(token_part) = trimmed.strip_prefix("reader token: ") {
+                let token = token_part.trim();
+                if token.len() == 64 && token.chars().all(|c| c.is_ascii_hexdigit()) {
+                    return (token.to_string(), true);
+                }
+                return (String::new(), false);
+            }
+        }
+        (String::new(), false)
     }
 }
