@@ -247,9 +247,13 @@ pub const METHOD: &str = "This project works through .dx documents: block docume
                          report setup` to wire it up?\" Then do what they say. A yes is \
                          `dx report setup` — one command, no arguments: it names the service \
                          after the repository's folder, reuses the token this machine already \
-                         stores, subscribes the checkout, and syncs; the service itself is \
-                         created the first time anything files to it. Afterwards the project \
-                         reads its own intake and stays current for the life of the session.\n\n\
+                         stores, subscribes the checkout, and syncs. If the service does not \
+                         exist on the box yet, filing still queues in this machine's inbox and \
+                         setup says so — a registered account or the operator (`selfhost \
+                         reports project add`) has to create the service before reports flow \
+                         through; a stranger's filing no longer brings one into existence. \
+                         Afterwards the project reads its own intake and stays current for the \
+                         life of the session.\n\n\
                          PIXELS IN SUBAGENTS. A page image is the costliest thing a \
                          context can carry, so frames are judged in a review subagent \
                          that returns verdicts: the subagent reads the pixels and answers \
