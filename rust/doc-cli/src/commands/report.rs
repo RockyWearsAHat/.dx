@@ -5,8 +5,9 @@
 //! dx report list [dir]        what is waiting here, and what the checkout carries
 //! dx report sync [dir]        push what is waiting, pull the project's open reports
 //! dx report subscribe [dir] [--project dx] [--endpoint URL] [--token T]
-//! dx report setup [dir] [--project N] [--endpoint URL] [--token T]
-//!                             one command: subscribe this repository
+//! dx report setup [dir] [--endpoint URL] [--token T]
+//!                             one command: subscribe this repository, minting a
+//!                             collision-resistant project key of its own if needed
 //! dx report token [T]         store the owner's token once, machine-wide
 //! dx report unsubscribe [dir]
 //! dx report close <id> [dir]  a fix: the block goes, and the database is told
@@ -305,11 +306,15 @@ fn try_claim_scoped_token(project: &str) -> ScopedToken {
 /// Write or merge a project-local MCP configuration file at `.mcp.json`.
 ///
 /// Creates a new file or merges into an existing one, preserving other MCP server entries.
-/// Does NOT print the token to stdout.
+/// Does NOT print the token to stdout. `endpoint` is baked into the launched server's own
+/// `env` block rather than left to whatever `DX_REPORT_ENDPOINT` the ambient shell happens to
+/// carry when an agent launches it — the MCP tool this writes is the one surface a repo's own
+/// service should be reached through, so it has to hold its own address, not re-derive one.
 fn write_mcp_config(
     root: &Path,
     project: &str,
     token: &str,
+    endpoint: &str,
     dx_binary: &Path,
 ) -> Result<(), String> {
     let mcp_json = root.join(".mcp.json");
@@ -338,7 +343,8 @@ fn write_mcp_config(
         "args": ["report", "mcp"],
         "env": {
             "DX_REPORT_PROJECT": project,
-            "DX_REPORT_TOKEN": token
+            "DX_REPORT_TOKEN": token,
+            "DX_REPORT_ENDPOINT": endpoint
         }
     });
 
@@ -408,42 +414,23 @@ fn fallback_to_stated_or_adopted_token(
 fn setup(args: &Args) -> Result<String, String> {
     let root = root_for(args.positional(1));
 
-    let project = if let Some(stated) = args.value("project") {
-        if stated
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
-        {
-            stated.to_string()
-        } else {
-            return Err(format!(
-                "`{stated}` has a character not allowed in a service name; use letters, digits, \
-                 dot, dash, and underscore only"
-            ));
-        }
-    } else {
-        let folder_name = root
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("report")
-            .to_string();
-        let sanitized = folder_name
-            .chars()
-            .map(|c| {
-                if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') {
-                    c
-                } else {
-                    '-'
-                }
-            })
-            .collect::<String>();
-        let trimmed = sanitized.trim_matches('-').to_string();
-        if trimmed.is_empty() {
-            return Err(format!(
-                "the folder name `{folder_name}` does not contain characters for a service name; \
-                 pass --project explicitly"
-            ));
-        }
-        trimmed
+    if args.value("project").is_some() {
+        return Err(
+            "`dx report setup` no longer takes --project — this repository's own project key \
+             is minted locally (a collision-resistant, unguessable key, not a typed name) and \
+             reused on every later `setup`. To read an already-named service's feed instead, \
+             use `dx report subscribe --project <name>`, which is unaffected."
+                .to_string(),
+        );
+    }
+
+    // This repository's own key on the intake: generated once, locally, and reused from here
+    // on — never a human-typed name, since a name is guessable (the failure `report-7004bd2b`
+    // and its neighbors both trace to). `.mcp.json`, wired below, is the one surface anything
+    // should use to interact with this repo's own service from here on.
+    let project = match intake::subscription_for(&root)? {
+        Some(existing) => existing.project,
+        None => intake::generate_project_key(),
     };
 
     let endpoint = args
@@ -467,7 +454,7 @@ fn setup(args: &Args) -> Result<String, String> {
 
             // Write the project-local MCP server configuration
             let dx_binary = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("dx"));
-            write_mcp_config(&root, &project, &scoped_token, &dx_binary)?;
+            write_mcp_config(&root, &project, &scoped_token, &endpoint, &dx_binary)?;
             add_to_gitignore(&root)?;
             out.push_str("registered project-local MCP server at .mcp.json\n");
         }
@@ -1584,9 +1571,9 @@ mod tests {
                     break;
                 }
             }
-            let answer = "{\"error\":\"`brand-new` is not a service this box hosts — a \
-                           registered account creates one, or the operator does with `selfhost \
-                           reports project add brand-new`\"}";
+            let answer = "{\"error\":\"is not a service this box hosts — a registered account \
+                           creates one, or the operator does with `selfhost reports project \
+                           add`\"}";
             stream
                 .write_all(
                     format!(
@@ -1601,8 +1588,6 @@ mod tests {
         let result = run(&args(&[
             "setup",
             root.to_str().expect("path"),
-            "--project",
-            "brand-new",
             "--endpoint",
             &format!("http://{address}"),
             "--token",
@@ -1628,10 +1613,10 @@ mod tests {
     }
 
     #[test]
-    fn folder_name_with_spaces_and_slashes_derives_sanitized_project_name() {
+    fn setup_mints_a_collision_resistant_project_key_rather_than_a_folder_name() {
         let _env = crate::env_lock();
         let _no_selfhost = NoSelfhost::new();
-        let root = scratch("cli-setup-sanitize");
+        let root = scratch("cli-setup-key");
         std::env::set_var("DX_SUBSCRIPTIONS_FILE", root.join("subscriptions.json"));
         std::env::set_var("DX_REPORT_TOKEN_FILE", root.join("token"));
 
@@ -1639,7 +1624,7 @@ mod tests {
         std::fs::create_dir_all(&messy_root).expect("create");
         let messy_canonical = workspace::workspace_root(&messy_root);
 
-        let result = run(&args(&[
+        run(&args(&[
             "setup",
             messy_root.to_str().expect("path"),
             "--endpoint",
@@ -1647,19 +1632,81 @@ mod tests {
         ]))
         .expect("setup");
 
-        let text = result.text();
-        assert!(
-            text.contains("slashes"),
-            "sanitized name should not have slashes: {}",
-            text
-        );
-
         let sub = intake::subscription_for(&messy_canonical)
             .expect("read")
             .expect("subscription exists");
+        assert_eq!(sub.project.len(), 32, "{}", sub.project);
+        assert!(
+            sub.project.chars().all(|c| c.is_ascii_hexdigit()),
+            "the folder's own name must not leak into a guessable key: {}",
+            sub.project
+        );
+
+        std::env::remove_var("DX_SUBSCRIPTIONS_FILE");
+        std::env::remove_var("DX_REPORT_TOKEN_FILE");
+    }
+
+    #[test]
+    fn setup_run_twice_reuses_the_same_project_key_rather_than_orphaning_the_first() {
+        let _env = crate::env_lock();
+        let _no_selfhost = NoSelfhost::new();
+        let root = scratch("cli-setup-key-idempotent");
+        std::env::set_var("DX_SUBSCRIPTIONS_FILE", root.join("subscriptions.json"));
+        std::env::set_var("DX_REPORT_TOKEN_FILE", root.join("token"));
+
+        run(&args(&[
+            "setup",
+            root.to_str().expect("path"),
+            "--endpoint",
+            "https://example.invalid/report",
+        ]))
+        .expect("first setup");
+        let first = intake::subscription_for(&workspace::workspace_root(&root))
+            .expect("read")
+            .expect("subscription exists")
+            .project;
+
+        run(&args(&[
+            "setup",
+            root.to_str().expect("path"),
+            "--endpoint",
+            "https://example.invalid/report",
+        ]))
+        .expect("second setup");
+        let second = intake::subscription_for(&workspace::workspace_root(&root))
+            .expect("read")
+            .expect("subscription exists")
+            .project;
+
         assert_eq!(
-            sub.project, "slashes",
-            "project should be sanitized folder name"
+            first, second,
+            "re-running setup must reuse the key .mcp.json was already wired to, not mint a \
+             fresh one that orphans the earlier scoped token"
+        );
+
+        std::env::remove_var("DX_SUBSCRIPTIONS_FILE");
+        std::env::remove_var("DX_REPORT_TOKEN_FILE");
+    }
+
+    #[test]
+    fn setup_refuses_a_stated_project_rather_than_silently_ignoring_it() {
+        let _env = crate::env_lock();
+        let _no_selfhost = NoSelfhost::new();
+        let root = scratch("cli-setup-project-refused");
+        std::env::set_var("DX_SUBSCRIPTIONS_FILE", root.join("subscriptions.json"));
+        std::env::set_var("DX_REPORT_TOKEN_FILE", root.join("token"));
+
+        let error = run(&args(&[
+            "setup",
+            root.to_str().expect("path"),
+            "--project",
+            "whatever",
+        ]))
+        .expect_err("--project should be refused, not ignored");
+        assert!(error.contains("no longer takes --project"), "{error}");
+        assert!(
+            error.contains("dx report subscribe"),
+            "should point at the still-supported way to read a named feed: {error}"
         );
 
         std::env::remove_var("DX_SUBSCRIPTIONS_FILE");
@@ -1869,8 +1916,9 @@ mod tests {
         let dx_binary = PathBuf::from("/usr/local/bin/dx");
         let project = "test-project";
         let token = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let endpoint = "https://rockywearsahat.com/report";
 
-        write_mcp_config(&root, project, token, &dx_binary).expect("write config");
+        write_mcp_config(&root, project, token, endpoint, &dx_binary).expect("write config");
 
         let mcp_json = root.join(".mcp.json");
         assert!(
@@ -1916,6 +1964,12 @@ mod tests {
             Some(token),
             "should set DX_REPORT_TOKEN"
         );
+        assert_eq!(
+            env.get("DX_REPORT_ENDPOINT").and_then(|v| v.as_str()),
+            Some(endpoint),
+            "the launched MCP server must hold its own endpoint rather than re-deriving one \
+             from whatever ambient DX_REPORT_ENDPOINT the agent's own shell happens to carry"
+        );
 
         // Token should not appear in the content as plaintext anywhere except in the JSON value
         let content_without_json = content.split('{').next().unwrap_or("");
@@ -1957,8 +2011,9 @@ mod tests {
         let dx_binary = PathBuf::from("/usr/bin/dx");
         let project = "test";
         let token = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let endpoint = "https://rockywearsahat.com/report";
 
-        write_mcp_config(&root, project, token, &dx_binary).expect("write config");
+        write_mcp_config(&root, project, token, endpoint, &dx_binary).expect("write config");
 
         let content = std::fs::read_to_string(&mcp_json).expect("read");
         let value: serde_json::Value = serde_json::from_str(&content).expect("parse");
