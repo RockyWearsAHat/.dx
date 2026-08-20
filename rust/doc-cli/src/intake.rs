@@ -1065,7 +1065,12 @@ mod tests {
     use crate::reports::Kind;
 
     fn scratch(label: &str) -> PathBuf {
-        let root = std::env::temp_dir().join(format!("dx-intake-tests-{label}"));
+        // Suffixed by pid: a fixed name collides with a concurrently running second `cargo
+        // test` process on the same machine — `env_lock` only serializes this process's own
+        // threads, not a sibling process racing the same path (this raced token_for's tests
+        // exactly this way once, values from an unrelated test bleeding across processes).
+        let root =
+            std::env::temp_dir().join(format!("dx-intake-tests-{label}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).expect("scratch");
         root
