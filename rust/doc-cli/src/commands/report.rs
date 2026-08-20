@@ -938,15 +938,94 @@ mod tests {
         Args::parse(&tokens.iter().map(|t| (*t).to_string()).collect::<Vec<_>>())
     }
 
+    /// Suffixed by pid: a fixed name collides with a concurrently running second `cargo test`
+    /// process on the same machine — `env_lock` only serializes this process's own threads,
+    /// not a sibling process racing the same path.
+    fn scratch(label: &str) -> PathBuf {
+        let root =
+            std::env::temp_dir().join(format!("dx-report-tests-{label}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("scratch");
+        root
+    }
+
+    /// Removes `selfhost` from `PATH` for the guard's lifetime, restoring the original PATH
+    /// when dropped (even on panic, so one failed test can't contaminate the next). Without
+    /// this, `try_claim_scoped_token` shells out to whatever `selfhost` a "no operator" test
+    /// finds on the real `PATH` — on the machine this feature actually targets (one that runs
+    /// Self-Host), that binary is really there, so a live `selfhost reports serve` answers the
+    /// test for real, non-deterministically, depending on what happens to be reachable when
+    /// the test runs.
+    struct NoSelfhost {
+        original: Option<std::ffi::OsString>,
+    }
+
+    impl NoSelfhost {
+        fn new() -> Self {
+            let original = std::env::var_os("PATH");
+            let filtered = original
+                .as_deref()
+                .map(|p| {
+                    std::env::join_paths(
+                        std::env::split_paths(p).filter(|dir| !dir.join("selfhost").exists()),
+                    )
+                    .unwrap_or_default()
+                })
+                .unwrap_or_default();
+            std::env::set_var("PATH", filtered);
+            Self { original }
+        }
+    }
+
+    impl Drop for NoSelfhost {
+        fn drop(&mut self) {
+            match &self.original {
+                Some(p) => std::env::set_var("PATH", p),
+                None => std::env::remove_var("PATH"),
+            }
+        }
+    }
+
+    /// Restores an env var to whatever it held before, when dropped — even on panic, so a
+    /// failed assertion can't leave the value live for whichever test's `env_lock()` acquires
+    /// the mutex next. `token_for`'s precedence checks the raw env var first, so a leaked
+    /// `DX_REPORT_TOKEN` (which three `mcp_serve_*` tests here used to set and never restore)
+    /// silently overrides every subscription/stored-token test that happens to run after.
+    struct EnvVarGuard {
+        name: &'static str,
+        original: Option<std::ffi::OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set(name: &'static str, value: &str) -> Self {
+            let original = std::env::var_os(name);
+            std::env::set_var(name, value);
+            Self { name, original }
+        }
+
+        fn unset(name: &'static str) -> Self {
+            let original = std::env::var_os(name);
+            std::env::remove_var(name);
+            Self { name, original }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            match &self.original {
+                Some(v) => std::env::set_var(self.name, v),
+                None => std::env::remove_var(self.name),
+            }
+        }
+    }
+
     /// The suite files into a temporary inbox with the push turned off: a test run must never
     /// touch the developer's real inbox, and must never reach the real intake. Both are
     /// process-wide variables, so the cases that need them share one test.
     #[test]
     fn filing_listing_and_draining_are_one_loop() {
         let _env = crate::env_lock();
-        let root = std::env::temp_dir().join("dx-report-cli-tests");
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).expect("scratch");
+        let root = scratch("cli-tests");
         std::env::set_var("DX_REPORTS_DIR", root.join("inbox"));
         std::env::set_var("DX_REPORT_ENDPOINT", "off");
         std::env::set_var("DX_SUBSCRIPTIONS_FILE", root.join("subscriptions.json"));
@@ -1121,9 +1200,7 @@ mod tests {
     #[test]
     fn syncing_a_checkout_nobody_subscribed_names_the_command_that_subscribes_it() {
         let _env = crate::env_lock();
-        let root = std::env::temp_dir().join("dx-report-cli-unsubscribed");
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).expect("scratch");
+        let root = scratch("cli-unsubscribed");
         std::env::set_var("DX_SUBSCRIPTIONS_FILE", root.join("subscriptions.json"));
         std::env::set_var("DX_REPORT_TOKEN_FILE", root.join("token"));
 
@@ -1138,9 +1215,7 @@ mod tests {
     #[test]
     fn drop_removes_a_report_from_the_local_inbox() {
         let _env = crate::env_lock();
-        let root = std::env::temp_dir().join("dx-report-cli-drop");
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).expect("scratch");
+        let root = scratch("cli-drop");
         std::env::set_var("DX_REPORTS_DIR", root.join("inbox"));
         std::env::set_var("DX_REPORT_ENDPOINT", "off");
 
@@ -1186,9 +1261,7 @@ mod tests {
     #[test]
     fn filing_from_the_cli_always_notes_the_mcp_tool_is_cheaper() {
         let _env = crate::env_lock();
-        let root = std::env::temp_dir().join("dx-report-cli-mcp-notice");
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).expect("scratch");
+        let root = scratch("cli-mcp-notice");
         std::env::set_var("DX_REPORTS_DIR", root.join("inbox"));
         std::env::set_var("DX_REPORT_ENDPOINT", "off");
         // The CLI always prints a notice to stderr directing agents to use the
@@ -1219,9 +1292,8 @@ mod tests {
     #[test]
     fn setup_with_no_token_anywhere_subscribes_and_says_filing_works() {
         let _env = crate::env_lock();
-        let root = std::env::temp_dir().join("dx-report-cli-setup-no-token");
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).expect("scratch");
+        let _no_selfhost = NoSelfhost::new();
+        let root = scratch("cli-setup-no-token");
         let root_canonical = workspace::workspace_root(&root);
         std::env::set_var("DX_SUBSCRIPTIONS_FILE", root.join("subscriptions.json"));
         std::env::set_var("DX_REPORT_TOKEN_FILE", root.join("token"));
@@ -1263,9 +1335,7 @@ mod tests {
     #[test]
     fn token_stores_and_never_echoes_it_in_output() {
         let _env = crate::env_lock();
-        let root = std::env::temp_dir().join("dx-report-cli-token");
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).expect("scratch");
+        let root = scratch("cli-token");
         std::env::set_var("DX_REPORT_TOKEN_FILE", root.join("token"));
 
         let result = run(&args(&["token", "my-secret-value"])).expect("token");
@@ -1291,9 +1361,8 @@ mod tests {
     #[test]
     fn setup_adopts_a_token_from_existing_same_endpoint_subscription() {
         let _env = crate::env_lock();
-        let root = std::env::temp_dir().join("dx-report-cli-setup-adopt");
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).expect("scratch");
+        let _no_selfhost = NoSelfhost::new();
+        let root = scratch("cli-setup-adopt");
         std::env::set_var("DX_SUBSCRIPTIONS_FILE", root.join("subscriptions.json"));
         std::env::set_var("DX_REPORT_TOKEN_FILE", root.join("token"));
         std::env::set_var("DX_REPORT_ENDPOINT", "off");
@@ -1340,9 +1409,8 @@ mod tests {
     #[test]
     fn setup_prunes_subscriptions_whose_workspace_no_longer_exists() {
         let _env = crate::env_lock();
-        let root = std::env::temp_dir().join("dx-report-cli-setup-prune");
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).expect("scratch");
+        let _no_selfhost = NoSelfhost::new();
+        let root = scratch("cli-setup-prune");
         std::env::set_var("DX_SUBSCRIPTIONS_FILE", root.join("subscriptions.json"));
         std::env::set_var("DX_REPORT_TOKEN_FILE", root.join("token"));
         std::env::set_var("DX_REPORT_ENDPOINT", "off");
@@ -1392,9 +1460,8 @@ mod tests {
         // filing would create it anyway; that string never matches what the box actually
         // answers, so this pins the guidance setup gives instead.
         let _env = crate::env_lock();
-        let root = std::env::temp_dir().join("dx-report-cli-setup-unregistered");
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).expect("scratch");
+        let _no_selfhost = NoSelfhost::new();
+        let root = scratch("cli-setup-unregistered");
         std::env::set_var("DX_SUBSCRIPTIONS_FILE", root.join("subscriptions.json"));
         std::env::set_var("DX_REPORT_TOKEN_FILE", root.join("token"));
 
@@ -1459,9 +1526,8 @@ mod tests {
     #[test]
     fn folder_name_with_spaces_and_slashes_derives_sanitized_project_name() {
         let _env = crate::env_lock();
-        let root = std::env::temp_dir().join("dx-report-cli-setup-sanitize");
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).expect("scratch");
+        let _no_selfhost = NoSelfhost::new();
+        let root = scratch("cli-setup-sanitize");
         std::env::set_var("DX_SUBSCRIPTIONS_FILE", root.join("subscriptions.json"));
         std::env::set_var("DX_REPORT_TOKEN_FILE", root.join("token"));
 
@@ -1499,9 +1565,7 @@ mod tests {
     #[test]
     fn token_query_says_whether_one_is_stored_for_the_endpoint() {
         let _env = crate::env_lock();
-        let root = std::env::temp_dir().join("dx-report-cli-token-query");
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).expect("scratch");
+        let root = scratch("cli-token-query");
         std::env::set_var("DX_REPORT_TOKEN_FILE", root.join("token"));
 
         let result = run(&args(&["token"])).expect("token query");
@@ -1532,8 +1596,8 @@ mod tests {
     #[test]
     fn mcp_serve_requires_project_env_var() {
         let _env = crate::env_lock();
-        std::env::remove_var("DX_REPORT_PROJECT");
-        std::env::set_var("DX_REPORT_TOKEN", "test-token");
+        let _project = EnvVarGuard::unset("DX_REPORT_PROJECT");
+        let _token = EnvVarGuard::set("DX_REPORT_TOKEN", "test-token");
 
         let result = mcp_serve(&args(&[]));
         assert!(result.is_err());
@@ -1544,8 +1608,8 @@ mod tests {
     #[test]
     fn mcp_serve_requires_token_env_var() {
         let _env = crate::env_lock();
-        std::env::set_var("DX_REPORT_PROJECT", "test-project");
-        std::env::remove_var("DX_REPORT_TOKEN");
+        let _project = EnvVarGuard::set("DX_REPORT_PROJECT", "test-project");
+        let _token = EnvVarGuard::unset("DX_REPORT_TOKEN");
 
         let result = mcp_serve(&args(&[]));
         assert!(result.is_err());
@@ -1556,8 +1620,8 @@ mod tests {
     #[test]
     fn mcp_serve_rejects_empty_env_vars() {
         let _env = crate::env_lock();
-        std::env::set_var("DX_REPORT_PROJECT", "  ");
-        std::env::set_var("DX_REPORT_TOKEN", "test-token");
+        let _project = EnvVarGuard::set("DX_REPORT_PROJECT", "  ");
+        let _token = EnvVarGuard::set("DX_REPORT_TOKEN", "test-token");
 
         let result = mcp_serve(&args(&[]));
         assert!(result.is_err());
@@ -1696,9 +1760,7 @@ mod tests {
     #[test]
     fn mcp_json_shape_is_correct() {
         let _env = crate::env_lock();
-        let root = std::env::temp_dir().join("dx-report-mcp-json-shape");
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).expect("scratch");
+        let root = scratch("mcp-json-shape");
 
         let dx_binary = PathBuf::from("/usr/local/bin/dx");
         let project = "test-project";
@@ -1758,15 +1820,27 @@ mod tests {
             "token should not appear in output before JSON"
         );
 
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&mcp_json)
+                .expect("stat .mcp.json")
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(
+                mode, 0o600,
+                ".mcp.json holds a live bearer token and must be owner-only (0600), got {mode:o}"
+            );
+        }
+
         std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]
     fn mcp_json_merges_with_existing_config() {
         let _env = crate::env_lock();
-        let root = std::env::temp_dir().join("dx-report-mcp-merge");
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).expect("scratch");
+        let root = scratch("mcp-merge");
 
         // Create initial config with another server
         let mcp_json = root.join(".mcp.json");
@@ -1805,9 +1879,7 @@ mod tests {
     #[test]
     fn gitignore_is_created_if_missing() {
         let _env = crate::env_lock();
-        let root = std::env::temp_dir().join("dx-report-gitignore-create");
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).expect("scratch");
+        let root = scratch("gitignore-create");
 
         add_to_gitignore(&root).expect("add to gitignore");
 
@@ -1826,9 +1898,7 @@ mod tests {
     #[test]
     fn gitignore_is_updated_if_entry_missing() {
         let _env = crate::env_lock();
-        let root = std::env::temp_dir().join("dx-report-gitignore-update");
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).expect("scratch");
+        let root = scratch("gitignore-update");
 
         let gitignore = root.join(".gitignore");
         std::fs::write(&gitignore, "*.swp\nnode_modules/\n").expect("write initial");
@@ -1848,9 +1918,7 @@ mod tests {
     #[test]
     fn gitignore_is_not_updated_if_entry_exists() {
         let _env = crate::env_lock();
-        let root = std::env::temp_dir().join("dx-report-gitignore-idempotent");
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).expect("scratch");
+        let root = scratch("gitignore-idempotent");
 
         let gitignore = root.join(".gitignore");
         let original = "*.swp\n.mcp.json\nnode_modules/\n";
@@ -1870,9 +1938,8 @@ mod tests {
     #[test]
     fn setup_without_operator_access_falls_back_to_existing_behavior() {
         let _env = crate::env_lock();
-        let root = std::env::temp_dir().join("dx-report-setup-no-operator");
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).expect("scratch");
+        let _no_selfhost = NoSelfhost::new();
+        let root = scratch("setup-no-operator");
         std::env::set_var("DX_SUBSCRIPTIONS_FILE", root.join("subscriptions.json"));
         std::env::set_var("DX_REPORT_TOKEN_FILE", root.join("token"));
 
