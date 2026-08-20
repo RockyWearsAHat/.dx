@@ -136,13 +136,15 @@ never its contents. `DX_REPORT_ENDPOINT=<url>` points it somewhere else — with
 (`…/report?billing`) that names the database too — and `DX_REPORT_ENDPOINT=off` turns the push
 off entirely, leaving the local inbox.
 
-`dx report setup` wires any repository in one command — it names the service after the folder,
-reuses the machine's stored token, subscribes the checkout, and syncs. On a machine running the
-box (with local `selfhost` operator access), setup claims a per-service reader token and
-registers a project-scoped MCP server at `.mcp.json`, so agents working in that repo get a
-report tool already bound to that project with no token to remember or leak. `dx report token <t>`
-stores the owner's token once per machine (mint it with `selfhost reports token` on the box),
-after which setup anywhere on the machine needs nothing.
+`dx report setup` wires any repository in one command — it mints a collision-resistant project
+key of its own (never the folder name, never a typed `--project`, so nobody reaches this repo's
+service by guessing), reuses the machine's stored token, subscribes the checkout, and syncs. On a
+machine running the box (with local `selfhost` operator access), setup claims a per-service
+reader token and registers a project-scoped MCP server at `.mcp.json` — with its key, token, and
+endpoint all baked into that one file — so agents working in that repo get a report tool already
+bound to that project, with no token to remember or leak, and no endpoint to reconfigure by hand.
+`dx report token <t>` stores the owner's token once per machine (mint it with `selfhost reports
+token` on the box), after which setup anywhere on the machine needs nothing.
 
 ## What executes, and what does not
 

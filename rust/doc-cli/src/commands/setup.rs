@@ -652,9 +652,10 @@ REPORT — what dx itself got wrong
               [--endpoint URL]                  folds them in, and an MCP session keeps
                                                 them current underneath the agent.
   dx report   setup [dir]                       one command: subscribe this repository
-              [--project N]                     to its own reports, naming the service
-              [--endpoint URL] [--token T]      after the folder unless --project says,
-                                                reusing this machine's stored token
+              [--endpoint URL] [--token T]      to its own reports, minting a
+                                                collision-resistant project key of its
+                                                own the first time, reusing it after,
+                                                and reusing this machine's stored token
   dx report   token [T]                         store the owner's token once,
                                                 machine-wide; with no T, say whether
                                                 one is stored

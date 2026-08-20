@@ -49,10 +49,11 @@
 //! database says is left byte-for-byte alone, so a sync that has nothing to add writes
 //! nothing and git sees no change.
 
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+use doc_core::digest::sha256_hex;
 use doc_core::edit;
 use doc_core::format::parse;
 use serde_json::{json, Value};
@@ -201,6 +202,60 @@ pub fn service() -> Option<String> {
 #[must_use]
 pub fn project_for() -> String {
     service().unwrap_or_else(|| DEFAULT_PROJECT.to_string())
+}
+
+/// A fresh, collision-resistant key for a repository's own project on the intake.
+///
+/// `dx report setup` used to let a human name this — a folder name by default, `--project` to
+/// override — which made it guessable: two repos can share a folder name, and the failure that
+/// closed `report-7004bd2b` and its neighbors both started with a project key someone could
+/// type without having run setup themselves. This is a 128-bit key instead: enough collision
+/// resistance that nobody reaches another repo's service by guessing, hex-encoded so it fits
+/// the same `[a-z0-9._-]` shape a human-typed key always had to and comfortably clears the
+/// box's own 40-character length cap on a service key, and generated once per workspace:
+/// `setup` reuses whatever an earlier run already minted rather than replacing it, so
+/// re-running setup never orphans an already-scoped MCP server. The one surface anything should
+/// use to interact with a repo's own service from here on is the MCP tool `setup` wires into
+/// `.mcp.json` — not a typed `--project`.
+#[must_use]
+pub fn generate_project_key() -> String {
+    // 16 bytes (128 bits) of hex is 32 characters — plenty of collision resistance for a
+    // per-repo identifier, and it leaves headroom under the box's 40-character cap for
+    // whatever a human-typed key already used.
+    sha256_hex(&random_material())[..32].to_string()
+}
+
+/// Local entropy this key is built from — never anything about the repository itself (its
+/// name, its path, its git remote), because all three are public or guessable, and a key
+/// built from any of them could be computed by someone who never ran `dx report setup` here.
+///
+/// `/dev/urandom` on the platforms this project's sandbox already assumes have one (macOS,
+/// Linux — see `doc-run::confine`); elsewhere, wall-clock nanoseconds, the process id, and the
+/// address of a freshly allocated heap value (ASLR-randomized on every platform this runs on)
+/// mixed together. Not a promise of CSPRNG-grade unpredictability on that fallback path, only
+/// that nobody can compute it from the outside the way a folder name always could be.
+fn random_material() -> Vec<u8> {
+    #[cfg(unix)]
+    {
+        if let Ok(mut file) = std::fs::File::open("/dev/urandom") {
+            let mut bytes = vec![0u8; 32];
+            if file.read_exact(&mut bytes).is_ok() {
+                return bytes;
+            }
+        }
+    }
+    let mut material = Vec::new();
+    material.extend_from_slice(
+        &std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+            .to_le_bytes(),
+    );
+    material.extend_from_slice(&u64::from(std::process::id()).to_le_bytes());
+    let marker = Box::new(0u8);
+    material.extend_from_slice(&((&*marker as *const u8) as usize as u64).to_le_bytes());
+    material
 }
 
 /// The service `setting` names in its query, if it names one. Split from [`service`] for the
@@ -1371,6 +1426,33 @@ mod tests {
 
         std::env::remove_var(ENDPOINT_ENV);
         std::env::remove_var(SUBSCRIPTIONS_ENV);
+    }
+
+    #[test]
+    fn a_generated_project_key_is_32_lowercase_hex_characters_and_never_repeats() {
+        let key = generate_project_key();
+        assert_eq!(key.len(), 32, "{key}");
+        assert!(
+            key.chars()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
+            "{key}"
+        );
+        // A key built from randomness, guessed a folder name never was.
+        assert_ne!(key, generate_project_key());
+    }
+
+    #[test]
+    fn a_generated_project_key_passes_the_same_shape_check_a_selfhost_reader_token_does() {
+        // `try_claim_scoped_token`'s own validation is exactly `len == 64 && all hex` for a
+        // token; a service key has no such fixed length, but it must still be legal in the
+        // `[a-z0-9._-]`, 1-to-40-character shape the box's `project_key` validator requires.
+        let key = generate_project_key();
+        assert!(key.len() <= 40, "{key}");
+        assert!(
+            key.starts_with(|c: char| c.is_ascii_alphanumeric())
+                && key.ends_with(|c: char| c.is_ascii_alphanumeric()),
+            "{key}"
+        );
     }
 
     #[test]
