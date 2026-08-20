@@ -222,42 +222,84 @@ fn drop(args: &Args) -> Result<String, String> {
     }
 }
 
-/// Try to claim a scoped reader token from the local operator via `selfhost reports project add`.
+/// What came of trying to claim a scoped reader token from the local operator.
+enum ScopedToken {
+    /// A token was claimed and validated.
+    Claimed(String),
+    /// No `selfhost` binary is reachable on `PATH` at all — the ordinary case for a machine
+    /// with no local operator, and not worth a diagnostic.
+    NoOperator,
+    /// `selfhost` ran but the claim did not go through; the fallback path is taken, but the
+    /// caller should be told the scoped path was tried and why it lost.
+    Refused(String),
+}
+
+/// Parse `selfhost reports project add`'s stdout for its `reader token: <hex>` line.
 ///
-/// Returns (token, was_operator_detected) tuple. If the selfhost binary is not found or the
-/// command fails for any reason, returns (empty_string, false) to fall back to the default path.
-fn try_claim_scoped_token(project: &str) -> (String, bool) {
-    let output = match std::process::Command::new("selfhost")
-        .arg("reports")
-        .arg("project")
-        .arg("add")
-        .arg(project)
-        .output()
-    {
-        Ok(output) => output,
-        Err(_) => return (String::new(), false), // selfhost not found or exec error
-    };
-
-    if !output.status.success() {
-        return (String::new(), false); // command failed
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
+/// Returns `(token, valid)`; `valid` is false when the line is missing or the token does not
+/// look like the 64-character lowercase-hex shape selfhost mints.
+fn parse_scoped_token(stdout: &str) -> (String, bool) {
     for line in stdout.lines() {
         let trimmed = line.trim();
         if let Some(token_part) = trimmed.strip_prefix("reader token: ") {
             let token = token_part.trim();
-            // Validate it looks like lowercase hex
             if token.len() == 64 && token.chars().all(|c| c.is_ascii_hexdigit()) {
                 return (token.to_string(), true);
             }
-            // Token format didn't match; fall back to non-operator path
             return (String::new(), false);
         }
     }
-
-    // Token line not found in output
     (String::new(), false)
+}
+
+/// Try to claim a scoped reader token from the local operator via `selfhost reports project add`.
+///
+/// `selfhost` locates its own `selfhost.config.toml` by walking up from *its* current
+/// directory — which, inherited from this process, is wherever `dx report setup` happened to
+/// run. Off the one machine tree that config lives in, that walk finds nothing and the claim
+/// silently loses even when an operator genuinely exists. `DX_SELFHOST_DIR`, when set, points
+/// the child at the operator's project directory directly so the walk-up still lands.
+fn try_claim_scoped_token(project: &str) -> ScopedToken {
+    let mut command = std::process::Command::new("selfhost");
+    command
+        .arg("reports")
+        .arg("project")
+        .arg("add")
+        .arg(project);
+    if let Ok(dir) = std::env::var("DX_SELFHOST_DIR") {
+        if !dir.is_empty() {
+            command.current_dir(dir);
+        }
+    }
+
+    let output = match command.output() {
+        Ok(output) => output,
+        Err(_) => return ScopedToken::NoOperator, // selfhost not found or exec error
+    };
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let reason = stderr
+            .lines()
+            .next_back()
+            .filter(|line| !line.trim().is_empty())
+            .unwrap_or("no diagnostic on stderr")
+            .trim();
+        return ScopedToken::Refused(format!(
+            "`selfhost reports project add {project}` exited with {}: {reason}",
+            output.status
+        ));
+    }
+
+    let (token, valid) = parse_scoped_token(&String::from_utf8_lossy(&output.stdout));
+    if valid {
+        ScopedToken::Claimed(token)
+    } else {
+        ScopedToken::Refused(format!(
+            "`selfhost reports project add {project}` exited successfully but printed no \
+             usable reader token"
+        ))
+    }
 }
 
 /// Write or merge a project-local MCP configuration file at `.mcp.json`.
@@ -332,6 +374,36 @@ fn add_to_gitignore(root: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// The non-scoped path: adopt a stated `--token`, or one from an existing same-endpoint
+/// subscription, exactly as `setup` did before a local operator's scoped token was possible.
+fn fallback_to_stated_or_adopted_token(
+    args: &Args,
+    endpoint: &str,
+    out: &mut String,
+) -> Result<(), String> {
+    if let Some(stated_token) = args.value("token") {
+        let path = intake::store_token(stated_token, endpoint)?;
+        out.push_str(&format!(
+            "token stored at {} — it is never shown again\n",
+            path.display()
+        ));
+    } else if intake::stored_token_for(endpoint).is_none() {
+        if let Ok(existing_subs) = intake::subscriptions() {
+            if let Some(existing) = existing_subs
+                .iter()
+                .find(|s| s.endpoint == endpoint && !s.token.is_empty())
+            {
+                intake::store_token(&existing.token, endpoint)?;
+                out.push_str(&format!(
+                    "adopted token from existing subscription at {}\n",
+                    existing.workspace.display()
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// `dx report setup [dir]` — one command: subscribe this repository to its own reports.
 fn setup(args: &Args) -> Result<String, String> {
     let root = root_for(args.positional(1));
@@ -383,43 +455,30 @@ fn setup(args: &Args) -> Result<String, String> {
     let mut out = String::new();
 
     // Try to claim a scoped token from the local operator
-    let (scoped_token, operator_detected) = try_claim_scoped_token(&project);
-
-    if operator_detected && !scoped_token.is_empty() {
-        // Store the scoped token with the project as the service qualifier
-        let scoped_endpoint = format!("{}?{}", endpoint, project);
-        let path = intake::store_token(&scoped_token, &scoped_endpoint)?;
-        out.push_str(&format!(
-            "claimed scoped reader token for `{project}` at {}\n",
-            path.display()
-        ));
-
-        // Write the project-local MCP server configuration
-        let dx_binary = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("dx"));
-        write_mcp_config(&root, &project, &scoped_token, &dx_binary)?;
-        add_to_gitignore(&root)?;
-        out.push_str("registered project-local MCP server at .mcp.json\n");
-    } else {
-        // Fallback: use existing token logic
-        if let Some(stated_token) = args.value("token") {
-            let path = intake::store_token(stated_token, &endpoint)?;
+    match try_claim_scoped_token(&project) {
+        ScopedToken::Claimed(scoped_token) => {
+            // Store the scoped token with the project as the service qualifier
+            let scoped_endpoint = format!("{}?{}", endpoint, project);
+            let path = intake::store_token(&scoped_token, &scoped_endpoint)?;
             out.push_str(&format!(
-                "token stored at {} — it is never shown again\n",
+                "claimed scoped reader token for `{project}` at {}\n",
                 path.display()
             ));
-        } else if intake::stored_token_for(&endpoint).is_none() {
-            if let Ok(existing_subs) = intake::subscriptions() {
-                if let Some(existing) = existing_subs
-                    .iter()
-                    .find(|s| s.endpoint == endpoint && !s.token.is_empty())
-                {
-                    intake::store_token(&existing.token, &endpoint)?;
-                    out.push_str(&format!(
-                        "adopted token from existing subscription at {}\n",
-                        existing.workspace.display()
-                    ));
-                }
-            }
+
+            // Write the project-local MCP server configuration
+            let dx_binary = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("dx"));
+            write_mcp_config(&root, &project, &scoped_token, &dx_binary)?;
+            add_to_gitignore(&root)?;
+            out.push_str("registered project-local MCP server at .mcp.json\n");
+        }
+        ScopedToken::NoOperator => fallback_to_stated_or_adopted_token(args, &endpoint, &mut out)?,
+        ScopedToken::Refused(reason) => {
+            out.push_str(&format!(
+                "scoped token claim skipped: {reason} — falling back to a machine-wide \
+                 subscribe; set DX_SELFHOST_DIR to the operator's project directory if one \
+                 exists but was not found here\n"
+            ));
+            fallback_to_stated_or_adopted_token(args, &endpoint, &mut out)?;
         }
     }
 
@@ -978,6 +1037,51 @@ mod tests {
     }
 
     impl Drop for NoSelfhost {
+        fn drop(&mut self) {
+            match &self.original {
+                Some(p) => std::env::set_var("PATH", p),
+                None => std::env::remove_var("PATH"),
+            }
+        }
+    }
+
+    /// Puts a fake `selfhost` shell script at the front of `PATH` for the guard's lifetime,
+    /// restoring the original PATH when dropped. Exercises the real subprocess path in
+    /// `try_claim_scoped_token` without depending on a real `selfhost` install existing on
+    /// the machine running the test.
+    struct FakeSelfhost {
+        original: Option<std::ffi::OsString>,
+    }
+
+    impl FakeSelfhost {
+        fn install(bin_dir: &Path, script: &str) -> Self {
+            std::fs::create_dir_all(bin_dir).expect("bin dir");
+            let selfhost_path = bin_dir.join("selfhost");
+            std::fs::write(&selfhost_path, script).expect("write fake selfhost");
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let mut perms = std::fs::metadata(&selfhost_path)
+                    .expect("stat fake selfhost")
+                    .permissions();
+                perms.set_mode(0o755);
+                std::fs::set_permissions(&selfhost_path, perms).expect("chmod fake selfhost");
+            }
+
+            let original = std::env::var_os("PATH");
+            let mut dirs = vec![bin_dir.to_path_buf()];
+            if let Some(existing) = &original {
+                dirs.extend(std::env::split_paths(existing));
+            }
+            std::env::set_var(
+                "PATH",
+                std::env::join_paths(dirs).expect("join PATH with fake selfhost dir"),
+            );
+            Self { original }
+        }
+    }
+
+    impl Drop for FakeSelfhost {
         fn drop(&mut self) {
             match &self.original {
                 Some(p) => std::env::set_var("PATH", p),
@@ -1724,7 +1828,7 @@ mod tests {
     fn parse_scoped_token_extracts_64_char_hex_token() {
         let stdout =
             "reader token: abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789\n";
-        let (token, detected) = try_claim_scoped_token_from_output(stdout);
+        let (token, detected) = parse_scoped_token(stdout);
         assert!(detected);
         assert_eq!(
             token,
@@ -1735,7 +1839,7 @@ mod tests {
     #[test]
     fn parse_scoped_token_ignores_malformed_token() {
         let stdout = "reader token: too-short\n";
-        let (token, detected) = try_claim_scoped_token_from_output(stdout);
+        let (token, detected) = parse_scoped_token(stdout);
         assert!(!detected);
         assert!(token.is_empty());
     }
@@ -1744,7 +1848,7 @@ mod tests {
     fn parse_scoped_token_ignores_non_hex_token() {
         let stdout =
             "reader token: zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz\n";
-        let (token, detected) = try_claim_scoped_token_from_output(stdout);
+        let (token, detected) = parse_scoped_token(stdout);
         assert!(!detected);
         assert!(token.is_empty());
     }
@@ -1752,7 +1856,7 @@ mod tests {
     #[test]
     fn parse_scoped_token_ignores_missing_line() {
         let stdout = "some other output\nwithout the token line\n";
-        let (token, detected) = try_claim_scoped_token_from_output(stdout);
+        let (token, detected) = parse_scoped_token(stdout);
         assert!(!detected);
         assert!(token.is_empty());
     }
@@ -1977,18 +2081,104 @@ mod tests {
         std::env::remove_var("DX_REPORT_TOKEN_FILE");
     }
 
-    /// Helper to test token parsing without needing the selfhost binary.
-    fn try_claim_scoped_token_from_output(stdout: &str) -> (String, bool) {
-        for line in stdout.lines() {
-            let trimmed = line.trim();
-            if let Some(token_part) = trimmed.strip_prefix("reader token: ") {
-                let token = token_part.trim();
-                if token.len() == 64 && token.chars().all(|c| c.is_ascii_hexdigit()) {
-                    return (token.to_string(), true);
-                }
-                return (String::new(), false);
-            }
-        }
-        (String::new(), false)
+    /// A fake `selfhost` that refuses unless run with a specific directory as its cwd —
+    /// standing in for the real `selfhost`'s upward walk from cwd to find its config, which
+    /// fails off the one machine tree that config happens to live in.
+    const FAKE_SELFHOST_CWD_GATED: &str = r#"#!/bin/sh
+if [ -f ./OPERATOR_MARKER ]; then
+  echo 'reader token: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
+  exit 0
+else
+  echo 'refused: no project `dx-report-mock-verify` on this box' 1>&2
+  exit 1
+fi
+"#;
+
+    #[test]
+    fn setup_reports_a_diagnostic_when_selfhost_is_present_but_refuses() {
+        let _env = crate::env_lock();
+        let bin_dir = scratch("fake-selfhost-bin-refuse");
+        let _fake_selfhost = FakeSelfhost::install(&bin_dir, FAKE_SELFHOST_CWD_GATED);
+        std::env::remove_var("DX_SELFHOST_DIR"); // no operator directory named — the reported bug
+
+        let root = scratch("setup-selfhost-refuses");
+        std::env::set_var("DX_SUBSCRIPTIONS_FILE", root.join("subscriptions.json"));
+        std::env::set_var("DX_REPORT_TOKEN_FILE", root.join("token"));
+
+        let result = run(&args(&[
+            "setup",
+            root.to_str().expect("path"),
+            "--endpoint",
+            "https://example.invalid/report",
+        ]))
+        .expect("setup");
+
+        let text = result.text();
+        assert!(
+            text.contains("scoped token claim skipped"),
+            "should say the scoped path was tried and lost: {text}"
+        );
+        assert!(
+            text.contains("DX_SELFHOST_DIR"),
+            "should tell the caller how to point at the operator's directory: {text}"
+        );
+        assert!(
+            !text.contains("claimed scoped"),
+            "should not claim a token: {text}"
+        );
+        assert!(
+            text.contains("now receives"),
+            "should still fall back to a normal subscribe: {text}"
+        );
+
+        let mcp_json = root.join(".mcp.json");
+        assert!(!mcp_json.exists(), ".mcp.json should not be created");
+
+        std::env::remove_var("DX_SUBSCRIPTIONS_FILE");
+        std::env::remove_var("DX_REPORT_TOKEN_FILE");
+    }
+
+    #[test]
+    fn setup_claims_a_scoped_token_when_dx_selfhost_dir_points_at_the_operator() {
+        let _env = crate::env_lock();
+        let bin_dir = scratch("fake-selfhost-bin-found");
+        let _fake_selfhost = FakeSelfhost::install(&bin_dir, FAKE_SELFHOST_CWD_GATED);
+
+        // The operator's own project directory — distinct from both the test process's cwd
+        // and the repo being set up, exactly as `~/Desktop/Self-Host` is distinct from
+        // whatever repo `dx report setup` runs from.
+        let operator_dir = scratch("fake-selfhost-operator-dir");
+        std::fs::write(operator_dir.join("OPERATOR_MARKER"), "").expect("marker");
+        std::env::set_var("DX_SELFHOST_DIR", &operator_dir);
+
+        let root = scratch("setup-selfhost-dir-found");
+        std::env::set_var("DX_SUBSCRIPTIONS_FILE", root.join("subscriptions.json"));
+        std::env::set_var("DX_REPORT_TOKEN_FILE", root.join("token"));
+
+        let result = run(&args(&[
+            "setup",
+            root.to_str().expect("path"),
+            "--endpoint",
+            "https://example.invalid/report",
+        ]))
+        .expect("setup");
+
+        let text = result.text();
+        assert!(
+            text.contains("claimed scoped reader token"),
+            "DX_SELFHOST_DIR should let the claim succeed off the operator's own cwd: {text}"
+        );
+        assert!(
+            text.contains("registered project-local MCP server"),
+            "{text}"
+        );
+        assert!(
+            root.join(".mcp.json").exists(),
+            ".mcp.json should be created when the scoped claim succeeds"
+        );
+
+        std::env::remove_var("DX_SELFHOST_DIR");
+        std::env::remove_var("DX_SUBSCRIPTIONS_FILE");
+        std::env::remove_var("DX_REPORT_TOKEN_FILE");
     }
 }
