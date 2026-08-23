@@ -11,6 +11,10 @@
 /.doc/index.db
 /.doc/index.db-*
 
+# Per-workspace search coverage log (doc-cli::coverage) — meaningless off the machine that
+# recorded it, and never meant to be shared or reviewed as a diff.
+/.doc/coverage.jsonl
+
 # Rust build output
 rust/target/
 
