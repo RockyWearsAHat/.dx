@@ -11,6 +11,7 @@
 //! what it does, which must never *do* it.
 
 pub mod browser;
+pub mod coverage;
 pub mod edit;
 pub mod exec;
 pub mod find;
@@ -126,6 +127,11 @@ const COMMANDS: &[Command] = &[
         names: &["trace"],
         flags: &["brief", "out"],
         run: |args| trace::run(args).map(Output::Document),
+    },
+    Command {
+        names: &["coverage"],
+        flags: &["window", "min-rate", "out"],
+        run: |args| coverage::run(args).map(Output::Document),
     },
     Command {
         names: &["help", "--help", "-h"],
@@ -414,6 +420,7 @@ mod tests {
             ),
             ("png", vec!["section", "out", "pages", "block", "against"]),
             ("search", vec!["limit"]),
+            ("coverage", vec!["window", "min-rate"]),
             ("source", vec!["block", "header"]),
             (
                 "set",

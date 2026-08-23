@@ -102,10 +102,16 @@ crates and the surfaces; `rust/engine.dx` is the crate-by-crate responsibility l
   resolving a pointer stay free of side effects — resolving must not even create the index.
   `edit::preview_block` applies a body to a parsed copy and throws it away. `dx run --review`
   is a read too: it reports what would run, folds no `::output`, writes no file. Only `dx run`
-  and `dx_run` execute, with two stated exceptions: an edit to a runnable block through a local
-  editing surface runs it at once (the edit is the review), and the agent read tools
+  and `dx_run` execute, with three stated exceptions: an edit to a runnable block through a
+  local editing surface runs it at once (the edit is the review), the agent read tools
   (`dx_read`, `dx_source`) refresh stale output of code *this machine already approved*, so an
-  agent never reads dead output. Unreviewed code stays blocked on a read; `refresh: false`
+  agent never reads dead output, and `dx_search`/`dx search` appends one best-effort record to
+  `.doc/coverage.jsonl` — document, source, or no hit, the ranking outcome the search already
+  computed and used to discard. The third is not execution and touches none of what the other
+  two guard: never a document, a pointer, or `.doc/index.db`. It never creates `.doc/` — a
+  workspace search has not touched stays untouched — any I/O failure is silently swallowed
+  rather than surfaced, and the log is self-pruning so it stays bounded. `doc-cli::coverage` is
+  the authority. Unreviewed code stays blocked on a read; `refresh: false`
   reads exactly what is stored. This is why a `nav` block and a `::board` resolve from their own
   document and never by reading another file. The one sanctioned outward read is
   `resolve::hydrate` — a document's own stated references, confined by `resolve::confined`,
