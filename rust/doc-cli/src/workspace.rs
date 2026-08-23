@@ -867,7 +867,9 @@ pub fn search(directory: &Path, query: &str, limit: usize) -> Result<Vec<Hit>, S
         })
         .collect();
 
-    Ok(cap_without_shutout(drop_noise(ranked), limit))
+    let hits = cap_without_shutout(drop_noise(ranked), limit);
+    crate::coverage::record(directory, query, &hits);
+    Ok(hits)
 }
 
 /// Truncate `ranked` (already best-score-first) to `limit` hits, without letting that cut

@@ -36,6 +36,7 @@ pub fn call(name: &str, args: &Value, root: &Path) -> ToolResult {
         "dx_outline" => outline_of(args, root),
         "dx_list" => list(args, root),
         "dx_search" => search(args, root),
+        "dx_coverage" => coverage(args, root),
         "dx_index" => index(args, root),
         "dx_render" => render(args, root),
         "dx_write" => write(args, root),
@@ -479,6 +480,38 @@ fn excerpt(answer: &str, query: &str) -> String {
     }
     let opening = if start > 0 { "…" } else { "" };
     format!("{opening}{}…", &windowed[..end])
+}
+
+/// Default number of recent searches a coverage report is drawn from.
+const DEFAULT_COVERAGE_WINDOW: usize = 200;
+
+/// `dx_coverage` — the document-hit rate over recent searches, and what fell back.
+fn coverage(args: &Value, root: &Path) -> ToolResult {
+    let directory = directory_arg(args, root);
+    let window = number(args, "window").map_or(DEFAULT_COVERAGE_WINDOW, |window| window as usize);
+
+    let Some(report) = crate::coverage::report(&directory, window) else {
+        return Ok(vec![json_content(&json!({
+            "has_data": false,
+            "message": "no coverage data yet — nothing has been searched",
+        }))]);
+    };
+
+    let fallbacks: Vec<Value> = report
+        .fallbacks
+        .iter()
+        .map(|(query, count)| json!({ "query": query, "count": count }))
+        .collect();
+    Ok(vec![json_content(&json!({
+        "has_data": true,
+        "window": report.window,
+        "total": report.total,
+        "document_hits": report.document_hits,
+        "source_hits": report.source_hits,
+        "none_hits": report.none_hits,
+        "document_rate": report.document_rate,
+        "fallbacks": fallbacks,
+    }))])
 }
 
 /// `dx_render` — the HTML page source.

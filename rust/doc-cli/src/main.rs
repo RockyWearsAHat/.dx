@@ -15,6 +15,7 @@
 
 mod args;
 mod commands;
+mod coverage;
 mod daemon;
 mod desktop;
 mod extension;

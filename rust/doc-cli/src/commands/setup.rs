@@ -598,6 +598,15 @@ READ
                                                 referencing files per symbol;
                                                 --brief ranks by fan-in, capped for
                                                 embedding in a document
+  dx coverage [dir] [--window N] [--min-rate R] the last N searches (default 200):
+                                                the share that landed on a document,
+                                                and the queries that fell back to
+                                                source or found nothing, most-repeated
+                                                first — what to write into a document
+                                                next. --min-rate fails the command
+                                                when the rate falls short, a normal
+                                                gate; a workspace with no data yet
+                                                never fails one
 
 WRITE
   dx new      <file> [--title T]                create a document

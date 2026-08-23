@@ -19,6 +19,7 @@ use serde_json::{json, Value};
 pub const TOOL_NAMES: &[&str] = &[
     "dx_list",
     "dx_search",
+    "dx_coverage",
     "dx_outline",
     "dx_source",
     "dx_read",
@@ -40,6 +41,7 @@ pub fn catalogue() -> Value {
     json!([
         list_tool(),
         search_tool(),
+        coverage_tool(),
         outline_tool(),
         source_tool(),
         read_tool(),
@@ -286,6 +288,36 @@ fn search_tool() -> Value {
                 "limit": { "type": "number", "description": "Maximum hits. Default: 20." }
             },
             "required": ["query"]
+        }
+    })
+}
+
+/// `dx_coverage` — how often search lands on a document instead of falling back.
+fn coverage_tool() -> Value {
+    json!({
+        "name": "dx_coverage",
+        "description": "How well this project's documents already answer the questions asked \
+                        of it. Reports the share of the last `window` dx_search/dx search \
+                        calls whose top hit landed on a document rather than falling back to \
+                        source or finding nothing, plus the fallback queries themselves, \
+                        most-repeated first — that list is the point as much as the rate is: \
+                        it names exactly what to write into a document next, per the \
+                        write-it-in-at-once loop. Returns `has_data: false` for a workspace \
+                        that has not been searched yet, rather than a misleading rate of zero.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "directory": {
+                    "type": "string",
+                    "description": "Directory to report on. Default: the workspace root."
+                },
+                "window": {
+                    "type": "number",
+                    "description": "How many of the most recent searches to summarize. \
+                                    Default: 200."
+                }
+            },
+            "required": []
         }
     })
 }
