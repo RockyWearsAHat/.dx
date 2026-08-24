@@ -269,7 +269,7 @@ impl<'a> Sides<'a> {
 }
 
 /// The committed pack as it stood at `revision`, or `None` when git has no such thing.
-fn pack_blob(root: &Path, revision: &str) -> Option<Vec<u8>> {
+pub(crate) fn pack_blob(root: &Path, revision: &str) -> Option<Vec<u8>> {
     let output = Command::new("git")
         .arg("-C")
         .arg(root)

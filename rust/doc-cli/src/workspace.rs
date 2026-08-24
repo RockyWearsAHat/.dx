@@ -526,11 +526,106 @@ pub fn document_dir(path: &Path) -> PathBuf {
         .map_or_else(|| PathBuf::from("."), Path::to_path_buf)
 }
 
+/// How far back through the committed pack's history a repair looks for a lost document.
+///
+/// Every revision costs one `git cat-file` and one pack decode, and the walk stops the moment
+/// every wanted digest is accounted for — so the bound only bites when the content genuinely
+/// is not there. A pointer older than this many pack commits is one `git log` away by hand,
+/// and the message a failed sync prints says so.
+const HISTORY_DEPTH: usize = 200;
+
 /// Reconcile the workspace at `root`: adopt plain-text documents, restore stubs from packs,
 /// and collect unreferenced chunks.
+///
+/// A pointer that nothing on this machine can resolve is looked for in the committed pack as
+/// *git* still has it, before the reconcile runs — see [`recover_from_history`]. Recovered
+/// documents are written back as plain text, so the reconcile adopts them by its ordinary
+/// path and reports them as adopted.
 pub fn sync(root: &Path) -> Result<SyncReport, String> {
     let _ = crate::commands::store::ensure_git_ready(root);
+    recover_from_history(root);
     open_store(root)?.sync().map_err(|error| error.to_string())
+}
+
+/// Restore pointers nothing holds any more from an older revision of the committed pack.
+///
+/// The stub and the pack are two files, and git will happily move one without the other: a
+/// `git checkout -- .doc/repo.dxcp` to unblock a merge, a reset that took the store back and
+/// left an edited pointer where it was. What is left is a pointer naming a version no pack on
+/// this machine carries — a state git calls clean and only dx can see is not.
+///
+/// It is nearly always recoverable, because the pack is committed and git keeps every version
+/// of it. This walks the pack's own history newest-first, decodes each revision, and writes
+/// back any document whose digest a stranded pointer names. Recovery is by digest, so it does
+/// not matter which commit, which branch, or what the document was called then.
+///
+/// Best effort throughout: a repository with no git, no history, or no answer leaves the
+/// pointer exactly as it was, and the reconcile reports it UNRESOLVED as before. Nothing here
+/// can make a workspace worse — a document is only ever written where a pointer already asked
+/// for precisely that content.
+fn recover_from_history(root: &Path) {
+    let Ok(listing) = load_all(root) else {
+        return;
+    };
+    // What each stranded pointer asks for, paired with the file that asks.
+    let mut wanted: Vec<(String, PathBuf)> = Vec::new();
+    for (relative, _) in &listing.unresolved {
+        let path = root.join(relative);
+        let Ok(text) = fs::read_to_string(&path) else {
+            continue;
+        };
+        if let Some(digest) = stub::digest_in(&text) {
+            wanted.push((digest, path));
+        }
+    }
+    if wanted.is_empty() {
+        return;
+    }
+
+    for revision in pack_revisions(root) {
+        let Some(bytes) = crate::commands::merge::pack_blob(root, &revision) else {
+            continue;
+        };
+        let Ok(documents) = pack::decode(&bytes, &revision) else {
+            continue;
+        };
+        for (_, source) in documents {
+            let found = stub::digest_of(&source);
+            wanted.retain(|(digest, path)| {
+                // The pointer already names this exact content, so writing it is restoring
+                // the file to what it always claimed to be.
+                *digest != found || fs::write(path, &source).is_err()
+            });
+        }
+        if wanted.is_empty() {
+            return;
+        }
+    }
+}
+
+/// The commits that touched the committed pack, newest first, capped at [`HISTORY_DEPTH`].
+fn pack_revisions(root: &Path) -> Vec<String> {
+    let Ok(output) = std::process::Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args([
+            "log",
+            "--format=%H",
+            &format!("--max-count={HISTORY_DEPTH}"),
+            "--",
+            pack::REPO_PACK,
+        ])
+        .output()
+    else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::to_string)
+        .collect()
 }
 
 /// What [`remove`] deleted, for the caller's report.
@@ -1860,6 +1955,59 @@ mod tests {
                 .expect("edited.dx resolves")
                 .contains("rewritten in the worktree"),
             "the edit must be what the pointer names"
+        );
+    }
+
+    /// What this pins: the stub and the pack are two files and git will move one without the
+    /// other — a `git checkout -- .doc/repo.dxcp` to unblock a merge leaves a pointer naming
+    /// content no pack on this machine has. Git calls that state clean; only dx can see it is
+    /// not. It is recoverable, because the pack is committed and git keeps every version.
+    #[test]
+    fn sync_recovers_a_pointer_whose_content_only_git_still_has() {
+        let root = scratch("stranded-pointer");
+        let git = |args: &[&str]| {
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(&root)
+                .args(args)
+                .output()
+                .is_ok_and(|out| out.status.success())
+        };
+        if !git(&["init", "-q", "-b", "main"]) {
+            return; // No git on this machine; nothing to assert.
+        }
+        git(&["config", "user.email", "t@example.com"]);
+        git(&["config", "user.name", "t"]);
+
+        save(&root.join("notes.dx"), &parse(NOTES)).expect("first version");
+        git(&["add", "-A"]);
+        git(&["commit", "-qm", "one"]);
+
+        let edited = NOTES.replace("kubernetes scheduling notes", "The only copy of this.");
+        save(&root.join("notes.dx"), &parse(&edited)).expect("second version");
+        git(&["add", "-A"]);
+        git(&["commit", "-qm", "two"]);
+        let stub_line = fs::read_to_string(root.join("notes.dx")).expect("pointer");
+
+        // The store goes back a commit and the pointer does not — the reported failure.
+        assert!(git(&["checkout", "HEAD~1", "--", ".doc/repo.dxcp"]));
+        fs::write(root.join("notes.dx"), &stub_line).expect("pointer stays where it was");
+        fs::remove_file(root.join(".doc/index.db")).expect("index goes with the packs");
+        for leftover in [".doc/index.db-wal", ".doc/index.db-shm"] {
+            let _ = fs::remove_file(root.join(leftover));
+        }
+        assert!(
+            read(&root.join("notes.dx")).is_err(),
+            "nothing on this machine holds what the pointer names"
+        );
+
+        sync(&root).expect("sync");
+
+        assert!(
+            read(&root.join("notes.dx"))
+                .expect("recovered from the pack git still has")
+                .contains("The only copy of this."),
+            "the version the pointer named is the version that comes back"
         );
     }
 }
