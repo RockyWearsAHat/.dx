@@ -183,6 +183,8 @@ impl Sources {
     fn source(&self, path: &Path) -> Result<String, String> {
         let on_disk = fs::read_to_string(path).ok();
         let is_pointer = on_disk.as_deref().is_some_and(stub::is_stub);
+        // What the file actually names, read before the text is given away below.
+        let named = on_disk.as_deref().and_then(stub::digest_in);
 
         if let Some(text) = on_disk {
             if !is_pointer {
@@ -191,9 +193,22 @@ impl Sources {
         }
 
         let relative = relative_of(&self.root, path);
+        // Every source is held to the digest the file names. The store is keyed by path, so
+        // it answers for this document even when it holds a *different* version of it — and a
+        // git operation moves a pointer without telling the index: a merge writes the merged
+        // pack and the merged stub and deliberately writes no store, so between the merge and
+        // the next `dx sync` the index still holds whatever version this branch happened to
+        // have. Handing that back would be the resolver answering with a document the file
+        // does not name, which is the one thing it must never do. So the packs — which the
+        // merge did rewrite — get their turn, and a disagreement is a sentence, never a
+        // plausible wrong answer.
+        let names_it = |source: &str| named.as_ref().is_none_or(|d| stub::digest_of(source) == *d);
+
         if let Some(store) = &self.store {
             match store.source(&relative) {
-                Ok(source) => return Ok(source),
+                Ok(source) if names_it(&source) => return Ok(source),
+                // A version of this document, but not this one: the packs may have it.
+                Ok(_) => {}
                 // Not in the index yet: fall through to the packs.
                 Err(StoreError::NotFound(_)) => {}
                 Err(error) => return Err(error.to_string()),
@@ -201,7 +216,14 @@ impl Sources {
         }
 
         match self.packed()?.get(&relative) {
-            Some(source) => Ok(source.clone()),
+            Some(source) if names_it(source) => Ok(source.clone()),
+            Some(_) => Err(format!(
+                "{} names version {}, and neither this workspace's store nor its packs holds \
+                 that version — they hold a different one. Run `dx sync` to reconcile them, or \
+                 restore .doc/repo.dxcp",
+                path.display(),
+                named.unwrap_or_default()
+            )),
             None if is_pointer => Err(format!(
                 "{} is a dx pointer, but its content is not in this workspace's store or packs; \
                  run `dx sync` to rebuild from .doc/, or restore .doc/repo.dxcp",
@@ -381,16 +403,46 @@ pub fn load(path: &Path) -> Result<Loaded, String> {
     })
 }
 
+/// Fill an index a workspace has not built yet from the packs committed beside it.
+///
+/// A fresh clone and a new `git worktree` arrive the same way: `.doc/repo.dxcp` is there
+/// because it is committed, and `.doc/index.db` is not because it never is. The first write
+/// into such a workspace was the moment the loss happened. The store came into being empty,
+/// took the one document being saved, and exported the packs from what it held — which was
+/// that document alone. Every other document's pointer then named content the pack no longer
+/// carried, and the older versions the pack keeps so `git diff` can show a pointer's history
+/// went with them. The export guard ([`StoreError::WouldLose`]) caught the case where another
+/// `.dx` file was standing in the tree and refused the write, which is right, and is still a
+/// stop sign in front of somebody doing ordinary work in a worktree they just made.
+///
+/// So the write path restores first. This is [`Store::sync`]'s own fresh-clone rule, run at
+/// the moment it is needed instead of waiting for a person to know to run it. It fires only
+/// when there is no index at all — a workspace that has one is already the authority — and it
+/// is on the write path only, so resolving a pointer still brings no database into being.
+fn ensure_store_ready(root: &Path) -> Result<(), String> {
+    if root.join(".doc").join("index.db").exists() {
+        return Ok(());
+    }
+    let (repo, local) = pack::paths(root);
+    if !repo.exists() && !local.exists() {
+        return Ok(());
+    }
+    let mut store = open_store(root)?;
+    store.sync().map(|_| ()).map_err(|error| error.to_string())
+}
+
 /// Store `document` at `path`: chunks into the store, pointer onto disk, packs re-exported.
 ///
 /// Writing a document is also the moment the repository is taught to handle one, so this is
 /// where [`ensure_git_ready`](crate::commands::store::ensure_git_ready) runs: a checkout
 /// nobody prepared by hand still diffs and merges its documents. It writes configuration and
 /// two text files, never git's index, and is a no-op every time after the first.
+/// [`ensure_store_ready`] runs beside it for the same reason, and states why.
 pub fn save(path: &Path, document: &Document) -> Result<(), String> {
     let root = workspace_root(path);
     let relative = relative_of(&root, path);
     let _ = crate::commands::store::ensure_git_ready(&root);
+    ensure_store_ready(&root)?;
     let mut store = open_store(&root)?;
     store
         .save(&relative, document)
@@ -1772,5 +1824,42 @@ mod tests {
         let path = root.join("out/page.html");
         write_text(&path, "<p>hi</p>").expect("write");
         assert_eq!(fs::read_to_string(&path).expect("read"), "<p>hi</p>");
+    }
+
+    #[test]
+    fn the_first_write_in_a_fresh_worktree_restores_the_index_instead_of_emptying_the_pack() {
+        // What a `git worktree add` hands you: the committed pack, the pointers, and no
+        // index. The write used to build an empty store and export it over the pack, which
+        // is how a second document became a pointer naming content nothing held.
+        let root = scratch("fresh-worktree");
+        save(&root.join("kept.dx"), &parse(NOTES)).expect("first document");
+        save(&root.join("edited.dx"), &parse(NOTES)).expect("second document");
+        let (pack_path, _) = pack::paths(&root);
+        let committed = fs::read(&pack_path).expect("the pack is committed");
+
+        fs::remove_file(root.join(".doc/index.db")).expect("worktrees carry no index");
+        for leftover in [".doc/index.db-wal", ".doc/index.db-shm"] {
+            let _ = fs::remove_file(root.join(leftover));
+        }
+        fs::write(&pack_path, &committed).expect("restore the committed pack");
+
+        save(
+            &root.join("edited.dx"),
+            &parse(&NOTES.replace("kubernetes scheduling notes", "rewritten in the worktree")),
+        )
+        .expect("the write lands rather than refusing");
+
+        assert!(
+            read(&root.join("kept.dx"))
+                .expect("kept.dx still resolves")
+                .contains("kubernetes"),
+            "the document nobody touched must survive the first write"
+        );
+        assert!(
+            read(&root.join("edited.dx"))
+                .expect("edited.dx resolves")
+                .contains("rewritten in the worktree"),
+            "the edit must be what the pointer names"
+        );
     }
 }

@@ -844,10 +844,30 @@ impl Store {
                     let known = self.document_id(&relative)?.is_some();
                     if known {
                         let source = self.source(&relative)?;
-                        if stub::digest_of(&source) != digest
-                            && self.write_stub(&relative, &source)?
+                        if stub::digest_of(&source) == digest {
+                            continue;
+                        }
+                        // The file names a version the index does not hold. If the packs
+                        // hold it, the *file* is right and the index is behind — that is
+                        // exactly what a merge leaves, because the merge driver writes the
+                        // merged pack and the merged pointer and deliberately writes no
+                        // store. Taking the index's side here would rewrite the pointer and
+                        // throw the merge away. Only when nothing holds the named version is
+                        // the index the last copy of the document, and the stub is rewritten
+                        // from it rather than left naming content that does not exist.
+                        match available
+                            .get(&relative)
+                            .filter(|packed| stub::digest_of(packed) == digest)
                         {
-                            report.stubs_written.push(relative);
+                            Some(packed) => {
+                                self.ingest(&relative, packed)?;
+                                report.restored.push(relative);
+                            }
+                            None => {
+                                if self.write_stub(&relative, &source)? {
+                                    report.stubs_written.push(relative);
+                                }
+                            }
                         }
                         continue;
                     }
@@ -1540,6 +1560,40 @@ mod tests {
             assert!(store.source(name).is_ok(), "{name} must resolve again");
         }
         assert!(store.sync().expect("settle").is_clean());
+    }
+
+    #[test]
+    fn sync_after_a_merge_keeps_the_merged_document_instead_of_rewinding_the_pointer() {
+        // What a merge leaves: git has written the merged pointer and the merge driver has
+        // written the merged pack, and neither wrote the store — the driver is a read. The
+        // index therefore still holds this branch's version. Sync used to treat the index as
+        // the authority and rewrite the pointer from it, which threw the merge away.
+        let root = scratch("merged-pointer");
+        let mut store = Store::open(&root).expect("open");
+        store.ingest("notes.dx", NOTES).expect("ours");
+
+        // The pack the merge driver would have written, built the way any pack is.
+        let merged = NOTES.replace(
+            "A line of prose about kubernetes.",
+            "What the merge produced.",
+        );
+        let elsewhere = scratch("merged-pointer-incoming");
+        let mut theirs = Store::open(&elsewhere).expect("open");
+        theirs.ingest("notes.dx", &merged).expect("their version");
+        drop(theirs);
+
+        let (repo_path, _) = pack::paths(&root);
+        let (their_pack, _) = pack::paths(&elsewhere);
+        fs::copy(&their_pack, &repo_path).expect("the merge driver's pack");
+        fs::write(root.join("notes.dx"), stub::render(&merged)).expect("git's merged pointer");
+
+        let report = store.sync().expect("sync");
+        assert_eq!(report.restored, vec!["notes.dx".to_string()], "{report:?}");
+        assert!(
+            report.stubs_written.is_empty(),
+            "the pointer git wrote must stand: {report:?}"
+        );
+        assert_eq!(store.source("notes.dx").expect("resolves"), merged);
     }
 
     #[test]
