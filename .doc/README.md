@@ -16,7 +16,8 @@ The content is here, stored once per distinct block.
 | `local.dxcp` | Documents git ignores or has never tracked — scratch work that should not reach a teammate. | No |
 | `index.db` | SQLite: the local queryable authority. Chunks, manifests, sections, and a token index for search. Rebuildable from `repo.dxcp`. | No |
 
-`dx git-setup` writes the `.gitignore` lines that get this right.
+Every dx write writes the `.gitignore` lines that get this right, so a fresh clone or a new
+worktree needs no ceremony. `dx git-setup` repeats it by hand if a checkout has lost them.
 
 ## How a document is stored
 

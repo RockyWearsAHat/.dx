@@ -502,7 +502,7 @@ async function showRendered(uri?: vscode.Uri): Promise<void> {
  * Compare the document with the version git's `HEAD` holds — both as documents.
  *
  * This is the one thing the editor's own "Open Changes" cannot do: git applies the `dx`
- * diff driver `dx git-setup` installed, VS Code's git integration does not, so its comparison
+ * diff driver every dx write installs, VS Code's git integration does not, so its comparison
  * is two pointer lines whose digests differ — true, and of no use to anyone. Here each side is
  * resolved first, and what the reader sees is the prose that changed.
  */
