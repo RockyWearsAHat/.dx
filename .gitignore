@@ -48,3 +48,7 @@ editor/github/test/fixture/
 
 # wasm-pack type declarations: nothing consumes them (the extension is plain JS)
 editor/github/wasm/*.d.ts
+
+# Build and agent tooling session state: autonomy handoff, project profiles, state databases
+.cache/
+.engine/
