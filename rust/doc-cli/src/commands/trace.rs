@@ -218,6 +218,39 @@ mod tests {
         assert_eq!(brief, "no referenced symbols found\n");
     }
 
+    /// worklist item 11: Objective-C++ (`.mm`), Metal (`.metal`), and assembly (`.S`)
+    /// files were once dropped entirely by [`CODE_EXTENSIONS`], so a project mixing them
+    /// with Rust/C got no references from its GPU/native half at all — not even the
+    /// reference-only coverage a non-covered-but-listed language already gets (mirrors
+    /// `doc_core::trace`'s `a_non_covered_language_still_contributes_references_but_no_definitions`).
+    #[test]
+    fn objective_c_metal_and_assembly_files_are_read_and_contribute_references() {
+        let root = std::env::temp_dir().join("dx-trace-tests-native-mix");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("dir");
+        std::fs::write(root.join("lib.rs"), "pub fn distinctive_gpu_symbol() {}\n").expect("lib");
+        std::fs::write(
+            root.join("glue.mm"),
+            "void bridge() { distinctive_gpu_symbol(); }\n",
+        )
+        .expect("mm");
+        std::fs::write(
+            root.join("shader.metal"),
+            "void kernel_entry() { distinctive_gpu_symbol(); }\n",
+        )
+        .expect("metal");
+        std::fs::write(root.join("routine.S"), "call distinctive_gpu_symbol\n").expect("asm");
+
+        let out = run(&args(&[&root.to_string_lossy()])).expect("trace");
+        assert!(out.contains("referenced by"), "{out}");
+        for file in ["glue.mm", "shader.metal", "routine.S"] {
+            assert!(
+                out.contains(file),
+                "{file} should be traced for references: {out}"
+            );
+        }
+    }
+
     #[test]
     fn a_missing_directory_is_a_clear_error() {
         let error = run(&args(&["/dx/nowhere"])).expect_err("should fail");

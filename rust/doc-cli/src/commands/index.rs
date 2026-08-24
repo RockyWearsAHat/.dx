@@ -55,9 +55,20 @@ const SURVEY_READ_CAP: u64 = 512 * 1024;
 
 /// Extensions the survey counts lines for and searches for references — also the set
 /// `dx trace` reads (`commands::trace`), so the two stay looking at the same tree.
+///
+/// Objective-C/Objective-C++ (`m`, `mm`), Metal shaders (`metal`), and assembly (`s`,
+/// `S`, `asm`) were once missing here: a project mixing them with C/Objective-C/Python
+/// verified this gap first-hand (`docs/validation.dx#first-contact-scaffold-trace`) — the
+/// traced index silently skipped every `.mm` and `.metal` file, so the GPU/native half of
+/// the project contributed no symbols at all, only whatever `.c`/`.h`/`.py` sat beside it.
+/// `workspace::SEARCHABLE_SOURCE` made the same call for `dx_search`'s source corpus
+/// already; this list mirrors it for the languages that are genuinely code (not
+/// `workspace::SEARCHABLE_SOURCE`'s wider markup/data/config allowance, which a survey of
+/// *code* has no reason to match).
 pub(crate) const CODE_EXTENSIONS: &[&str] = &[
     "rs", "js", "mjs", "cjs", "ts", "tsx", "jsx", "py", "go", "rb", "java", "kt", "swift", "c",
-    "h", "cpp", "hpp", "cc", "cs", "php", "sh", "bash", "lua", "sql",
+    "h", "cpp", "hpp", "cc", "cs", "php", "sh", "bash", "lua", "sql", "m", "mm", "metal", "s", "S",
+    "asm",
 ];
 
 /// File names that are an area's front door regardless of what references them. Kept in
