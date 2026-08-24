@@ -49,7 +49,9 @@ use crate::StoreError;
 /// as 2, but `tokens` now holds stemmed words and identifier parts
 /// ([`doc_core::search`]), and a row written by the older tokeniser would narrow a search to
 /// the wrong documents. Derived data that no longer matches how it is queried is stale data.
-pub const VERSION: i64 = 3;
+/// Version 4 adds `source_files` and `source_tokens` tables to index source code without
+/// writing to the schema on every read.
+pub const VERSION: i64 = 4;
 
 /// Drop every table this schema owns, in dependency order.
 ///
@@ -124,7 +126,7 @@ CREATE TABLE IF NOT EXISTS tokens (
 CREATE TABLE IF NOT EXISTS source_files (
     path         TEXT PRIMARY KEY,
     size         INTEGER NOT NULL,
-    mtime        INTEGER NOT NULL
+    mtime        TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS source_tokens (
@@ -329,5 +331,85 @@ mod tests {
             [],
         );
         assert!(dangling.is_err(), "a document kept a dangling manifest");
+    }
+
+    #[test]
+    fn source_tokens_cascade_deletes_when_source_file_is_removed() {
+        let connection = Connection::open_in_memory().expect("memory db");
+        apply(&connection).expect("migrate");
+
+        connection
+            .execute(
+                "INSERT INTO source_files (path, size, mtime) VALUES ('src/main.rs', 1024, '2025-01-01T00:00:00Z')",
+                [],
+            )
+            .expect("insert source file");
+
+        connection
+            .execute(
+                "INSERT INTO source_tokens (path, token) VALUES ('src/main.rs', 'fn')",
+                [],
+            )
+            .expect("insert token");
+
+        // Verify the token was inserted
+        let count: i64 = connection
+            .query_row(
+                "SELECT count(*) FROM source_tokens WHERE path = 'src/main.rs'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count");
+        assert_eq!(count, 1);
+
+        // Delete the source file and verify the token is cascade-deleted
+        connection
+            .execute("DELETE FROM source_files WHERE path = 'src/main.rs'", [])
+            .expect("delete source file");
+
+        let orphaned: i64 = connection
+            .query_row(
+                "SELECT count(*) FROM source_tokens WHERE path = 'src/main.rs'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count");
+        assert_eq!(orphaned, 0, "cascade delete did not remove tokens");
+    }
+
+    #[test]
+    fn source_tokens_rejects_orphan_paths() {
+        let connection = Connection::open_in_memory().expect("memory db");
+        apply(&connection).expect("migrate");
+
+        let orphan = connection.execute(
+            "INSERT INTO source_tokens (path, token) VALUES ('nonexistent.rs', 'fn')",
+            [],
+        );
+        assert!(orphan.is_err(), "foreign key constraint was not enforced");
+    }
+
+    #[test]
+    fn mtime_is_iso_8601_text() {
+        let connection = Connection::open_in_memory().expect("memory db");
+        apply(&connection).expect("migrate");
+
+        // Insert with ISO-8601 format and verify it is stored as-is
+        let mtime = "2025-01-15T14:30:00Z";
+        connection
+            .execute(
+                "INSERT INTO source_files (path, size, mtime) VALUES ('test.rs', 100, ?1)",
+                [mtime],
+            )
+            .expect("insert");
+
+        let stored: String = connection
+            .query_row(
+                "SELECT mtime FROM source_files WHERE path = 'test.rs'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("query");
+        assert_eq!(stored, mtime, "mtime was not stored as ISO-8601");
     }
 }
