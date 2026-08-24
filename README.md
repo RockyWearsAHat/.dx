@@ -33,9 +33,10 @@ and writes its output into the document, fingerprinted so re-running executes on
 changed. Reading, rendering, and screenshotting never execute anything.
 
 On disk, a document you have adopted into a workspace is a one-line pointer; the content lives
-in `.doc/repo.dxcp` as content-addressed, deduplicated chunks — committed to git,
-diffed as prose after `dx git-setup`, and always resolved back to the true document by every
-reader: the CLI, the editor, an agent, and git itself.
+in `.doc/repo.dxcp` as content-addressed, deduplicated chunks — committed to git, diffed and
+merged as prose, and always resolved back to the true document by every reader: the CLI, the
+editor, an agent, and git itself. Every dx write teaches the repository it is writing in, so a
+fresh clone or a new worktree needs no ceremony.
 
 ## Install
 
@@ -61,8 +62,8 @@ dx doctor    # what is installed, what is missing, and what is out of date
 ```bash
 mkdir /tmp/pad && cd /tmp/pad && git init -q .
 dx new notes.dx --title "First notes"
-dx sync .            # make this directory a workspace
-dx git-setup .       # make git diff, git show, and git log -p render documents
+dx sync .            # make this directory a workspace; git diff, git show, and git log -p
+                     # now render documents, and two branches merge block by block
 cat notes.dx         # a pointer — the content is in .doc/
 dx text notes.dx     # the document
 dx open notes.dx     # the rendered page, in your browser

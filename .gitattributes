@@ -1,1 +1,2 @@
-*.dx diff=dx
+*.dx diff=dx merge=dx
+.doc/repo.dxcp diff=dx merge=dx
