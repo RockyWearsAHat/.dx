@@ -96,6 +96,12 @@ pub fn run_sync(args: &Args) -> Result<String, String> {
             out.push_str(&format!("  {path}\n"));
         }
     }
+    if !report.moved.is_empty() {
+        out.push_str(&format!("\nfollowed a move ({})\n", report.moved.len()));
+        for (from, to) in &report.moved {
+            out.push_str(&format!("  {from} → {to}\n"));
+        }
+    }
     if report.chunks_collected > 0 {
         out.push_str(&format!(
             "\ncollected {} unreferenced chunk(s)\n",
