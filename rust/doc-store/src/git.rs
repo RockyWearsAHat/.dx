@@ -71,6 +71,42 @@ pub fn tracks(root: &Path, relative: &str) -> bool {
         && !succeeds(root, &["check-ignore", "-q", "--", relative])
 }
 
+/// The repository's other working trees, if `root` is a repository that has any.
+///
+/// `root` itself is never in the list, so a non-empty answer means exactly one thing: this
+/// path is not the only checkout of this repository, and a relative path names a document in
+/// *this* one. A long-lived process rooted at a directory — the MCP server — cannot see which
+/// checkout its caller is working in, so the honest thing is to say the choice exists rather
+/// than resolve it silently against whichever tree the process happened to start in.
+///
+/// An empty vector for anything that is not a repository, and for a repository with no linked
+/// worktrees. Complexity: one short-lived `git` invocation.
+#[must_use]
+pub fn linked_worktrees(root: &Path) -> Vec<std::path::PathBuf> {
+    let Ok(output) = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["worktree", "list", "--porcelain"])
+        .output()
+    else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+    // The name git prints is the real path; `root` may reach the same directory through a
+    // symlink, so compare what both resolve to and fall back to the paths as given.
+    let here = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| line.strip_prefix("worktree "))
+        .map(std::path::PathBuf::from)
+        .filter(|path| {
+            path.canonicalize().unwrap_or_else(|_| path.clone()) != here && path.as_path() != root
+        })
+        .collect()
+}
+
 /// Whether `git args` run against `root` exits zero.
 fn succeeds(root: &Path, args: &[&str]) -> bool {
     Command::new("git")
@@ -186,6 +222,58 @@ mod tests {
         }
         assert!(tracks(root, ".doc/repo.dxcp"));
         assert!(!tracks(root, ".doc/local.dxcp"));
+    }
+
+    #[test]
+    fn a_directory_that_is_not_a_repository_has_no_linked_worktrees() {
+        assert!(linked_worktrees(&std::env::temp_dir()).is_empty());
+    }
+
+    #[test]
+    fn a_checkout_lists_its_other_working_trees_and_never_itself() {
+        // What this pins: a process rooted at one checkout must be able to find out that the
+        // repository has others. Answering with the root itself would make "are there other
+        // trees?" always true and the answer useless.
+        let root = std::env::temp_dir().join("dx-git-linked-worktrees");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("scratch");
+        let git = |args: &[&str]| {
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(&root)
+                .args(args)
+                .output()
+                .is_ok_and(|out| out.status.success())
+        };
+        if !git(&["init", "-q", "-b", "main"]) {
+            return; // No git on this machine; nothing to assert.
+        }
+        git(&["config", "user.email", "t@example.com"]);
+        git(&["config", "user.name", "t"]);
+        std::fs::write(root.join("a.dx"), "::paragraph id=p\nx\n::end\n").expect("write");
+        git(&["add", "-A"]);
+        git(&["commit", "-qm", "one"]);
+
+        assert!(linked_worktrees(&root).is_empty());
+
+        let side = root.join("trees").join("side");
+        assert!(git(&[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "side",
+            &side.to_string_lossy(),
+        ]));
+
+        let listed = linked_worktrees(&root);
+        assert_eq!(listed.len(), 1, "only the linked tree, never the root");
+        assert_eq!(
+            listed[0].canonicalize().expect("linked tree"),
+            side.canonicalize().expect("linked tree")
+        );
+        // And from inside the linked tree, the main checkout is the other one.
+        assert_eq!(linked_worktrees(&side).len(), 1);
     }
 
     #[test]

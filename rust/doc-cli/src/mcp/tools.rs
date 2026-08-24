@@ -62,7 +62,9 @@ pub fn catalogue() -> Value {
 fn path_property() -> Value {
     json!({
         "type": "string",
-        "description": "Path to the .dx file, absolute or relative to the workspace root."
+        "description": "Path to the .dx file, absolute or relative to the workspace root — \
+                        the directory this server was started in, which dx_list names, and \
+                        not your working directory. In a git worktree, pass an absolute path."
     })
 }
 

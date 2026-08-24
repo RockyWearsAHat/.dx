@@ -392,6 +392,20 @@ pub(crate) const INDEX_OFFER: &str = "This project has no dx documents yet. Say 
     what the person just said, and ask rather than invent past that. A no turns the method \
     off for this project and is not asked again.";
 
+/// What a listing says when the repository it just listed is not its only checkout.
+///
+/// This server's root is the directory it was started in and cannot change afterwards, so a
+/// caller who moved into a linked worktree mid-session — a second agent on a branch, a task
+/// running in `.claude/worktrees/…` — keeps writing into the checkout the server started in
+/// while believing it is writing into the branch. Nothing in a write's result gives that away:
+/// it names an absolute path, which is right, and looks exactly like the path that was wanted.
+/// So the listing says it at orientation, which is the one moment it can still be acted on.
+const WORKTREE_NOTE: &str = "This repository has other checkouts. A relative path always names \
+    a document under `workspace` above — the directory this server was started in — because \
+    the server cannot see which tree you are working in. If you are working inside one of the \
+    trees below, pass an absolute path (or `directory`), or a branch's findings land in a \
+    checkout that never merges with it.";
+
 /// `dx_list` — every document in a directory, unresolvable ones named rather than hidden.
 fn list(args: &Value, root: &Path) -> ToolResult {
     let directory = directory_arg(args, root);
@@ -408,9 +422,22 @@ fn list(args: &Value, root: &Path) -> ToolResult {
         })
         .collect();
     let none_yet = documents.is_empty();
-    let mut answer = json!({ "documents": documents });
+    let mut answer = json!({
+        "workspace": directory.display().to_string(),
+        "documents": documents,
+    });
     if none_yet {
         answer["offer"] = json!(INDEX_OFFER);
+    }
+    let elsewhere = doc_store::git::linked_worktrees(&directory);
+    if !elsewhere.is_empty() {
+        answer["worktrees"] = json!({
+            "note": WORKTREE_NOTE,
+            "paths": elsewhere
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect::<Vec<_>>(),
+        });
     }
     if !listing.unresolved.is_empty() {
         answer["unresolved"] = listing
@@ -1822,6 +1849,60 @@ mod tests {
             .contains("Install it first."));
     }
 
+    /// What this pins: an agent that has moved into a linked worktree must be told, at
+    /// orientation, that a relative path will not reach it. The server's root is fixed at
+    /// launch and a write's result names an absolute path that looks exactly right, so this
+    /// listing is the only place the divergence can still be caught.
+    #[test]
+    fn a_listing_names_its_root_and_the_repository_s_other_checkouts() {
+        let root = project("worktree-note");
+        let listed = text_of(&call("dx_list", &json!({}), &root).expect("list"));
+        let parsed: Value = serde_json::from_str(&listed).expect("json");
+        assert_eq!(parsed["workspace"], root.display().to_string());
+        // Not a repository yet: nothing to warn about.
+        assert!(parsed["worktrees"].is_null(), "{listed}");
+
+        let git = |args: &[&str]| {
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(&root)
+                .args(args)
+                .output()
+                .is_ok_and(|out| out.status.success())
+        };
+        if !git(&["init", "-q", "-b", "main"]) {
+            return; // No git on this machine; nothing to assert.
+        }
+        git(&["config", "user.email", "t@example.com"]);
+        git(&["config", "user.name", "t"]);
+        git(&["add", "-A"]);
+        git(&["commit", "-qm", "one"]);
+        let side = root.join("trees").join("side");
+        assert!(git(&[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "side",
+            &side.to_string_lossy()
+        ]));
+
+        let listed = text_of(&call("dx_list", &json!({}), &root).expect("list"));
+        let parsed: Value = serde_json::from_str(&listed).expect("json");
+        assert!(parsed["worktrees"]["note"]
+            .as_str()
+            .expect("note")
+            .contains("other checkouts"));
+        assert_eq!(
+            parsed["worktrees"]["paths"]
+                .as_array()
+                .expect("paths")
+                .len(),
+            1,
+            "{listed}"
+        );
+    }
+
     /// A project with no documents is the one moment the offer matters, and a host that drops
     /// the handshake's `instructions` must still see it — so the listing carries it itself.
     #[test]
@@ -1843,7 +1924,8 @@ mod tests {
 
         // A project that already has documents is past the offer, and never sees it again.
         let seeded = text_of(&call("dx_list", &json!({}), &project("offer-past")).expect("list"));
-        assert!(!seeded.contains("offer"), "{seeded}");
+        let parsed: Value = serde_json::from_str(&seeded).expect("json");
+        assert!(parsed["offer"].is_null(), "{seeded}");
     }
 
     #[test]
