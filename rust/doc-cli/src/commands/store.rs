@@ -28,7 +28,12 @@ const ATTRIBUTES_LINE: &str = "*.dx diff=dx merge=dx";
 /// Both lines are needed and neither is enough. Without the pack line git calls the pack
 /// binary and keeps one side whole; without the `*.dx` line every pointer conflicts on a hex
 /// digest. They are written together, and [`crate::commands::merge`] is why they agree.
-const PACK_ATTRIBUTES_LINE: &str = ".doc/repo.dxcp merge=dx";
+///
+/// `diff=dx` on the pack is the other half of the same debt. The pack is the repository's
+/// content, and git called it binary — so a checkout that had run a gate could not be told
+/// whether its dirty pack held a real paragraph or only a re-timed run, and answering it meant
+/// `strings` and a hand diff. [`run_textconv`] turns the pack into its manifest instead.
+const PACK_ATTRIBUTES_LINE: &str = ".doc/repo.dxcp diff=dx merge=dx";
 
 /// The directory a command should operate on: the first positional, else the current one.
 fn target_directory(args: &Args) -> PathBuf {
@@ -197,12 +202,16 @@ pub fn run_stats(args: &Args) -> Result<String, String> {
     Ok(out)
 }
 
-/// `dx textconv <file>` — print the document a pointer stands for.
+/// `dx textconv <file>` — print the document a pointer stands for, or a pack's manifest.
 ///
 /// This is git's `textconv` hook, so it must behave like `cat` on a document: content to
 /// standard output, and never a diagnostic in place of content. A file that is already plain
 /// text passes straight through, which is what makes the driver safe to install before a
 /// workspace has been converted.
+///
+/// A `.dxcp` pack comes out as [`pack_manifest`] instead — one line per document. The pack is
+/// the repository's content and git had no way to show it, so a checkout that had merely run
+/// a gate could not learn whether its dirty pack held anything unique without `strings`.
 ///
 /// The file git passes is a **temporary copy of a blob**, not the document in the workspace, so
 /// resolution goes by the digest inside the pointer rather than by path.
@@ -217,13 +226,41 @@ pub fn run_textconv(args: &Args) -> Result<String, String> {
         .positional(0)
         .ok_or_else(|| "dx textconv needs a file".to_string())?;
     let path = Path::new(file);
-    let text = std::fs::read_to_string(path)
+    let bytes = std::fs::read(path)
         .map_err(|error| format!("could not read {}: {error}", path.display()))?;
+
+    // A pack before a pointer: the pack is the one file here git would otherwise call binary,
+    // and it is decided by content because the copy git hands over is a temp file whose name
+    // says nothing about what is in it.
+    if let Ok(entries) = pack::decode(&bytes, &path.display().to_string()) {
+        return Ok(pack_manifest(&entries));
+    }
+    let text = String::from_utf8(bytes)
+        .map_err(|_| format!("{} is neither a dx pack nor text", path.display()))?;
 
     let root = args
         .value("root")
         .map_or_else(crate::commands::merge::worktree_root, PathBuf::from);
     workspace::resolve_contents(&text, &root)
+}
+
+/// One line per document a pack carries: its path, its digest, and how many blocks it holds.
+///
+/// Deliberately not the documents themselves. Every one of them is already diffable through
+/// its own pointer, so printing the text here would show the same change twice and bury the
+/// question the pack alone can answer — *which* documents moved. When the answer is "none",
+/// the manifest is byte-identical on both sides and `git diff` prints no hunk at all, which
+/// is the whole point: a pack that differs only in how it was written now says so.
+fn pack_manifest(entries: &[(String, String)]) -> String {
+    let mut out = String::new();
+    for (relative, source) in entries {
+        let blocks = doc_core::format::parse(source).blocks.len();
+        out.push_str(&format!(
+            "{relative}  {}  {blocks} block(s)\n",
+            doc_store::stub::digest_of(source)
+        ));
+    }
+    out
 }
 
 /// `dx git-setup` — teach git to diff `.dx` pointers as documents.
@@ -568,6 +605,43 @@ mod tests {
         assert_eq!(
             run_textconv(&args(&[&path.to_string_lossy()])).expect("textconv"),
             NOTES
+        );
+    }
+
+    /// What this pins: the committed pack is the repository's content and git called it
+    /// binary, so a checkout that had run a gate could not be told whether its dirty pack
+    /// held a real paragraph or only a re-timed run. The manifest answers it, and answers
+    /// "nothing moved" by being byte-identical.
+    #[test]
+    fn textconv_shows_a_pack_as_the_documents_it_carries() {
+        let root = scratch("textconv-pack");
+        workspace::save(&root.join("notes.dx"), &parse(NOTES)).expect("save");
+        let (repo_pack, _) = pack::paths(&root);
+
+        let shown = run_textconv(&args(&[&repo_pack.to_string_lossy()])).expect("textconv");
+        assert!(shown.starts_with("notes.dx  "), "{shown}");
+        assert!(
+            shown.contains(&doc_store::stub::digest_of(NOTES)),
+            "{shown}"
+        );
+        assert!(shown.trim_end().ends_with("2 block(s)"), "{shown}");
+
+        // A document rewritten to the same text writes the pack again and the manifest does
+        // not move — which is how a caller learns the delta holds nothing unique.
+        workspace::save(&root.join("notes.dx"), &parse(NOTES)).expect("save again");
+        assert_eq!(
+            run_textconv(&args(&[&repo_pack.to_string_lossy()])).expect("textconv"),
+            shown
+        );
+
+        // A real edit does move it, and names the document that moved.
+        let changed = NOTES.replace("A line.", "A different line.");
+        workspace::save(&root.join("notes.dx"), &parse(&changed)).expect("save changed");
+        let after = run_textconv(&args(&[&repo_pack.to_string_lossy()])).expect("textconv");
+        assert_ne!(after, shown);
+        assert!(
+            after.contains(&doc_store::stub::digest_of(&changed)),
+            "{after}"
         );
     }
 
