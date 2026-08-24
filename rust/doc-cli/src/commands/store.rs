@@ -49,6 +49,8 @@ fn target_directory(args: &Args) -> PathBuf {
 pub fn run_sync(args: &Args) -> Result<String, String> {
     let root = workspace::workspace_root(&target_directory(args));
     let report = workspace::sync(&root)?;
+    // After the repair, not before: the pack this asks about is the one sync just left behind.
+    let pending = pending_pull(&root);
 
     let mut out = format!("dx sync — {}\n", root.display());
     // A workspace subscribed to a report project is reconciled with the intake too: `dx sync`
@@ -70,8 +72,11 @@ pub fn run_sync(args: &Args) -> Result<String, String> {
         out.push_str(&format!("\n  {}\n", said.replace('\n', "\n  ")));
     }
     if report.is_clean() {
-        if reports.is_none() {
+        if reports.is_none() && pending.is_none() {
             out.push_str("\n  nothing to do; every document already resolves\n");
+        }
+        if let Some(warning) = pending {
+            out.push_str(&warning);
         }
         return Ok(out);
     }
@@ -139,7 +144,161 @@ pub fn run_sync(args: &Args) -> Result<String, String> {
             );
         }
     }
+    if let Some(warning) = pending {
+        out.push_str(&warning);
+    }
     Ok(out)
+}
+
+/// How many changed documents are named before the list is cut short.
+const NAMED_DOCUMENTS: usize = 10;
+
+/// The pull this workspace is about to have refused, said before git says it.
+///
+/// # Why `dx sync` speaks about git at all
+/// `.doc/repo.dxcp` is a tracked file that changes on every document write, and git refuses
+/// to pull over *any* modified tracked file — **before a merge driver is ever consulted**, so
+/// nothing in dx can intercept it. That refusal is git's and correct; what makes it read as a
+/// tooling failure is that the file it names is the one file in the repository a person never
+/// edited by hand, and it is opaque. The operator is told a binary blocks their pull and left
+/// to guess whether it holds their afternoon's work or nothing at all.
+///
+/// # Why it is not noise
+/// This speaks only when a pull would actually abort: the branch has to be **behind its
+/// upstream** *and* the pack has to differ from `HEAD`. Both are local, offline questions —
+/// the remote-tracking ref is whatever the last fetch left, and nothing here touches the
+/// network. A workspace that is up to date, or has nothing uncommitted, hears nothing,
+/// because an uncommitted document is the ordinary state of working and warning about it
+/// would be warning about work.
+///
+/// `None` whenever the question cannot be asked: no git, no upstream, no `HEAD`. A workspace
+/// that is not in a repository is not about to be pulled into.
+fn pending_pull(root: &Path) -> Option<String> {
+    let behind = git_stdout(root, &["rev-list", "--count", "HEAD..@{upstream}"])?
+        .trim()
+        .parse::<usize>()
+        .ok()?;
+    if behind == 0 {
+        return None;
+    }
+    // `diff HEAD` covers staged and unstaged alike, because a pull refuses on either.
+    let code = std::process::Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["diff", "--quiet", "HEAD", "--", pack::REPO_PACK])
+        .status()
+        .ok()?
+        .code()?;
+    if code != 1 {
+        // 0 is a clean pack and nothing to say; anything else is git failing to answer, and a
+        // warning built on an answer git did not give would be a guess.
+        return None;
+    }
+
+    let commits = if behind == 1 {
+        "1 commit".to_string()
+    } else {
+        format!("{behind} commits")
+    };
+    let Some(changed) = changed_documents(root) else {
+        return Some(format!(
+            "\n{} is uncommitted and this branch is {commits} behind its upstream, so `git \
+             pull` will refuse before any dx driver runs.\n  `git diff {}` shows what the pack \
+             holds, as a manifest rather than as bytes.\n  Commit it, or `git stash` → `git \
+             pull` → `git stash pop`.\n",
+            pack::REPO_PACK,
+            pack::REPO_PACK
+        ));
+    };
+    if changed.is_empty() {
+        // The pack is built from the documents it carries, so this is the rare case: the
+        // bytes moved and the content did not — a re-encode, or a version of dx that packs
+        // differently. Nothing is lost by throwing it away, and saying so is the whole fix.
+        return Some(format!(
+            "\n{} differs from the last commit but holds no document that differs — its bytes \
+             changed, its content did not.\n  `git checkout -- {}` clears it and loses no \
+             document. Without that, the pull this branch is {commits} behind will refuse on \
+             it.\n",
+            pack::REPO_PACK,
+            pack::REPO_PACK
+        ));
+    }
+
+    let mut out = format!(
+        "\n{} holds {} uncommitted document(s) and this branch is {commits} behind its \
+         upstream,\nso `git pull` will refuse before any dx driver runs — git will not pull \
+         over a modified\ntracked file, whatever kind of file it is.\n\n",
+        pack::REPO_PACK,
+        changed.len()
+    );
+    for path in changed.iter().take(NAMED_DOCUMENTS) {
+        out.push_str(&format!("  {path}\n"));
+    }
+    if changed.len() > NAMED_DOCUMENTS {
+        out.push_str(&format!(
+            "  … and {} more\n",
+            changed.len() - NAMED_DOCUMENTS
+        ));
+    }
+    out.push_str(
+        "\nCommit them (`git add -A && git commit`), or set them aside and put them back:\n  \
+         `git stash` → `git pull` → `git stash pop`\nThe pop goes through the dx merge driver, \
+         so it reconciles block by block rather than\nrefusing on a binary.\n",
+    );
+    Some(out)
+}
+
+/// Which documents the working pack carries differently from the one `HEAD` committed.
+///
+/// The pack is built from exactly the documents it holds, so this is the honest answer to
+/// "what would I lose by discarding it" — and an empty list is a real answer, not a failure.
+/// `None` means the question could not be asked at all: no blob for `HEAD`, or a pack that
+/// will not decode.
+fn changed_documents(root: &Path) -> Option<Vec<String>> {
+    let head = crate::commands::merge::pack_blob(root, "HEAD")?;
+    let committed: std::collections::BTreeMap<String, String> =
+        pack::decode(&head, "HEAD:.doc/repo.dxcp")
+            .ok()?
+            .into_iter()
+            .collect();
+    let working: std::collections::BTreeMap<String, String> = pack::decode(
+        &std::fs::read(root.join(pack::REPO_PACK)).ok()?,
+        pack::REPO_PACK,
+    )
+    .ok()?
+    .into_iter()
+    .collect();
+
+    let mut changed: Vec<String> = working
+        .iter()
+        .filter(|(path, source)| committed.get(*path) != Some(source))
+        .map(|(path, _)| path.clone())
+        .collect();
+    // A document the working pack no longer carries is a deletion, and a pull refuses on it
+    // for the same reason.
+    changed.extend(
+        committed
+            .keys()
+            .filter(|path| !working.contains_key(*path))
+            .cloned(),
+    );
+    changed.sort();
+    changed.dedup();
+    Some(changed)
+}
+
+/// The standard output of one git command, or `None` when git could not answer.
+fn git_stdout(root: &Path, arguments: &[&str]) -> Option<String> {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(arguments)
+        .output()
+        .ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).to_string())
 }
 
 /// `dx rm <file>` — delete one document, deliberately.
@@ -736,6 +895,160 @@ mod tests {
         std::fs::write(root.join("notes.dx"), NOTES).expect("resolve by hand");
         let after = run_sync(&args(&[&root.to_string_lossy()])).expect("sync");
         assert!(after.contains("adopted from plain text"), "{after}");
+    }
+
+    /// A workspace with an upstream it is `behind` commits short of, or `None` when this
+    /// machine has no usable git. The upstream is a real second repository, because
+    /// `@{upstream}` is what the check reads and only a real remote gives it one.
+    fn behind_upstream(label: &str, behind: usize) -> Option<PathBuf> {
+        let origin = scratch(&format!("{label}-origin"));
+        let clone = std::env::temp_dir().join(format!("dx-store-cmd-tests-{label}"));
+        let _ = std::fs::remove_dir_all(&clone);
+        let git = |dir: &Path, arguments: &[&str]| {
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(dir)
+                .args(arguments)
+                .output()
+                .is_ok_and(|out| out.status.success())
+        };
+        if !git(&origin, &["init", "-q", "-b", "main"]) {
+            return None;
+        }
+        assert!(git(
+            &origin,
+            &["config", "user.email", "dx@example.invalid"]
+        ));
+        assert!(git(&origin, &["config", "user.name", "dx tests"]));
+        // A bare clone cannot be pushed into from its own worktree, so origin gets a
+        // detachable HEAD instead: the clone fetches, and origin keeps committing.
+        workspace::save(&origin.join("notes.dx"), &parse(NOTES)).expect("first document");
+        assert!(git(&origin, &["add", "-A"]));
+        assert!(git(&origin, &["commit", "-qm", "base"]));
+
+        assert!(std::process::Command::new("git")
+            .args(["clone", "-q"])
+            .arg(&origin)
+            .arg(&clone)
+            .output()
+            .is_ok_and(|out| out.status.success()));
+        let clone = std::fs::canonicalize(&clone).expect("canonical");
+        assert!(git(&clone, &["config", "user.email", "dx@example.invalid"]));
+        assert!(git(&clone, &["config", "user.name", "dx tests"]));
+
+        for step in 0..behind {
+            let moved = NOTES.replace("A line.", &format!("Upstream wrote {step}."));
+            workspace::save(&origin.join("notes.dx"), &parse(&moved)).expect("upstream edit");
+            assert!(git(&origin, &["add", "-A"]));
+            assert!(git(&origin, &["commit", "-qm", "upstream"]));
+        }
+        assert!(git(&clone, &["fetch", "-q", "origin"]));
+        Some(clone)
+    }
+
+    #[test]
+    fn sync_names_the_documents_a_pending_pull_will_refuse_on() {
+        // Git refuses to pull over a modified tracked file before any driver runs, and the
+        // file it names is the one nobody edits by hand. Left to git's own message, the
+        // operator cannot tell whether that binary holds an afternoon's work or nothing.
+        let Some(root) = behind_upstream("pending-pull", 2) else {
+            return; // No usable git on this machine.
+        };
+        workspace::save(
+            &root.join("mine.dx"),
+            &parse("::paragraph id=p\nlocal\n::end\n"),
+        )
+        .expect("an uncommitted document");
+
+        let report = run_sync(&args(&[&root.to_string_lossy()])).expect("sync");
+        assert!(report.contains("2 commits behind"), "{report}");
+        assert!(report.contains(pack::REPO_PACK), "{report}");
+        assert!(
+            report.contains("mine.dx"),
+            "the opaque pack must be named as the documents it holds: {report}"
+        );
+        assert!(report.contains("git stash pop"), "{report}");
+    }
+
+    #[test]
+    fn sync_says_nothing_about_a_pull_that_is_not_pending() {
+        // An uncommitted document is the ordinary state of working. Warning about it whenever
+        // the pack is dirty would be warning about work, so the branch has to be behind too.
+        let Some(root) = behind_upstream("pending-pull-none", 0) else {
+            return;
+        };
+        workspace::save(
+            &root.join("mine.dx"),
+            &parse("::paragraph id=p\nlocal\n::end\n"),
+        )
+        .expect("an uncommitted document");
+
+        let report = run_sync(&args(&[&root.to_string_lossy()])).expect("sync");
+        assert!(!report.contains("git stash pop"), "{report}");
+        assert!(!report.contains("behind its upstream"), "{report}");
+    }
+
+    #[test]
+    fn a_pack_whose_bytes_moved_without_its_documents_is_safe_to_throw_away() {
+        // The version-bump case: `HEAD` carries a pack some other dx encoded, this one exports
+        // it the way a committed pack is meant to be written, and git — which reads bytes —
+        // calls that a modified tracked file and refuses the pull. Nothing was authored, so
+        // the answer that loses nothing is to throw the working copy away, and no other
+        // advice would be true.
+        let Some(root) = behind_upstream("pending-pull-bytes", 1) else {
+            return;
+        };
+        let git = |arguments: &[&str]| {
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(&root)
+                .args(arguments)
+                .output()
+                .is_ok_and(|out| out.status.success())
+        };
+        // Settle the clone first, so what follows is the only thing left to differ.
+        run_sync(&args(&[&root.to_string_lossy()])).expect("settle");
+
+        let held = pack::decode(
+            &std::fs::read(root.join(pack::REPO_PACK)).expect("read the pack"),
+            "working",
+        )
+        .expect("decode");
+        let parsed: Vec<_> = held
+            .iter()
+            .map(|(path, source)| (path.clone(), parse(source)))
+            .collect();
+        let rebuilt = doc_core::chunk::Pack::build(
+            parsed
+                .iter()
+                .map(|(path, document)| (path.as_str(), document)),
+        );
+        let otherwise =
+            doc_core::chunk::encode_pack_for(&rebuilt, doc_core::chunk::PackStorage::Compressed);
+        assert_ne!(
+            otherwise,
+            std::fs::read(root.join(pack::REPO_PACK)).expect("read"),
+            "the two encodings must actually differ, or this proves nothing"
+        );
+        std::fs::write(root.join(pack::REPO_PACK), &otherwise).expect("the other encoding");
+        assert!(git(&["add", "-A"]));
+        assert!(git(&[
+            "commit",
+            "-qm",
+            "committed by a dx that packs differently"
+        ]));
+
+        // This sync exports the pack the way this dx writes one, which is now a change git
+        // can see and no document can account for.
+        let report = run_sync(&args(&[&root.to_string_lossy()])).expect("sync");
+        assert!(
+            report.contains("holds no document that differs"),
+            "{report}"
+        );
+        assert!(
+            report.contains(&format!("git checkout -- {}", pack::REPO_PACK)),
+            "the fix that loses nothing must be the one named: {report}"
+        );
     }
 
     #[test]
