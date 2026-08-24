@@ -57,6 +57,22 @@ drifted. It never discards content: a pointer it cannot resolve is reported, not
 If a pointer is reported unresolved, its content is in neither the index nor the packs. Restore
 `repo.dxcp` from version control.
 
+## If a pull refuses on `repo.dxcp`
+
+Git will not pull over a modified tracked file, and it decides that before any merge driver
+runs — so this is git's refusal and no dx driver can intercept it. The file it names is just
+the one file here nobody edits by hand, which is why it reads as a tooling failure rather than
+as *you have uncommitted documents*.
+
+`dx sync` says which documents that pack is holding, whenever the branch is actually behind
+its upstream. Commit them, or set them aside and put them back:
+
+```bash
+git stash && git pull && git stash pop
+```
+
+The pop goes back through the dx merge driver, so it reconciles block by block.
+
 ## Do not hand-edit anything in here
 
 These are generated artifacts. Write documents through `dx` or your editor; both go through the
