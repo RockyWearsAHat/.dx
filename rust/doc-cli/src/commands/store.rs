@@ -124,8 +124,10 @@ pub fn run_sync(args: &Args) -> Result<String, String> {
         out.push_str("\nUnresolved pointers have no content in .doc/:\n");
         if !report.unresolved.is_empty() {
             out.push_str(
-                "  Generic unresolved: restore .doc/repo.dxcp from version control, or delete \
-                 the pointers if the documents are gone.\n",
+                "  Generic unresolved: this sync already searched the committed pack's own git \
+                 history and no revision of it carried the version these pointers name. Fetch \
+                 the branch the content was committed on, restore .doc/repo.dxcp from a backup, \
+                 or delete the pointers if the documents are gone.\n",
             );
         }
         if !report.tracked_but_ignored.is_empty() {
