@@ -42,12 +42,15 @@ use doc_store::{merge as pack_merge, pack, stub};
 use crate::args::Args;
 use crate::workspace;
 
-/// The revisions a git operation leaves lying around, and where a merge's other side lives.
+/// The revisions a git operation leaves lying around, tried before the pack's own history.
 ///
 /// A merge sets `MERGE_HEAD`; a rebase sets `REBASE_HEAD`; `git cherry-pick` and `git revert`
 /// set their own. The driver does not need to know which operation is running, because it
 /// looks content up **by digest** — any pack that carries the content answers, so the whole
 /// list is tried and the first hit wins.
+///
+/// These are one `git cat-file` each, which is why they go first. They are **not** enough on
+/// their own; [`pack_history`] states the case that proves it.
 const SIDE_REVISIONS: [&str; 6] = [
     "HEAD",
     "MERGE_HEAD",
@@ -56,6 +59,14 @@ const SIDE_REVISIONS: [&str; 6] = [
     "REVERT_HEAD",
     "ORIG_HEAD",
 ];
+
+/// How far back the committed pack's history is followed looking for one version.
+///
+/// The content being looked for belongs to a commit that is part of the operation in flight, so
+/// it is near the front of this list in every real case. The bound is here because an
+/// unresolvable digest must cost a bounded search rather than one proportional to the age of
+/// the repository.
+const HISTORY_DEPTH: usize = 200;
 
 /// `dx merge-driver` — merge one path git could not.
 ///
@@ -153,12 +164,16 @@ fn merge_pointer(
     marker: usize,
 ) -> Result<String, String> {
     let mut sides = Sides::new(root);
-    let base = match ancestor {
-        Some(path) => Some(sides.source_at(named, "common ancestor", path)?),
-        None => None,
+    // An ancestor that will not resolve costs a three-way merge its base, which makes more
+    // blocks conflict and loses nothing. A *side* that will not resolve is the case with
+    // nothing to merge at all, and [`unresolved_side`] is what must happen then.
+    let base = ancestor.and_then(|path| sides.source_at(named, "common ancestor", path).ok());
+    let mine = sides.source_at(named, "side of this branch", ours);
+    let yours = sides.source_at(named, "incoming side", theirs);
+    let (mine, yours) = match (mine, yours) {
+        (Ok(mine), Ok(yours)) => (mine, yours),
+        (mine, yours) => return unresolved_side(named, ours, marker, &mine, &yours),
     };
-    let mine = sides.source_at(named, "side of this branch", ours)?;
-    let yours = sides.source_at(named, "incoming side", theirs)?;
 
     let merged = merge_documents(base.as_deref(), &mine, &yours, marker);
     if merged.is_clean() {
@@ -187,13 +202,63 @@ fn merge_pointer(
     ))
 }
 
+/// Write a file for the case where one side of the merge cannot be resolved to a document.
+///
+/// # Why this writes anything at all
+/// It used to write nothing: the driver returned the error and git, seeing a failed driver,
+/// marked the path unmerged and left the `--ours` file as it stood. That file is a **clean
+/// pointer to our side**, so every reader — `dx text`, an editor, a person opening it — was
+/// shown a finished document with the other branch's work absent and nothing to say it had
+/// ever existed. `git add -A && git commit`, which is how a person finishes a merge, then
+/// committed exactly that.
+///
+/// So the unresolvable case is written down as what it is: a conflict, in git's own markers,
+/// carrying whichever side did resolve and the sentence explaining the one that did not. It is
+/// plain text, which a `.dx` file is allowed to be, and every route in dx refuses to read or
+/// adopt it while the markers remain — [`workspace::half_merged`] and `Store::sync` both — so
+/// this cannot be committed as a document by accident.
+fn unresolved_side(
+    named: &str,
+    ours: &Path,
+    marker: usize,
+    mine: &Result<String, String>,
+    yours: &Result<String, String>,
+) -> Result<String, String> {
+    let run = |glyph: char| std::iter::repeat_n(glyph, marker).collect::<String>();
+    let body = |side: &Result<String, String>| match side {
+        Ok(source) => source.trim_end().to_string(),
+        Err(sentence) => sentence.clone(),
+    };
+    let text = format!(
+        "{} ours\n{}\n{}\n{}\n{} theirs\n",
+        run('<'),
+        body(mine),
+        run('='),
+        body(yours),
+        run('>')
+    );
+    std::fs::write(ours, &text)
+        .map_err(|error| format!("could not write the unresolved merge: {error}"))?;
+    let why = match (mine, yours) {
+        (Err(sentence), _) | (_, Err(sentence)) => sentence.clone(),
+        // Unreachable: this is only called when at least one side is an error.
+        (Ok(_), Ok(_)) => String::new(),
+    };
+    Err(format!(
+        "{why}\n{named} is now plain text holding the side that did resolve, between conflict \
+         markers, so it cannot be committed as a finished document. Recover the missing side \
+         and run `dx sync`.\n"
+    ))
+}
+
 /// Resolves each side of a pointer merge to the document text it stands for.
 ///
 /// Three sources are tried in cost order, and only as far as the answer needs:
 ///
 /// 1. The file is already document text (a side something other than dx wrote) — use it.
 /// 2. The workspace's own store and packs — every version this machine has held.
-/// 3. The pack blob at each revision a git operation leaves behind ([`SIDE_REVISIONS`]).
+/// 3. The pack blob at each revision git can still produce — [`SIDE_REVISIONS`] first, then
+///    the committed pack's own history ([`pack_history`]).
 ///
 /// The third is what makes an incoming branch resolvable at all: content that arrived over
 /// the network has never been in this machine's index, and lives only inside the committed
@@ -201,15 +266,23 @@ fn merge_pointer(
 /// not have to know whether a merge, a rebase, or a cherry-pick is running.
 struct Sides<'a> {
     root: &'a Path,
-    /// Documents found in git's pack blobs, keyed by digest; built once, on first need.
-    from_git: Option<Vec<(String, String)>>,
+    /// Documents decoded out of git's pack blobs so far, keyed by digest.
+    found: Vec<(String, String)>,
+    /// Revisions whose pack has not been decoded yet, in the order they are worth trying.
+    queue: std::collections::VecDeque<String>,
+    /// Whether [`SIDE_REVISIONS`] has been queued, and whether the history has followed it.
+    seeded: bool,
+    walked: bool,
 }
 
 impl<'a> Sides<'a> {
     fn new(root: &'a Path) -> Self {
         Self {
             root,
-            from_git: None,
+            found: Vec::new(),
+            queue: std::collections::VecDeque::new(),
+            seeded: false,
+            walked: false,
         }
     }
 
@@ -234,10 +307,8 @@ impl<'a> Sides<'a> {
         if let Ok(source) = workspace::resolve_contents(&text, self.root) {
             return Ok(source);
         }
-        for (found, source) in self.git_documents() {
-            if *found == digest {
-                return Ok(source.clone());
-            }
+        if let Some(source) = self.find_in_git(&digest) {
+            return Ok(source);
         }
         Err(format!(
             "dx merge-driver cannot merge {named}: its {side} points at version {digest}, which \
@@ -248,24 +319,90 @@ impl<'a> Sides<'a> {
         ))
     }
 
-    /// Every document in every pack blob git can still produce, keyed by digest.
-    fn git_documents(&mut self) -> &[(String, String)] {
-        self.from_git.get_or_insert_with(|| {
-            let mut found: Vec<(String, String)> = Vec::new();
-            for revision in SIDE_REVISIONS {
-                let Some(bytes) = pack_blob(self.root, revision) else {
-                    continue;
-                };
-                let Ok(documents) = pack::decode(&bytes, revision) else {
-                    continue;
-                };
-                for (_, source) in documents {
-                    found.push((stub::digest_of(&source), source));
-                }
+    /// The document with `digest`, out of whichever pack blob git can still produce it from.
+    ///
+    /// Revisions are decoded one at a time and only until the wanted version turns up, because
+    /// the common case answers on the first: `HEAD`'s pack holds every document this branch has
+    /// ever committed. What follows costs nothing when it is not needed.
+    fn find_in_git(&mut self, digest: &str) -> Option<String> {
+        loop {
+            if let Some((_, source)) = self.found.iter().find(|(held, _)| held == digest) {
+                return Some(source.clone());
             }
-            found
-        })
+            let revision = self.next_revision()?;
+            let Some(bytes) = pack_blob(self.root, &revision) else {
+                continue;
+            };
+            let Ok(documents) = pack::decode(&bytes, &revision) else {
+                continue;
+            };
+            for (_, source) in documents {
+                self.found.push((stub::digest_of(&source), source));
+            }
+        }
     }
+
+    /// The next revision worth decoding: the named refs, and then the pack's own history.
+    fn next_revision(&mut self) -> Option<String> {
+        if !self.seeded {
+            self.seeded = true;
+            self.queue
+                .extend(SIDE_REVISIONS.iter().map(|name| (*name).to_string()));
+        }
+        if let Some(next) = self.queue.pop_front() {
+            return Some(next);
+        }
+        if !self.walked {
+            self.walked = true;
+            self.queue.extend(pack_history(self.root, HISTORY_DEPTH));
+        }
+        self.queue.pop_front()
+    }
+}
+
+/// Every revision of the committed pack, newest first, across every ref in the repository.
+///
+/// # Why the named refs are not enough
+/// The case that proves it is the ordinary one. **Git writes `MERGE_HEAD` only once the merge
+/// is known to be unfinished, which is after every merge driver has run** — so for the whole
+/// time this driver is executing, the commit being merged in has no name at all. `HEAD` and
+/// `ORIG_HEAD` are both our own side, and the incoming document's content, which lives only
+/// inside that commit's `.doc/repo.dxcp`, could not be reached by any of them.
+///
+/// What that cost was not a failed merge but a silent one. The pointer driver gave up, wrote
+/// nothing, and left the `--ours` file exactly as it found it: a clean pointer to our side.
+/// Git marked the path unmerged, and the next `git add -A && git commit` — the thing a person
+/// does to finish a merge — committed our side as the merge result with the other branch's
+/// edit dropped and no marker anywhere to say so.
+///
+/// `--all` reaches it, because a fetched branch is a ref even while the merge that is
+/// consuming it is not. The lookup this feeds is by digest, so which revision carries the
+/// content does not matter, and the incoming tip is a recent one either way.
+///
+/// Complexity: one `git rev-list` bounded by `depth`; the caller decodes only as far as it
+/// must.
+pub(crate) fn pack_history(root: &Path, depth: usize) -> Vec<String> {
+    let Ok(output) = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args([
+            "rev-list",
+            "--all",
+            &format!("--max-count={depth}"),
+            "--",
+            pack::REPO_PACK,
+        ])
+        .output()
+    else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::to_string)
+        .collect()
 }
 
 /// The committed pack as it stood at `revision`, or `None` when git has no such thing.
@@ -541,6 +678,102 @@ mod tests {
         );
         let error = driver(&root, "notes.dx", &o, &a, &b).expect_err("cannot resolve");
         assert!(error.contains("dx sync"), "{error}");
+    }
+
+    #[test]
+    fn a_side_that_cannot_be_resolved_is_written_down_as_a_conflict() {
+        // The silent failure this pins down: the driver used to write nothing here, and the
+        // `--ours` file git left in place was a clean pointer to our side. Every reader then
+        // saw a finished document with the other branch's work simply absent.
+        let root = scratch("pointer-unresolvable-theirs");
+        let mine = document("Notes", "the side that is here");
+        store(&root, &mine);
+        let (o, a, b) = sides(
+            &root,
+            &document("Notes", "one"),
+            &stub::render(&mine),
+            &stub::render(&document("Notes", "arrived without its pack")),
+        );
+
+        let error = driver(&root, "notes.dx", &o, &a, &b).expect_err("cannot resolve the incoming");
+        assert!(error.contains("incoming side"), "{error}");
+
+        let written = std::fs::read_to_string(&a).expect("read back");
+        assert!(
+            !stub::is_stub(&written),
+            "our side must not be left standing as a finished document: {written}"
+        );
+        assert!(doc_core::merge::has_conflict_markers(&written), "{written}");
+        assert!(written.contains("the side that is here"), "{written}");
+        assert!(
+            written.contains("is not in this workspace's store"),
+            "the missing side must say why it is missing: {written}"
+        );
+    }
+
+    #[test]
+    fn an_incoming_branch_resolves_before_git_has_a_name_for_it() {
+        // Git writes `MERGE_HEAD` only once the merge is known to be unfinished, which is
+        // after every driver has run, so the commit being merged in has no name while this
+        // code executes. Here the incoming version exists *only* inside a commit no named
+        // revision reaches — which is exactly the shape of a real merge — and the driver has
+        // to walk the pack's own history to find it.
+        let root = scratch("incoming-unnamed");
+        let git = |args: &[&str]| {
+            Command::new("git")
+                .arg("-C")
+                .arg(&root)
+                .args(args)
+                .output()
+                .is_ok_and(|out| out.status.success())
+        };
+        if !git(&["init", "-q", "-b", "main"]) {
+            return; // No usable git on this machine; there is nothing to drive.
+        }
+        assert!(git(&["config", "user.email", "dx@example.invalid"]));
+        assert!(git(&["config", "user.name", "dx tests"]));
+
+        let base = document("Notes", "one");
+        let theirs = document("Notes", "what the other branch wrote");
+        store(&root, &base);
+        // Only the pack and the pointer: a committed `index.db` would answer for free and
+        // prove nothing.
+        assert!(git(&["add", "scratch.dx", pack::REPO_PACK]));
+        assert!(git(&["commit", "-qm", "base"]));
+        store(&root, &theirs);
+        assert!(git(&["add", "scratch.dx", pack::REPO_PACK]));
+        assert!(git(&["commit", "-qm", "theirs"]));
+
+        // Put that commit where only `--all` reaches it, and take away every local copy of
+        // its content, so the pack blob in git's object database is the sole remaining source.
+        assert!(git(&["branch", "side"]));
+        assert!(git(&["reset", "-q", "--hard", "HEAD~1"]));
+        // The reset names that commit `ORIG_HEAD`; a real merge does not — there `ORIG_HEAD`
+        // is our own side. Leaving it would let the test pass for a reason the merge cannot
+        // rely on.
+        std::fs::remove_file(root.join(".git/ORIG_HEAD")).expect("unname the incoming commit");
+        std::fs::remove_file(root.join(".doc/index.db")).expect("drop the local index");
+        let _ = std::fs::remove_file(root.join(".doc/local.dxcp"));
+        assert!(
+            workspace::resolve_contents(&stub::render(&theirs), &root).is_err(),
+            "the incoming version must be unreachable except through git"
+        );
+
+        let (o, a, b) = sides(
+            &root,
+            &stub::render(&base),
+            &stub::render(&base),
+            &stub::render(&theirs),
+        );
+        let report = driver(&root, "notes.dx", &o, &a, &b).expect("the incoming side resolves");
+        assert!(report.contains("merged notes.dx"), "{report}");
+
+        let written = std::fs::read_to_string(&a).expect("read back");
+        assert_eq!(
+            stub::digest_in(&written).expect("a digest"),
+            stub::digest_of(&theirs),
+            "an unchanged side must take the incoming version whole"
+        );
     }
 
     #[test]
