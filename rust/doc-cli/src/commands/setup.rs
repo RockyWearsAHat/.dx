@@ -22,6 +22,7 @@ use doc_run::toolchain::locate;
 
 use crate::args::Args;
 use crate::commands::browser;
+use crate::commands::store;
 use crate::desktop;
 use crate::extension::{self, Channel, Family, Target};
 use crate::install::{self, Registration};
@@ -184,6 +185,8 @@ pub fn run_doctor(_args: &Args) -> Result<String, String> {
         Err(message) => out.push_str(&message),
     }
 
+    out.push_str(&git_readiness());
+
     out.push_str("\ngithub.com\n");
     for line in browser::status_lines() {
         out.push_str(&line);
@@ -210,6 +213,70 @@ pub fn run_doctor(_args: &Args) -> Result<String, String> {
     }
 
     Ok(out)
+}
+
+/// Whether this checkout's git is taught to diff and merge dx documents.
+///
+/// Every write path prepares the repository ([`store::ensure_git_ready`]), so this section is
+/// normally three "yes" lines. It exists for the case that cannot be repaired automatically:
+/// a `.doc/index.db` some earlier commit put into git. That file is binary, rebuildable, and
+/// different on every machine, so once it is tracked *every* merge between branches that both
+/// wrote documents conflicts on it and no resolution is correct. Untracking it is a commit
+/// somebody has to make on purpose, so doctor names it and `dx git-setup` does it.
+fn git_readiness() -> String {
+    let root = crate::workspace::workspace_root(&std::path::PathBuf::from("."));
+    if !root.join(".git").exists() {
+        return String::new();
+    }
+
+    let mut out = String::from("\ngit\n");
+    let attributes = std::fs::read_to_string(root.join(".gitattributes")).unwrap_or_default();
+    let says = |pattern: &str, attribute: &str| {
+        attributes.lines().any(|line| {
+            let mut words = line.split_whitespace();
+            words.next() == Some(pattern) && words.any(|word| word == attribute)
+        })
+    };
+    out.push_str(&format!(
+        "  diff      {}\n",
+        if says("*.dx", "diff=dx") {
+            "yes — `git diff` shows documents, not digests"
+        } else {
+            "no — run `dx git-setup`"
+        }
+    ));
+    out.push_str(&format!(
+        "  merge     {}\n",
+        if says("*.dx", "merge=dx") && says(doc_store::pack::REPO_PACK, "merge=dx") {
+            "yes — two branches reconcile block by block"
+        } else {
+            "no — run `dx git-setup`"
+        }
+    ));
+
+    let committed: Vec<&str> = [
+        ".doc/index.db",
+        ".doc/index.db-wal",
+        ".doc/index.db-shm",
+        doc_store::pack::LOCAL_PACK,
+        ".doc/coverage.jsonl",
+    ]
+    .into_iter()
+    .filter(|relative| store::in_the_index(&root, relative))
+    .collect();
+    out.push_str(&format!(
+        "  local     {}\n",
+        if committed.is_empty() {
+            "yes — nothing machine-local is committed".to_string()
+        } else {
+            format!(
+                "{} is committed and will conflict on every merge — run `dx git-setup`, \
+                 then commit the removal",
+                committed.join(", ")
+            )
+        }
+    ));
+    out
 }
 
 /// Whether images can be produced, and what to install when they cannot.
@@ -688,7 +755,19 @@ STORE
   dx stats    [dir]                             documents, block sharing, compaction
   dx rm       <file>                            delete a document; history survives
   dx textconv <file>                            print what a pointer stands for
-  dx git-setup [dir]                            make git diff .dx as documents
+  dx git-setup [dir]                            teach git to diff and merge documents
+              Every dx write already does this for the repository it is writing
+              in, so a fresh clone or a new worktree needs no ceremony. Run it by
+              hand to repair a checkout, or to untrack a .doc/index.db an older
+              commit put into git — that file is machine-local and binary, and
+              once committed it conflicts on every merge that touched documents.
+              Untracking it is a commit, so it is never done behind your back.
+  dx merge-driver --ancestor %O --ours %A --theirs %B --path %P --marker-size %L
+              Git calls this; a person does not. Two branches that changed
+              documents merge block by block — the pack and the pointers both,
+              agreeing because both compute the same merge. A block both branches
+              rewrote is left in the .dx file with conflict markers, and `dx sync`
+              refuses to adopt it until they are gone.
 
 RUN
   dx run      <file> [--only ID] [--force] [--dry] [--timeout S]

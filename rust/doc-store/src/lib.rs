@@ -20,6 +20,10 @@
 //!   artifact that carries documents to a fresh clone; the local pack holds git-ignored
 //!   scratch work. [`Store::sync`] rebuilds the database from them when it is missing.
 //!
+//! Both committed artifacts — the pack and the stubs that name it — are merged by [`merge`],
+//! so two branches that each changed documents reconcile block by block instead of colliding
+//! on a container git reads as binary and a pointer that is one hex line.
+//!
 //! Nothing here is allowed to lose a byte: a document's chunks reassemble to its exact
 //! canonical source, and [`Store::source`] verifies the result against the digest recorded in
 //! the stub before returning it.
@@ -29,6 +33,7 @@
 #![warn(clippy::all)]
 
 pub mod git;
+pub mod merge;
 pub mod pack;
 mod schema;
 mod store;

@@ -209,19 +209,26 @@ fn read_pack(path: &Path) -> Result<Vec<(String, String)>, StoreError> {
             )))
         }
     };
+    decode(&bytes, &path.display().to_string())
+}
 
-    let pack = decode_pack(&bytes).map_err(|error| {
-        StoreError::Corrupt(format!("{} is not readable ({error})", path.display()))
-    })?;
+/// Decode pack `bytes` into `(path, canonical source)` pairs, naming `label` in any failure.
+///
+/// The bytes are the unit rather than a file because a merge reads two of the three sides
+/// out of git rather than off disk ([`crate::merge`]) — a pack that only ever exists as a
+/// blob still has to decode by exactly the same rules as one on disk.
+///
+/// # Errors
+/// [`StoreError::Corrupt`] when the container will not decode, or when it names a document
+/// whose chunks it does not carry.
+pub fn decode(bytes: &[u8], label: &str) -> Result<Vec<(String, String)>, StoreError> {
+    let pack = decode_pack(bytes)
+        .map_err(|error| StoreError::Corrupt(format!("{label} is not readable ({error})")))?;
 
     let mut out = Vec::with_capacity(pack.entries.len());
     for entry in &pack.entries {
         let source = pack.source(&entry.path).ok_or_else(|| {
-            StoreError::Corrupt(format!(
-                "{} is missing chunks for {}",
-                path.display(),
-                entry.path
-            ))
+            StoreError::Corrupt(format!("{label} is missing chunks for {}", entry.path))
         })?;
         out.push((entry.path.clone(), source));
     }
@@ -240,8 +247,11 @@ pub fn source(root: &Path, relative: &str) -> Result<Option<String>, StoreError>
 
 /// The `.gitignore` lines a workspace needs so the right things are committed.
 ///
-/// The database and the local pack are machine-local; the repo pack and the stubs are the
-/// content and must travel.
+/// The database, its write-ahead log, the local pack, and the search-coverage log are all
+/// machine-local; the repo pack and the stubs are the content and must travel. Committing a
+/// machine-local file is not a tidiness problem but a merge one: `.doc/index.db` is binary and
+/// every branch that wrote a document has its own, so a tracked index conflicts on every
+/// single merge and no resolution of it can be right.
 #[must_use]
 pub fn gitignore_lines() -> String {
     format!(
@@ -249,6 +259,7 @@ pub fn gitignore_lines() -> String {
          {STORE_DIR}/index.db\n\
          {STORE_DIR}/index.db-wal\n\
          {STORE_DIR}/index.db-shm\n\
+         {STORE_DIR}/coverage.jsonl\n\
          {LOCAL_PACK}\n"
     )
 }

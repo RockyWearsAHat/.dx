@@ -16,6 +16,7 @@ pub mod edit;
 pub mod exec;
 pub mod find;
 pub mod index;
+pub mod merge;
 pub mod play;
 pub mod report;
 pub mod setup;
@@ -277,6 +278,13 @@ const COMMANDS: &[Command] = &[
         names: &["git-setup"],
         flags: &[],
         run: |args| store::run_git_setup(args).map(Output::Report),
+    },
+    // Git calls this one, never a person; it is in the table so it goes through the same
+    // flag checking as everything else.
+    Command {
+        names: &["merge-driver"],
+        flags: &["ancestor", "ours", "theirs", "path", "marker-size", "root"],
+        run: |args| merge::run_merge_driver(args).map(Output::Report),
     },
     // The platform.
     Command {
