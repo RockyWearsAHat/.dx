@@ -340,6 +340,17 @@ fn source(args: &Value, root: &Path) -> ToolResult {
 
 /// The body of [`source`], with the run cache stated rather than defaulted.
 fn source_in(args: &Value, root: &Path, cache_root: &Path) -> ToolResult {
+    // A file a merge left half-resolved is not a document, and every other route refuses it
+    // (`workspace::half_merged` says why). This one answers, because an agent asked to resolve
+    // a conflict has no other window onto the file — and what it needs is the marker lines
+    // exactly as git wrote them, not a parse that would invent blocks around them.
+    let path = resolve(required(args, "path")?, root);
+    if let Some(conflicted) = workspace::half_merged_text(&path) {
+        return Ok(vec![
+            text_content(&workspace::half_merged(&path)),
+            text_content(&conflicted),
+        ]);
+    }
     let note = if boolean_or(args, "refresh", true) {
         refresh_outputs(args, root, cache_root)
     } else {
@@ -1667,6 +1678,32 @@ mod tests {
         let body = text_of(&items);
         assert!(body.contains("# Guide"));
         assert!(body.contains("Then run it."));
+    }
+
+    #[test]
+    fn a_half_merged_document_comes_back_as_the_conflict_it_is() {
+        let root = project("source-conflicted");
+        let conflicted = "::heading level=1 id=title\nGuide\n::end\n\n\
+             <<<<<<< ours\n::paragraph id=intro\nOurs.\n::end\n\
+             =======\n::paragraph id=intro\nTheirs.\n::end\n\
+             >>>>>>> theirs\n";
+        std::fs::write(root.join("guide.dx"), conflicted).expect("what git left");
+
+        let body =
+            text_of(&call("dx_source", &json!({ "path": "guide.dx" }), &root).expect("read"));
+        assert!(
+            body.contains("merge git could not finish"),
+            "the agent is told what it is looking at: {body}"
+        );
+        assert!(
+            body.contains(">>>>>>> theirs"),
+            "and sees the markers exactly as git wrote them: {body}"
+        );
+
+        // Every other route refuses, so no id the conflict invented can be edited.
+        let error = call("dx_outline", &json!({ "path": "guide.dx" }), &root)
+            .expect_err("an outline of a conflict is a fiction");
+        assert!(error.contains("dx sync"), "{error}");
     }
 
     #[test]

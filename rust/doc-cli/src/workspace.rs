@@ -151,6 +151,56 @@ pub fn read(path: &Path) -> Result<String, String> {
     Sources::open(&workspace_root(path))?.source(path)
 }
 
+/// The one sentence dx says about a `.dx` file a merge left half-resolved.
+///
+/// # Why a read refuses instead of answering
+/// What git writes into a conflicted path is not DOCSRC. It is the two sides interleaved with
+/// `<<<<<<<` / `=======` / `>>>>>>>` lines, and [`parse`] has no choice but to read those lines
+/// as prose: it invents a block per marker, re-numbers the ids of the real blocks around them
+/// so one document reports `intro` *and* `intro-2`, and turns `>>>>>>> theirs` into a quote
+/// block one `>` shorter than the line git wrote. Every one of those is a plausible answer to
+/// "what does this document say", and all of them are wrong.
+///
+/// The consequence was not cosmetic. A block edit reads, changes the block it was given, and
+/// saves — so an edit addressed at an id the *conflict* invented adopted the marker lines as a
+/// real document, replaced git's conflicted file with a pointer to it, and dropped the other
+/// side, all while `git status` still called the path unmerged. One tool call, and the branch
+/// that was being merged in was gone.
+///
+/// So the resolver refuses, which costs nothing a caller wanted: there is no correct document
+/// to hand back yet. [`doc_store::Store::sync`] already refused to *adopt* such a file for the
+/// same reason; this is that rule reaching the read side, so a file dx will not store is also a
+/// file dx will not parse.
+///
+/// # What still answers
+/// The two routes whose job is the exact characters rather than the document: `dx textconv`
+/// (git's diff driver, which must show the conflict) and `dx_source`, an agent's only window
+/// onto the file it has to resolve. Both hand the file back as it stands.
+#[must_use]
+pub fn half_merged(path: &Path) -> String {
+    format!(
+        "{} is a merge git could not finish: it still has <<<<<<< ======= >>>>>>> lines, so it \
+         is not a document yet and reading it as one would invent blocks and drop a side. Open \
+         it, keep the words you want, delete the marker lines, then run `dx sync` — it adopts \
+         the file the moment the markers are gone. `dx textconv {}` shows it exactly as it \
+         stands.",
+        path.display(),
+        path.display()
+    )
+}
+
+/// The text of `path` when a merge left it half-resolved, and [`None`] otherwise.
+///
+/// This is the window [`half_merged`] promises: a caller that must show the conflict rather
+/// than the document asks here first and hands the answer over verbatim. A pointer is never
+/// half-merged — the merge driver writes a pointer only when it produced a document, and the
+/// store refuses to hold anything else — so only plain text on disk is examined.
+#[must_use]
+pub fn half_merged_text(path: &Path) -> Option<String> {
+    let text = fs::read_to_string(path).ok()?;
+    (!stub::is_stub(&text) && doc_core::merge::has_conflict_markers(&text)).then_some(text)
+}
+
 /// A workspace's content, opened once: the store, and the packs behind it.
 ///
 /// One document resolved on its own is one store open, and that is fine. A *listing* resolves
@@ -188,6 +238,11 @@ impl Sources {
 
         if let Some(text) = on_disk {
             if !is_pointer {
+                // Plain text a merge left unfinished is not a document, and parsing it as one
+                // is how a side gets thrown away — see [`half_merged`].
+                if doc_core::merge::has_conflict_markers(&text) {
+                    return Err(half_merged(path));
+                }
                 return Ok(text);
             }
         }
@@ -604,28 +659,14 @@ fn recover_from_history(root: &Path) {
 }
 
 /// The commits that touched the committed pack, newest first, capped at [`HISTORY_DEPTH`].
+///
+/// Every ref, not this branch's history: a pointer is stranded exactly when the two files git
+/// moves independently came apart, and the branch that still carries the content is as often
+/// as not one this checkout is not standing on. The merge driver needs the same list for the
+/// same reason and states it at length — [`crate::commands::merge::pack_history`] is the one
+/// answer to "which revisions of the pack can git still produce".
 fn pack_revisions(root: &Path) -> Vec<String> {
-    let Ok(output) = std::process::Command::new("git")
-        .arg("-C")
-        .arg(root)
-        .args([
-            "log",
-            "--format=%H",
-            &format!("--max-count={HISTORY_DEPTH}"),
-            "--",
-            pack::REPO_PACK,
-        ])
-        .output()
-    else {
-        return Vec::new();
-    };
-    if !output.status.success() {
-        return Vec::new();
-    }
-    String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .map(str::to_string)
-        .collect()
+    crate::commands::merge::pack_history(root, HISTORY_DEPTH)
 }
 
 /// What [`remove`] deleted, for the caller's report.
@@ -2009,5 +2050,60 @@ mod tests {
                 .contains("The only copy of this."),
             "the version the pointer named is the version that comes back"
         );
+    }
+
+    /// What git writes into a `.dx` path it could not merge: two whole blocks, interleaved.
+    const HALF_MERGED: &str = "::heading level=1 id=title\nAlpha\n::end\n\n\
+         <<<<<<< ours\n::paragraph id=intro\nOurs kept the intro.\n::end\n\
+         =======\n::paragraph id=intro\nTheirs rewrote the intro.\n::end\n\
+         >>>>>>> theirs\n";
+
+    #[test]
+    fn a_half_merged_file_is_refused_rather_than_parsed_into_blocks_it_does_not_have() {
+        let root = scratch("half-merged-read");
+        let path = root.join("a.dx");
+        fs::write(&path, HALF_MERGED).expect("what git left");
+
+        let error = read(&path).expect_err("a conflict is nobody's document yet");
+        assert!(error.contains("merge git could not finish"), "{error}");
+        assert!(
+            error.contains("dx sync"),
+            "the sentence says what to do: {error}"
+        );
+
+        // The window that still answers hands back exactly what git wrote — the `>` run in the
+        // closing marker included, which a parse turns into a quote block one `>` shorter.
+        let seen = half_merged_text(&path).expect("the conflict is readable as text");
+        assert_eq!(seen, HALF_MERGED);
+    }
+
+    #[test]
+    fn a_half_merged_file_cannot_have_one_side_edited_away() {
+        let root = scratch("half-merged-edit");
+        let path = root.join("a.dx");
+        fs::write(&path, HALF_MERGED).expect("what git left");
+
+        // `intro` is an id the conflict appears to offer twice. Every block edit reads first,
+        // so the refusal reaches all of them before anything is stored.
+        let error = read(&path).expect_err("no block of this file is addressable");
+        assert!(error.contains("drop a side"), "{error}");
+
+        assert_eq!(
+            fs::read_to_string(&path).expect("still there"),
+            HALF_MERGED,
+            "the file git left is untouched — no pointer, no adopted half"
+        );
+    }
+
+    #[test]
+    fn a_document_that_is_merely_about_conflict_markers_still_reads() {
+        let root = scratch("half-merged-prose");
+        let path = root.join("a.dx");
+        // Marker runs mid-line are prose, and a body line may carry one when escaped. A format
+        // that could not document its own merge driver would be the wrong format for this.
+        let prose = "::paragraph id=p\nGit writes ======= between the sides.\n::end\n";
+        fs::write(&path, prose).expect("plain text");
+        assert_eq!(read(&path).expect("prose is not a conflict"), prose);
+        assert!(half_merged_text(&path).is_none());
     }
 }
