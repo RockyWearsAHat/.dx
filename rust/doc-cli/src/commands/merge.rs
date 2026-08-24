@@ -154,11 +154,11 @@ fn merge_pointer(
 ) -> Result<String, String> {
     let mut sides = Sides::new(root);
     let base = match ancestor {
-        Some(path) => Some(sides.source_at(path)?),
+        Some(path) => Some(sides.source_at(named, "common ancestor", path)?),
         None => None,
     };
-    let mine = sides.source_at(ours)?;
-    let yours = sides.source_at(theirs)?;
+    let mine = sides.source_at(named, "side of this branch", ours)?;
+    let yours = sides.source_at(named, "incoming side", theirs)?;
 
     let merged = merge_documents(base.as_deref(), &mine, &yours, marker);
     if merged.is_clean() {
@@ -214,7 +214,12 @@ impl<'a> Sides<'a> {
     }
 
     /// The document text one side's file stands for; an absent or empty file is a deletion.
-    fn source_at(&mut self, path: &Path) -> Result<String, String> {
+    ///
+    /// `named` and `side` are for the failure only: git hands each revision over as a temp
+    /// file with a name like `.merge_file_abfKlS`, so a message that named the file it was
+    /// given told the reader nothing about which document, or whose half of it, could not be
+    /// found.
+    fn source_at(&mut self, named: &str, side: &str, path: &Path) -> Result<String, String> {
         let text = match std::fs::read_to_string(path) {
             Ok(text) => text,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(String::new()),
@@ -235,10 +240,11 @@ impl<'a> Sides<'a> {
             }
         }
         Err(format!(
-            "dx merge-driver cannot merge {}: it points at version {digest}, which is not in \
-             this workspace's store, its packs, or any .doc/repo.dxcp git still has. Fetch the \
-             branch being merged, or run `dx sync` and try again.",
-            path.display()
+            "dx merge-driver cannot merge {named}: its {side} points at version {digest}, which \
+             is not in this workspace's store, its packs, or any .doc/repo.dxcp git still has. \
+             That side's commit carries a pointer whose content never reached .doc/repo.dxcp — \
+             run `dx sync` on the branch it came from and commit the pack, or fetch the branch \
+             if it is simply not here yet."
         ))
     }
 
