@@ -146,6 +146,13 @@ pub struct SyncReport {
     pub packs_rewritten: Vec<String>,
     /// Chunks deleted because nothing referenced them.
     pub chunks_collected: usize,
+    /// `.dx` files still carrying git conflict markers, which a sync refuses to adopt.
+    ///
+    /// A merge that could not be resolved leaves the document as plain text with `<<<<<<<`
+    /// in it ([`crate::merge`]). That text parses — the markers are ordinary body lines —
+    /// so adopting it would store both branches' words as one document and lose the fact
+    /// that a person still has to choose. It is named and left alone instead.
+    pub conflicted: Vec<String>,
 }
 
 impl SyncReport {
@@ -159,6 +166,7 @@ impl SyncReport {
             && self.tracked_but_ignored.is_empty()
             && self.pruned.is_empty()
             && self.packs_rewritten.is_empty()
+            && self.conflicted.is_empty()
             && self.chunks_collected == 0
     }
 }
@@ -822,7 +830,13 @@ impl Store {
 
             match stub::digest_in(&text) {
                 None => {
-                    // Real content on disk: adopt it, then replace it with its pointer.
+                    // Real content on disk: adopt it, then replace it with its pointer —
+                    // unless a merge left it half-resolved, which is a decision only a
+                    // person can finish and must not be stored as if it were a document.
+                    if doc_core::merge::has_conflict_markers(&text) {
+                        report.conflicted.push(relative);
+                        continue;
+                    }
                     self.ingest(&relative, &text)?;
                     report.ingested.push(relative);
                 }

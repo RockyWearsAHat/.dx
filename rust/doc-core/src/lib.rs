@@ -8,6 +8,7 @@
 //! - [`compress`] — the `dxz1` LZSS byte codec used for chunk storage.
 //! - [`format`] — DOCSRC (`.dx`) parsing and canonical stringify.
 //! - [`chunk`] — content-addressed per-block chunks and the `DXCP1` pack container.
+//! - [`merge`] — the block-keyed three-way merge two branches of a document reconcile through.
 //! - [`search`] — the in-memory token search index.
 //! - [`trace`] — the heuristic symbol + reference index.
 //! - [`render`] — the document views: themed HTML, Markdown, outlines, and sections.
@@ -33,6 +34,7 @@ pub mod compress;
 pub mod digest;
 pub mod edit;
 pub mod format;
+pub mod merge;
 pub mod model;
 pub mod pointer;
 pub mod render;

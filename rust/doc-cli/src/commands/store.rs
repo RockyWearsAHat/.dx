@@ -15,8 +15,20 @@ use crate::workspace;
 
 /// Git config key for the dx diff driver's text conversion.
 const TEXTCONV_KEY: &str = "diff.dx.textconv";
+/// Git config key naming the merge driver, and the key holding its command line.
+const MERGE_NAME_KEY: &str = "merge.dx.name";
+/// The command git runs to merge a path it could not merge itself.
+const MERGE_DRIVER_KEY: &str = "merge.dx.driver";
+/// What `git status` calls the driver when it reports a conflict.
+const MERGE_NAME: &str = "dx documents, merged block by block";
 /// The `.gitattributes` line that points `.dx` files at the driver.
-const ATTRIBUTES_LINE: &str = "*.dx diff=dx";
+const ATTRIBUTES_LINE: &str = "*.dx diff=dx merge=dx";
+/// The `.gitattributes` line that routes the committed pack through the same driver.
+///
+/// Both lines are needed and neither is enough. Without the pack line git calls the pack
+/// binary and keeps one side whole; without the `*.dx` line every pointer conflicts on a hex
+/// digest. They are written together, and [`crate::commands::merge`] is why they agree.
+const PACK_ATTRIBUTES_LINE: &str = ".doc/repo.dxcp merge=dx";
 
 /// The directory a command should operate on: the first positional, else the current one.
 fn target_directory(args: &Args) -> PathBuf {
@@ -59,8 +71,12 @@ pub fn run_sync(args: &Args) -> Result<String, String> {
         return Ok(out);
     }
 
-    let sections: [(&str, &Vec<String>); 7] = [
+    let sections: [(&str, &Vec<String>); 8] = [
         ("adopted from plain text", &report.ingested),
+        (
+            "CONFLICTED — a merge left markers in the file",
+            &report.conflicted,
+        ),
         ("restored from a pack", &report.restored),
         ("pointer rewritten", &report.stubs_written),
         ("pruned (file deleted from the tree)", &report.pruned),
@@ -85,6 +101,13 @@ pub fn run_sync(args: &Args) -> Result<String, String> {
             "\ncollected {} unreferenced chunk(s)\n",
             report.chunks_collected
         ));
+    }
+    if !report.conflicted.is_empty() {
+        out.push_str(
+            "\nConflicted documents were left exactly as they are. Open each one, keep the \
+             words\nyou want, delete the <<<<<<< ======= >>>>>>> lines, and run `dx sync` \
+             again —\nit adopts the file the moment the markers are gone.\n",
+        );
     }
     if !report.unresolved.is_empty() || !report.tracked_but_ignored.is_empty() {
         out.push_str("\nUnresolved pointers have no content in .doc/:\n");
@@ -176,10 +199,13 @@ pub fn run_stats(args: &Args) -> Result<String, String> {
 /// workspace has been converted.
 ///
 /// The file git passes is a **temporary copy of a blob**, not the document in the workspace, so
-/// resolution goes by the digest inside the pointer rather than by path. `--root DIR` names the
-/// workspace to resolve against; without it the current directory is used, which is where git
-/// runs the driver from. [`run_git_setup`] bakes an absolute `--root` into the config so the
-/// driver does not depend on that.
+/// resolution goes by the digest inside the pointer rather than by path.
+///
+/// The workspace is the one git is running in, asked for at each invocation
+/// ([`merge::worktree_root`](crate::commands::merge::worktree_root)) — never a path baked into
+/// the config. A baked root is wrong the moment a second worktree exists: every `git diff` in
+/// the new checkout would resolve against the original one, showing its documents and opening
+/// its index. `--root DIR` still overrides, for a caller that knows better.
 pub fn run_textconv(args: &Args) -> Result<String, String> {
     let file = args
         .positional(0)
@@ -188,10 +214,9 @@ pub fn run_textconv(args: &Args) -> Result<String, String> {
     let text = std::fs::read_to_string(path)
         .map_err(|error| format!("could not read {}: {error}", path.display()))?;
 
-    let root = args.value("root").map_or_else(
-        || std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-        PathBuf::from,
-    );
+    let root = args
+        .value("root")
+        .map_or_else(crate::commands::merge::worktree_root, PathBuf::from);
     workspace::resolve_contents(&text, &root)
 }
 
@@ -204,62 +229,246 @@ pub fn run_textconv(args: &Args) -> Result<String, String> {
 pub fn run_git_setup(args: &Args) -> Result<String, String> {
     let root = workspace::workspace_root(&target_directory(args));
     let mut out = format!("dx git-setup — {}\n\n", root.display());
+    if !root.join(".git").exists() {
+        out.push_str("  nothing to do; this is not a git repository\n");
+        return Ok(out);
+    }
 
+    // The command a person ran on purpose reports the true state, so it does not consult the
+    // once-per-process mark the automatic path keeps.
+    let mut said = prepare_git(&root);
+    said.extend(untrack_machine_local_files(&root));
+    if said.is_empty() {
+        out.push_str("  present   this repository already diffs and merges dx documents\n");
+    }
+    for line in said {
+        out.push_str(&format!("  {line}\n"));
+    }
+
+    out.push_str(
+        "\nNow `git diff`, `git show`, and `git log -p` render .dx documents, and two \
+         branches\nthat both changed documents merge block by block instead of colliding.\n",
+    );
+    Ok(out)
+}
+
+/// Teach `root`'s repository to diff and merge dx documents, and say what it wrote.
+///
+/// # Why this is not only a command
+/// It used to be only `dx git-setup`, run by hand, once, by whoever thought of it — and every
+/// fresh clone, every `git worktree add`, and every agent that started in a checkout nobody
+/// had prepared got the untaught behavior: pointer conflicts on a hex line and a pack git
+/// calls binary. The repository is the thing that needs teaching, not the person, so every
+/// write path calls this and it is cheap enough to mean it.
+///
+/// # Why it never touches git's index
+/// This runs inside `dx set`, `dx sync`, and the editors' saves. Staging or unstaging a file
+/// from under a person mid-edit is not a thing a save may do, so this writes only
+/// configuration and two text files, and is a no-op the second time. Untracking what should
+/// never have been committed is [`untrack_machine_local_files`], and stays in the command a
+/// person runs on purpose.
+///
+/// Returns one line per thing written; empty when the repository was already ready. A
+/// directory that is not a git repository gets nothing at all.
+pub fn ensure_git_ready(root: &Path) -> Vec<String> {
+    if !root.join(".git").exists() || !mark_ensured(root) {
+        return Vec::new();
+    }
+    prepare_git(root)
+}
+
+/// Write everything [`ensure_git_ready`] promises, without consulting its mark.
+fn prepare_git(root: &Path) -> Vec<String> {
+    let mut wrote = Vec::new();
     let attributes = root.join(".gitattributes");
-    if ensure_line(&attributes, ATTRIBUTES_LINE)? {
-        out.push_str(&format!(
-            "  wrote     {ATTRIBUTES_LINE}  (.gitattributes)\n"
+    // `*.dx diff=dx` is what earlier versions wrote, so the line is *upgraded* in place
+    // rather than appended beside — two lines matching the same pattern would leave which
+    // driver wins up to git's ordering rules.
+    if ensure_attribute(&attributes, "*.dx", ATTRIBUTES_LINE).unwrap_or(false) {
+        wrote.push(format!("wrote     {ATTRIBUTES_LINE}  (.gitattributes)"));
+    }
+    if ensure_attribute(&attributes, pack::REPO_PACK, PACK_ATTRIBUTES_LINE).unwrap_or(false) {
+        wrote.push(format!(
+            "wrote     {PACK_ATTRIBUTES_LINE}  (.gitattributes)"
         ));
-    } else {
-        out.push_str("  present   .gitattributes already routes *.dx to the dx driver\n");
     }
 
     let ignore = root.join(".gitignore");
     let mut ignored = 0;
     for line in pack::gitignore_lines().lines() {
-        if ensure_line(&ignore, line)? {
+        if ensure_line(&ignore, line).unwrap_or(false) {
             ignored += 1;
         }
     }
-    out.push_str(&format!(
-        "  {:<9} {ignored} .gitignore line(s) for the local index\n",
-        if ignored > 0 { "wrote" } else { "present" }
-    ));
-
-    let command = textconv_command(&root);
-    match set_git_config(&root, TEXTCONV_KEY, &command) {
-        Ok(()) => out.push_str(&format!(
-            "  wrote     git config {TEXTCONV_KEY}={command}\n"
-        )),
-        Err(error) => out.push_str(&format!("  skipped   git config: {error}\n")),
+    if ignored > 0 {
+        wrote.push(format!(
+            "wrote     {ignored} .gitignore line(s) for the machine-local files"
+        ));
     }
 
-    out.push_str("\nNow `git diff`, `git show`, and `git log -p` render .dx documents.\n");
-    Ok(out)
+    for (key, value) in [
+        (TEXTCONV_KEY, textconv_command()),
+        (MERGE_NAME_KEY, MERGE_NAME.to_string()),
+        (MERGE_DRIVER_KEY, merge_driver_command()),
+    ] {
+        if git_config(root, key).as_deref() == Some(value.as_str()) {
+            continue;
+        }
+        match set_git_config(root, key, &value) {
+            Ok(()) => wrote.push(format!("wrote     git config {key}={value}")),
+            Err(error) => wrote.push(format!("skipped   git config {key}: {error}")),
+        }
+    }
+    wrote
+}
+
+/// Whether this process has yet to prepare `root`, marking it prepared.
+///
+/// A save is a hot path and this is the same answer every time within one run, so the git
+/// calls happen once per workspace per process rather than once per document written.
+fn mark_ensured(root: &Path) -> bool {
+    use std::collections::BTreeSet;
+    use std::sync::Mutex;
+    static ENSURED: Mutex<BTreeSet<PathBuf>> = Mutex::new(BTreeSet::new());
+    ENSURED
+        .lock()
+        .map_or(true, |mut seen| seen.insert(root.to_path_buf()))
+}
+
+/// Stop tracking the files that are this machine's, not the repository's.
+///
+/// `.doc/index.db` is the one that hurts: it is a SQLite file, rebuildable from the pack, and
+/// once committed it conflicts on **every** merge between branches that both wrote documents —
+/// a binary conflict no resolution can be correct for, since each side's database describes
+/// its own machine. Committing it also publishes `.doc/local.dxcp`'s scratch work in some
+/// checkouts. The content survives untouched on disk; only git forgets it.
+fn untrack_machine_local_files(root: &Path) -> Vec<String> {
+    let mut said = Vec::new();
+    for relative in [
+        ".doc/index.db",
+        ".doc/index.db-wal",
+        ".doc/index.db-shm",
+        pack::LOCAL_PACK,
+        ".doc/coverage.jsonl",
+    ] {
+        if !in_the_index(root, relative) {
+            continue;
+        }
+        let output = std::process::Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(["rm", "--cached", "-q", "--", relative])
+            .output();
+        match output {
+            Ok(done) if done.status.success() => said.push(format!(
+                "untracked {relative}  (still on disk; commit the removal)"
+            )),
+            Ok(done) => said.push(format!(
+                "skipped   could not untrack {relative}: {}",
+                String::from_utf8_lossy(&done.stderr).trim()
+            )),
+            Err(error) => said.push(format!("skipped   could not untrack {relative}: {error}")),
+        }
+    }
+    said
+}
+
+/// Whether git's index carries `relative` — committed, not merely present on disk.
+///
+/// This asks the index rather than `.gitignore`: a file that was committed *before* the ignore
+/// line existed stays tracked forever, and that is exactly the case being repaired here.
+pub(crate) fn in_the_index(root: &Path, relative: &str) -> bool {
+    std::process::Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["ls-files", "--error-unmatch", "-z", "--", relative])
+        .output()
+        .is_ok_and(|output| output.status.success())
 }
 
 /// The command git should run to expand a pointer.
 ///
-/// Two things are pinned here, and both were needed to make the driver actually work:
+/// The **absolute path of the running binary** is pinned, not the bare word `dx`: git runs the
+/// driver with whatever environment it happens to have, and a different or older `dx` earlier
+/// on `PATH` answers with a usage error instead of the document — which git reports only as
+/// `unable to read files to diff`.
 ///
-/// - The **absolute path of the running binary**, not the bare word `dx`. Git runs the driver
-///   with whatever environment it happens to have, and a different or older `dx` earlier on
-///   `PATH` answers with a usage error instead of the document — which git reports only as
-///   `unable to read files to diff`.
-/// - The **absolute workspace root**, because git hands the driver a temporary blob copy from
-///   somewhere under the system temp directory. Searching for a workspace from there finds
-///   nothing.
-fn textconv_command(root: &Path) -> String {
-    let root = shell_quote(&root.to_string_lossy());
-    std::env::current_exe().map_or_else(
-        |_| format!("dx textconv --root {root}"),
-        |exe| {
-            format!(
-                "{} textconv --root {root}",
-                shell_quote(&exe.to_string_lossy())
-            )
-        },
+/// The workspace root is deliberately *not* pinned. It used to be, because git hands the driver
+/// a temporary blob copy from under the system temp directory and searching from there finds no
+/// workspace; but a root in the config is a root for every checkout that shares the config, so
+/// `git diff` inside a linked worktree resolved against — and opened the index of — the
+/// original checkout. The driver asks git where it is instead, per invocation.
+fn textconv_command() -> String {
+    format!("{} textconv", quoted_exe())
+}
+
+/// The command git should run to merge a path it cannot merge itself.
+///
+/// `%O %A %B %P %L` are git's placeholders: the ancestor, our side (which is also where the
+/// result goes), their side, the path in the working tree, and the conflict-marker size.
+fn merge_driver_command() -> String {
+    format!(
+        "{} merge-driver --ancestor %O --ours %A --theirs %B --path %P --marker-size %L",
+        quoted_exe()
     )
+}
+
+/// This binary's absolute path, quoted for the shell git runs a driver through.
+fn quoted_exe() -> String {
+    std::env::current_exe().map_or_else(
+        |_| "dx".to_string(),
+        |exe| shell_quote(&exe.to_string_lossy()),
+    )
+}
+
+/// The value of a repository-local git config key, when it is set.
+fn git_config(root: &Path, key: &str) -> Option<String> {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["config", "--get", key])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    Some(
+        String::from_utf8_lossy(&output.stdout)
+            .trim_end()
+            .to_string(),
+    )
+}
+
+/// Write `line` into `.gitattributes` for `pattern`, replacing whatever it said before.
+///
+/// Reports whether the file changed. An existing line for the same pattern is rewritten in
+/// place rather than appended beside, so upgrading a repository that only knew about `diff=dx`
+/// leaves one line, not two that disagree.
+fn ensure_attribute(path: &Path, pattern: &str, line: &str) -> Result<bool, String> {
+    let existing = std::fs::read_to_string(path).unwrap_or_default();
+    let mut replaced = false;
+    let mut lines: Vec<String> = Vec::new();
+    for found in existing.lines() {
+        if found.split_whitespace().next() == Some(pattern) {
+            replaced = true;
+            lines.push(line.to_string());
+        } else {
+            lines.push(found.to_string());
+        }
+    }
+    if replaced {
+        if existing.lines().eq(lines.iter().map(String::as_str)) {
+            return Ok(false);
+        }
+    } else {
+        lines.push(line.to_string());
+    }
+
+    let mut updated = lines.join("\n");
+    updated.push('\n');
+    std::fs::write(path, updated)
+        .map_err(|error| format!("could not write {}: {error}", path.display()))?;
+    Ok(true)
 }
 
 /// Quote a path for the shell git invokes the driver through, if it needs it.
@@ -422,6 +631,32 @@ mod tests {
     }
 
     #[test]
+    fn sync_refuses_to_adopt_a_document_a_merge_left_conflicted() {
+        // The markers are ordinary body lines as far as the format is concerned, so adopting
+        // the file would store both branches' words as one document and quietly lose the fact
+        // that a person still has to choose.
+        let root = scratch("sync-conflicted");
+        let conflicted = "::paragraph id=p\n<<<<<<< ours\nmine\n=======\ntheirs\n>>>>>>> \
+                          theirs\n::end\n";
+        std::fs::write(root.join("notes.dx"), conflicted).expect("write");
+
+        let report = run_sync(&args(&[&root.to_string_lossy()])).expect("sync");
+        assert!(report.contains("CONFLICTED"), "{report}");
+        assert!(report.contains("notes.dx"), "{report}");
+        assert!(report.contains("dx sync` again"), "{report}");
+        assert_eq!(
+            std::fs::read_to_string(root.join("notes.dx")).expect("read"),
+            conflicted,
+            "the file must be left exactly as the merge wrote it"
+        );
+
+        // And the moment the markers are gone it adopts normally.
+        std::fs::write(root.join("notes.dx"), NOTES).expect("resolve by hand");
+        let after = run_sync(&args(&[&root.to_string_lossy()])).expect("sync");
+        assert!(after.contains("adopted from plain text"), "{after}");
+    }
+
+    #[test]
     fn sync_flags_a_pointer_it_cannot_resolve() {
         let root = scratch("sync-orphan");
         std::fs::write(root.join("orphan.dx"), doc_store::stub::render(NOTES)).expect("write");
@@ -452,14 +687,33 @@ mod tests {
         assert!(report.contains("no documents stored yet"), "{report}");
     }
 
+    /// A scratch workspace that is also a real git repository, which is what the setup path
+    /// is about — a directory with no `.git` is deliberately left alone.
+    fn scratch_repo(label: &str) -> PathBuf {
+        let root = scratch(label);
+        let done = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&root)
+            .args(["init", "-q"])
+            .output()
+            .expect("git init");
+        assert!(
+            done.status.success(),
+            "git init failed in {}",
+            root.display()
+        );
+        root
+    }
+
     #[test]
     fn git_setup_writes_the_attributes_and_ignore_lines_once() {
-        let root = scratch("git-setup");
+        let root = scratch_repo("git-setup");
         let first = run_git_setup(&args(&[&root.to_string_lossy()])).expect("setup");
         assert!(first.contains(".gitattributes"), "{first}");
 
         let attributes = std::fs::read_to_string(root.join(".gitattributes")).expect("read");
-        assert!(attributes.contains(ATTRIBUTES_LINE));
+        assert!(attributes.contains(ATTRIBUTES_LINE), "{attributes}");
+        assert!(attributes.contains(PACK_ATTRIBUTES_LINE), "{attributes}");
         let ignore = std::fs::read_to_string(root.join(".gitignore")).expect("read");
         assert!(ignore.contains("index.db"));
         assert!(ignore.contains(pack::LOCAL_PACK));
@@ -468,21 +722,91 @@ mod tests {
             "the committed pack must not be ignored: {ignore}"
         );
 
-        // Running again must not duplicate anything.
-        run_git_setup(&args(&[&root.to_string_lossy()])).expect("again");
+        // Running again must not duplicate anything, and must say so rather than repeating.
+        let again = run_git_setup(&args(&[&root.to_string_lossy()])).expect("again");
+        assert!(again.contains("already diffs and merges"), "{again}");
         let attributes_again = std::fs::read_to_string(root.join(".gitattributes")).expect("read");
         assert_eq!(attributes, attributes_again);
     }
 
     #[test]
-    fn the_diff_driver_points_at_this_binary_not_whatever_is_on_path() {
-        // A stale `dx` earlier on PATH answers `textconv` with a usage error, and git reports
-        // "unable to read files to diff". The driver must name the running executable.
-        let command = textconv_command(Path::new("/tmp/some-workspace"));
-        assert!(
-            command.contains(" textconv --root /tmp/some-workspace"),
-            "{command}"
+    fn git_setup_configures_the_merge_driver_git_will_actually_call() {
+        // Without this config the `merge=dx` attribute names a driver that does not exist and
+        // git silently falls back to the built-in one — which is where the binary conflicts
+        // came from.
+        let root = scratch_repo("git-setup-merge");
+        run_git_setup(&args(&[&root.to_string_lossy()])).expect("setup");
+        let driver = git_config(&root, MERGE_DRIVER_KEY).expect("the driver is configured");
+        assert!(driver.contains("merge-driver"), "{driver}");
+        for placeholder in ["%O", "%A", "%B", "%P", "%L"] {
+            assert!(driver.contains(placeholder), "{driver} lacks {placeholder}");
+        }
+        assert_eq!(
+            git_config(&root, MERGE_NAME_KEY).as_deref(),
+            Some(MERGE_NAME)
         );
+    }
+
+    #[test]
+    fn a_repository_that_only_knew_about_diff_is_upgraded_in_place() {
+        // Every workspace set up before merging existed carries `*.dx diff=dx`. A second line
+        // beside it would leave which driver wins to git's ordering rules.
+        let root = scratch_repo("git-setup-upgrade");
+        std::fs::write(root.join(".gitattributes"), "*.dx diff=dx\n").expect("old line");
+        run_git_setup(&args(&[&root.to_string_lossy()])).expect("setup");
+
+        let attributes = std::fs::read_to_string(root.join(".gitattributes")).expect("read");
+        assert_eq!(
+            attributes
+                .lines()
+                .filter(|line| line.starts_with("*.dx"))
+                .count(),
+            1,
+            "{attributes}"
+        );
+        assert!(attributes.contains("merge=dx"), "{attributes}");
+    }
+
+    #[test]
+    fn git_setup_untracks_the_index_a_repository_committed_by_mistake() {
+        // A committed .doc/index.db conflicts on every merge between branches that both wrote
+        // documents, and no resolution of it can be right — each side's database is its own
+        // machine's. The file stays on disk; only git forgets it.
+        let root = scratch_repo("git-setup-untrack");
+        std::fs::write(root.join(".doc").join("index.db"), b"pretend sqlite").expect("write");
+        let added = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&root)
+            .args(["add", "-f", "--", ".doc/index.db"])
+            .output()
+            .expect("git add");
+        assert!(added.status.success());
+        assert!(in_the_index(&root, ".doc/index.db"));
+
+        let report = run_git_setup(&args(&[&root.to_string_lossy()])).expect("setup");
+        assert!(report.contains("untracked .doc/index.db"), "{report}");
+        assert!(!in_the_index(&root, ".doc/index.db"));
+        assert!(root.join(".doc").join("index.db").exists(), "still on disk");
+    }
+
+    #[test]
+    fn setting_up_a_directory_that_is_not_a_repository_writes_nothing() {
+        let root = scratch("git-setup-not-a-repo");
+        let report = run_git_setup(&args(&[&root.to_string_lossy()])).expect("setup");
+        assert!(report.contains("not a git repository"), "{report}");
+        assert!(!root.join(".gitattributes").exists());
+    }
+
+    #[test]
+    fn the_diff_driver_points_at_this_binary_and_bakes_in_no_workspace() {
+        // Two failures in one line. A stale `dx` earlier on PATH answers `textconv` with a
+        // usage error, which git reports only as "unable to read files to diff" — so the
+        // running executable is named. And a baked `--root` makes every `git diff` in a
+        // second worktree resolve against the first checkout, opening its index; so the root
+        // is asked for per invocation instead.
+        let command = textconv_command();
+        assert!(command.ends_with(" textconv"), "{command}");
+        assert!(!command.contains("--root"), "{command}");
         if let Ok(exe) = std::env::current_exe() {
             assert!(
                 command.contains(exe.to_string_lossy().trim()),

@@ -382,9 +382,15 @@ pub fn load(path: &Path) -> Result<Loaded, String> {
 }
 
 /// Store `document` at `path`: chunks into the store, pointer onto disk, packs re-exported.
+///
+/// Writing a document is also the moment the repository is taught to handle one, so this is
+/// where [`ensure_git_ready`](crate::commands::store::ensure_git_ready) runs: a checkout
+/// nobody prepared by hand still diffs and merges its documents. It writes configuration and
+/// two text files, never git's index, and is a no-op every time after the first.
 pub fn save(path: &Path, document: &Document) -> Result<(), String> {
     let root = workspace_root(path);
     let relative = relative_of(&root, path);
+    let _ = crate::commands::store::ensure_git_ready(&root);
     let mut store = open_store(&root)?;
     store
         .save(&relative, document)
@@ -471,6 +477,7 @@ pub fn document_dir(path: &Path) -> PathBuf {
 /// Reconcile the workspace at `root`: adopt plain-text documents, restore stubs from packs,
 /// and collect unreferenced chunks.
 pub fn sync(root: &Path) -> Result<SyncReport, String> {
+    let _ = crate::commands::store::ensure_git_ready(root);
     open_store(root)?.sync().map_err(|error| error.to_string())
 }
 
