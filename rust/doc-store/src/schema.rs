@@ -20,9 +20,17 @@
 //!   previous version, so keeping the old manifest costs a row per block, not a copy of the
 //!   document.
 //!
-//! `sections` and `tokens` are derived read models over the current version: they let an agent
-//! ask for one section or search the corpus without decompressing whole documents. They are
-//! rebuilt on every save, so they cannot disagree with the content.
+//! `sections` and `tokens` are derived read models over the current document versions: they
+//! let an agent ask for one section or search the corpus without decompressing whole documents.
+//! They are rebuilt on every save, so they cannot disagree with the content.
+//!
+//! `source_files` and `source_tokens` are derived read models over the source code files
+//! indexed by the workspace. They mirror the `documents`/`tokens` pattern: `source_files` holds
+//! metadata (path, size, mtime) keyed by path, and `source_tokens` maps source paths to tokens
+//! for fast search without decompressing source. Both are built by the indexer and rebuilt on
+//! every sync, so they cannot disagree with the actual source files. A read operation over
+//! source files must never write to the index — the indexer owns all writes, and reads answer
+//! only what the indexer has already recorded.
 //!
 //! # Why no refcount column
 //! An unreferenced chunk is found by asking, not by bookkeeping: `collect_garbage` deletes the
@@ -49,9 +57,11 @@ pub const VERSION: i64 = 3;
 /// in the committed packs — so discarding and rebuilding it is safe where migrating an
 /// unreleased schema would be pointless ceremony. `Store::sync` repopulates it.
 const DROP_ALL: &str = "
+DROP TABLE IF EXISTS source_tokens;
 DROP TABLE IF EXISTS tokens;
 DROP TABLE IF EXISTS sections;
 DROP TABLE IF EXISTS documents;
+DROP TABLE IF EXISTS source_files;
 DROP TABLE IF EXISTS manifest_chunks;
 DROP TABLE IF EXISTS manifests;
 DROP TABLE IF EXISTS document_chunks;
@@ -111,10 +121,24 @@ CREATE TABLE IF NOT EXISTS tokens (
     FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS source_files (
+    path         TEXT PRIMARY KEY,
+    size         INTEGER NOT NULL,
+    mtime        INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS source_tokens (
+    path         TEXT NOT NULL,
+    token        TEXT NOT NULL,
+    PRIMARY KEY (path, token),
+    FOREIGN KEY (path) REFERENCES source_files(path) ON DELETE CASCADE
+);
+
 CREATE INDEX IF NOT EXISTS idx_manifest_chunks_hash ON manifest_chunks(chunk_hash);
 CREATE INDEX IF NOT EXISTS idx_documents_digest ON documents(source_digest);
 CREATE INDEX IF NOT EXISTS idx_sections_document ON sections(document_id, position);
 CREATE INDEX IF NOT EXISTS idx_tokens_token ON tokens(token);
+CREATE INDEX IF NOT EXISTS idx_source_tokens_token ON source_tokens(token);
 ";
 
 /// The schema version recorded in the database at `path`, or `None` when there is no
@@ -219,12 +243,12 @@ mod tests {
         let tables: i64 = connection
             .query_row(
                 "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name IN \
-                 ('chunks', 'manifests', 'manifest_chunks', 'documents', 'sections', 'tokens')",
+                 ('chunks', 'manifests', 'manifest_chunks', 'documents', 'sections', 'tokens', 'source_files', 'source_tokens')",
                 [],
                 |row| row.get(0),
             )
             .expect("count");
-        assert_eq!(tables, 6);
+        assert_eq!(tables, 8);
     }
 
     #[test]
