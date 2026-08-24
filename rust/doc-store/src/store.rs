@@ -10,7 +10,7 @@
 //! leaves the database ahead of the stub rather than behind it. A stub whose digest the
 //! database does not recognize is a signal to re-resolve, never a reason to serve nothing.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -133,6 +133,10 @@ pub struct SyncReport {
     pub stubs_written: Vec<String>,
     /// Documents recovered from a pack because the database did not have them.
     pub restored: Vec<String>,
+    /// Documents that changed path, as `(from, to)`: a pointer arrived somewhere new naming
+    /// content the packs already held under another name. `git mv` and a plain `mv` both
+    /// leave exactly this, and following it is what keeps the move from being a deletion.
+    pub moved: Vec<(String, String)>,
     /// Stubs that could not be resolved from any source.
     pub unresolved: Vec<String>,
     /// Unresolved pointers whose path is force-added but git-ignored — their content stays
@@ -162,6 +166,7 @@ impl SyncReport {
         self.ingested.is_empty()
             && self.stubs_written.is_empty()
             && self.restored.is_empty()
+            && self.moved.is_empty()
             && self.unresolved.is_empty()
             && self.tracked_but_ignored.is_empty()
             && self.pruned.is_empty()
@@ -819,6 +824,10 @@ impl Store {
     fn reconcile(&mut self) -> Result<SyncReport, StoreError> {
         let mut report = SyncReport::default();
         let available = pack::load_all(&self.root)?;
+        // Paths a document has moved away from: their rows go, and neither the prune nor the
+        // materialize pass below may treat them as a deletion or as a document to bring
+        // back — one would report a move as a loss, the other would undo it.
+        let mut moved_from: BTreeSet<String> = BTreeSet::new();
 
         for absolute in discover(&self.root) {
             let Some(relative) = self.relative_of(&absolute) else {
@@ -855,11 +864,8 @@ impl Store {
                         // throw the merge away. Only when nothing holds the named version is
                         // the index the last copy of the document, and the stub is rewritten
                         // from it rather than left naming content that does not exist.
-                        match available
-                            .get(&relative)
-                            .filter(|packed| stub::digest_of(packed) == digest)
-                        {
-                            Some(packed) => {
+                        match packed_as(&available, &digest) {
+                            Some((_, packed)) => {
                                 self.ingest(&relative, packed)?;
                                 report.restored.push(relative);
                             }
@@ -871,10 +877,25 @@ impl Store {
                         }
                         continue;
                     }
-                    match available.get(&relative) {
-                        Some(source) => {
+                    // A pointer the index has never seen. Its own path first — the
+                    // fresh-clone case — and then the same digest under *any* name, because
+                    // a document that moved keeps its content and changes only its key. Not
+                    // following that was a way to destroy a document with two ordinary
+                    // commands: `git mv` left the new path unresolved and the old path a row
+                    // whose file was gone, and rule 5 pruned the only copy.
+                    let held = available
+                        .get_key_value(&relative)
+                        .or_else(|| packed_as(&available, &digest));
+                    match held {
+                        Some((was, source)) => {
+                            let from = was.clone();
                             self.ingest(&relative, source)?;
-                            report.restored.push(relative);
+                            if from == relative {
+                                report.restored.push(relative);
+                            } else {
+                                moved_from.insert(from.clone());
+                                report.moved.push((from, relative));
+                            }
                         }
                         None => {
                             if crate::git::is_tracked_but_ignored(&self.root, &relative) {
@@ -890,7 +911,10 @@ impl Store {
 
         // A row whose file is gone records a deletion made in the tree (rule 5 above):
         // prune it, then rewrite the packs so the deletion sticks instead of being
-        // restored by the next sync.
+        // restored by the next sync. A path the document moved *away* from is one of these
+        // and is not a deletion — the row goes, and the report says "moved", because
+        // "pruned" beside a restore is how a move used to read like two accidents.
+        let mut pruned_any = false;
         for summary in self.list()? {
             if self.stub_path(&summary.path).exists() {
                 continue;
@@ -901,9 +925,12 @@ impl Store {
                     params![summary.path],
                 )
                 .map_err(StoreError::backend)?;
-            report.pruned.push(summary.path);
+            pruned_any = true;
+            if !moved_from.contains(&summary.path) {
+                report.pruned.push(summary.path);
+            }
         }
-        if !report.pruned.is_empty() {
+        if pruned_any {
             self.export_packs()?;
         }
 
@@ -912,7 +939,7 @@ impl Store {
         // was just pruned matters: the pack copy loaded before the prune is the ghost
         // itself, and materializing it would resurrect the deleted file.
         for (relative, source) in &available {
-            if report.pruned.contains(relative) {
+            if report.pruned.contains(relative) || moved_from.contains(relative) {
                 continue;
             }
             if self.document_id(relative)?.is_none() {
@@ -930,6 +957,20 @@ impl Store {
         let relative = absolute.strip_prefix(&self.root).ok()?;
         stub::normalize_path(&relative.to_string_lossy())
     }
+}
+
+/// The pack entry whose content is exactly `digest`, under whatever name it is filed.
+///
+/// The packs are keyed by path and a document's identity is its content, so a pointer is
+/// answerable by any entry carrying its digest. That is what makes a move followable: the new
+/// path has never been in a pack, and the old one holds precisely what the new pointer names.
+fn packed_as<'a>(
+    available: &'a BTreeMap<String, String>,
+    digest: &str,
+) -> Option<(&'a String, &'a String)> {
+    available
+        .iter()
+        .find(|(_, source)| stub::digest_of(source) == digest)
 }
 
 /// Compress `text` when that actually saves space, reporting which form was chosen.
@@ -1617,6 +1658,45 @@ mod tests {
         // And the repair the message names actually works.
         let report = store.sync().expect("sync");
         assert_eq!(report.restored, vec!["lost.dx".to_string()]);
+    }
+
+    #[test]
+    fn sync_follows_a_moved_document_instead_of_pruning_the_only_copy_of_it() {
+        // `git mv thing.dx docs/thing.dx` used to be a way to destroy a document with two
+        // ordinary commands: the new path resolved to nothing, the old path was a row whose
+        // file was gone, and the prune took the last copy while both commands reported
+        // success. The pointer names the content, so the content is findable under any name.
+        let root = scratch("follow-move");
+        let mut store = Store::open(&root).expect("open");
+        store.ingest("thing.dx", NOTES).expect("ingest");
+        store.ingest("stays.dx", "# Stays\n").expect("ingest");
+        drop(store);
+
+        fs::create_dir_all(root.join("docs")).expect("dirs");
+        fs::rename(root.join("thing.dx"), root.join("docs/thing.dx")).expect("move it");
+
+        let mut store = Store::open(&root).expect("reopen");
+        let report = store.sync().expect("sync");
+        assert_eq!(
+            report.moved,
+            vec![("thing.dx".to_string(), "docs/thing.dx".to_string())],
+            "{report:?}"
+        );
+        assert!(
+            report.pruned.is_empty(),
+            "a move is not a deletion: {report:?}"
+        );
+        assert!(report.unresolved.is_empty(), "{report:?}");
+        assert_eq!(store.source("docs/thing.dx").expect("resolves"), NOTES);
+        assert!(
+            !root.join("thing.dx").exists(),
+            "the old path must not be resurrected"
+        );
+        assert!(
+            store.source("stays.dx").is_ok(),
+            "the untouched document stays"
+        );
+        assert!(store.sync().expect("settle").is_clean(), "and it settles");
     }
 
     #[test]
