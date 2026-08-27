@@ -9,3 +9,4 @@ repository.workspace = true
 [dependencies]
 doc-core = { path = "../doc-core" }
 doc-shot = { path = "../doc-shot" }
+doc-store = { path = "../doc-store" }

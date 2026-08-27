@@ -168,6 +168,11 @@ impl Grant {
 /// This is the read scope's outer edge — "the parent folder that has the repo" — so a
 /// document deep in a project reads the whole project, and a loose document in a plain
 /// folder reads that folder and nothing above it.
+///
+/// A `.git` **file** (rather than directory) satisfies the marker too — that is what a `git
+/// worktree` checkout has, pointing at the real `.git` elsewhere — so a worktree is its own
+/// scope by this function alone. [`read_scope`] is what widens that to the repository's other
+/// worktrees; call that, not this, when building a [`Grant`].
 #[must_use]
 pub fn repo_root(document_dir: &Path) -> PathBuf {
     let start = std::fs::canonicalize(document_dir).unwrap_or_else(|_| document_dir.to_path_buf());
@@ -181,6 +186,32 @@ pub fn repo_root(document_dir: &Path) -> PathBuf {
             None => return start.clone(),
         }
     }
+}
+
+/// The full read scope for a document at `document_dir`: its repository, plus every other
+/// working tree of the *same* repository.
+///
+/// [`repo_root`] alone under-scopes a `git worktree` checkout. A worktree carries its own
+/// `.git` (a file pointing at the real one), so `repo_root` correctly stops there rather than
+/// climbing into whatever directory happens to be above it — but that leaves the checkout the
+/// worktree was created from, and any of its siblings, outside the boundary even though they
+/// are provably the same logical project: one `.git` common directory, shared history, shared
+/// remotes. A gate that reads the main checkout's live state by absolute path is not reading
+/// "the rest of the machine" — it is reading the repository it is already scoped to, from a
+/// different one of that repository's own checkouts.
+///
+/// `git worktree list` (via [`doc_store::git::linked_worktrees`]) is the source of truth for
+/// which directories those are: it is git's own bookkeeping, not anything the document or the
+/// block declares, so a block cannot widen its own scope by naming an arbitrary path — only a
+/// path git itself already recognises as another checkout of the same history comes back.
+/// When git is unavailable, or `document_dir` is not a repository at all, this is exactly
+/// `[repo_root(document_dir)]` — the pre-existing, narrower behaviour.
+#[must_use]
+pub fn read_scope(document_dir: &Path) -> Vec<PathBuf> {
+    let root = repo_root(document_dir);
+    let mut scope = vec![root.clone()];
+    scope.extend(doc_store::git::linked_worktrees(&root));
+    scope
 }
 
 /// Wrap `spec` so the kernel confines it to `grant`.
@@ -583,6 +614,78 @@ mod tests {
             repo_root(&loose),
             std::fs::canonicalize(&loose).expect("canonical"),
             "a folder with no repository above it is its own scope"
+        );
+    }
+
+    /// The bug this pins: a document run from a `git worktree` checkout of a repository could
+    /// not read a file in the checkout the worktree was created from, even though both are
+    /// the same logical repository sharing one `.git`. `repo_root` alone stops at the
+    /// worktree (it has its own `.git` file), so the read scope has to be widened explicitly
+    /// by [`read_scope`] rather than by climbing further — climbing would also let a loose
+    /// document outside any repository walk into an unrelated parent directory.
+    #[test]
+    fn a_worktree_reads_its_own_checkout_and_its_sibling_worktree() {
+        let scratch = std::env::temp_dir().join("dx-confine-tests-read-scope");
+        let _ = std::fs::remove_dir_all(&scratch);
+        std::fs::create_dir_all(&scratch).expect("scratch");
+        let git = |dir: &Path, args: &[&str]| {
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(dir)
+                .args(args)
+                .output()
+                .is_ok_and(|out| out.status.success())
+        };
+
+        let main = scratch.join("main");
+        std::fs::create_dir_all(&main).expect("main checkout");
+        if !git(&main, &["init", "-q", "-b", "main"]) {
+            return; // No git on this machine; nothing to assert.
+        }
+        git(&main, &["config", "user.email", "t@example.com"]);
+        git(&main, &["config", "user.name", "t"]);
+        std::fs::write(main.join("audit.dx"), "::paragraph id=p\nx\n::end\n").expect("write");
+        git(&main, &["add", "-A"]);
+        git(&main, &["commit", "-qm", "one"]);
+
+        // The main checkout alone reads only itself, same as any other repository.
+        assert_eq!(
+            read_scope(&main),
+            vec![std::fs::canonicalize(&main).expect("canonical")]
+        );
+
+        let side = scratch.join("side");
+        assert!(git(
+            &main,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "side",
+                &side.to_string_lossy()
+            ],
+        ));
+
+        // From the worktree, the read scope reaches back into the checkout it was created
+        // from — the file this test writes lives only in `main`, never copied into `side`.
+        let scope = read_scope(&side);
+        let main_canonical = std::fs::canonicalize(&main).expect("canonical");
+        let side_canonical = std::fs::canonicalize(&side).expect("canonical");
+        assert!(
+            scope.contains(&side_canonical),
+            "the worktree itself must stay in scope: {scope:?}"
+        );
+        assert!(
+            scope.contains(&main_canonical),
+            "the checkout it was branched from must be in scope too: {scope:?}"
+        );
+
+        // And the same holds symmetrically from the main checkout looking at the worktree.
+        let scope_from_main = read_scope(&main);
+        assert!(
+            scope_from_main.contains(&side_canonical),
+            "a sibling worktree must be readable from the main checkout too: {scope_from_main:?}"
         );
     }
 

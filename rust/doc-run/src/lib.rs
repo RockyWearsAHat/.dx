@@ -828,12 +828,11 @@ fn execute(
     // document's folders writable would be a fetch that can edit the project, and no
     // install needs that.
     let writable = vec![dirs.block.clone(), dirs.toolchains.clone()];
-    // What a block may read: the repository its document belongs to, and the run caches.
+    // What a block may read: the repository its document belongs to (plus that repository's
+    // other worktrees, if it has any — see `confine::read_scope`), and the run caches.
     // Everything else of the user's is outside the boundary — see `confine`.
-    let readable = vec![
-        confine::repo_root(&options.document_dir),
-        options.cache_root.clone(),
-    ];
+    let mut readable = confine::read_scope(&options.document_dir);
+    readable.push(options.cache_root.clone());
     let installing = Grant::offline(writable.clone())
         .reading(readable.clone())
         .with_network();
