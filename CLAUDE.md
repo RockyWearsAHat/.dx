@@ -132,12 +132,7 @@ crates and the surfaces; `rust/engine.dx` is the crate-by-crate responsibility l
   interpreter and no subprocess of the block's own code, so `confine`'s boundary is not what
   is protecting anything there — `live.rs`'s module doc is the authority on what scopes it
   instead (a browser that resolves and proxies only the one `target=` host, hostname or IP
-  literal alike), and `capture_network.rs` is its own attack evidence. `lang=query` is the
-  other: a declarative read of one JSON field from a `src=` sibling file or a `target=` live
-  service (`query=<dot.path>`), never author code, so there is likewise nothing of the
-  block's own for `confine` to sandbox — `query.rs`'s module doc is the authority on its
-  scope (a direct, unproxied `http://` GET to exactly the one `target=` host:port, no
-  redirect ever followed), and `query_network.rs` is its own attack evidence.
+  literal alike), and `capture_network.rs` is its own attack evidence.
 - **Unreviewed code does not run at all — but a local edit is the review.**
   `doc-run::approvals` (module doc is the authority) is a ledger of fingerprints *this machine*
   recorded, never inside a repository. The identity is the code and its powers — runner, deps,

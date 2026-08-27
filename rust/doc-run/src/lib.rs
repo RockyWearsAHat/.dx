@@ -61,7 +61,6 @@ mod live;
 mod live_actions;
 mod live_proxy;
 mod order;
-mod query;
 mod workdir;
 
 /// Serializes tests that touch process environment variables (`HOME`, `DX_UNCONFINED`,
@@ -550,24 +549,12 @@ fn declared_read_paths(reads: &str) -> Result<Vec<String>, String> {
 /// the same way [`fingerprint`] prepends a `writes=` grant: reviewing the code reviews the
 /// whole power, not just the part written as a script. Toggling `actions` with the body
 /// left untouched must re-open review too, or an approved raw-JS fingerprint would stay
-/// "approved" once reinterpreted as a wholly different compiled program.
-///
-/// A `query` block has no script body at all — `target=` (or the hydrated `src=` text
-/// already carried in `block.text`) and `query=` are its *entire* power, so both are
-/// prepended the same way: a reviewer approves exactly where it reaches and which field it
-/// extracts, and editing either re-opens review even though there is no "code" to look
-/// different in a diff.
-///
-/// Every other block's `target`/`setup`/`actions`/`query` stay at their defaults, so this
-/// returns their body completely unchanged — no fingerprint computed before these fields
+/// "approved" once reinterpreted as a wholly different compiled program. Every other
+/// block's `target` and `setup` are always empty and `actions` is always false, so this
+/// returns their body completely unchanged — no fingerprint computed before this field
 /// existed moves.
 fn approval_material(block: &Block) -> std::borrow::Cow<'_, str> {
-    if block.language.eq_ignore_ascii_case("query") {
-        std::borrow::Cow::Owned(format!(
-            "target={}\u{1f}query={}\u{1f}{}",
-            block.target, block.query, block.text
-        ))
-    } else if block.target.is_empty() && block.setup.is_empty() && !block.actions {
+    if block.target.is_empty() && block.setup.is_empty() && !block.actions {
         std::borrow::Cow::Borrowed(block.text.as_str())
     } else {
         std::borrow::Cow::Owned(format!(
@@ -824,13 +811,6 @@ fn execute(
             Ok(granted) => live::execute(block, &granted, &options.document_dir, timeout),
             Err(message) => blocked(&message),
         };
-    }
-
-    // `query` is a read, not a run: no interpreter, no subprocess, nothing of the block's
-    // own to sandbox — see [`query`]'s module doc. It writes nothing, so it needs no
-    // `writes=` grant and never reaches `plan`/`confine` either.
-    if runner == "query" {
-        return query::execute(block, timeout);
     }
 
     let dirs = plan::Dirs {

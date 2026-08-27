@@ -764,19 +764,7 @@ fn run_tool() -> Value {
                         run's picture. This is the answer to \"::view only shows a static \
                         local file\" — ::view stays that way on purpose (it is a read, and \
                         reads never execute); a live app's current, driven-into-a-state \
-                        rendering is what lang=capture is for. A second, smaller exception: \
-                        lang=query. A block `::code lang=query run src=<path> \
-                        query=<dot.path>` (or `target=<url>` instead of `src=`) reads a \
-                        sibling file or a live http:// service, parses it as JSON, and \
-                        records one field — `query=status.stepsDone` or \
-                        `query=items[2].name` — as the block's output, with no author code \
-                        at all: no interpreter, no subprocess, nothing to sandbox beyond the \
-                        one declared src=/target= reach itself. `target=` is scoped exactly \
-                        like a capture's: one host:port, http:// only (an https:// service \
-                        is reached through lang=capture's browser instead), no redirect ever \
-                        followed. This is the answer to \"show this document one field of \
-                        live project state\" — stepsDone out of a status file, status out of \
-                        a health endpoint — without hand-writing a parsing script. What a block reads it \
+                        rendering is what lang=capture is for. What a block reads it \
                         declares with reads=src,data.csv \
                         — files or folders; a folder covers every file under it (hidden \
                         entries, target/node_modules, and the block's own writes= folders \

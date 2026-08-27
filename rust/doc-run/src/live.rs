@@ -199,13 +199,11 @@ fn capture(
 }
 
 /// The host and port a capture target names, for scoping the browser's DNS resolution
-/// ([`Cdp::launch`]'s `allow_host`) and for polling readiness before opening it. Also the
-/// authority [`crate::query`] scopes its own plain HTTP fetch to, for a `lang=query
-/// target=` block — the same "exactly this host:port, nothing else" parsing either way.
+/// ([`Cdp::launch`]'s `allow_host`) and for polling readiness before opening it.
 #[derive(Debug)]
-pub(crate) struct Authority {
-    pub(crate) host: String,
-    pub(crate) port: u16,
+struct Authority {
+    host: String,
+    port: u16,
 }
 
 /// Parse `url`'s host and port.
@@ -213,7 +211,7 @@ pub(crate) struct Authority {
 /// This is not a general URL parser — it only has to be right for the http(s) targets a
 /// capture block can name. A bracketed IPv6 literal is kept whole with its brackets; every
 /// other authority is split on the last `:` to find a port, defaulting to 80 or 443.
-pub(crate) fn target_authority(url: &str) -> Result<Authority, String> {
+fn target_authority(url: &str) -> Result<Authority, String> {
     let (scheme, rest) = if let Some(rest) = url.strip_prefix("https://") {
         ("https", rest)
     } else if let Some(rest) = url.strip_prefix("http://") {
