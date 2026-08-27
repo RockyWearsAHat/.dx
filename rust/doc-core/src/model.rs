@@ -108,6 +108,10 @@ pub struct Block {
     /// `hover`, `type`, `key`, `scroll`, `eval` — the bare `actions` attribute) rather
     /// than raw JavaScript. Ignored outside `lang=capture`.
     pub actions: bool,
+    /// The dot-path a `lang=query` block extracts from the JSON it reads (`query=`
+    /// attribute), e.g. `status.stepsDone` or `items[2].name`. Empty for every other
+    /// `code` block.
+    pub query: String,
 }
 
 /// Names of the language runners the platform can execute, in catalogue order.
@@ -128,6 +132,7 @@ pub const RUNNERS: &[&str] = &[
     "java",
     "swift",
     "capture",
+    "query",
 ];
 
 /// Map a `code` block's `language` to the runner that executes it, or `None` when the
@@ -138,7 +143,9 @@ pub const RUNNERS: &[&str] = &[
 /// `typescript` (the machine's own Node toolchain — `deno` stays its own explicit
 /// choice), `sh`/`shell`/`zsh` under `bash`, `rs` under `rust`, and `c++`/`cc`/`cxx`
 /// under `cpp`. `capture` names itself: it is not a language, it is dx's own driver for
-/// a `target=` URL, so there is no alias to fold.
+/// a `target=` URL, so there is no alias to fold. `query` names itself the same way: it is
+/// dx's own driver for reading one field out of a `src=` file or a `target=` service, never
+/// author code, so there is nothing to alias either.
 #[must_use]
 pub fn runner_for_language(language: &str) -> Option<&'static str> {
     match language.trim().to_ascii_lowercase().as_str() {
@@ -155,6 +162,7 @@ pub fn runner_for_language(language: &str) -> Option<&'static str> {
         "java" => Some("java"),
         "swift" => Some("swift"),
         "capture" => Some("capture"),
+        "query" => Some("query"),
         _ => None,
     }
 }

@@ -10,3 +10,4 @@ repository.workspace = true
 doc-core = { path = "../doc-core" }
 doc-shot = { path = "../doc-shot" }
 doc-store = { path = "../doc-store" }
+serde_json = "1.0"

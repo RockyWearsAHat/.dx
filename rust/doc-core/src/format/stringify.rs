@@ -60,6 +60,9 @@ pub(crate) fn block_header(block: &Block) -> String {
             if !block.setup.is_empty() {
                 attributes.push(format!("setup={}", format_attribute_value(&block.setup)));
             }
+            if !block.query.is_empty() {
+                attributes.push(format!("query={}", format_attribute_value(&block.query)));
+            }
             if block.width > 0 {
                 attributes.push(format!("width={}", block.width));
             }
