@@ -75,6 +75,7 @@ fn push_block(blocks: &mut Vec<Block>, block_type: &str, attrs: &[Attr], content
             block.writes = js_trim(attr(attrs, "writes")).to_string();
             block.target = js_trim(attr(attrs, "target")).to_string();
             block.setup = js_trim(attr(attrs, "setup")).to_string();
+            block.query = js_trim(attr(attrs, "query")).to_string();
             block.width = attr(attrs, "width").trim().parse().unwrap_or(0);
             block.height = attr(attrs, "height").trim().parse().unwrap_or(0);
             block.timeout = attr(attrs, "timeout").trim().parse().unwrap_or(0);

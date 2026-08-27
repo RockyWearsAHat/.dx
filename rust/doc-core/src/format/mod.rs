@@ -511,6 +511,23 @@ mod tests {
     }
 
     #[test]
+    fn a_query_blocks_src_and_query_path_round_trip() {
+        let input = "::code id=steps lang=query src=status.json run query=stepsDone\n\n::end\n";
+        assert_eq!(round_trip(input), input);
+        let block = &parse(input).blocks[0];
+        assert_eq!(block.src, "status.json");
+        assert_eq!(block.query, "stepsDone");
+        // Additive: a query block naming target= instead of src= serializes the same way,
+        // and a query block with neither adds nothing beyond `lang=query run`.
+        let live = "::code id=health lang=query run target=http://127.0.0.1:8080/health \
+                     query=status\n\n::end\n";
+        assert_eq!(round_trip(live), live);
+        let bare = "::code id=steps lang=query run\n\n::end\n";
+        assert_eq!(round_trip(bare), bare);
+        assert!(parse(bare).blocks[0].query.is_empty());
+    }
+
+    #[test]
     fn plain_code_gains_no_execution_attributes() {
         // Non-runnable code must serialize exactly as before, or every existing doc drifts.
         let input = "::code id=c lang=js\nconst x = 1;\n::end\n";

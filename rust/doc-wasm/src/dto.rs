@@ -104,6 +104,10 @@ pub struct BlockDto {
     /// (`setup=` attribute).
     #[serde(default)]
     pub setup: String,
+    /// The dot-path a `lang=query` block extracts from the JSON it reads (`query=`
+    /// attribute), e.g. `status.stepsDone` or `items[2].name`.
+    #[serde(default)]
+    pub query: String,
     /// Seconds an executable `code` block may run before it is killed; `0` means default.
     #[serde(default)]
     pub timeout: u32,
@@ -203,6 +207,7 @@ impl From<&Block> for BlockDto {
             writes: block.writes.clone(),
             target: block.target.clone(),
             setup: block.setup.clone(),
+            query: block.query.clone(),
             timeout: block.timeout,
             for_block: block.for_block.clone(),
             status: block.status.clone(),
@@ -241,6 +246,7 @@ impl From<&BlockDto> for Block {
             writes: dto.writes.clone(),
             target: dto.target.clone(),
             setup: dto.setup.clone(),
+            query: dto.query.clone(),
             timeout: dto.timeout,
             for_block: dto.for_block.clone(),
             status: dto.status.clone(),
