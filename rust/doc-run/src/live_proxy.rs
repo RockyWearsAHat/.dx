@@ -84,7 +84,7 @@ pub(crate) fn start(allowed_host: String, allowed_port: u16) -> Result<Proxy, St
 fn handle(mut client: TcpStream, allowed_host: &str, allowed_port: u16) -> std::io::Result<()> {
     client.set_read_timeout(Some(Duration::from_secs(10)))?;
     let request = read_request_line(&mut client)?;
-    let Some((method, target)) = request else {
+    let Some((method, target, headers)) = request else {
         return Ok(());
     };
 
@@ -123,8 +123,9 @@ fn handle(mut client: TcpStream, allowed_host: &str, allowed_port: u16) -> std::
         // expect the absolute-URI a proxy is sent.
         let origin_form = request_target_from_absolute(&target).unwrap_or(target.clone());
         upstream.write_all(format!("{method} {origin_form} HTTP/1.1\r\n").as_bytes())?;
-        // The rest of the request (headers, and any already-buffered body bytes) still
-        // needs to reach the origin — relay drains and forwards everything else below.
+        upstream.write_all(&headers)?;
+        // Any already-buffered body bytes still need to reach the origin — relay drains
+        // and forwards everything else below.
     }
 
     relay(client, upstream)
@@ -139,8 +140,10 @@ fn relay(client: TcpStream, upstream: TcpStream) -> std::io::Result<()> {
     let to_upstream = thread::spawn(move || {
         let mut client_read = client_read;
         let mut upstream_write = upstream_write;
-        let _ = std::io::copy(&mut client_read, &mut upstream_write);
-        let _ = upstream_write.shutdown(std::net::Shutdown::Write);
+        let r = std::io::copy(&mut client_read, &mut upstream_write);
+        if r.is_ok() {
+            let _ = upstream_write.shutdown(std::net::Shutdown::Write);
+        }
     });
     let mut upstream_read = upstream;
     let mut client_write = client;
@@ -150,10 +153,11 @@ fn relay(client: TcpStream, upstream: TcpStream) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Read one request line (`METHOD target HTTP/version`) and consume the header block that
-/// follows it, so a re-issued plain-HTTP request's headers are still sitting in `client`'s
-/// stream for [`relay`] to forward untouched. Returns `(method, target)`, uppercased method.
-fn read_request_line(client: &mut TcpStream) -> std::io::Result<Option<(String, String)>> {
+/// Read one request line (`METHOD target HTTP/version`) plus the header block that follows
+/// it. Returns `(method, target, headers)` — uppercased method, and the raw header bytes
+/// (everything after the request line's trailing `\r\n`, including the final blank line) for
+/// [`handle`] to forward verbatim to the origin.
+fn read_request_line(client: &mut TcpStream) -> std::io::Result<Option<(String, String, Vec<u8>)>> {
     let mut buf = Vec::new();
     let mut byte = [0u8; 1];
     // A request line plus headers is small; reading byte-by-byte to find `\r\n\r\n` keeps
@@ -170,16 +174,20 @@ fn read_request_line(client: &mut TcpStream) -> std::io::Result<Option<(String, 
             return Ok(None);
         }
     }
-    let text = String::from_utf8_lossy(&buf);
-    let mut lines = text.split("\r\n");
-    let Some(first) = lines.next() else {
+    let Some(split_point) = buf.windows(2).position(|w| w == b"\r\n") else {
         return Ok(None);
     };
-    let mut parts = first.split_whitespace();
+    let first_line = String::from_utf8_lossy(&buf[..split_point]);
+    let mut parts = first_line.split_whitespace();
     let (Some(method), Some(target)) = (parts.next(), parts.next()) else {
         return Ok(None);
     };
-    Ok(Some((method.to_ascii_uppercase(), target.to_string())))
+    let headers = buf[split_point + 2..].to_vec();
+    Ok(Some((
+        method.to_ascii_uppercase(),
+        target.to_string(),
+        headers,
+    )))
 }
 
 /// `http://host:port/path` → `host:port`.
