@@ -314,6 +314,92 @@ fn a_repositorys_document_reads_the_repository_and_nothing_above_it() {
     );
 }
 
+/// A `git worktree` checkout is its own directory but the same repository. A document run
+/// from one must still be able to read a file that lives only in a sibling checkout of that
+/// same repository — the live state a gate wants was never "the rest of the machine" just
+/// because it happens to sit in whichever checkout `dx` was not invoked from this time.
+#[test]
+fn a_worktree_reads_a_file_that_lives_only_in_its_sibling_checkout() {
+    if !confined() {
+        return;
+    }
+    let git = |dir: &Path, args: &[&str]| {
+        std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .output()
+            .is_ok_and(|out| out.status.success())
+    };
+
+    let scratch = std::env::temp_dir().join("dx-attack-worktree-scope");
+    let _ = fs::remove_dir_all(&scratch);
+    let main = scratch.join("main");
+    fs::create_dir_all(&main).expect("main checkout");
+    if !git(&main, &["init", "-q", "-b", "main"]) {
+        return; // No git on this machine; nothing to assert.
+    }
+    git(&main, &["config", "user.email", "t@example.com"]);
+    git(&main, &["config", "user.name", "t"]);
+    fs::write(main.join("seed.dx"), "::paragraph id=p\nx\n::end\n").expect("write");
+    git(&main, &["add", "-A"]);
+    git(&main, &["commit", "-qm", "one"]);
+
+    // Live state that exists only in the main checkout — never copied into the worktree —
+    // the same shape as `.sara/config.json` living only in the checkout a worktree branched
+    // from, not duplicated into every worktree.
+    fs::write(
+        main.join("live-state.json"),
+        "the main checkout's live state",
+    )
+    .expect("state");
+
+    let side = scratch.join("side");
+    assert!(git(
+        &main,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "side",
+            &side.to_string_lossy()
+        ],
+    ));
+
+    let mut options = RunOptions {
+        document_dir: side.clone(),
+        cache_root: scratch.join("cache"),
+        default_timeout: Duration::from_secs(30),
+        approve: true,
+        ..RunOptions::default()
+    };
+    let output = attack(
+        &format!("cat {}", main.join("live-state.json").display()),
+        &options,
+    );
+    assert!(
+        output.contains("the main checkout's live state"),
+        "a worktree could not read its sibling checkout of the same repository: {output}"
+    );
+
+    // The boundary is still real: an unrelated directory beside the whole scratch tree — no
+    // relation to this repository at all — must stay dark from the worktree exactly as it
+    // would from any other checkout.
+    let canary = scratch
+        .parent()
+        .expect("temp parent")
+        .join("dx-attack-worktree-scope-canary.txt");
+    fs::write(&canary, "CANARY-9f21 beyond the repository").expect("canary");
+    options.document_dir = side;
+    let leaked = attack(&format!("cat {}", canary.display()), &options);
+    let _ = fs::remove_file(&canary);
+    assert!(
+        !leaked.contains("CANARY-9f21"),
+        "a worktree read a directory unrelated to its repository: {leaked}"
+    );
+}
+
 /// Credentials are the exception inside the readable scope: these are denied outright, so
 /// a document cannot even put a key on the page for a shoulder to read over.
 #[test]
