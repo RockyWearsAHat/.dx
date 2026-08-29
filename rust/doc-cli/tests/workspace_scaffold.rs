@@ -63,6 +63,58 @@ fn all_workspace_member_crates_have_source_directories() {
     }
 }
 
+#[test]
+fn workspace_builds_with_no_dependency_gaps() {
+    // GREEN: cargo check must pass, verifying no dependency gaps or unresolved references.
+    let output = Command::new("cargo")
+        .args(&["check", "--all"])
+        .env("GOWORK", "off")
+        .current_dir(workspace_root())
+        .output()
+        .expect("cargo check must run");
+
+    assert!(
+        output.status.success(),
+        "cargo check failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn workspace_dependency_graph_is_acyclic() {
+    // GREEN: cargo tree must succeed, indicating no circular dependencies.
+    let output = Command::new("cargo")
+        .args(&["tree", "--depth", "10"])
+        .env("GOWORK", "off")
+        .current_dir(workspace_root())
+        .output()
+        .expect("cargo tree must run");
+
+    assert!(
+        output.status.success(),
+        "cargo tree failed (circular dependency?): {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // tree output should list all members.
+    let tree = String::from_utf8_lossy(&output.stdout);
+    let expected_crates = vec![
+        "doc-cli",
+        "doc-core",
+        "doc-run",
+        "doc-shot",
+        "doc-store",
+        "doc-wasm",
+    ];
+    for crate_name in expected_crates {
+        assert!(
+            tree.contains(&format!("{} v", crate_name)),
+            "cargo tree missing workspace member: {}",
+            crate_name
+        );
+    }
+}
+
 /// Find the Rust workspace root (the directory containing Cargo.toml at workspace level).
 fn workspace_root() -> std::path::PathBuf {
     // CARGO_MANIFEST_DIR points to the crate's directory (doc-cli).
