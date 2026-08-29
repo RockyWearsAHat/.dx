@@ -1,39 +1,26 @@
 #!/usr/bin/env bash
 # Wrapper for node that uses custom test reporter by default
-# Find the real node binary by searching common locations and excluding this wrapper
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Find the real node binary by getting the latest NVM version, then fall back to system
 REAL_NODE=""
-
-# Try to find node in NVM's latest version first, then other common locations
-for dir in ~/.nvm/versions/node/v*/bin /usr/local/bin /usr/bin; do
-  if [[ -f "$dir/node" && "$dir/node" != "$SCRIPT_DIR/node" ]]; then
-    # Use the first (or latest if sorted) version found
-    REAL_NODE="$dir/node"
-    # Don't break - keep searching to get the latest version
-  fi
-done
-
-# Sort and get the latest if multiple found
 if [[ -d ~/.nvm/versions/node ]]; then
-  REAL_NODE="$( (find ~/.nvm/versions/node -maxdepth 2 -type f -name "node" 2>/dev/null | sort -V | tail -1) || echo "")"
+  # Get latest v* directory
+  for nvm_dir in $(ls -1d ~/.nvm/versions/node/v* 2>/dev/null | sort -V | tail -1); do
+    if [[ -x "$nvm_dir/bin/node" ]]; then
+      REAL_NODE="$nvm_dir/bin/node"
+      break
+    fi
+  done
 fi
 
-# Fallback to system node if not found in NVM
-if [[ -z "$REAL_NODE" ]] || [[ ! -x "$REAL_NODE" ]]; then
-  REAL_NODE="$(command -v node 2>/dev/null || echo "")"
-  # Avoid recursion - if command -v returns the wrapper, search for a different node
-  if [[ "$REAL_NODE" == "$SCRIPT_DIR/node" ]]; then
-    for dir in /usr/local/bin /usr/bin /opt/homebrew/bin; do
-      if [[ -x "$dir/node" ]]; then
-        REAL_NODE="$dir/node"
-        break
-      fi
-    done
-  fi
+# Fallback to system node
+if [[ -z "$REAL_NODE" ]]; then
+  REAL_NODE="/usr/bin/node"
 fi
 
-if [[ -z "$REAL_NODE" ]] || [[ ! -x "$REAL_NODE" ]]; then
-  echo "Could not find node binary" >&2
+if [[ ! -x "$REAL_NODE" ]]; then
+  echo "Could not find node binary at $REAL_NODE" >&2
   exit 1
 fi
 
