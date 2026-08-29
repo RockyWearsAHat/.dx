@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Wrapper for node that uses custom test reporter by default
+if [[ "$1" == "--test" ]]; then
+  exec /usr/bin/env node --test-reporter="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/editor/test-reporter.mjs" "$@"
+else
+  exec /usr/bin/env node "$@"
+fi
