@@ -7,7 +7,7 @@ use std::process::Command;
 fn cargo_metadata_recognizes_all_workspace_members() {
     // GREEN: cargo metadata must work and report all workspace members.
     let output = Command::new("cargo")
-        .args(&["metadata", "--format-version", "1"])
+        .args(["metadata", "--format-version", "1"])
         .current_dir(workspace_root())
         .output()
         .expect("cargo metadata must run");
@@ -67,7 +67,7 @@ fn all_workspace_member_crates_have_source_directories() {
 fn workspace_builds_with_no_dependency_gaps() {
     // GREEN: cargo check must pass, verifying no dependency gaps or unresolved references.
     let output = Command::new("cargo")
-        .args(&["check", "--all"])
+        .args(["check", "--all"])
         .env("GOWORK", "off")
         .current_dir(workspace_root())
         .output()
@@ -84,7 +84,7 @@ fn workspace_builds_with_no_dependency_gaps() {
 fn workspace_dependency_graph_is_acyclic() {
     // GREEN: cargo tree must succeed, indicating no circular dependencies.
     let output = Command::new("cargo")
-        .args(&["tree", "--depth", "10"])
+        .args(["tree", "--depth", "10"])
         .env("GOWORK", "off")
         .current_dir(workspace_root())
         .output()

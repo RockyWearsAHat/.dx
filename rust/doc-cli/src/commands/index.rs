@@ -57,7 +57,7 @@ const SURVEY_READ_CAP: u64 = 512 * 1024;
 /// `dx trace` reads (`commands::trace`), so the two stay looking at the same tree.
 pub(crate) const CODE_EXTENSIONS: &[&str] = &[
     "rs", "js", "mjs", "cjs", "ts", "tsx", "jsx", "py", "go", "rb", "java", "kt", "swift", "c",
-    "h", "cpp", "hpp", "cc", "cs", "php", "sh", "bash", "lua", "sql",
+    "h", "cpp", "hpp", "cc", "cs", "php", "sh", "bash", "lua", "sql", "mm", "metal", "S",
 ];
 
 /// File names that are an area's front door regardless of what references them. Kept in
@@ -1976,6 +1976,22 @@ mod tests {
         assert!(
             text.contains("::code id=area-root-entry lang=python src=manage.py"),
             "{text}"
+        );
+    }
+
+    #[test]
+    fn code_extensions_includes_objective_cpp_metal_and_assembly() {
+        assert!(
+            CODE_EXTENSIONS.contains(&"mm"),
+            "CODE_EXTENSIONS must include 'mm' for Objective-C++"
+        );
+        assert!(
+            CODE_EXTENSIONS.contains(&"metal"),
+            "CODE_EXTENSIONS must include 'metal' for Metal GPU"
+        );
+        assert!(
+            CODE_EXTENSIONS.contains(&"S"),
+            "CODE_EXTENSIONS must include 'S' for Assembly"
         );
     }
 }

@@ -254,7 +254,9 @@ pub fn decode(png: &[u8]) -> Result<Image, String> {
     let rgba = match color_type {
         6 => pixels,
         2 => pixels
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .flat_map(|pixel| [pixel[0], pixel[1], pixel[2], 255])
             .collect(),
         0 => pixels
@@ -262,7 +264,9 @@ pub fn decode(png: &[u8]) -> Result<Image, String> {
             .flat_map(|&gray| [gray, gray, gray, 255])
             .collect(),
         _ => pixels
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .flat_map(|pixel| [pixel[0], pixel[0], pixel[0], pixel[1]])
             .collect(),
     };
@@ -331,12 +335,17 @@ fn paeth(left: u8, up: u8, up_left: u8) -> u8 {
 /// from a naive one.
 #[must_use]
 pub fn encode(image: &Image) -> Vec<u8> {
-    let opaque = image.rgba.chunks_exact(4).all(|pixel| pixel[3] == 255);
+    let opaque = image
+        .rgba
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .all(|pixel| pixel[3] == 255);
     let (color_type, channels) = if opaque { (2u8, 3usize) } else { (6u8, 4usize) };
     let stride = image.width as usize * channels;
 
     let mut pixels = Vec::with_capacity(stride * image.height as usize);
-    for pixel in image.rgba.chunks_exact(4) {
+    for pixel in image.rgba.as_chunks::<4>().0 {
         pixels.extend_from_slice(&pixel[..channels]);
     }
 
