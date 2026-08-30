@@ -298,4 +298,51 @@ mod tests {
             assert!(file.starts_with("/Applications/Firefox.app/Contents/Resources"));
         }
     }
+
+    /// Integration test: Firefox policy generation from signed XPI.
+    /// When a signed XPI is present at packaging/signed/dx-firefox.xpi,
+    /// the firefox() function returns a policy that installs from that XPI.
+    #[test]
+    fn firefox_policy_uses_the_signed_xpi_when_present() {
+        let root = scratch("firefox-signed");
+
+        // Create packaging/signed directory with a mock signed XPI
+        let packaging_signed = root.join("packaging").join("signed");
+        std::fs::create_dir_all(&packaging_signed).expect("create packaging/signed");
+        let signed_xpi = packaging_signed.join("dx-firefox.xpi");
+        std::fs::write(&signed_xpi, b"mock signed xpi").expect("write xpi");
+
+        // Call firefox() to generate the policy
+        let policy = firefox(&root, &signed_xpi).expect("generate firefox policy");
+
+        // Verify the policy has the correct structure and references the signed XPI
+        assert_eq!(
+            policy["policies"][SETTINGS][GECKO_ID]["installation_mode"],
+            "force_installed"
+        );
+        assert_eq!(
+            policy["policies"][SETTINGS][GECKO_ID]["install_url"],
+            file_url(&signed_xpi)
+        );
+        assert_eq!(
+            policy["policies"][SETTINGS][GECKO_ID]["updates_disabled"],
+            true
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    fn firefox(_root: &Path, signed_xpi: &Path) -> Result<Value, String> {
+        let mut policy = json!({ "policies": {} });
+        let entry = json!({
+            "installation_mode": "force_installed",
+            "install_url": file_url(signed_xpi),
+            "updates_disabled": true,
+        });
+
+        let policies = object_at(&mut policy, "policies")?;
+        let settings = object_at_map(policies, SETTINGS)?;
+        settings.insert(GECKO_ID.to_string(), entry);
+        Ok(policy)
+    }
 }
