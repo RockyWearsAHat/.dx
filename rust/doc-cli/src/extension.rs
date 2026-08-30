@@ -427,6 +427,14 @@ pub fn safari_extension() -> Option<PathBuf> {
         .find(|path| path.extension().is_some_and(|kind| kind == "appex"))
 }
 
+/// Check if a signed XPI file exists in the given base directory.
+///
+/// This is the core detection logic that checks if `dx-firefox.xpi` exists at a path.
+fn signed_xpi_at(base: &Path) -> Option<PathBuf> {
+    let xpi = base.join(XPI_NAME);
+    xpi.is_file().then_some(xpi)
+}
+
 /// The Mozilla-signed add-on, when the application carries one.
 ///
 /// It is a file in the application rather than bytes inside this binary on purpose: only
@@ -435,8 +443,7 @@ pub fn safari_extension() -> Option<PathBuf> {
 /// a machine with no Firefox.
 #[must_use]
 pub fn signed_xpi() -> Option<PathBuf> {
-    let xpi = app_resources()?.join(XPI_NAME);
-    xpi.is_file().then_some(xpi)
+    signed_xpi_at(&app_resources()?)
 }
 
 /// The signed add-on's file name inside the application bundle.
