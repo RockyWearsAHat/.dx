@@ -224,6 +224,34 @@ Tests are colocated with the code they test and named for the behavior they pin 
 fix a bug, add the test that would have caught it. Non-ASCII prose, empty input, and missing
 toolchains are all real cases that have broken this code before.
 
+## Build & Test
+
+The fast loop for development is in `dev.dx`. For local validation, run from the `rust/` directory
+with the rustup toolchain (not Homebrew `rustc`):
+
+```bash
+# Set up the correct Rust toolchain path
+cd rust
+export PATH="$HOME/.cargo/bin:$PATH"
+
+# Build the project
+cargo build
+
+# Run all tests — must be green in every crate
+cargo test
+
+# Check formatting — must be clean
+cargo fmt --check
+
+# Check lints — must be clean
+cargo clippy --all-targets -- -D warnings
+```
+
+Run `cargo test --package <crate>` to test a single crate. The repository is Rust-only; the
+JavaScript surfaces (`editor/surface/edit.js`, `editor/github/`, `editor/vscode/`) are
+driven by the wasm engine compiled from `doc-core`, never by reimplemented logic. After changes
+to `doc-core`, rebuild the wasm targets with `./editor/build.sh` before testing surfaces.
+
 ## Working discipline
 
 The worklist has one home: `index.dx#now-worklist`. Record what a task did in its commit
