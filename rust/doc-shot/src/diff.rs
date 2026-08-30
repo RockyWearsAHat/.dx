@@ -90,8 +90,10 @@ pub fn compare(actual: &Image, golden: &Image) -> Verdict {
     let width = actual.width.max(1);
     for (index, (ours, theirs)) in actual
         .rgba
-        .chunks_exact(4)
-        .zip(golden.rgba.chunks_exact(4))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(golden.rgba.as_chunks::<4>().0)
         .enumerate()
     {
         let changed = ours

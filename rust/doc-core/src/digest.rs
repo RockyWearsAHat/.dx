@@ -74,7 +74,7 @@ fn sha256_bytes(message: &[u8]) -> [u8; 32] {
     let buffer = padded(message);
     let mut w = [0u32; 64];
 
-    for block in buffer.chunks_exact(64) {
+    for block in buffer.as_chunks::<64>().0 {
         for (i, word) in w.iter_mut().take(16).enumerate() {
             *word = read_u32_be(block, i * 4);
         }
@@ -127,7 +127,7 @@ fn sha1_bytes(message: &[u8]) -> [u8; 20] {
     let buffer = padded(message);
     let mut w = [0u32; 80];
 
-    for block in buffer.chunks_exact(64) {
+    for block in buffer.as_chunks::<64>().0 {
         for (i, word) in w.iter_mut().take(16).enumerate() {
             *word = read_u32_be(block, i * 4);
         }
