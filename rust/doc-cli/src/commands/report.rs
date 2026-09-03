@@ -506,15 +506,21 @@ fn setup(args: &Args) -> Result<String, String> {
     let synced = intake::sync(&subscription)?;
     out.push_str(&format!("{}\n", synced.summary(&subscription.document())));
 
-    if synced
-        .problems
-        .iter()
-        .any(|p| p.contains("is not a service this box hosts"))
-    {
+    // Check for project registration errors — these occur when the project hasn't been
+    // registered on the intake server yet. Multiple error message formats are possible
+    // depending on the server version and error handling.
+    let has_registration_error = synced.problems.iter().any(|p| {
+        p.contains("is not a service this box hosts")
+            || p.contains("no project")
+            || p.contains("project") && p.contains("on this box")
+    });
+
+    if has_registration_error {
         out.push_str(
-            "no service exists for this project yet — a registered account or the operator \
-             (`selfhost reports project add`) has to create it before reports flow through; \
-             filing still queues in this machine's inbox until then\n",
+            "project not yet registered on the intake server — a registered account or the \
+             operator (`selfhost reports project add`) needs to create it before reports flow \
+             through. Filing will queue in this machine's inbox until registration is done, and \
+             the next `dx report sync` will pull them in.\n",
         );
     }
 
@@ -1599,13 +1605,77 @@ mod tests {
 
         let text = result.text();
         assert!(
-            text.contains("no service exists for this project yet"),
+            text.contains("not yet registered") || text.contains("no service exists"),
             "should explain the service needs creating rather than claim it will \
              auto-create: {text}"
         );
         assert!(
             text.contains("selfhost reports project add"),
             "should name the operator's creation door: {text}"
+        );
+
+        std::env::remove_var("DX_SUBSCRIPTIONS_FILE");
+        std::env::remove_var("DX_REPORT_TOKEN_FILE");
+    }
+
+    #[test]
+    fn setup_with_no_project_error_explains_registration_is_needed() {
+        // Regression test for the bug where the first feed pull after `dx report setup`
+        // fails with "no project <name> on this box", which reads like a client error when
+        // it's actually "project not registered on the intake server". The fix is to detect
+        // this "no project" error and provide a clear, actionable message.
+        let _env = crate::env_lock();
+        let _no_selfhost = NoSelfhost::new();
+        let root = scratch("cli-setup-no-project-error");
+        std::env::set_var("DX_SUBSCRIPTIONS_FILE", root.join("subscriptions.json"));
+        std::env::set_var("DX_REPORT_TOKEN_FILE", root.join("token"));
+
+        use std::io::{BufRead, BufReader, Write as _};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let address = listener.local_addr().expect("address");
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).expect("head");
+                if line == "\r\n" || line.is_empty() {
+                    break;
+                }
+            }
+            // Simulate server response when project is not registered
+            let answer = "{\"error\":\"no project abc123def456 on this box\"}";
+            stream
+                .write_all(
+                    format!(
+                        "HTTP/1.1 404 Not Found\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{answer}",
+                        answer.len()
+                    )
+                    .as_bytes(),
+                )
+                .expect("answer");
+        });
+
+        let result = run(&args(&[
+            "setup",
+            root.to_str().expect("path"),
+            "--endpoint",
+            &format!("http://{address}"),
+            "--token",
+            "t",
+        ]))
+        .expect("setup");
+
+        server.join().expect("listener");
+
+        let text = result.text();
+        assert!(
+            text.contains("not yet registered")
+                || text.contains("no service")
+                || text.contains("doesn't exist"),
+            "should provide clear guidance that project registration is needed: {text}"
         );
 
         std::env::remove_var("DX_SUBSCRIPTIONS_FILE");
