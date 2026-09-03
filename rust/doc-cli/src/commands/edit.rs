@@ -1152,4 +1152,72 @@ mod tests {
             .expect("fmt again")
             .contains("unchanged"));
     }
+
+    /// Test that external mutations to a document are not lost by a subsequent edit.
+    /// This reproduces the stale-cache bug: dx_source reads a document, external code
+    /// removes blocks B and C, then dx_edit modifies block A — the removed blocks should
+    /// NOT be resurrected when the document is saved.
+    #[test]
+    fn edit_respects_external_mutations() {
+        let path = scratch("stale-cache").join("doc.dx");
+        let file = path.to_string_lossy().into_owned();
+
+        // Create a document with blocks A, B, C
+        workspace::write_text(
+            &path,
+            "::heading level=1 id=A\nA\n::end\n\n::paragraph id=B\nB content\n::end\n\n::paragraph id=C\nC content\n::end\n",
+        )
+        .expect("seed");
+
+        // Simulate dx_source by reading the document
+        let _original = workspace::read(&path).expect("read original");
+
+        // Simulate external mutation: remove blocks B and C via CLI command
+        run_remove(&args(&[&file, "B"])).expect("remove B");
+        run_remove(&args(&[&file, "C"])).expect("remove C");
+
+        // Verify that B and C are gone from disk
+        let after_remove = workspace::read(&path).expect("read after remove");
+        assert!(
+            !after_remove.contains("id=B"),
+            "B should be removed: {}",
+            after_remove
+        );
+        assert!(
+            !after_remove.contains("id=C"),
+            "C should be removed: {}",
+            after_remove
+        );
+
+        // Now simulate dx_edit by editing block A
+        run_set(&args(&[&file, "A", "--replace", "A", "--with", "A_edited"])).expect("edit A");
+
+        // Verify that B and C are still gone, and not resurrected
+        let final_doc = workspace::read(&path).expect("read final");
+        assert!(
+            final_doc.contains("A_edited"),
+            "A should be edited: {}",
+            final_doc
+        );
+        assert!(
+            !final_doc.contains("id=B"),
+            "B should still be removed: {}",
+            final_doc
+        );
+        assert!(
+            !final_doc.contains("id=C"),
+            "C should still be removed: {}",
+            final_doc
+        );
+        assert!(
+            !final_doc.contains("B content"),
+            "B content should not exist: {}",
+            final_doc
+        );
+        assert!(
+            !final_doc.contains("C content"),
+            "C content should not exist: {}",
+            final_doc
+        );
+    }
 }
