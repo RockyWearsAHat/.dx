@@ -605,6 +605,12 @@ fn edit_in(args: &Value, root: &Path, cache_root: PathBuf) -> ToolResult {
     let path = resolve(required(args, "path")?, root);
     let wanted = required(args, "block")?.trim().trim_start_matches('#');
 
+    // SAFETY: Each call to workspace::read() reads the file fresh from disk, ensuring that
+    // any external mutations to the document (e.g., via CLI `dx remove`) are observed. The MCP
+    // server is a pure request-response handler with no session-level state, so there is no
+    // cross-call caching of documents. Each edit operation reads the current on-disk state
+    // immediately before writing, respecting all external changes.
+    //
     // The change-sized edit: `replace`+`with` touch an exact string inside the body and
     // nothing else, so a one-word change is priced at the change, not the block. It
     // stands alone — combined with `text` there would be two instructions for one body.
@@ -2433,5 +2439,88 @@ mod tests {
         let root = project("resolve");
         assert_eq!(resolve("a.dx", &root), root.join("a.dx"));
         assert_eq!(resolve("/abs/a.dx", &root), PathBuf::from("/abs/a.dx"));
+    }
+
+    /// Test that MCP reads respect external mutations to a document.
+    /// This reproduces report-871d930c: dx_source reads a document, external code
+    /// removes blocks B and C, then dx_edit modifies block A — the removed blocks should
+    /// NOT be resurrected when the document is saved back.
+    #[test]
+    fn dx_edit_respects_mutations_made_after_dx_source() {
+        use crate::args::Args;
+        use crate::commands::edit;
+
+        let root = project("stale-cache");
+        let doc_path = root.join("doc.dx");
+        let doc_str = doc_path.to_string_lossy().into_owned();
+
+        // Create a document with blocks A, B, C
+        workspace::write_text(
+            &doc_path,
+            "::heading level=1 id=A\nA\n::end\n\n::paragraph id=B\nB content\n::end\n\n::paragraph id=C\nC content\n::end\n",
+        )
+        .expect("seed");
+
+        // Simulate dx_source: read the document through MCP
+        let _original =
+            call("dx_source", &json!({ "path": "doc.dx" }), &root).expect("read original");
+
+        // Simulate external mutation: remove blocks B and C using CLI remove command
+        // (This is done outside the MCP server, so the MCP cache, if any, won't see it)
+        fn make_args(tokens: &[&str]) -> Args {
+            Args::parse(&tokens.iter().map(|t| (*t).to_string()).collect::<Vec<_>>())
+        }
+
+        edit::run_remove(&make_args(&[&doc_str, "B"])).expect("remove B");
+        edit::run_remove(&make_args(&[&doc_str, "C"])).expect("remove C");
+
+        // Verify that B and C are gone
+        let after_remove = workspace::read(&doc_path).expect("read after remove");
+        assert!(
+            !after_remove.contains("id=B"),
+            "B should be removed: {}",
+            after_remove
+        );
+        assert!(
+            !after_remove.contains("id=C"),
+            "C should be removed: {}",
+            after_remove
+        );
+
+        // Now simulate dx_edit by editing block A through MCP
+        call(
+            "dx_edit",
+            &json!({ "path": "doc.dx", "block": "A", "replace": "A", "with": "A_edited" }),
+            &root,
+        )
+        .expect("edit A");
+
+        // Verify that B and C are still gone (not resurrected by the edit)
+        let final_doc = workspace::read(&doc_path).expect("read final");
+        assert!(
+            final_doc.contains("A_edited"),
+            "A should be edited: {}",
+            final_doc
+        );
+        assert!(
+            !final_doc.contains("id=B"),
+            "B should still be removed: {}",
+            final_doc
+        );
+        assert!(
+            !final_doc.contains("id=C"),
+            "C should still be removed: {}",
+            final_doc
+        );
+        assert!(
+            !final_doc.contains("B content"),
+            "B content should not exist: {}",
+            final_doc
+        );
+        assert!(
+            !final_doc.contains("C content"),
+            "C content should not exist: {}",
+            final_doc
+        );
     }
 }
