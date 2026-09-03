@@ -229,9 +229,9 @@ fn js_string(value: &str) -> String {
     out
 }
 
-/// Split `script` on top-level `;` — one not inside a `'`/`"` quote and not inside
+/// Split `script` on top-level `;` or newline — one not inside a `'`/`"` quote and not inside
 /// `(`/`[`/`{` nesting, so `eval`'s JavaScript (and a quoted argument's own punctuation)
-/// can carry a real semicolon without ending the statement early.
+/// can carry a real semicolon or newline without ending the statement early.
 fn split_statements(script: &str) -> Vec<String> {
     let mut statements = Vec::new();
     let mut current = String::new();
@@ -263,7 +263,7 @@ fn split_statements(script: &str) -> Vec<String> {
                 depth -= 1;
                 current.push(c);
             }
-            ';' if depth <= 0 => {
+            ';' | '\n' if depth <= 0 => {
                 statements.push(current.trim().to_string());
                 current = String::new();
             }
@@ -389,5 +389,25 @@ mod tests {
         assert_eq!(js_string("a\"b"), "\"a\\\"b\"");
         assert_eq!(js_string("a\\b"), "\"a\\\\b\"");
         assert_eq!(js_string("a\u{2028}b"), "\"a\\u2028b\"");
+    }
+
+    #[test]
+    fn newline_separated_statements_are_treated_as_separate_statements() {
+        // Regression test for silent data loss when newlines are used instead of semicolons.
+        // A script with two lines (no semicolons) should produce two statements, not one.
+        let js =
+            compile("type input[name=a] \"one\"\ntype input[name=b] \"two\"").expect("compile");
+        // Both type statements should be present
+        assert!(
+            js.contains("input[name=a]"),
+            "first type should be present: {js}"
+        );
+        assert!(
+            js.contains("input[name=b]"),
+            "second type should be present: {js}"
+        );
+        // They should be joined with semicolon-newline as per compile() output format
+        assert!(js.contains("one\";"), "first statement terminator: {js}");
+        assert!(js.contains("two\""), "second statement present: {js}");
     }
 }
