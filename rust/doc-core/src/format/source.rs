@@ -99,37 +99,39 @@ struct ParsedSource {
 /// Choose a parse strategy for `text`: `@doc` frontmatter, bare DOCSRC block syntax, or
 /// legacy Markdown. Port of `parseDocSource` (the JSON-object input path is intentionally
 /// not ported — see [`parse`]).
-fn parse_doc_source(text: &str) -> ParsedSource {
+fn parse_doc_source(text: &str) -> Result<ParsedSource, String> {
     if let Some(header) = parse_docsrc_header(text) {
-        return ParsedSource {
+        let blocks = parse_docsrc_blocks(&header.body)?;
+        return Ok(ParsedSource {
             title: header.title,
             summary: header.summary,
             tags: header.tags,
             meta: header.meta,
-            blocks: parse_docsrc_blocks(&header.body),
-        };
+            blocks,
+        });
     }
 
     let trimmed = js_trim(text);
     if starts_with_block_line(trimmed) {
-        return ParsedSource {
+        let blocks = parse_docsrc_blocks(text)?;
+        return Ok(ParsedSource {
             title: String::new(),
             summary: String::new(),
             tags: Vec::new(),
             meta: Vec::new(),
-            blocks: parse_docsrc_blocks(text),
-        };
+            blocks,
+        });
     }
 
     // Legacy Markdown / plain text. (Front-matter `---` and JSON object inputs are not
     // ported; they are non-DOCSRC ingestion shapes.)
-    ParsedSource {
+    Ok(ParsedSource {
         title: String::new(),
         summary: String::new(),
         tags: Vec::new(),
         meta: Vec::new(),
         blocks: parse_legacy_blocks(text),
-    }
+    })
 }
 
 /// Whether any line of `trimmed` begins with a `::type` block opener (`/^::[a-z-]+(?:\s|$)/m`).
@@ -160,8 +162,29 @@ fn starts_with_block_line(trimmed: &str) -> bool {
 ///
 /// The non-canonical JSON-object input path (`text` starting with `{`) is **not** handled
 /// here; pass such inputs through a JSON layer before constructing a [`Document`].
+///
+/// Returns a parse error document (with an error block) if DOCSRC parsing fails due to
+/// structural problems like a block opener with no matching `::end`.
 pub fn parse(text: &str) -> Document {
-    let parsed = parse_doc_source(text);
+    let parsed = match parse_doc_source(text) {
+        Ok(source) => source,
+        Err(error_msg) => {
+            // Return a document with an error block instead of panicking
+            let error_block = Block {
+                kind: "paragraph".to_string(),
+                text: format!("Parse error: {}", error_msg),
+                ..Block::default()
+            };
+            return Document {
+                title: "Parse Error".to_string(),
+                summary: error_msg,
+                tags: vec![],
+                meta: vec![],
+                blocks: vec![error_block],
+            };
+        }
+    };
+
     let blocks = if parsed.blocks.is_empty() {
         normalize_blocks(&[])
     } else {

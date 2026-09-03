@@ -552,4 +552,49 @@ mod tests {
             stringify(&document)
         );
     }
+
+    /// Test that parser errors on a block opener without a matching ::end marker
+    #[test]
+    fn parser_errors_on_missing_end_marker() {
+        // Single block without ::end should error
+        let doc = parse("::heading id=x\nMissing end");
+        assert_eq!(doc.title, "Parse Error");
+        assert!(doc.summary.contains("has no matching '::end'"));
+    }
+
+    /// Test that parser errors when first block lacks ::end but subsequent blocks exist
+    #[test]
+    fn parser_errors_on_unclosed_first_block_with_later_blocks() {
+        // First block has no ::end, but there's another block opener after it
+        // Without the fix, both would be absorbed into the first block
+        let doc = parse("::heading id=x\nContent\n::paragraph id=y\nMore content");
+        assert_eq!(doc.title, "Parse Error");
+        assert!(doc.summary.contains("has no matching '::end'"));
+    }
+
+    /// Test that parser still works correctly with proper ::end markers
+    #[test]
+    fn parser_succeeds_with_proper_end_markers() {
+        let doc = parse("::heading id=x\nTitle\n::end\n\n::paragraph id=p\nBody\n::end\n");
+        assert_eq!(doc.title, "Title");
+        assert_eq!(doc.blocks.len(), 2);
+        assert_eq!(doc.blocks[0].kind, "heading");
+        assert_eq!(doc.blocks[0].text, "Title");
+        assert_eq!(doc.blocks[1].kind, "paragraph");
+        assert_eq!(doc.blocks[1].text, "Body");
+    }
+
+    /// Test that parser handles multiple properly-closed blocks
+    #[test]
+    fn parser_handles_multiple_proper_blocks() {
+        let doc = parse(
+            "::heading id=h1\nFirst\n::end\n\n\
+             ::paragraph id=p1\nParagraph one\n::end\n\n\
+             ::paragraph id=p2\nParagraph two\n::end\n",
+        );
+        assert_eq!(doc.blocks.len(), 3);
+        assert_eq!(doc.blocks[0].kind, "heading");
+        assert_eq!(doc.blocks[1].kind, "paragraph");
+        assert_eq!(doc.blocks[2].kind, "paragraph");
+    }
 }
