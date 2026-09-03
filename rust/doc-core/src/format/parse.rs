@@ -282,6 +282,7 @@ pub(super) fn parse_docsrc_blocks(body: &str) -> Result<Vec<Block>, String> {
 
         cursor += 1;
         let mut found_end = false;
+        let mut swallowed_another_opener = false;
         let block_start_line = cursor; // Track line number for error reporting
 
         while cursor < lines.len() {
@@ -301,13 +302,27 @@ pub(super) fn parse_docsrc_blocks(body: &str) -> Result<Vec<Block>, String> {
                     found_end = true;
                     break;
                 }
-                None => content_lines.push(body_line.clone()),
+                None => {
+                    // A block header swallowed here as plain content is exactly the silent
+                    // data-loss bug this check exists for: everything from here to EOF (or
+                    // the next real `::end`) would otherwise vanish into this block's body.
+                    // A lone unclosed *trailing* block (nothing but prose after it) is a
+                    // harmless, long-supported shorthand and stays implicitly closed at EOF.
+                    if parse_block_header(js_trim(body_line)).is_some()
+                        || parse_inline_block(js_trim(body_line)).is_some()
+                    {
+                        swallowed_another_opener = true;
+                    }
+                    content_lines.push(body_line.clone());
+                }
             }
             cursor += 1;
         }
 
-        // Check for missing ::end marker
-        if !found_end {
+        // Missing `::end` is only an error when it actually swallowed a later block opener
+        // into this block's body — an unclosed trailing block with no further openers after
+        // it is implicitly closed at end of document, matching prior behavior.
+        if !found_end && swallowed_another_opener {
             return Err(format!(
                 "block opener '::{block_type}' at line {} has no matching '::end'",
                 block_start_line
