@@ -209,7 +209,10 @@ fn push_block(blocks: &mut Vec<Block>, block_type: &str, attrs: &[Attr], content
 
 /// Parse a DOCSRC body (block syntax) into raw, un-normalized blocks. Port of
 /// `parseDocsrcBlocks`.
-pub(super) fn parse_docsrc_blocks(body: &str) -> Vec<Block> {
+///
+/// Returns an error if a block opener (e.g. `::heading`, `::paragraph`) is found but has no
+/// matching `::end` marker before the document ends.
+pub(super) fn parse_docsrc_blocks(body: &str) -> Result<Vec<Block>, String> {
     let stripped = strip_leading_newlines(body);
     let lines: Vec<String> = stripped.split('\n').map(str::to_string).collect();
     let mut blocks: Vec<Block> = Vec::new();
@@ -279,6 +282,7 @@ pub(super) fn parse_docsrc_blocks(body: &str) -> Vec<Block> {
 
         cursor += 1;
         let mut found_end = false;
+        let block_start_line = cursor; // Track line number for error reporting
 
         while cursor < lines.len() {
             let body_line = &lines[cursor];
@@ -302,6 +306,14 @@ pub(super) fn parse_docsrc_blocks(body: &str) -> Vec<Block> {
             cursor += 1;
         }
 
+        // Check for missing ::end marker
+        if !found_end {
+            return Err(format!(
+                "block opener '::{block_type}' at line {} has no matching '::end'",
+                block_start_line
+            ));
+        }
+
         push_block(&mut blocks, &block_type, &attrs, &content_lines);
 
         if cursor < lines.len() && found_end {
@@ -310,7 +322,7 @@ pub(super) fn parse_docsrc_blocks(body: &str) -> Vec<Block> {
     }
 
     adopt_loose(&mut loose, &mut blocks);
-    blocks
+    Ok(blocks)
 }
 
 /// Adopt a buffered run of loose prose lines as blocks, through the Markdown parser —
