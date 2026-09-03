@@ -402,7 +402,7 @@ pub fn run_textconv(args: &Args) -> Result<String, String> {
     let root = args
         .value("root")
         .map_or_else(crate::commands::merge::worktree_root, PathBuf::from);
-    workspace::resolve_contents(&text, &root)
+    workspace::resolve_contents_for_textconv(&text, &root)
 }
 
 /// One line per document a pack carries: its path, its digest, and how many blocks it holds.
