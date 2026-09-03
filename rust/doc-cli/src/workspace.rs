@@ -329,6 +329,24 @@ impl Sources {
 /// `search_from` is where the workspace is looked for (git runs the driver from the top of the
 /// worktree). Plain document text passes straight through unchanged.
 pub fn resolve_contents(text: &str, search_from: &Path) -> Result<String, String> {
+    resolve_contents_impl(text, search_from, false)
+}
+
+/// Resolve a document's contents, returning a placeholder on missing versions instead of an error.
+///
+/// This is what textconv (git's diff driver) needs. Textconv must exit 0 even when the version
+/// is unavailable, or `git diff` becomes unusable. A placeholder message allows `git diff` to
+/// still work on historical revisions whose packs were smaller.
+pub fn resolve_contents_for_textconv(text: &str, search_from: &Path) -> Result<String, String> {
+    resolve_contents_impl(text, search_from, true)
+}
+
+/// Implementation of resolve_contents, parametrized by whether to emit a placeholder on missing.
+fn resolve_contents_impl(
+    text: &str,
+    search_from: &Path,
+    placeholder_on_missing: bool,
+) -> Result<String, String> {
     let Some(digest) = stub::digest_in(text) else {
         return Ok(text.to_string());
     };
@@ -353,11 +371,25 @@ pub fn resolve_contents(text: &str, search_from: &Path) -> Result<String, String
         }
     }
 
-    Err(format!(
-        "this dx pointer names version {digest}, which is not in {}'s store or packs; \
-         run `dx sync` there, or restore .doc/repo.dxcp",
-        root.display()
-    ))
+    if placeholder_on_missing {
+        // Textconv must exit 0 even when the version is unavailable, or `git diff` becomes
+        // unusable on historical revisions. Return a placeholder that names what version was
+        // sought, so the user can still see something went wrong.
+        Ok(format!(
+            "~ {digest}\n\
+             (unavailable: this version exists as a pointer in this git revision but is not \
+             available in .doc/repo.dxcp or the store; the content may have been pruned during \
+             a pack rewrite, or may only exist in an older commit. Run `git show <revision>:.doc/repo.dxcp` \
+             to inspect the pack from that revision, or `git log -p` on the .dx file to see \
+             versions git still carries.)\n"
+        ))
+    } else {
+        Err(format!(
+            "this dx pointer names version {digest}, which is not in {}'s store or packs; \
+             run `dx sync` there, or restore .doc/repo.dxcp",
+            root.display()
+        ))
+    }
 }
 
 /// The CLI's [`Resolver`]: a document's own folder on disk.
