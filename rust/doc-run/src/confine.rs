@@ -730,4 +730,64 @@ mod tests {
         std::env::remove_var(OVERRIDE);
         assert!(!overridden());
     }
+
+    /// A block running from a worktree can read files in the main checkout.
+    #[test]
+    fn a_worktree_block_reads_main_checkout_by_absolute_path() {
+        let scratch = std::env::temp_dir().join("dx-confine-tests-worktree-absolute-read");
+        let _ = std::fs::remove_dir_all(&scratch);
+        std::fs::create_dir_all(&scratch).expect("scratch");
+        let git = |dir: &Path, args: &[&str]| {
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(dir)
+                .args(args)
+                .output()
+                .is_ok_and(|out| out.status.success())
+        };
+
+        let main = scratch.join("main");
+        std::fs::create_dir_all(&main).expect("main checkout");
+        if !git(&main, &["init", "-q", "-b", "master"]) {
+            return; // No git on this machine; nothing to assert.
+        }
+        git(&main, &["config", "user.email", "t@example.com"]);
+        git(&main, &["config", "user.name", "t"]);
+
+        // Create a file in the main checkout that the worktree needs to read
+        let config_file = main.join("config.json");
+        std::fs::write(&config_file, r#"{"key": "value"}"#).expect("write config");
+
+        std::fs::write(main.join("doc.dx"), "::paragraph id=p\nx\n::end\n").expect("write");
+        git(&main, &["add", "-A"]);
+        git(&main, &["commit", "-qm", "one"]);
+
+        let side = scratch.join("side");
+        assert!(git(
+            &main,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "side",
+                &side.to_string_lossy()
+            ],
+        ));
+
+        // From the worktree, verify read_scope includes the main checkout
+        let scope = read_scope(&side);
+        let main_canonical = std::fs::canonicalize(&main).expect("canonical");
+        assert!(
+            scope.contains(&main_canonical),
+            "the main checkout must be in scope when running from a worktree: {scope:?}"
+        );
+
+        // Also verify that the main checkout's config file exists and is readable
+        assert!(config_file.exists(), "config file must exist");
+        assert!(
+            std::fs::read_to_string(&config_file).is_ok(),
+            "config file must be readable"
+        );
+    }
 }
