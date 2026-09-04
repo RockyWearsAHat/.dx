@@ -914,6 +914,51 @@ fn sandbox_hint(output: &str) -> Option<&'static str> {
     None
 }
 
+/// Get Rust toolchain environment variables to pass into the sandbox.
+///
+/// Derives RUSTUP_HOME and CARGO_HOME from the current environment or defaults,
+/// and reads the default toolchain from ~/.rustup/settings.toml if available.
+/// These must be passed into the sandbox because home_in_block redirects HOME to
+/// the block's directory, which would otherwise hide the real toolchain locations.
+fn rust_toolchain_env() -> Vec<(String, String)> {
+    use std::path::PathBuf;
+
+    let mut env = Vec::new();
+
+    // Determine the actual home directory before it gets redirected.
+    let home = match std::env::var_os("HOME") {
+        Some(h) => PathBuf::from(h),
+        None => return env, // No HOME, skip toolchain env setup.
+    };
+
+    // Get RUSTUP_HOME, defaulting to ~/.rustup
+    let rustup_home = std::env::var("RUSTUP_HOME")
+        .unwrap_or_else(|_| home.join(".rustup").to_string_lossy().into_owned());
+    env.push(("RUSTUP_HOME".to_string(), rustup_home.clone()));
+
+    // Get CARGO_HOME, defaulting to ~/.cargo
+    let cargo_home = std::env::var("CARGO_HOME")
+        .unwrap_or_else(|_| home.join(".cargo").to_string_lossy().into_owned());
+    env.push(("CARGO_HOME".to_string(), cargo_home));
+
+    // Try to read the default toolchain from ~/.rustup/settings.toml
+    let settings_path = home.join(".rustup/settings.toml");
+    if let Ok(content) = std::fs::read_to_string(&settings_path) {
+        for line in content.lines() {
+            if let Some(value) = line.strip_prefix("default_toolchain = ") {
+                // The value is quoted: "stable" or "1.xx.x", etc.
+                let trimmed = value.trim().trim_matches('"');
+                if !trimmed.is_empty() {
+                    env.push(("RUSTUP_TOOLCHAIN".to_string(), trimmed.to_string()));
+                    break;
+                }
+            }
+        }
+    }
+
+    env
+}
+
 /// Point the block's home, temp, and cache directories at its own working directory.
 ///
 /// Not decoration: the sandbox makes the reader's home read-only, and a toolchain whose
@@ -926,7 +971,8 @@ fn home_in_block(
     dirs: &plan::Dirs,
 ) -> process::CommandSpec {
     let block_dir = dirs.block.to_string_lossy().into_owned();
-    run.clone()
+    let mut cmd = run
+        .clone()
         .with_env("HOME", block_dir.clone())
         .with_env("TMPDIR", block_dir.clone())
         .with_env("TEMP", block_dir.clone())
@@ -935,7 +981,14 @@ fn home_in_block(
             dirs.toolchains.to_string_lossy().into_owned(),
         )
         .with_env("DX_BLOCK_ID", block.id.clone())
-        .with_env("DX_SANDBOX", block_dir)
+        .with_env("DX_SANDBOX", block_dir);
+
+    // Pass Rust toolchain environment variables into the sandbox.
+    for (key, value) in rust_toolchain_env() {
+        cmd = cmd.with_env(&key, value);
+    }
+
+    cmd
 }
 
 /// Whether the `DX_NO_EXEC` kill switch is set.
