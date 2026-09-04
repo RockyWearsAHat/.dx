@@ -332,7 +332,13 @@ pub fn run_document(
                 language: block.language.clone(),
                 status: "review".to_string(),
                 exit: 0,
-                output: review_text(&material, &approval, ledger.is_approved(&approval), &writes),
+                output: review_text(
+                    &material,
+                    &approval,
+                    ledger.is_approved(&approval),
+                    &read_paths,
+                    &writes,
+                ),
                 duration_ms: 0,
             });
             continue;
@@ -391,7 +397,15 @@ pub fn run_document(
         // Reachable unapproved only through `--force`, which is the bypass that must say so.
         let bypassed = !approved;
         let started = Instant::now();
-        let mut capture = execute(runner, block, &deps, &writes, &fingerprint, options);
+        let mut capture = execute(
+            runner,
+            block,
+            &deps,
+            &writes,
+            &read_paths,
+            &fingerprint,
+            options,
+        );
         if bypassed {
             capture.output = format!("{FORCED_NOTICE}\n{}", capture.output);
         }
@@ -524,18 +538,24 @@ fn declared_reads(
 /// This is the path list both identities agree on: [`fingerprint`] pairs each with its
 /// current text, [`approval_fingerprint`] takes the paths alone — so the two can never
 /// disagree about *which* files a block declared.
+///
+/// Unlike write paths, read paths may use `..` to reference parent directories and siblings,
+/// as long as they stay within the repository scope.
 fn declared_read_paths(reads: &str) -> Result<Vec<String>, String> {
     reads
         .split(',')
         .map(str::trim)
         .filter(|path| !path.is_empty())
         .map(|path| {
-            resolve::confined(path).map(str::to_string).ok_or_else(|| {
-                format!(
-                    "{path} is not a path this block may declare — a `reads=` file stays \
-                     inside the document's own folder, relative and walking downward."
-                )
-            })
+            resolve::confined_with_parent_refs(path)
+                .map(str::to_string)
+                .ok_or_else(|| {
+                    format!(
+                        "{path} is not a path this block may declare — a `reads=` path must be \
+                     relative, may not start with / ~ or contain absolute components, and must \
+                     not contain escape sequences like :// or backslashes."
+                    )
+                })
         })
         .collect()
 }
@@ -718,25 +738,95 @@ fn granted_writes(writes: &[String], document_dir: &Path) -> Result<Vec<PathBuf>
     Ok(granted)
 }
 
+/// Resolve `reads=` paths to their canonical form for the sandbox grant.
+///
+/// Paths are joined with the document directory and normalized. They will be added to the
+/// sandbox's readable roots, allowing the block to read them. Validation that they are within
+/// the repository scope happens earlier (in [`declared_reads`]) through the resolver.
+fn granted_reads(reads: &[String], document_dir: &Path) -> Result<Vec<PathBuf>, String> {
+    let repo_scope = confine::read_scope(document_dir);
+
+    // Canonicalize the document_dir once for consistent path comparisons
+    let canonical_doc_dir = document_dir.canonicalize().unwrap_or_else(|_| {
+        // If document_dir can't be canonicalized (rare), use it as-is
+        document_dir.to_path_buf()
+    });
+
+    let mut granted = Vec::new();
+
+    for path in reads {
+        // Join the path with the canonical document directory to get a resolved path
+        let resolved = canonical_doc_dir.join(path);
+
+        // Normalize the path by removing any `.` or `..` components using the path APIs
+        // For paths that exist, canonicalize; for those that don't, normalize manually
+        let normalized = if resolved.exists() {
+            resolved
+                .canonicalize()
+                .map_err(|error| format!("reads={path} could not be resolved: {error}"))?
+        } else {
+            // Normalize non-existent paths by collecting components
+            let mut normalized_path = canonical_doc_dir.clone();
+            for component in path.split('/').filter(|s| !s.is_empty()) {
+                if component == ".." {
+                    normalized_path.pop();
+                } else if component != "." {
+                    normalized_path.push(component);
+                }
+            }
+            normalized_path
+        };
+
+        // Validate that the normalized path is within the repository scope
+        let in_scope = repo_scope.iter().any(|scope| normalized.starts_with(scope));
+
+        if !in_scope {
+            return Err(format!(
+                "reads={path} is not within the repository scope — \
+                 a `reads=` path must be reachable from the document's repository root or its linked worktrees"
+            ));
+        }
+
+        granted.push(normalized);
+    }
+    Ok(granted)
+}
+
 /// What review mode reports for one block: the exact code that would run (hydrated, so
-/// `src=` listings show the file's current text), its fingerprint, the write grant it
+/// `src=` listings show the file's current text), its fingerprint, the read and write grants it
 /// asks for, and where it stands with the approval gate.
-fn review_text(code: &str, fingerprint: &str, approved: bool, writes: &[String]) -> String {
+fn review_text(
+    code: &str,
+    fingerprint: &str,
+    approved: bool,
+    reads: &[String],
+    writes: &[String],
+) -> String {
     let standing = if approved {
         "approved — a plain run executes this code"
     } else {
         "not approved — a run with approve records it and executes"
     };
-    let grant = if writes.is_empty() {
+    let mut grants = Vec::new();
+    if !reads.is_empty() {
+        grants.push(format!(
+            "reads {} — approving grants this code read access to these paths",
+            reads.join(", ")
+        ));
+    }
+    if !writes.is_empty() {
+        grants.push(format!(
+            "writes {} — approving grants this code write access to these folders",
+            writes.join(", ")
+        ));
+    }
+    let grant_text = if grants.is_empty() {
         String::new()
     } else {
-        format!(
-            "writes {} — approving grants this code write access to these folders\n",
-            writes.join(", ")
-        )
+        format!("{}\n", grants.join("\n"))
     };
     format!(
-        "fingerprint {fingerprint}\napproval {standing}\n{grant}--- code ---\n{code}\n--- end code ---"
+        "fingerprint {fingerprint}\napproval {standing}\n{grant_text}--- code ---\n{code}\n--- end code ---"
     )
 }
 
@@ -795,6 +885,7 @@ fn execute(
     block: &Block,
     deps: &[String],
     writes: &[String],
+    reads: &[String],
     fingerprint: &str,
     options: &RunOptions,
 ) -> Capture {
@@ -833,10 +924,19 @@ fn execute(
     // install needs that.
     let writable = vec![dirs.block.clone(), dirs.toolchains.clone()];
     // What a block may read: the repository its document belongs to (plus that repository's
-    // other worktrees, if it has any — see `confine::read_scope`), and the run caches.
-    // Everything else of the user's is outside the boundary — see `confine`.
+    // other worktrees, if it has any — see `confine::read_scope`), the run caches, and any
+    // additional paths declared with `reads=`. Everything else of the user's is outside the
+    // boundary — see `confine`.
     let mut readable = confine::read_scope(&options.document_dir);
     readable.push(options.cache_root.clone());
+
+    // Add any explicitly declared read paths to the readable scope
+    let declared_read_paths = match granted_reads(reads, &options.document_dir) {
+        Ok(paths) => paths,
+        Err(message) => return blocked(&message),
+    };
+    readable.extend(declared_read_paths.clone());
+
     let installing = Grant::offline(writable.clone())
         .reading(readable.clone())
         .with_network();

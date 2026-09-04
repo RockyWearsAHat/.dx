@@ -281,6 +281,29 @@ pub fn confined(path: &str) -> Option<&str> {
     clean.then_some(path)
 }
 
+/// A path that may use `..` to reference parent directories and siblings.
+///
+/// Used for `reads=` declarations, which can reference files outside the document folder
+/// as long as they stay within the repository scope. Other constraints are the same as
+/// [`confined`]: no absolute paths, no escape sequences, no control characters.
+pub fn confined_with_parent_refs(path: &str) -> Option<&str> {
+    let path = path.trim();
+    let path = path.strip_prefix("./").unwrap_or(path);
+    if path.is_empty() || path.starts_with(['/', '\\', '~']) {
+        return None;
+    }
+    if path.contains(':') || path.contains('\\') {
+        return None;
+    }
+    // Paths may use `..` to reference sibling folders or parent directories, as long as
+    // they don't contain empty segments or `.` (current directory); `.` is normalized to nothing
+    // and empty segments indicate `//` which is not a valid relative path in this context.
+    let clean = path
+        .split('/')
+        .all(|segment| !segment.is_empty() && segment != ".");
+    clean.then_some(path)
+}
+
 /// A view's `src`, split at its `#fragment`: the file to read, and the element the
 /// frame shows.
 ///
