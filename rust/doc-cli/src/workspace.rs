@@ -1052,7 +1052,20 @@ pub struct Hit {
 /// Complexity: `O(n)` in the bytes of the project's documents and source files.
 pub fn search(directory: &Path, query: &str, limit: usize) -> Result<Vec<Hit>, String> {
     let mut documents = load_all(directory)?.documents;
-    documents.extend(source_corpus(directory));
+
+    // Try to use cached source files if available and fresh; fall back to full scan if stale.
+    let source_docs = if let Some(cached_files) = load_source_cache(directory) {
+        build_source_corpus_from_cache(directory, cached_files)
+    } else {
+        eprintln!("source index stale, rescanning");
+        let docs = source_corpus(directory);
+        // Collect the file paths to cache for next time.
+        let source_paths: Vec<PathBuf> = docs.iter().map(|d| d.path.clone()).collect();
+        let _ = save_source_cache(directory, &source_paths);
+        docs
+    };
+
+    documents.extend(source_docs);
     // Tokenising is the expensive half of a search, and it is per-document work: index the
     // slices in parallel and join them (`SearchIndex::merge`). The join is order-preserving,
     // so the ranking is the ranking a single thread would have produced.

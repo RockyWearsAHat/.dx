@@ -15,4 +15,5 @@ doc-core = { path = "../doc-core" }
 doc-run = { path = "../doc-run" }
 doc-shot = { path = "../doc-shot" }
 doc-store = { path = "../doc-store" }
+serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
