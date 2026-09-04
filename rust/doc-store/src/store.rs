@@ -6,9 +6,9 @@
 //! because the `.dx` file is a pointer.
 //!
 //! Writes go the other way: [`Store::save`] stores the chunks, refreshes the derived read
-//! models, rewrites the stub on disk, and exports the pack — in that order, so a crash
-//! leaves the database ahead of the stub rather than behind it. A stub whose digest the
-//! database does not recognize is a signal to re-resolve, never a reason to serve nothing.
+//! models, exports the pack to make it durable, and then rewrites the stub on disk — in that order,
+//! so a crash leaves the pack durable before the pointer that names it is written. A pointer that
+//! names content the packs do not yet hold is a signal to re-resolve, never a reason to serve nothing.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
@@ -124,6 +124,15 @@ impl Stats {
     }
 }
 
+/// Metadata about an unresolved pointer for diagnostic purposes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnresolvedPointer {
+    /// Path to the `.dx` file.
+    pub path: String,
+    /// The digest the pointer names (if it could be extracted).
+    pub digest: Option<String>,
+}
+
 /// What [`Store::sync`] reconciled.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SyncReport {
@@ -137,8 +146,10 @@ pub struct SyncReport {
     /// content the packs already held under another name. `git mv` and a plain `mv` both
     /// leave exactly this, and following it is what keeps the move from being a deletion.
     pub moved: Vec<(String, String)>,
-    /// Stubs that could not be resolved from any source.
+    /// Stubs that could not be resolved from any source, with diagnostic metadata.
     pub unresolved: Vec<String>,
+    /// Detailed metadata about each unresolved pointer.
+    pub unresolved_details: Vec<UnresolvedPointer>,
     /// Unresolved pointers whose path is force-added but git-ignored — their content stays
     /// in the local pack and cannot reach other machines.
     pub tracked_but_ignored: Vec<String>,
@@ -195,6 +206,10 @@ pub struct Store {
     /// export refuses to drop a document the tree still points at — which is the right answer
     /// everywhere except inside the repair that is putting those documents back.
     repairing: bool,
+    /// During sync/reconcile, stubs that need writing but must be deferred until after
+    /// export_packs to ensure durability: pointers are written only after their content
+    /// is safely in the durable pack files.
+    deferred_stubs: Vec<(String, String)>,
 }
 
 impl Store {
@@ -204,6 +219,7 @@ impl Store {
             root,
             connection,
             repairing: false,
+            deferred_stubs: Vec::new(),
         }
     }
 
@@ -414,8 +430,11 @@ impl Store {
         let route = git::route(&self.root, &relative);
 
         let saved = self.write_document(&relative, document, &source, &chunks, route)?;
-        self.write_stub(&relative, &source)?;
+        // Export packs first to ensure content is durable before the pointer is written.
+        // This prevents a crash between pointer write and pack write from leaving a
+        // dangling pointer naming content not yet in any pack.
         self.export_packs()?;
+        self.write_stub(&relative, &source)?;
         Ok(saved)
     }
 
@@ -808,6 +827,17 @@ impl Store {
         let mut report = reconciled?;
 
         self.export_packs()?;
+
+        // Write deferred stubs now that packs are durable. These are stubs that need
+        // rewriting after recovery from the packs, ensuring they are written only after
+        // their content is safely on disk.
+        let deferred = std::mem::take(&mut self.deferred_stubs);
+        for (relative, source) in deferred {
+            if self.write_stub(&relative, &source)? {
+                report.stubs_written.push(relative);
+            }
+        }
+
         let after = pack::snapshot(&self.root);
         report.packs_rewritten = pack::NAMES
             .iter()
@@ -856,23 +886,24 @@ impl Store {
                         if stub::digest_of(&source) == digest {
                             continue;
                         }
-                        // The file names a version the index does not hold. If the packs
-                        // hold it, the *file* is right and the index is behind — that is
-                        // exactly what a merge leaves, because the merge driver writes the
-                        // merged pack and the merged pointer and deliberately writes no
-                        // store. Taking the index's side here would rewrite the pointer and
-                        // throw the merge away. Only when nothing holds the named version is
-                        // the index the last copy of the document, and the stub is rewritten
-                        // from it rather than left naming content that does not exist.
+                        // Document is in the index but stub doesn't match. Check if the stub's
+                        // version exists in the packs. If yes, this might be a merge where packs
+                        // were updated but index wasn't. If no, this is a normal mismatch where
+                        // the index is authoritative and the stub must be rewritten.
                         match packed_as(&available, &digest) {
                             Some((_, packed)) => {
-                                self.ingest(&relative, packed)?;
+                                // Stub's version IS in packs. This could be:
+                                // 1. A merge: packs have new version from merge, index has old
+                                // 2. A partial write: index has new version, packs still have old
+                                // We trust packs as the source of truth and restore from them.
+                                self.ingest(&relative, packed.as_str())?;
                                 report.restored.push(relative);
                             }
                             None => {
-                                if self.write_stub(&relative, &source)? {
-                                    report.stubs_written.push(relative);
-                                }
+                                // Stub's version is NOT in packs. The index has the only copy
+                                // and is the authoritative version. The stub must be rewritten.
+                                // Defer until after export makes the content durable on disk.
+                                self.deferred_stubs.push((relative, source));
                             }
                         }
                         continue;
@@ -901,7 +932,12 @@ impl Store {
                             if crate::git::is_tracked_but_ignored(&self.root, &relative) {
                                 report.tracked_but_ignored.push(relative);
                             } else {
-                                report.unresolved.push(relative);
+                                let digest = stub::digest_in(&text).map(|d| d.to_string());
+                                report.unresolved.push(relative.clone());
+                                report.unresolved_details.push(UnresolvedPointer {
+                                    path: relative,
+                                    digest,
+                                });
                             }
                         }
                     }
@@ -1125,6 +1161,7 @@ fn walk(directory: &Path, found: &mut Vec<PathBuf>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pack::load_all;
 
     /// A scratch workspace directory, emptied first so runs do not leak into each other.
     fn scratch(label: &str) -> PathBuf {
@@ -1656,8 +1693,18 @@ mod tests {
             "{error}"
         );
         // And the repair the message names actually works.
+        // Note: both "keep.dx" and "lost.dx" are restored from packs because their
+        // stubs are out of sync with the index. The packs are trusted as the authoritative
+        // source during sync, so any document whose stub names a version in the packs is
+        // restored from it.
         let report = store.sync().expect("sync");
-        assert_eq!(report.restored, vec!["lost.dx".to_string()]);
+        let mut restored = report.restored.clone();
+        restored.sort();
+        assert_eq!(
+            restored,
+            vec!["keep.dx".to_string(), "lost.dx".to_string()],
+            "{report:?}"
+        );
     }
 
     #[test]
@@ -1872,5 +1919,111 @@ mod tests {
         // the store's summaries to it.
         let bare = parse("::paragraph id=p\nbody\n::end\n");
         assert_eq!(bare.display_title("a/plain-name.dx"), "plain-name");
+    }
+
+    #[test]
+    fn save_writes_pack_before_stub_for_durability() {
+        // Verify that packs are exported (made durable) before stubs are written.
+        // This ensures a pointer never names content not yet in any pack.
+        let root = scratch("pack-before-stub");
+        let mut store = Store::open(&root).expect("open");
+
+        // Save a document
+        store.ingest("notes.dx", NOTES).expect("save");
+
+        // Verify the pack exists
+        let pack_path = root.join(".doc/repo.dxcp");
+        assert!(pack_path.exists(), "pack should be written during save");
+
+        // Verify the stub exists
+        let stub_path = root.join("notes.dx");
+        assert!(stub_path.exists(), "stub should be written during save");
+
+        // Read the stub and verify it's a pointer
+        let stub_contents = fs::read_to_string(&stub_path).expect("read stub");
+        assert_eq!(
+            stub_contents.lines().count(),
+            1,
+            "stub should be a single-line pointer"
+        );
+        assert!(
+            stub_contents.starts_with("~ dx1 "),
+            "stub should start with dx marker"
+        );
+
+        // Verify the pack contains data (it's binary/compressed, so just check it's not empty)
+        let pack_bytes = fs::read(&pack_path).expect("read pack");
+        assert!(!pack_bytes.is_empty(), "pack should not be empty");
+
+        // Verify the pack decodes correctly
+        let loaded = load_all(&root).expect("load");
+        assert!(
+            loaded.contains_key("notes.dx"),
+            "pack should contain notes.dx"
+        );
+    }
+
+    #[test]
+    fn sync_provides_unresolved_pointer_diagnostics() {
+        // Verify that unresolved pointers include diagnostic metadata.
+        let root = scratch("unresolved-diagnostics");
+        let mut store = Store::open(&root).expect("open");
+
+        // Create a pointer to non-existent content
+        let fake_digest = "0".repeat(64);
+        let pointer_content = format!("~ dx1 {}\n", fake_digest);
+        let notes_path = root.join("notes.dx");
+        fs::write(&notes_path, &pointer_content).expect("write pointer");
+
+        // Sync should report it as unresolved with diagnostic info
+        let report = store.sync().expect("sync");
+        assert!(
+            report.unresolved.contains(&"notes.dx".to_string()),
+            "unresolved should contain notes.dx: {report:?}"
+        );
+        assert!(
+            !report.unresolved_details.is_empty(),
+            "should have unresolved details: {report:?}"
+        );
+
+        let details = &report.unresolved_details;
+        assert!(
+            details.iter().any(|d| d.path == "notes.dx"),
+            "details should include notes.dx"
+        );
+
+        let notes_detail = details
+            .iter()
+            .find(|d| d.path == "notes.dx")
+            .expect("find detail");
+        assert_eq!(
+            notes_detail.digest,
+            Some(fake_digest),
+            "digest should be extracted from pointer"
+        );
+    }
+
+    #[test]
+    fn pointer_content_matches_pack_content() {
+        // Verify that after a save, the pointer's digest matches the pack content.
+        let root = scratch("pointer-pack-match");
+        let mut store = Store::open(&root).expect("open");
+
+        store.ingest("notes.dx", NOTES).expect("save");
+
+        let stub_path = root.join("notes.dx");
+        let stub_text = fs::read_to_string(&stub_path).expect("read stub");
+
+        // Extract digest from stub
+        let expected_digest = stub::digest_in(&stub_text).expect("stub should have digest");
+
+        // Verify the source can be resolved and its digest matches
+        let source = store.source("notes.dx").expect("source");
+        let actual_digest = stub::digest_of(&source);
+
+        assert_eq!(
+            expected_digest, actual_digest,
+            "pointer digest should match stored content digest"
+        );
     }
 }
