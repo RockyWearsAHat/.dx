@@ -106,7 +106,7 @@ fn handle(mut client: TcpStream, allowed_host: &str, allowed_port: u16) -> std::
         refuse(&mut client, 400, "Bad Request")?;
         return Ok(());
     };
-    if !host.eq_ignore_ascii_case(allowed_host) || port != allowed_port {
+    if !hosts_match(&host, allowed_host) || port != allowed_port {
         refuse(&mut client, 403, "Forbidden")?;
         return Ok(());
     }
@@ -222,6 +222,32 @@ fn split_host_port(destination: &str) -> Option<(String, u16)> {
     Some((host.to_string(), port.parse().ok()?))
 }
 
+/// Check if two hosts refer to the same target, treating loopback addresses as equivalent.
+/// Allows "localhost", "127.0.0.1", "::1", "[::1]", and other loopback forms to match each
+/// other when the target is loopback, since different environments normalize differently.
+fn hosts_match(request_host: &str, allowed_host: &str) -> bool {
+    if request_host.eq_ignore_ascii_case(allowed_host) {
+        return true;
+    }
+
+    // Treat loopback addresses as equivalent: localhost, 127.0.0.1, ::1, and [::1]
+    let is_request_loopback = is_loopback(request_host);
+    let is_allowed_loopback = is_loopback(allowed_host);
+
+    is_request_loopback && is_allowed_loopback
+}
+
+/// Check if a host string refers to a loopback address.
+fn is_loopback(host: &str) -> bool {
+    let normalized = if host.starts_with('[') && host.ends_with(']') {
+        &host[1..host.len() - 1]
+    } else {
+        host
+    };
+
+    matches!(normalized, "localhost" | "127.0.0.1" | "::1")
+}
+
 /// Send a bare status line refusing the request; the client sees a proxy error, not the
 /// destination's own response, because there is no destination — nothing was ever opened.
 fn refuse(client: &mut TcpStream, status: u16, reason: &str) -> std::io::Result<()> {
@@ -325,5 +351,38 @@ mod tests {
             !reached.load(Ordering::SeqCst),
             "the proxy opened a socket to a destination it was not asked to allow"
         );
+    }
+
+    #[test]
+    fn localhost_and_127_0_0_1_are_equivalent() {
+        assert!(hosts_match("localhost", "127.0.0.1"));
+        assert!(hosts_match("127.0.0.1", "localhost"));
+        assert!(hosts_match("localhost", "localhost"));
+        assert!(hosts_match("127.0.0.1", "127.0.0.1"));
+    }
+
+    #[test]
+    fn ipv6_loopback_addresses_are_equivalent() {
+        assert!(hosts_match("::1", "[::1]"));
+        assert!(hosts_match("[::1]", "::1"));
+        assert!(hosts_match("localhost", "::1"));
+        assert!(hosts_match("::1", "127.0.0.1"));
+    }
+
+    #[test]
+    fn non_loopback_hosts_must_match_exactly() {
+        assert!(!hosts_match("example.com", "localhost"));
+        assert!(!hosts_match("192.168.1.1", "127.0.0.1"));
+        assert!(!hosts_match("example.com", "example.org"));
+    }
+
+    #[test]
+    fn is_loopback_recognizes_all_forms() {
+        assert!(is_loopback("localhost"));
+        assert!(is_loopback("127.0.0.1"));
+        assert!(is_loopback("::1"));
+        assert!(is_loopback("[::1]"));
+        assert!(!is_loopback("example.com"));
+        assert!(!is_loopback("192.168.1.1"));
     }
 }
