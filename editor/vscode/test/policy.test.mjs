@@ -11,7 +11,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { makeNonce, scriptPolicy } from '../src/policy.ts';
+import { makeNonce, scriptPolicy } from '../dist/policy.js';
 
 test('a rendered document may show inline images and reach nothing else', () => {
   const policy = scriptPolicy('abc');
