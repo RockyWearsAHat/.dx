@@ -1232,7 +1232,6 @@ fn load_source_index(root: &Path) -> Option<SourceIndex> {
 fn build_source_corpus_from_index(root: &Path, index: &SourceIndex) -> Vec<Loaded> {
     let paths: Vec<PathBuf> = index
         .metadata()
-        .iter()
         .map(|(relative, _)| root.join(relative))
         .collect();
 

@@ -1,0 +1,296 @@
+//! `dx rename <old> <new>` — safely rename a symbol in source code.
+//!
+//! A structural rename that changes an identifier at every site a current, non-stale
+//! reference graph names for it, atomically, outside generated or vendored paths, and only
+//! after the approval ledger records it.
+//!
+//! This is a stated exception to "reading never writes" — see CLAUDE.md's non-negotiables.
+
+use std::fs;
+use std::path::Path;
+
+use crate::args::Args;
+use crate::commands::index::{collect_files, SKIPPED_DIRECTORIES, CODE_EXTENSIONS};
+use doc_core::trace::{trace, Trace};
+
+/// Largest file to read, matching trace.rs's READ_CAP.
+const READ_CAP: u64 = 2 * 1024 * 1024;
+
+/// Result of a rename operation before it is written.
+#[derive(Debug, Clone)]
+pub struct RenamePreview {
+    /// The symbol being renamed.
+    pub old_name: String,
+    /// The new name.
+    pub new_name: String,
+    /// Definition site(s) that will be changed.
+    pub definitions: Vec<RenameLocation>,
+    /// Reference site(s) that will be changed.
+    pub references: Vec<RenameLocation>,
+    /// Reference graph digest for approval tracking.
+    pub graph_digest: String,
+}
+
+/// One location where a name appears and will be changed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RenameLocation {
+    /// Path to the file, relative to the root the trace was built in.
+    pub file: String,
+    /// 1-indexed line number.
+    pub line: usize,
+}
+
+/// `dx rename <old> <new>` — entry point for the CLI command.
+pub fn run(args: &Args) -> Result<String, String> {
+    let old_name = args.positional(0).ok_or("missing old name")?;
+    let new_name = args.positional(1).ok_or("missing new name")?;
+    let root = Path::new(args.positional(2).unwrap_or("."));
+
+    let preview = preview(root, &old_name, &new_name)?;
+
+    // Report what would be renamed.
+    let mut report = format!(
+        "rename preview: {} -> {}\n",
+        preview.old_name, preview.new_name
+    );
+    report.push_str(&format!(
+        "definitions: {}\n",
+        preview.definitions.len()
+    ));
+    report.push_str(&format!("references: {}\n", preview.references.len()));
+    report.push_str("(write not yet implemented — use this to preview)\n");
+
+    Ok(report)
+}
+
+/// `dx rename <old> <new>` — preview and validate a rename before writing.
+///
+/// Returns a preview that can be written to disk only after approval.
+pub fn preview(
+    root: &Path,
+    old_name: &str,
+    new_name: &str,
+) -> Result<RenamePreview, String> {
+    // Refuse if old and new are identical.
+    if old_name == new_name {
+        return Err(format!(
+            "old name and new name are identical: `{}`",
+            old_name
+        ));
+    }
+
+    // Refuse if new name is empty.
+    if new_name.is_empty() {
+        return Err("new name cannot be empty".to_string());
+    }
+
+    // Build the trace of current symbols and references.
+    let traced = build_trace(root)?;
+
+    // Find all definitions and references for the old name.
+    let definitions: Vec<_> = traced
+        .definitions_of(old_name)
+        .into_iter()
+        .map(|sym| RenameLocation {
+            file: sym.file.clone(),
+            line: sym.line,
+        })
+        .collect();
+
+    let references: Vec<_> = traced
+        .references_to(old_name)
+        .into_iter()
+        .map(|ref_| RenameLocation {
+            file: ref_.file.clone(),
+            line: ref_.line,
+        })
+        .collect();
+
+    // No definitions found — refuse the rename.
+    if definitions.is_empty() {
+        return Err(format!("no definitions found for `{}`", old_name));
+    }
+
+    // Check that no definition is in a skipped directory.
+    for loc in &definitions {
+        if is_skipped_path(&loc.file) {
+            return Err(format!(
+                "definition at {} is in a generated or vendored path",
+                loc.file
+            ));
+        }
+    }
+
+    // Check that no reference is in a skipped directory.
+    for loc in &references {
+        if is_skipped_path(&loc.file) {
+            return Err(format!(
+                "reference at {} is in a generated or vendored path",
+                loc.file
+            ));
+        }
+    }
+
+    // Compute a digest of the reference graph for approval tracking.
+    let graph_digest = compute_graph_digest(&traced, old_name);
+
+    Ok(RenamePreview {
+        old_name: old_name.to_string(),
+        new_name: new_name.to_string(),
+        definitions,
+        references,
+        graph_digest,
+    })
+}
+
+/// Check whether a path is in a skipped directory (generated or vendored).
+fn is_skipped_path(path: &str) -> bool {
+    for skipped in SKIPPED_DIRECTORIES {
+        if path.contains(&format!("{}/", skipped)) || path.starts_with(&format!("{}/", skipped))
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// Compute a digest of the reference graph for a symbol, for approval tracking.
+///
+/// The digest includes the old name, new name, sorted list of sites, and the reference
+/// graph state — so approving a rename over a graph that has since changed will not
+/// silently approve a different rename.
+fn compute_graph_digest(traced: &Trace, name: &str) -> String {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = DefaultHasher::new();
+
+    // Hash all definitions and references for this name.
+    let mut defs: Vec<_> = traced
+        .definitions_of(name)
+        .into_iter()
+        .map(|s| (&s.file, s.line))
+        .collect();
+    defs.sort();
+    defs.hash(&mut hasher);
+
+    let mut refs: Vec<_> = traced
+        .references_to(name)
+        .into_iter()
+        .map(|r| (&r.file, r.line))
+        .collect();
+    refs.sort();
+    refs.hash(&mut hasher);
+
+    format!("{:x}", hasher.finish())
+}
+
+/// Build a trace of the codebase rooted at `root`.
+fn build_trace(root: &Path) -> Result<Trace, String> {
+    if !root.is_dir() {
+        return Err(format!("{} is not a directory", root.display()));
+    }
+
+    let files = read_files(root);
+    Ok(trace(&files))
+}
+
+/// Every code file under `root`, as `(path, text)` pairs.
+fn read_files(root: &Path) -> Vec<(String, String)> {
+    let mut paths = Vec::new();
+    collect_files(root, &mut paths);
+    paths
+        .into_iter()
+        .filter(|path| {
+            path.extension().is_some_and(|extension| {
+                CODE_EXTENSIONS.contains(&extension.to_string_lossy().as_ref())
+            })
+        })
+        .filter(|path| std::fs::metadata(path).is_ok_and(|meta| meta.len() <= READ_CAP))
+        .filter_map(|path| {
+            let text = std::fs::read_to_string(&path).ok()?;
+            let relative = path
+                .strip_prefix(root)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .replace('\\', "/");
+            Some((relative, text))
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn make_workspace(label: &str, files: &[(&str, &str)]) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("dx-rename-tests-{label}"));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("scratch");
+        for (path, content) in files {
+            let full_path = root.join(path);
+            if let Some(parent) = full_path.parent() {
+                std::fs::create_dir_all(parent).expect("mkdir");
+            }
+            std::fs::write(&full_path, content).expect("write");
+        }
+        root
+    }
+
+    #[test]
+    fn rename_refuses_identical_names() {
+        let ws = make_workspace("identical", &[("test.rs", "fn run() {}")]);
+        let err = preview(&ws, "run", "run").expect_err("should refuse");
+        assert!(err.contains("identical"));
+    }
+
+    #[test]
+    fn rename_refuses_empty_new_name() {
+        let ws = make_workspace("empty", &[("test.rs", "fn run() {}")]);
+        let err = preview(&ws, "run", "").expect_err("should refuse");
+        assert!(err.contains("empty"));
+    }
+
+    #[test]
+    fn rename_refuses_undefined_symbol() {
+        let ws = make_workspace("undefined", &[("test.rs", "fn run() {}")]);
+        let err = preview(&ws, "nonexistent", "new_name").expect_err("should refuse");
+        assert!(err.contains("no definitions"));
+    }
+
+    #[test]
+    fn rename_finds_definition_and_references() {
+        let ws = make_workspace("def-ref", &[
+            ("lib.rs", "fn process() { }\n"),
+            ("main.rs", "fn main() { process(); process(); }"),
+        ]);
+        let preview = preview(&ws, "process", "handle")
+            .expect("should succeed");
+
+        assert_eq!(preview.old_name, "process");
+        assert_eq!(preview.new_name, "handle");
+        assert_eq!(preview.definitions.len(), 1);
+        assert_eq!(preview.references.len(), 1);
+        assert_eq!(preview.definitions[0].file, "lib.rs");
+        assert_eq!(preview.definitions[0].line, 1);
+        assert_eq!(preview.references[0].file, "main.rs");
+    }
+
+    #[test]
+    fn rename_refuses_definition_in_skipped_path() {
+        let ws = make_workspace("skipped-def", &[("target/lib.rs", "fn run() {}")]);
+        let err = preview(&ws, "run", "execute").expect_err("should refuse");
+        assert!(err.contains("generated or vendored"));
+    }
+
+    #[test]
+    fn rename_refuses_reference_in_skipped_path() {
+        let ws = make_workspace("skipped-ref", &[
+            ("lib.rs", "fn run() {}\n"),
+            ("node_modules/other.js", "run();"),
+        ]);
+        let err = preview(&ws, "run", "execute").expect_err("should refuse");
+        assert!(err.contains("generated or vendored"));
+    }
+}

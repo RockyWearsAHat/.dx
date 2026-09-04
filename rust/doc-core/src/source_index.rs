@@ -81,6 +81,11 @@ impl SourceIndex {
             .unwrap_or_default()
     }
 
+    /// Returns an iterator over the file paths and their metadata.
+    pub fn metadata(&self) -> impl Iterator<Item = (&String, &(u64, String))> {
+        self.metadata.iter()
+    }
+
     /// Detects whether the index is stale relative to current file metadata.
     ///
     /// Returns `Ok(true)` if any file's mtime or content_hash has changed, or if a
