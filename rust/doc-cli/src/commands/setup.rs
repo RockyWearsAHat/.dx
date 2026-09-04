@@ -620,240 +620,247 @@ pub fn run_help(_args: &Args) -> Result<String, String> {
 pub const HELP: &str = "\
 dx — a notepad for code. Read, render, run, and share .dx documents.
 
+QUICKSTART
+  dx new notes.dx                                create a new document
+  dx text notes.dx                              read it as plain Markdown
+  dx render notes.dx                            view it in a browser
+  dx insert notes.dx --after intro --type code  add a code block
+  dx set notes.dx block1 --text 'new content'   edit a block
+  dx run notes.dx --review                      check before running code
+
 READ
-  dx text     <file> [--section ID] [--ids]     document as Markdown
-  dx outline  <file>                            block ids, kinds, and previews
-  dx render   <file> [--section ID] [--theme T] self-contained HTML page
-  dx render   <file> --block ID [--body=T]      one block, as the page draws it
-  dx render   --all [dir] --out DIR             every document as its own page —
-                                                one command exports a whole site,
-                                                <out>/<same relative path>.html each
-  dx png      <file> [--section ID] [--out F]   render to an image
-  dx png      <file> --pages                    one image per page, in order
-  dx png      <file> --block ID                 one block alone — a board at natural size
-  dx png      <file> --block A,B,…              every named block from one browser
-                                                session — one <stem>-<id>.png each
-  dx png      <file> --block ID --against G.png compare the block's render to a
-                                                golden PNG and print one line —
-                                                `identical` or `differs: N px in
-                                                x,y wxh` (the changed region;
-                                                drift up to 3/255 per channel is
-                                                antialiasing, not a difference).
-                                                Different sizes are stated the
-                                                same way. Writes no file.
+  dx text     <file> [--section ID] [--ids]     document as Markdown — plain text, not
+                                                formatted. Use --ids to print block ids
+                                                you can pass to other commands
+  dx outline  <file>                            block ids, kinds, and previews — one line
+                                                per block, ready for scripting
+  dx render   <file> [--section ID] [--theme T] self-contained HTML page in stdout
+  dx render   <file> --block ID [--body=T]      one block, as the page draws it — for
+                                                embedding a single block elsewhere
+  dx render   --all [dir] --out DIR             batch export: every document as its own
+                                                page — <out>/<same relative path>.html
+  dx png      <file> [--section ID] [--out F]   render as PNG image
+  dx png      <file> --pages                    one image per page, breaking between blocks
+  dx png      <file> --block ID                 one block alone at natural size — a board
+                                                rendered exactly as drawn
+  dx png      <file> --block A,B,…              multiple blocks from one browser session
+                                                — one <stem>-<id>.png per block
+  dx png      <file> --block ID --against F     compare render to golden PNG: output is
+                                                `identical` or `differs: N px in x,y wxh`
+                                                (drift up to 3/255 is antialiasing, ok)
   dx play     <file> --script \"wait 500ms; key Space; scroll 200\"
-              [--node ID] [--fps N] [--out DIR] drive the rendered page with real
-              input — wait, key, click, scroll, hover — and write one PNG frame
-              per tick, each stamped with its moment and the action it shows.
-              --node clips every frame to one block and reads x,y targets
-              inside that block's box (0,0 its corner, bare scroll its centre)
-              — clip and coordinates share one frame, so a control inside an
-              embedded ::view is targetable; without --node, x,y is viewport
-              pixels. Nothing in the document executes; targets are block ids
-              from dx outline, or x,y.
-  dx open     <file> [--section ID]             open the rendered page in a browser
-  dx ls       [dir]                             every .dx document in a project
-  dx search   <query> [dir] [--limit N]         search the documents *and* the source
-                                                files; each hit shows its answering block —
-                                                a line range, for a source file. Ask a whole
-                                                question in your own words: word endings,
-                                                compoundNames, and a word the project spells
-                                                its own way all still land
-  dx trace    [dir] [--brief]                   real symbols and references, by
-                                                heuristic extraction (Rust, JS/TS,
-                                                Python, Go) — definition site and
-                                                referencing files per symbol;
-                                                --brief ranks by fan-in, capped for
-                                                embedding in a document
-  dx coverage [dir] [--window N] [--min-rate R] the last N searches (default 200):
-                                                the share that landed on a document,
-                                                and the queries that fell back to
-                                                source or found nothing, most-repeated
-                                                first — what to write into a document
-                                                next. --min-rate fails the command
-                                                when the rate falls short, a normal
-                                                gate; a workspace with no data yet
-                                                never fails one
+              [--node ID] [--fps N] [--out DIR] drive the rendered page with real input
+                                                — wait, key, click, scroll, hover — and
+                                                write one PNG frame per tick, stamped with
+                                                the moment and action. --node clips every
+                                                frame to one block and reads x,y targets
+                                                inside that block (0,0 is corner, bare
+                                                scroll its center); without --node, x,y
+                                                is viewport pixels. Nothing executes;
+                                                targets are block ids or x,y coordinates
+  dx open     <file> [--section ID]             render in browser — if no browser found,
+                                                prints a file:// URL instead
+  dx ls       [dir]                             list every .dx document in the directory
+  dx search   <query> [dir] [--limit N]         search documents *and* source code. Ask a
+                                                whole question in natural language (word
+                                                endings, camelCase, and project jargon all
+                                                work). Each hit shows the answering block
+                                                or source line range
+  dx trace    [dir] [--brief]                   extract symbols and references from code
+                                                (Rust, JS/TS, Python, Go) — lists definition
+                                                sites and files that reference each symbol.
+                                                Use --brief to rank by usage count, suitable
+                                                for embedding in a document
+  dx coverage [dir] [--window N] [--min-rate R] search quality report: of the last N
+                                                searches (default 200), how many hit a
+                                                document vs. fell back to source-only or
+                                                found nothing. Shows most-repeated misses
+                                                first — hints for what to document next.
+                                                Use --min-rate R to fail if below R%
+  dx doctor                                     check installation health and find missing
+                                                toolchains
 
 WRITE
-  dx new      <file> [--title T]                create a document
-  dx index    [dir] [--force]                   scaffold index.dx — a project map
-                                                from the tree, files ranked by
-                                                how load-bearing they look, meant
-                                                to be read whole and improved by
-                                                its reader — plus dev.dx, verify
-                                                gates for the detected build
-                                                system, awaiting review
-                                                (`dx run dev.dx --approve`)
-  dx source   <file> [--block ID] [--header]    the exact characters, to edit
-              --header prints the block's `::kind attrs` opening line
-  dx set      <file> <block-id> --text T        replace one block's body
-              [--header H]                      replace the whole block — a new
-              `::kind attrs` line retypes it; an empty H reads the text as plain
-              prose, markdown shorthand included
-              --replace OLD --with NEW [--all]  change OLD to NEW inside the body
-                                                and keep every other character —
-                                                the cheap edit for a rename or a
-                                                one-line fix; OLD must match once
-                                                unless --all says every one
-  dx insert   <file> --after ID [--type T]      add a block after another
-              [--id ID] [--level N]             name it, or set a heading's level
-              [--lang L] [--run] [--deps D]     a runnable one, with --type code
-  dx remove   <file> [block-id]                 take a block out; no id: the document
-  dx check    <file> <checklist-id> --item N    tick or untick one box, by its
-                                                position, counting from zero
-  dx board    <file> <board-id>                 arrange a ::board's nodes
-              --place N --x X --y Y [--w W]     move or add the node named N
-                                                a size is pixels, `page`, or `fit`
-              --add --x X --y Y                 a fresh node, ready to write
-              --detach N                        take a node off the board
-              --link A --to B | --unlink A --to B   draw or erase an edge
-  dx append   <file> --type T --text T          add a block at the end
-              [--id ID] [--level N]             name it, or set a heading's level
-  dx fmt      <file...> [--check]               rewrite in canonical form
+  dx new      <file> [--title T]                create a new document with an optional title
 
-REPORT — what dx itself got wrong
-  dx report   bug|suggestion|observation        file it from any project, the moment
-              --title T --detail D              it happens: what you did, what you
-              [--route R] [--repro X]           expected, what happened instead.
-                                                --route names the tool or command
-                                                involved. It goes to the intake, so the
-                                                dx checkout carries it for whoever fixes
-                                                it — and to this machine's inbox first,
-                                                so an unreachable intake loses nothing.
-  dx report   list [dir]                        what is waiting, what <dir>'s reports.dx
-                                                carries, and what it subscribes to
-  dx report   subscribe [dir]                   <dir>/reports.dx receives a project's
-              [--project dx] [--token T]        open reports from then on: every sync
-              [--endpoint URL]                  folds them in, and an MCP session keeps
-                                                them current underneath the agent.
-  dx report   setup [dir]                       one command: subscribe this repository
-              [--endpoint URL] [--token T]      to its own reports, minting a
-                                                collision-resistant project key of its
-                                                own the first time, reusing it after,
-                                                and reusing this machine's stored token
-  dx report   token [T]                         store the owner's token once,
-                                                machine-wide; with no T, say whether
-                                                one is stored
-  dx report   sync [dir]                        push what is waiting, pull what is open
-  dx report   close <id> [dir]                  a fix landed: the block goes and the
-                                                intake is told, so no later sync brings
-                                                it back
-  dx report   drop <id>                         remove one entry from the local inbox
-                                                by id only, for a stuck entry that
-                                                cannot be synced
-  dx report   drain [dir]                       fold this machine's inbox into
-                                                <dir>/reports.dx with no network at all.
-                                                The same defect filed twice becomes a
-                                                second sighting on one block, never a
-                                                duplicate.
+  dx index    [dir] [--force]                   scaffold index.dx — auto-discovers the
+                                                project, ranks files by importance, and
+                                                creates index.dx plus dev.dx with verify
+                                                gates for the detected build system. Use
+                                                --force to re-scan the tree
 
-STORE
-  A .dx file on disk is a one-line pointer; its content lives in the workspace
-  store (.doc/). Every dx read resolves the pointer to the real document.
-  dx sync     [dir]                             adopt, restore, and repair pointers
-  dx stats    [dir]                             documents, block sharing, compaction
-  dx rm       <file>                            delete a document; history survives
-  dx textconv <file>                            print what a pointer stands for
-  dx git-setup [dir]                            teach git to diff and merge documents
-              Every dx write already does this for the repository it is writing
-              in, so a fresh clone or a new worktree needs no ceremony. Run it by
-              hand to repair a checkout, or to untrack a .doc/index.db an older
-              commit put into git — that file is machine-local and binary, and
-              once committed it conflicts on every merge that touched documents.
-              Untracking it is a commit, so it is never done behind your back.
-  dx merge-driver --ancestor %O --ours %A --theirs %B --path %P --marker-size %L
-              Git calls this; a person does not. Two branches that changed
-              documents merge block by block — the pack and the pointers both,
-              agreeing because both compute the same merge. A block both branches
-              rewrote is left in the .dx file with conflict markers, and `dx sync`
-              refuses to adopt it until they are gone.
+  dx source   <file> [--block ID] [--header]    raw block text for editing — copy from
+              --header includes \"::kind attrs\"  the shell and edit offline, then use
+                                                `dx set` to update the document. --header
+                                                adds the opening ::kind line
+
+  dx set      <file> <id> --text TEXT           replace block body (entire block content)
+              [--header H]                      with new text. Use --header to rewrite
+                                                the opening line (new ::kind or blank to
+                                                make prose). Fastest for one-liners:
+              --replace OLD --with NEW [--all]    find-replace OLD→NEW once (or --all for
+                                                every occurrence). Keeps every other
+                                                character — ideal for renames
+
+  dx insert   <file> --after ID [--type T]      add a new block after another block. Type
+              [--id ID] [--level N]             can be: h1-h4 (headings), text, code,
+              [--lang L] [--run] [--deps D]     checklist, etc. For code: use --lang
+                                                (rust, python, js), --run to mark runnable,
+                                                and --deps to declare dependencies
+
+  dx append   <file> --type T --text TEXT       add a block at the end — same options as
+              [--id ID] [--level N]             `dx insert` but always goes to end
+
+  dx remove   <file> [block-id]                 delete a block (no id: delete the whole
+                                                document). History is preserved in the store
+
+  dx check    <file> <checklist-id> --item N    toggle checkbox N in checklist (counting
+                                                from zero). Use to automate box ticking
+
+  dx board    <file> <board-id>                 edit ::board geometry (node positions,
+              --place N --x X --y Y [--w W]       sizes, connections):
+              --add --x X --y Y                   --place or --add sets node position
+              --detach N                          (size in px, \"page\", or \"fit\")
+              --link A --to B                     --link and --unlink draw or erase edges
+              --unlink A --to B
+
+  dx fmt      <file...> [--check]               rewrite blocks in canonical form (fixes
+                                                line endings, spacing). Use --check to
+                                                verify files are already formatted
+
+REPORT — report dx bugs and suggestions
+  dx report   bug|suggestion|observation        file a report: --title T --detail D
+              --title T --detail D              [--route R] [--repro X]. Goes to the dx
+              [--route R] [--repro X]           inbox first (survives network loss),
+                                                then syncs to the intake. --route names
+                                                the affected command (e.g. \"run\", \"set\")
+  dx report   list [dir]                        show reports waiting to sync, and what
+                                                <dir>/reports.dx already has
+  dx report   setup [dir]                       subscribe this repository to its own
+              [--endpoint URL] [--token T]      reports (one-time setup). Mints a
+                                                collision-resistant project key
+  dx report   subscribe [dir]                   add <dir>/reports.dx to report sync
+              [--project P] [--token T]
+              [--endpoint URL]
+  dx report   sync [dir]                        push inbox reports, pull open defects
+                                                (works offline: stages changes to sync
+                                                on next network connection)
+  dx report   token [T]                         store your token machine-wide (or
+                                                check what's stored if no T)
+  dx report   close <id> [dir]                  mark a report fixed (removes block,
+                                                notifies intake)
+  dx report   drop <id>                         remove from inbox (for unsynced stubs)
+  dx report   drain [dir]                       move inbox → <dir>/reports.dx (no
+                                                network). Duplicate reports become
+                                                second sightings, not duplicates
+
+STORAGE — how dx stores and manages documents
+
+  A .dx file is a one-line pointer (a digest). Content lives in .doc/.
+  Every read resolves the pointer to the real document.
+
+  dx sync     [dir]                             repair/restore pointers and documents
+                                                after git operations. Reconciles .dx
+                                                files, .doc/ packs, and index.db
+
+  dx stats    [dir]                             storage summary: document count, block
+                                                sharing, space used, compaction advice
+
+  dx rm       <file>                            delete document (history survives in
+                                                .doc/ — reversible if committed)
+
+  dx textconv <file>                            debug: print the real content a .dx
+                                                pointer stands for
+
+  dx git-setup [dir]                            configure git diff/merge for .dx files.
+              (Normally automatic on write, so  Use when: fixing a checkout, or fixing
+               fresh clones need this only for  a .doc/index.db that was accidentally
+               repairs)                         committed (it's binary, machine-local,
+                                                and conflicts on every merge that
+                                                touched documents)
+
+  Git merge & diff:
+    When two branches change documents, they merge block-by-block. Conflict markers
+    in a .dx file freeze the block until `dx sync` can adopt a clean merge.
+    The merge driver is called by git; you don't call it:
+    dx merge-driver --ancestor %O --ours %A --theirs %B --path %P --marker-size %L
 
 RUN
   dx run      <file> [--only ID] [--force] [--dry] [--timeout S]
               [--review] [--approve] [--follow-edges]
-              Executes code blocks marked `run` and stores their output in the
-              document. The only other executions are the two stated elsewhere:
-              an edit to a runnable block runs it (the edit is the review), and
-              the agent read tools refresh stale output of already-approved
-              code. New or edited
-              code is blocked until reviewed: --review prints each block's exact
-              code and fingerprint without executing; --approve approves the
-              current code and runs it (--review with --approve is refused —
-              review records nothing); --force runs it this once and says so in
-              the output. Editing a block changes its fingerprint, so approval
-              expires with the edit. Only this machine's approvals count: a
-              result already recorded in the document approves nothing, so a
-              document you were handed is reviewed rather than skipped as
-              cached. --follow-edges runs blocks in the order the
-              document's board edges state — an edge means this-then-that, even
-              through non-runnable nodes — instead of document order. The
-              earliest ready block always runs next, so an edge that defers a
-              block lets later blocks (on a board or not) run before it; only
-              stated edges order side effects. A cycle among runnable blocks is
-              refused with a sentence naming it.
-              A block runs inside a kernel sandbox scoped to its project: read
-              the repository the document lives in, the run caches, and the
-              system with its toolchains (never the rest of your files, never
-              credential stores), write only its own scratch directory, and no
-              network while the block's code runs — libraries fetch during
-              setup, declared with deps=. $HOME, $TMPDIR, and $DX_SANDBOX all
-              point at that scratch directory, so state keyed off a real home
-              (~/.gitconfig) is deliberately out of reach. A block you just
-              edited runs without a second gate — the edit is the review — while
-              a document that merely arrived waits for --review/--approve. A block
-              whose work belongs in the document's own folder — a build
-              directory, generated files — declares it with writes=target,gen:
-              each folder must sit inside the document's folder (the store and
-              any symlinked way out are refused), it is created if missing, and
-              the grant joins the block's fingerprint, so --review prints it
-              and changing what a block may touch re-opens review exactly like
-              changing its code. It grants folders, never loose files, so a
-              tool that rewrites one beside the document needs the flag that
-              tells it not to (`cargo test --locked`). The network stays gone
-              either way. What a block reads it declares with reads=src,data.csv
-              — files or folders, comma-separated, confined to the document's
-              folder. Their current content joins the run fingerprint, so
-              editing a declared input re-runs already-approved code on the
-              next plain run; a folder covers every file under it (hidden
-              entries, target and node_modules, and the block's own writes=
-              folders left out). Approval names the declared paths, never the
-              content — new data re-runs, new powers re-review.
 
-PLATFORM
-  dx serve    [--port N]                        the local rendering service
-              Holds packs in memory and renders through the one engine, so every
-              surface — a browser, a phone, an editor — is a thin client of it.
-              Reads no files, writes none, runs nothing.
-  dx mcp                                        serve documents to AI agents over MCP
-  dx setup    [--all] [--bin-dir D] [--uninstall]
-              The one install, run once per device: puts dx on PATH, registers the
-              MCP server with every assistant here, starts the rendering service at
-              login, installs DX.app so a double-clicked .dx opens as a page, and
-              configures every browser that dx can configure for itself.
-              --uninstall reverses all of it.
-  dx browser  [--browser B] [--from S] [--dir D] [--open]
-              Show .dx documents on github.com. Says how each browser here takes the
-              extension and the one step it reserves for you. --from <source> builds
-              a loadable directory out of a checkout's editor/github.
-  dx doctor                                     what is installed and what is missing
-  dx help                                       this text
+  Execution:
+    dx run notes.dx                 run all code blocks marked ::code run
+    dx run notes.dx --only block1   run one block
+    dx run notes.dx --dry           show what would run, without executing
+    dx run notes.dx --follow-edges  run in board edge order, not document order
 
-COMMON FLAGS
-  --section ID   render only one block or heading section
+  Approval workflow (new code must be reviewed):
+    dx run notes.dx --review        print code fingerprints without executing
+    dx run notes.dx --approve       approve reviewed code and run it
+    dx run notes.dx --force         run once without approval (marked in output)
+    NOTE: Editing a block clears its approval (the edit is the review). Only
+    this machine's approvals count; cached results don't auto-approve.
+
+  Sandbox (code runs confined, not with your full permissions):
+    • Reads: repository folder, run caches, system toolchains
+    • Writes: block's own scratch directory only (--writes= for document folders)
+    • Network: none. Dependencies install during setup (--deps=), then offline
+    • $HOME, $TMPDIR, $DX_SANDBOX all point to the scratch directory
+
+  Block metadata:
+    ::code id=build lang=rust run deps=\"cargo\"
+      <code here>
+      reads=src,Cargo.lock            # files/folders this block reads (confined to
+      writes=target,build             # document folder only)
+    ::end
+
+    reads=: declare what files the block needs (csv). Content changes re-run
+            approved code. Folders are recursive (hidden dirs included, but
+            target/ node_modules/ and the block's own writes= are skipped)
+    writes=: declare where to write (folders only, must be inside document
+            folder). Grant joins the fingerprint, so new write powers re-review.
+    deps=: packages/tools to install during setup (offline, doesn't re-install
+           unless changed)
+
+PLATFORM & SETUP
+  dx serve    [--port N]                        local rendering service. Holds packs in
+                                                memory, thin-client for browser/phone/editor.
+                                                Reads no files, writes nothing, runs nothing
+
+  dx mcp                                        serve documents to AI agents over MCP stdio
+
+  dx setup    [--all] [--bin-dir D]             one-time setup per device: add dx to PATH,
+              [--uninstall]                     register MCP with every assistant, start
+                                                rendering service at login, install DX.app,
+                                                configure browsers. --uninstall reverses all
+
+  dx browser  [--browser B] [--from S] [--dir D]  install GitHub extension to view .dx files
+              [--open]                           on github.com. Shows setup steps per browser.
+                                                --from builds an install dir from a
+                                                checkout's editor/github directory
+
+  dx doctor                                     check installation, toolchains, agents,
+                                                documents, git config, and report health
+
+COMMON FLAGS (all commands)
+  --section ID   show only one block/section (by id)
   --theme T      auto (default), light, or dark
   --hidden       include blocks marked hidden
-  --show-code    open every code block, for a page nobody can click (print, archive)
-  --out FILE     write to a file instead of standard output ('-' means stdout)
-  --pages        with dx png: one image per page, breaking between blocks
-  --scale N      with dx png: image pixels per CSS pixel (default 2, matching a
-                 high-density screen; 1 for CSS-pixel images)
+  --show-code    expand all code blocks (for printing/archiving)
+  --out FILE     write to file instead of stdout (- means stdout)
+  --pages        (for dx png) one image per page, break between blocks
+  --scale N      (for dx png) pixels per CSS pixel (default 2 for hi-dpi; 1 for
+                 CSS-pixel size)
 
-A RUNNABLE BLOCK
-  ::code id=chart lang=python run deps=\"matplotlib\"
-  ...your code...
+EXAMPLE: A runnable block
+  ::code id=analyze lang=python run deps=\"pandas,matplotlib\"
+  import pandas as df
+  df.read_csv('data.csv').plot()
   ::end
-";
+
+  This block: imports pandas/matplotlib during setup, runs offline with reads=data.csv
+  access and writes=plots output permissions, stores result in the document.";
 
 #[cfg(test)]
 mod tests {
