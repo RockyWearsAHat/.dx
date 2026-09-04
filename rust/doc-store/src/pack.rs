@@ -105,6 +105,7 @@ pub(crate) fn export(store: &Store, loss: Loss) -> Result<(), StoreError> {
     Ok(())
 }
 
+
 /// Fail if any pack carries a document `keeping` does not, while its `.dx` file is still there.
 ///
 /// Both packs are checked against the *whole* store rather than pack by pack, because a
@@ -201,6 +202,9 @@ pub(crate) fn snapshot(root: &Path) -> [Option<Vec<u8>>; 2] {
     [fs::read(repo_path).ok(), fs::read(local_path).ok()]
 }
 
+/// The source index file, relative to the workspace root.
+pub const SOURCE_INDEX: &str = ".doc/source_index";
+
 /// The pack names [`snapshot`] reports, in the same order.
 pub(crate) const NAMES: [&str; 2] = [REPO_PACK, LOCAL_PACK];
 
@@ -271,10 +275,10 @@ pub fn source(root: &Path, relative: &str) -> Result<Option<String>, StoreError>
 /// The `.gitignore` lines a workspace needs so the right things are committed.
 ///
 /// The database, its write-ahead log, the local pack, and the search-coverage log are all
-/// machine-local; the repo pack and the stubs are the content and must travel. Committing a
-/// machine-local file is not a tidiness problem but a merge one: `.doc/index.db` is binary and
-/// every branch that wrote a document has its own, so a tracked index conflicts on every
-/// single merge and no resolution of it can be right.
+/// machine-local; the repo pack, the source index, and the stubs are the content and must travel.
+/// Committing a machine-local file is not a tidiness problem but a merge one: `.doc/index.db`
+/// is binary and every branch that wrote a document has its own, so a tracked index conflicts
+/// on every single merge and no resolution of it can be right.
 #[must_use]
 pub fn gitignore_lines() -> String {
     format!(
