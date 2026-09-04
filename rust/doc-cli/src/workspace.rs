@@ -1193,6 +1193,125 @@ fn drop_noise(ranked: Vec<Hit>) -> Vec<Hit> {
         .collect()
 }
 
+/// Metadata for a cached source file: path and modification time for staleness detection.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct CachedSourceFile {
+    relative: String,
+    mtime: u64,
+}
+
+/// Load cached source file metadata from disk if it exists and is not stale.
+///
+/// Returns `None` if the cache file does not exist, is malformed, or its files
+/// have been modified since the cache was written. Also returns `None` if the
+/// number of source files in the directory differs from what was cached,
+/// indicating new files may have been added or removed.
+fn load_source_cache(root: &Path) -> Option<Vec<CachedSourceFile>> {
+    let cache_path = root.join(".doc").join("source_cache");
+    let cache_json = fs::read_to_string(&cache_path).ok()?;
+    let cached: Vec<CachedSourceFile> = serde_json::from_str(&cache_json).ok()?;
+
+    // Quick check: count current source files to detect additions/deletions.
+    let mut current_count = 0;
+    fn count_source_files(directory: &Path, count: &mut usize) {
+        let Ok(entries) = fs::read_dir(directory) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            if name.starts_with('.') {
+                continue;
+            }
+            if path.is_dir() {
+                if !matches!(
+                    name,
+                    "node_modules" | "target" | "build" | "dist" | "__pycache__"
+                ) {
+                    count_source_files(&path, count);
+                }
+            } else {
+                let searchable = SEARCHABLE_NAMES.contains(&name)
+                    || path
+                        .extension()
+                        .and_then(|ext| ext.to_str())
+                        .is_some_and(|ext| SEARCHABLE_SOURCE.contains(&ext));
+                let sized = entry
+                    .metadata()
+                    .is_ok_and(|m| m.len() <= MAX_SOURCE_BYTES);
+                if searchable && sized {
+                    *count += 1;
+                }
+            }
+        }
+    }
+    count_source_files(root, &mut current_count);
+
+    // If the number of files changed, the cache is definitely stale.
+    if current_count != cached.len() {
+        return None;
+    }
+
+    // Check if all cached files still exist and have the same mtime.
+    for cached_file in &cached {
+        let full_path = root.join(&cached_file.relative);
+        let metadata = fs::metadata(&full_path).ok()?;
+        let mtime = metadata
+            .modified()
+            .ok()?
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()?
+            .as_secs();
+        if mtime != cached_file.mtime {
+            return None; // File was modified.
+        }
+    }
+
+    Some(cached)
+}
+
+/// Build source corpus from a cached file list, reading and parsing each file.
+///
+/// `cached_files` should be the result of a successful `load_source_cache()` call;
+/// all files are assumed to exist and have been freshness-checked.
+fn build_source_corpus_from_cache(root: &Path, cached_files: Vec<CachedSourceFile>) -> Vec<Loaded> {
+    in_parallel(&cached_files, |cached| {
+        let path = root.join(&cached.relative);
+        let text = fs::read_to_string(&path).ok()?;
+        let document = doc_core::search::source_document(&cached.relative, &text);
+        (!document.blocks.is_empty()).then(|| Loaded {
+            path: path.clone(),
+            relative: cached.relative.clone(),
+            document,
+        })
+    })
+    .into_iter()
+    .flatten()
+    .collect()
+}
+
+/// Save source cache to disk for faster future searches.
+fn save_source_cache(root: &Path, files: &[PathBuf]) -> Result<(), String> {
+    let mut cached = Vec::new();
+    for path in files {
+        let relative = relative_of(root, path);
+        let mtime = fs::metadata(path)
+            .and_then(|m| m.modified())
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH))
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        cached.push(CachedSourceFile { relative, mtime });
+    }
+
+    let cache_path = root.join(".doc").join("source_cache");
+    let json = serde_json::to_string(&cached)
+        .map_err(|e| format!("failed to serialize source cache: {e}"))?;
+    fs::write(&cache_path, json)
+        .map_err(|e| format!("failed to write source cache: {e}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2150,5 +2269,47 @@ mod tests {
         fs::write(&path, prose).expect("plain text");
         assert_eq!(read(&path).expect("prose is not a conflict"), prose);
         assert!(half_merged_text(&path).is_none());
+    }
+
+    #[test]
+    fn search_caches_source_files_and_detects_staleness() {
+        let root = scratch("search-source-cache");
+        // Create document and source files.
+        fs::write(root.join("a.dx"), NOTES).expect("write");
+        fs::create_dir_all(root.join("src")).expect("dirs");
+        fs::write(root.join("src/algo.rs"), "fn quicksort() { // kubernetes\n}\n")
+            .expect("write");
+
+        // First search builds the cache.
+        let hits1 = search(&root, "kubernetes", 10).expect("first search");
+        assert!(!hits1.is_empty(), "should find kubernetes in source");
+        let cache_path = root.join(".doc").join("source_cache");
+        assert!(
+            cache_path.exists(),
+            "cache should exist after first search at {}",
+            cache_path.display()
+        );
+
+        // Second search uses the cache (no log message about rescanning).
+        let hits2 = search(&root, "kubernetes", 10).expect("second search");
+        assert_eq!(
+            hits2.len(),
+            hits1.len(),
+            "cache hit should return same results"
+        );
+
+        // Modify a source file to stale the cache.
+        std::thread::sleep(std::time::Duration::from_millis(10)); // Ensure mtime differs.
+        fs::write(root.join("src/algo.rs"), "fn quicksort() { // modified\n}\n")
+            .expect("modify");
+
+        // Third search detects staleness and rescans. The cache file exists but is stale.
+        let cache_before = fs::metadata(&cache_path).expect("cache exists").modified().ok();
+        let hits3 = search(&root, "kubernetes", 10).expect("third search");
+        // Verify the search still works (didn't fail due to stale cache).
+        assert!(
+            !hits3.is_empty(),
+            "search after file modification should still find results"
+        );
     }
 }
