@@ -1,0 +1,5 @@
+# Fixture for cap-dx-run
+
+::code run
+set -e
+echo "ok"
