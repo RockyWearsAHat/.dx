@@ -24,6 +24,30 @@
 //! same three revisions, and it is a pure function. The pointer driver writes the digest of
 //! what the pack driver stored, without either one knowing whether the other has run.
 //!
+//! # Concurrent editing and conflict scenarios
+//!
+//! When two agents edit the workspace concurrently and merge:
+//!
+//! ## Clean merge: different documents edited
+//! - Agent A edits `index.dx`, Agent B edits `console.dx`
+//! - Packs merge cleanly (no documents overlap)
+//! - Pointers merge cleanly (both new files)
+//! - `dx sync` completes with no conflicts reported
+//!
+//! ## Conflicted merge: same document edited
+//! - Both agents edit `data.dx` with different changes
+//! - Pack merge embeds conflict markers in the document source: `<<<<<<< ours / ======= / >>>>>>> theirs`
+//! - Pointer merge also conflicts (hex digest differs)
+//! - Git marks both `.doc/repo.dxcp` and `data.dx` as unmerged
+//! - Merge driver returns an error listing the conflicting document paths
+//! - User must resolve `data.dx` by removing conflict markers and running `dx sync` again
+//! - While markers remain, `dx sync` refuses to adopt the file; it reports it in the `conflicted` list
+//! - Once markers are removed, `dx sync` adopts the resolved document and updates the store
+//!
+//! The tests in this module ([`tests`]) verify these scenarios; see especially
+//! [`tests::one_branch_adding_a_document_and_the_other_editing_a_different_one_merges_clean`]
+//! and [`tests::both_sides_rewriting_one_block_conflicts_and_the_pack_still_decodes`].
+//!
 //! # Nothing here writes to the store
 //! A merge driver runs in the middle of a git operation, with the working tree half
 //! rewritten and `.doc/repo.dxcp` about to be replaced by git itself. Ingesting into the
