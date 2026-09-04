@@ -338,6 +338,7 @@ pub fn run_document(
                     ledger.is_approved(&approval),
                     &read_paths,
                     &writes,
+                    &options.document_dir,
                 ),
                 duration_ms: 0,
             });
@@ -741,16 +742,19 @@ fn granted_writes(writes: &[String], document_dir: &Path) -> Result<Vec<PathBuf>
 /// Resolve `reads=` paths to their canonical form for the sandbox grant.
 ///
 /// Paths are joined with the document directory and normalized. They will be added to the
-/// sandbox's readable roots, allowing the block to read them. Validation that they are within
-/// the repository scope happens earlier (in [`declared_reads`]) through the resolver.
+/// sandbox's readable roots, allowing the block to read them. Explicit `reads=` entries may
+/// resolve anywhere on the machine (outside the repository), but are validated to refuse
+/// paths under sensitive directories (.ssh, .gnupg, .aws, Library/Keychains) and .env* files.
+/// Existence validation happens in [`declared_reads`] which uses the resolver.
 fn granted_reads(reads: &[String], document_dir: &Path) -> Result<Vec<PathBuf>, String> {
-    let repo_scope = confine::read_scope(document_dir);
-
     // Canonicalize the document_dir once for consistent path comparisons
     let canonical_doc_dir = document_dir.canonicalize().unwrap_or_else(|_| {
         // If document_dir can't be canonicalized (rare), use it as-is
         document_dir.to_path_buf()
     });
+
+    // Determine the home directory for secret path validation
+    let home = std::env::var_os("HOME").map(PathBuf::from);
 
     let mut granted = Vec::new();
 
@@ -777,19 +781,82 @@ fn granted_reads(reads: &[String], document_dir: &Path) -> Result<Vec<PathBuf>, 
             normalized_path
         };
 
-        // Validate that the normalized path is within the repository scope
-        let in_scope = repo_scope.iter().any(|scope| normalized.starts_with(scope));
+        // Refuse .env* files
+        if let Some(filename) = normalized.file_name() {
+            let filename_str = filename.to_string_lossy();
+            if filename_str == ".env" || filename_str.starts_with(".env.") {
+                return Err(format!(
+                    "reads={path} cannot be granted — .env files contain secrets"
+                ));
+            }
+        }
 
-        if !in_scope {
-            return Err(format!(
-                "reads={path} is not within the repository scope — \
-                 a `reads=` path must be reachable from the document's repository root or its linked worktrees"
-            ));
+        // Refuse paths under sensitive directories
+        if let Some(home_dir) = &home {
+            let sensitive_dirs = vec![
+                home_dir.join(".ssh"),
+                home_dir.join(".gnupg"),
+                home_dir.join(".aws"),
+                home_dir.join("Library/Keychains"),
+            ];
+            for secret_dir in sensitive_dirs {
+                if normalized.starts_with(&secret_dir) {
+                    return Err(format!(
+                        "reads={path} cannot be granted — the path is in a sensitive directory"
+                    ));
+                }
+            }
         }
 
         granted.push(normalized);
     }
     Ok(granted)
+}
+
+/// Check if a declared read path is outside the repository scope.
+fn is_read_outside_repo(path: &str, document_dir: &Path) -> bool {
+    let canonical_doc_dir = document_dir
+        .canonicalize()
+        .unwrap_or_else(|_| document_dir.to_path_buf());
+    let resolved = canonical_doc_dir.join(path);
+    let normalized = if resolved.exists() {
+        resolved.canonicalize().unwrap_or(resolved)
+    } else {
+        let mut normalized_path = canonical_doc_dir.clone();
+        for component in path.split('/').filter(|s| !s.is_empty()) {
+            if component == ".." {
+                normalized_path.pop();
+            } else if component != "." {
+                normalized_path.push(component);
+            }
+        }
+        normalized_path
+    };
+
+    let repo_scope = confine::read_scope(document_dir);
+    !repo_scope.iter().any(|scope| normalized.starts_with(scope))
+}
+
+/// Resolve a read path to its absolute form for display.
+fn resolve_read_path_for_display(path: &str, document_dir: &Path) -> String {
+    let canonical_doc_dir = document_dir
+        .canonicalize()
+        .unwrap_or_else(|_| document_dir.to_path_buf());
+    let resolved = canonical_doc_dir.join(path);
+    let normalized = if resolved.exists() {
+        resolved.canonicalize().unwrap_or(resolved)
+    } else {
+        let mut normalized_path = canonical_doc_dir.clone();
+        for component in path.split('/').filter(|s| !s.is_empty()) {
+            if component == ".." {
+                normalized_path.pop();
+            } else if component != "." {
+                normalized_path.push(component);
+            }
+        }
+        normalized_path
+    };
+    normalized.to_string_lossy().to_string()
 }
 
 /// What review mode reports for one block: the exact code that would run (hydrated, so
@@ -801,6 +868,7 @@ fn review_text(
     approved: bool,
     reads: &[String],
     writes: &[String],
+    document_dir: &Path,
 ) -> String {
     let standing = if approved {
         "approved — a plain run executes this code"
@@ -809,9 +877,20 @@ fn review_text(
     };
     let mut grants = Vec::new();
     if !reads.is_empty() {
+        let read_displays: Vec<String> = reads
+            .iter()
+            .map(|path| {
+                let absolute = resolve_read_path_for_display(path, document_dir);
+                if is_read_outside_repo(path, document_dir) {
+                    format!("{} → {} (outside repository)", path, absolute)
+                } else {
+                    format!("{} → {}", path, absolute)
+                }
+            })
+            .collect();
         grants.push(format!(
             "reads {} — approving grants this code read access to these paths",
-            reads.join(", ")
+            read_displays.join(", ")
         ));
     }
     if !writes.is_empty() {
