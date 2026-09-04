@@ -40,5 +40,6 @@ pub mod pointer;
 pub mod render;
 pub mod resolve;
 pub mod search;
+pub mod source_index;
 pub mod surface;
 pub mod trace;
