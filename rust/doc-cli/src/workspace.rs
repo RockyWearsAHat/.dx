@@ -629,6 +629,15 @@ const HISTORY_DEPTH: usize = 200;
 /// *git* still has it, before the reconcile runs — see [`recover_from_history`]. Recovered
 /// documents are written back as plain text, so the reconcile adopts them by its ordinary
 /// path and reports them as adopted.
+///
+/// **Handling merge conflicts**: When `git merge` completes a merge of `.doc/repo.dxcp`
+/// (from concurrent edits by two agents), the merge driver may produce conflicted documents
+/// with embedded conflict markers (`<<<<<<<`, `=======`, `>>>>>>>`). The sync function detects
+/// these markers via `has_conflict_markers()` and reports such documents in the sync report
+/// but refuses to adopt them into the index. The user must manually resolve the conflicts by
+/// editing the document to remove the markers (choosing one branch or manually merging both),
+/// then run `dx sync` again to adopt the resolved version. This ensures conflicted content is
+/// never silently ingested into the workspace.
 pub fn sync(root: &Path) -> Result<SyncReport, String> {
     let _ = crate::commands::store::ensure_git_ready(root);
     recover_from_history(root);
