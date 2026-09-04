@@ -234,3 +234,34 @@ fn a_capture_block_is_gated_by_approval_like_any_other_runner() {
     assert_eq!(run.status, "blocked", "{}", run.output);
     assert!(!root.join("out").join("shot.png").exists());
 }
+
+#[test]
+fn capture_localhost_allowed() {
+    let Some(_) = doc_shot::browser::find() else {
+        eprintln!("skipping: no browser on this machine");
+        return;
+    };
+    let _guard = BROWSER_LOCK
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    let (root, options) = scene("localhost");
+
+    let port = serve("<html><body>localhost works</body></html>", "");
+
+    // Test using "localhost" hostname instead of IP literal
+    let source = format!(
+        "::code id=shot lang=capture run target=http://localhost:{port}/ writes=out timeout=25\n\
+         return document.body.innerText;\n\
+         ::end\n"
+    );
+    let report = run_document(&source, &options, &Nowhere).expect("acyclic run");
+    let run = report.runs.first().expect("one run");
+
+    assert_eq!(run.status, "ok", "{}", run.output);
+    assert!(
+        run.output.contains("localhost works"),
+        "{}",
+        run.output
+    );
+    assert!(root.join("out").join("shot.png").exists(), "{}", run.output);
+}

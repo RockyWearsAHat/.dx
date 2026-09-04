@@ -55,6 +55,26 @@
 //! database that is meant to be rebuildable. So the drivers are pure: bytes in, bytes out.
 //! `dx sync` afterwards is what puts the index back in agreement — and it is the same
 //! `dx sync` a fresh clone runs, not a special path.
+//!
+//! # Concurrent editing and conflict scenarios
+//! When two agents edit `.doc/repo.dxcp` concurrently (e.g., in separate worktrees), git
+//! merge invokes this module to resolve the concurrent edits:
+//!
+//! **Clean merge**: If the two agents edit *different* documents, the merge succeeds without
+//! conflicts. For example, see the test
+//! `one_branch_adding_a_document_and_the_other_editing_a_different_one_merges_clean()`.
+//!
+//! **Conflicted merge**: If both agents edit the *same* document, the pack decomposes to
+//! three versions (the common ancestor, each agent's version), and the block-level three-way
+//! comparison may produce conflicts. When a conflict occurs, the merge driver embeds conflict
+//! markers in the document source, preserving both sides' edits inside the merged pack. For
+//! example, see `both_sides_rewriting_one_block_conflicts_and_the_pack_still_decodes()`,
+//! which verifies that the pack still decodes correctly even with markers present.
+//!
+//! **Resolution**: `dx sync` afterwards detects conflict markers in document sources and
+//! refuses to adopt the conflicted documents into the index until they are manually
+//! resolved. The user must remove the conflict markers (keeping one version or manually
+//! combining both), then run `dx sync` again to adopt the resolved document.
 
 use std::collections::{BTreeMap, BTreeSet};
 
