@@ -90,7 +90,7 @@ use plan::parse_deps;
 use process::Capture;
 
 /// Seconds a block may run when it does not set its own `timeout`.
-pub const DEFAULT_TIMEOUT_SECONDS: u64 = 60;
+pub const DEFAULT_TIMEOUT_SECONDS: u64 = 600;
 
 /// Longest output kept in a document; anything past this is truncated with a notice.
 const MAX_OUTPUT_CHARS: usize = 20_000;
@@ -311,7 +311,7 @@ pub fn run_document(
             }
         };
         let material = approval_material(block);
-        let fingerprint = fingerprint(runner, &material, &deps, &reads, &writes);
+        let fingerprint = fingerprint(runner, &material, &deps, &reads, &writes, block.timeout);
         // Approval names the *declared* paths, never a directory's current expansion —
         // a file appearing under a declared folder is new data, not a new power.
         let read_paths = match declared_read_paths(&block.reads) {
@@ -584,6 +584,7 @@ fn fingerprint(
     deps: &[String],
     reads: &[(String, String)],
     writes: &[String],
+    timeout: u32,
 ) -> String {
     let mut material = format!("{runner}\u{1f}{}\u{1f}{code}", deps.join(","));
     for (path, text) in reads {
@@ -594,6 +595,9 @@ fn fingerprint(
     }
     if !writes.is_empty() {
         material = format!("writes={}\u{1e}{material}", writes.join(","));
+    }
+    if timeout > 0 {
+        material = format!("timeout={}\u{1e}{material}", timeout);
     }
     sha256_hex(material.as_bytes())
 }
@@ -1485,13 +1489,13 @@ mod tests {
 
     #[test]
     fn fingerprints_change_with_code_and_dependencies() {
-        let base = fingerprint("python", "print(1)", &[], &[], &[]);
-        assert_ne!(base, fingerprint("python", "print(2)", &[], &[], &[]));
+        let base = fingerprint("python", "print(1)", &[], &[], &[], 0);
+        assert_ne!(base, fingerprint("python", "print(2)", &[], &[], &[], 0));
         assert_ne!(
             base,
-            fingerprint("python", "print(1)", &["rich".into()], &[], &[])
+            fingerprint("python", "print(1)", &["rich".into()], &[], &[], 0)
         );
-        assert_ne!(base, fingerprint("node", "print(1)", &[], &[], &[]));
+        assert_ne!(base, fingerprint("node", "print(1)", &[], &[], &[], 0));
         // The full digest: this value is the approval identity, and a truncated one is
         // a collision a hostile author could manufacture.
         assert_eq!(base.len(), 64);
@@ -1499,13 +1503,14 @@ mod tests {
 
     #[test]
     fn fingerprints_change_with_declared_reads() {
-        let base = fingerprint("python", "print(1)", &[], &[], &[]);
+        let base = fingerprint("python", "print(1)", &[], &[], &[], 0);
         let read = fingerprint(
             "python",
             "print(1)",
             &[],
             &[("site.css".into(), "body{}".into())],
             &[],
+            0,
         );
         assert_ne!(base, read);
         // The same file with different content is a different fingerprint — that is the
@@ -1518,6 +1523,7 @@ mod tests {
                 &[],
                 &[("site.css".into(), "body{color:red}".into())],
                 &[],
+                0,
             )
         );
         // A renamed file is a different fingerprint even with identical content.
@@ -1529,18 +1535,26 @@ mod tests {
                 &[],
                 &[("other.css".into(), "body{}".into())],
                 &[],
+                0,
             )
         );
     }
 
     #[test]
     fn fingerprints_change_with_the_write_grant_and_cannot_be_forged_onto_one() {
-        let bare = fingerprint("bash", "make", &[], &[], &[]);
-        let granted = fingerprint("bash", "make", &[], &[], &["target".into()]);
+        let bare = fingerprint("bash", "make", &[], &[], &[], 0);
+        let granted = fingerprint("bash", "make", &[], &[], &["target".into()], 0);
         assert_ne!(bare, granted, "a grant is part of what review approves");
         assert_ne!(
             granted,
-            fingerprint("bash", "make", &[], &[], &["target".into(), "gen".into()]),
+            fingerprint(
+                "bash",
+                "make",
+                &[],
+                &[],
+                &["target".into(), "gen".into()],
+                0
+            ),
             "a wider grant is a different approval"
         );
         // The forgery `reads=` could otherwise mount: a file whose *text* replays the
@@ -1552,10 +1566,26 @@ mod tests {
             &[],
             &[("writes".into(), "target".into())],
             &[],
+            0,
         );
         assert_ne!(
             granted, forged,
             "an ungranted block can never share a granted print"
+        );
+    }
+
+    #[test]
+    fn fingerprints_change_with_timeout() {
+        let base = fingerprint("python", "print(1)", &[], &[], &[], 0);
+        let with_timeout = fingerprint("python", "print(1)", &[], &[], &[], 300);
+        assert_ne!(
+            base, with_timeout,
+            "a timeout is part of what review approves"
+        );
+        assert_ne!(
+            with_timeout,
+            fingerprint("python", "print(1)", &[], &[], &[], 600),
+            "a different timeout is a different approval"
         );
     }
 
@@ -1651,14 +1681,14 @@ mod tests {
             ..Block::default()
         };
         let before = declared_reads(&block, &provided, &[]).expect("resolves");
-        let recorded = fingerprint("python", &block.text, &[], &before, &[]);
+        let recorded = fingerprint("python", &block.text, &[], &before, &[], 0);
 
         let mut edited = resolve::Provided::new();
         edited.add_file("site.css", "body{color:red}");
         let after = declared_reads(&block, &edited, &[]).expect("resolves");
         assert_ne!(
             recorded,
-            fingerprint("python", &block.text, &[], &after, &[])
+            fingerprint("python", &block.text, &[], &after, &[], 0)
         );
     }
 
@@ -1690,7 +1720,7 @@ mod tests {
         let before = Walked(vec![("data/a.txt".into(), "one".into())]);
         let reads = declared_reads(&block, &before, &[]).expect("resolves");
         assert_eq!(reads, vec![("data/a.txt".to_string(), "one".to_string())]);
-        let recorded = fingerprint("bash", &block.text, &[], &reads, &[]);
+        let recorded = fingerprint("bash", &block.text, &[], &reads, &[], 0);
 
         // A file appearing under the declared folder is a change the record must see.
         let grown = Walked(vec![
@@ -1698,7 +1728,10 @@ mod tests {
             ("data/b.txt".into(), "two".into()),
         ]);
         let after = declared_reads(&block, &grown, &[]).expect("resolves");
-        assert_ne!(recorded, fingerprint("bash", &block.text, &[], &after, &[]));
+        assert_ne!(
+            recorded,
+            fingerprint("bash", &block.text, &[], &after, &[], 0)
+        );
 
         // But not a change to the block's powers: approval names the declared path.
         let paths = declared_read_paths(&block.reads).expect("lawful");
@@ -1995,7 +2028,7 @@ mod tests {
     /// like, since the fingerprint is a pure function of content its author controls.
     fn document_with_a_matching_run_record(code: &str) -> String {
         let body = format!("echo {code}");
-        let hash = fingerprint("bash", &body, &[], &[], &[]);
+        let hash = fingerprint("bash", &body, &[], &[], &[], 0);
         format!(
             "::code id=forged lang=bash run\n{body}\n::end\n\n\
 ::output id=forged-output for=forged status=ok exit=0 hash={hash}\n{code}\n::end\n"
@@ -2063,5 +2096,36 @@ mod tests {
         assert_eq!(report.runs[0].status, "review");
         assert!(!report.changed);
         assert!(!report.source.contains("::output"));
+    }
+
+    #[test]
+    fn timeout_attribute_causes_timeout_at_specified_seconds() {
+        // A block that sleeps 2 seconds with timeout=1 should timeout
+        let source_timeout_too_short =
+            "::code id=sleep2 lang=bash run timeout=1\nsleep 2 && echo done\n::end\n";
+        let report = run_isolated(source_timeout_too_short, "timeout-fail");
+        assert_eq!(report.runs.len(), 1);
+        assert_eq!(
+            report.runs[0].status, "error",
+            "block should timeout and error"
+        );
+        assert!(
+            report.runs[0].output.contains("timed out"),
+            "output should mention timeout"
+        );
+
+        // Same block with timeout=5 should complete successfully
+        let source_timeout_long_enough =
+            "::code id=sleep2b lang=bash run timeout=5\nsleep 2 && echo done\n::end\n";
+        let report2 = run_isolated(source_timeout_long_enough, "timeout-pass");
+        assert_eq!(report2.runs.len(), 1);
+        assert_eq!(
+            report2.runs[0].status, "ok",
+            "block should complete within timeout"
+        );
+        assert!(
+            report2.runs[0].output.contains("done"),
+            "output should contain the expected result"
+        );
     }
 }
