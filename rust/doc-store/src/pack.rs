@@ -384,6 +384,24 @@ mod tests {
     }
 
     #[test]
+    fn gitignore_never_uses_wildcard_patterns_that_ignore_the_committed_pack() {
+        let lines = gitignore_lines();
+        // The bug: a pattern like `.doc/*.dxcp` would match both local.dxcp AND repo.dxcp,
+        // preventing the committed pack from being tracked. Explicitly list local.dxcp instead.
+        assert!(
+            !lines.contains(".doc/*.dxcp"),
+            "wildcard pattern .doc/*.dxcp would ignore repo.dxcp: {lines}"
+        );
+        // Ensure only local.dxcp is ignored, not the committed pack.
+        assert!(lines.contains(LOCAL_PACK), "{lines}");
+        // repo.dxcp must not be listed as an ignore pattern on its own line.
+        assert!(
+            !lines.contains(&format!("\n{REPO_PACK}\n")),
+            "repo.dxcp must not appear as an ignored pattern: {lines}"
+        );
+    }
+
+    #[test]
     fn many_documents_share_chunk_bodies_inside_one_pack() {
         let root = scratch("sharing");
         let mut store = Store::open(&root).expect("open");
