@@ -2175,4 +2175,5 @@ mod tests {
             "source_index file should be removed when empty"
         );
     }
+
 }
