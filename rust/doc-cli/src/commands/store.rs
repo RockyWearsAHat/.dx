@@ -8,6 +8,8 @@
 
 use std::path::{Path, PathBuf};
 
+use doc_core::digest;
+use doc_core::source_index::{FileMetadata, SourceIndex};
 use doc_store::pack;
 
 use crate::args::Args;
@@ -147,7 +149,101 @@ pub fn run_sync(args: &Args) -> Result<String, String> {
     if let Some(warning) = pending {
         out.push_str(&warning);
     }
+
+    build_and_write_source_index(&root)?;
+
     Ok(out)
+}
+
+/// Builds the source index from all source files in the workspace and writes it to `.doc/source_index`.
+fn build_and_write_source_index(root: &Path) -> Result<(), String> {
+    let start = std::time::Instant::now();
+    let files = collect_source_files(root)?;
+    let file_count = files.len();
+
+    let mut index_files = Vec::new();
+    for path in files {
+        let metadata = std::fs::metadata(&path)
+            .map_err(|e| format!("failed to read metadata for {}: {e}", path.display()))?;
+        let mtime = metadata
+            .modified()
+            .map_err(|e| format!("failed to get mtime for {}: {e}", path.display()))?
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|e| format!("failed to compute mtime for {}: {e}", path.display()))?
+            .as_secs();
+
+        let content = std::fs::read_to_string(&path)
+            .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
+        let content_hash = digest::sha256_hex(content.as_bytes());
+
+        let relative = path
+            .strip_prefix(root)
+            .unwrap_or(&path)
+            .to_string_lossy()
+            .into_owned();
+
+        index_files.push((
+            FileMetadata {
+                path: relative,
+                mtime,
+                content_hash,
+            },
+            content,
+        ));
+    }
+
+    let index = SourceIndex::build_from(index_files)
+        .map_err(|e| format!("failed to build source index: {e}"))?;
+
+    let index_bytes = index.to_bytes();
+    let index_dir = root.join(".doc");
+    std::fs::create_dir_all(&index_dir)
+        .map_err(|e| format!("failed to create .doc directory: {e}"))?;
+    let index_path = index_dir.join("source_index");
+    std::fs::write(&index_path, index_bytes)
+        .map_err(|e| format!("failed to write source index: {e}"))?;
+
+    let elapsed = start.elapsed().as_millis();
+    eprintln!("source index built in {} ms for {} files", elapsed, file_count);
+
+    Ok(())
+}
+
+/// Collects all source files under `root` (excluding `.doc`, `.git`, and hidden directories).
+fn collect_source_files(root: &Path) -> Result<Vec<PathBuf>, String> {
+    let mut files = Vec::new();
+    walk_directory(root, root, &mut files)?;
+    Ok(files)
+}
+
+/// Recursively walks a directory, collecting source files and skipping internal directories.
+fn walk_directory(dir: &Path, root: &Path, files: &mut Vec<PathBuf>) -> Result<(), String> {
+    let entries = std::fs::read_dir(dir)
+        .map_err(|e| format!("failed to read directory {}: {e}", dir.display()))?;
+
+    for entry in entries {
+        let entry = entry
+            .map_err(|e| format!("failed to read entry in {}: {e}", dir.display()))?;
+        let path = entry.path();
+
+        if path.is_dir() {
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy())
+                .unwrap_or_default();
+
+            // Skip internal directories and hidden files
+            if name.starts_with('.') || name == "node_modules" || name == "target" {
+                continue;
+            }
+
+            walk_directory(&path, root, files)?;
+        } else if path.is_file() {
+            files.push(path);
+        }
+    }
+
+    Ok(())
 }
 
 /// How many changed documents are named before the list is cut short.
@@ -1232,5 +1328,26 @@ mod tests {
             "first\nsecond\n"
         );
         assert!(!ensure_line(&path, "second").expect("idempotent"));
+    }
+
+    #[test]
+    fn sync_builds_source_index_and_writes_to_dot_doc() {
+        let root = scratch("sync-source-index");
+        std::fs::write(root.join("file1.rs"), "hello world").expect("write file1");
+        std::fs::write(root.join("file2.rs"), "goodbye world").expect("write file2");
+
+        run_sync(&args(&[&root.to_string_lossy()])).expect("sync");
+
+        let index_path = root.join(".doc").join("source_index");
+        assert!(
+            index_path.exists(),
+            "source_index file should exist at {}",
+            index_path.display()
+        );
+
+        let index_size = std::fs::metadata(&index_path)
+            .expect("read metadata")
+            .len();
+        assert!(index_size > 0, "source_index should have content");
     }
 }
