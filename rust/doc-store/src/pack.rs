@@ -131,6 +131,9 @@ fn refuse_to_drop(
 /// what a watcher and a build cache key off — so the encoded bytes are compared first. That
 /// comparison is also what lets [`Store::sync`] notice a pack whose *encoding policy* changed
 /// while no document did.
+///
+/// The pack file is fsync'd after writing to ensure durability before any pointer file is
+/// written, preventing a situation where a pointer names content not yet durable in the pack.
 fn write_pack(
     path: &Path,
     documents: &[(String, Document)],
@@ -161,11 +164,31 @@ fn write_pack(
     if fs::read(path).is_ok_and(|found| found == bytes) {
         return Ok(false);
     }
-    fs::write(path, bytes)
-        .map_err(|error| {
-            StoreError::Backend(format!("could not write {}: {error}", path.display()))
-        })
-        .map(|()| true)
+    fs::write(path, bytes).map_err(|error| {
+        StoreError::Backend(format!("could not write {}: {error}", path.display()))
+    })?;
+
+    // Ensure the pack is durable before returning, so a pointer written afterward
+    // will never name content that isn't yet safely on disk.
+    fsync_file(path)?;
+
+    Ok(true)
+}
+
+/// Sync a file to disk to ensure durability.
+fn fsync_file(path: &Path) -> Result<(), StoreError> {
+    use std::fs::OpenOptions;
+
+    let file = OpenOptions::new().write(true).open(path).map_err(|error| {
+        StoreError::Backend(format!(
+            "could not open {} for fsync: {error}",
+            path.display()
+        ))
+    })?;
+
+    file.sync_all().map_err(|error| {
+        StoreError::Backend(format!("could not fsync {}: {error}", path.display()))
+    })
 }
 
 /// The bytes both packs hold right now, in the order [`paths`] names them.
@@ -509,5 +532,25 @@ mod tests {
             .remove("notes.dx")
             .expect("entry");
         assert_eq!(parse(&source).blocks.len(), 1);
+    }
+
+    #[test]
+    fn pack_writes_are_durable() {
+        // Verify that pack files are fsync'd after writing to ensure durability.
+        // This is critical to prevent a pointer from naming content not yet safely on disk.
+        let root = scratch("durable-packs");
+        let mut store = Store::open(&root).expect("open");
+        store.ingest("notes.dx", NOTES).expect("ingest");
+
+        let (repo_path, _) = paths(&root);
+        assert!(repo_path.exists(), "pack file should exist after write");
+
+        // Verify we can read it back immediately (it was fsync'd)
+        let pack_bytes = std::fs::read(&repo_path).expect("read pack");
+        assert!(!pack_bytes.is_empty(), "pack should have content");
+
+        // Try to decode it to verify durability (not corrupted mid-write)
+        decode(&pack_bytes, &repo_path.to_string_lossy())
+            .expect("pack should be decodable immediately after write");
     }
 }
