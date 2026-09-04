@@ -625,6 +625,22 @@ const HISTORY_DEPTH: usize = 200;
 /// Reconcile the workspace at `root`: adopt plain-text documents, restore stubs from packs,
 /// and collect unreferenced chunks.
 ///
+/// # Handling merge conflicts
+///
+/// When a merge leaves `.dx` files with conflict markers (from concurrent editing), this function
+/// detects them using `doc_core::merge::has_conflict_markers()` and reports them in the
+/// `conflicted` list of the returned report from the store's sync. Conflicted files are not
+/// adopted into the store — they stay as plain text with markers until the user resolves them by
+/// removing the `<<<<<<< ours / ======= / >>>>>>> theirs` lines. Running `dx sync` again after
+/// resolving the markers then adopts the document.
+///
+/// When two agents edit the same document in concurrent branches:
+/// - The merge of `.doc/repo.dxcp` embeds conflict markers in the document source
+/// - The merge of the `.dx` pointer file also conflicts (different digest hashes)
+/// - The merge driver (see `merge.rs`) handles both independently but consistently
+/// - The user must manually resolve the conflict in the `.dx` file
+/// - Once resolved, `dx sync` adopts it into the store
+///
 /// A pointer that nothing on this machine can resolve is looked for in the committed pack as
 /// *git* still has it, before the reconcile runs — see [`recover_from_history`]. Recovered
 /// documents are written back as plain text, so the reconcile adopts them by its ordinary
