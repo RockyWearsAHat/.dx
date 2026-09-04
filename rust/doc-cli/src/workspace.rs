@@ -26,6 +26,7 @@ use std::path::{Path, PathBuf};
 use doc_core::format::parse;
 use doc_core::model::Document;
 use doc_core::resolve::Resolver;
+use doc_core::source_index::{FileMetadata, SourceIndex};
 use doc_store::{pack, stub, Stats, Store, StoreError, SyncReport};
 
 /// Markers that identify a workspace root, in the order they are trusted.
@@ -1053,15 +1054,15 @@ pub struct Hit {
 pub fn search(directory: &Path, query: &str, limit: usize) -> Result<Vec<Hit>, String> {
     let mut documents = load_all(directory)?.documents;
 
-    // Try to use cached source files if available and fresh; fall back to full scan if stale.
-    let source_docs = if let Some(cached_files) = load_source_cache(directory) {
-        build_source_corpus_from_cache(directory, cached_files)
+    // Try to use source index if available and fresh; fall back to full scan if stale.
+    let source_docs = if let Some(index) = load_source_index(directory) {
+        build_source_corpus_from_index(directory, &index)
     } else {
         eprintln!("source index stale, rescanning");
         let docs = source_corpus(directory);
-        // Collect the file paths to cache for next time.
+        // Collect the file paths to rebuild index for next time.
         let source_paths: Vec<PathBuf> = docs.iter().map(|d| d.path.clone()).collect();
-        let _ = save_source_cache(directory, &source_paths);
+        let _ = build_and_save_source_index(directory, &source_paths);
         docs
     };
 
@@ -1193,97 +1194,30 @@ fn drop_noise(ranked: Vec<Hit>) -> Vec<Hit> {
         .collect()
 }
 
-/// Metadata for a cached source file: path and modification time for staleness detection.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-struct CachedSourceFile {
-    relative: String,
-    mtime: u64,
+/// Load source index from `.doc/source_index` if it exists.
+fn load_source_index(root: &Path) -> Option<SourceIndex> {
+    let index_path = root.join(".doc").join("source_index");
+    let bytes = fs::read(&index_path).ok()?;
+    SourceIndex::from_bytes(&bytes).ok()
 }
 
-/// Load cached source file metadata from disk if it exists and is not stale.
+/// Build source corpus from index metadata, reading and parsing files at known paths.
 ///
-/// Returns `None` if the cache file does not exist, is malformed, or its files
-/// have been modified since the cache was written. Also returns `None` if the
-/// number of source files in the directory differs from what was cached,
-/// indicating new files may have been added or removed.
-fn load_source_cache(root: &Path) -> Option<Vec<CachedSourceFile>> {
-    let cache_path = root.join(".doc").join("source_cache");
-    let cache_json = fs::read_to_string(&cache_path).ok()?;
-    let cached: Vec<CachedSourceFile> = serde_json::from_str(&cache_json).ok()?;
+/// Assumes all files in the index still exist and have not been modified.
+fn build_source_corpus_from_index(root: &Path, index: &SourceIndex) -> Vec<Loaded> {
+    let paths: Vec<PathBuf> = index
+        .metadata()
+        .iter()
+        .map(|(relative, _)| root.join(relative))
+        .collect();
 
-    // Quick check: count current source files to detect additions/deletions.
-    let mut current_count = 0;
-    fn count_source_files(directory: &Path, count: &mut usize) {
-        let Ok(entries) = fs::read_dir(directory) else {
-            return;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
-                continue;
-            };
-            if name.starts_with('.') {
-                continue;
-            }
-            if path.is_dir() {
-                if !matches!(
-                    name,
-                    "node_modules" | "target" | "build" | "dist" | "__pycache__"
-                ) {
-                    count_source_files(&path, count);
-                }
-            } else {
-                let searchable = SEARCHABLE_NAMES.contains(&name)
-                    || path
-                        .extension()
-                        .and_then(|ext| ext.to_str())
-                        .is_some_and(|ext| SEARCHABLE_SOURCE.contains(&ext));
-                let sized = entry
-                    .metadata()
-                    .is_ok_and(|m| m.len() <= MAX_SOURCE_BYTES);
-                if searchable && sized {
-                    *count += 1;
-                }
-            }
-        }
-    }
-    count_source_files(root, &mut current_count);
-
-    // If the number of files changed, the cache is definitely stale.
-    if current_count != cached.len() {
-        return None;
-    }
-
-    // Check if all cached files still exist and have the same mtime.
-    for cached_file in &cached {
-        let full_path = root.join(&cached_file.relative);
-        let metadata = fs::metadata(&full_path).ok()?;
-        let mtime = metadata
-            .modified()
-            .ok()?
-            .duration_since(std::time::UNIX_EPOCH)
-            .ok()?
-            .as_secs();
-        if mtime != cached_file.mtime {
-            return None; // File was modified.
-        }
-    }
-
-    Some(cached)
-}
-
-/// Build source corpus from a cached file list, reading and parsing each file.
-///
-/// `cached_files` should be the result of a successful `load_source_cache()` call;
-/// all files are assumed to exist and have been freshness-checked.
-fn build_source_corpus_from_cache(root: &Path, cached_files: Vec<CachedSourceFile>) -> Vec<Loaded> {
-    in_parallel(&cached_files, |cached| {
-        let path = root.join(&cached.relative);
-        let text = fs::read_to_string(&path).ok()?;
-        let document = doc_core::search::source_document(&cached.relative, &text);
+    in_parallel(&paths, |path| {
+        let relative = relative_of(root, path);
+        let text = fs::read_to_string(path).ok()?;
+        let document = doc_core::search::source_document(&relative, &text);
         (!document.blocks.is_empty()).then(|| Loaded {
             path: path.clone(),
-            relative: cached.relative.clone(),
+            relative,
             document,
         })
     })
@@ -1292,24 +1226,40 @@ fn build_source_corpus_from_cache(root: &Path, cached_files: Vec<CachedSourceFil
     .collect()
 }
 
-/// Save source cache to disk for faster future searches.
-fn save_source_cache(root: &Path, files: &[PathBuf]) -> Result<(), String> {
-    let mut cached = Vec::new();
+/// Build a SourceIndex from current source files and save it to `.doc/source_index`.
+fn build_and_save_source_index(root: &Path, files: &[PathBuf]) -> Result<(), String> {
+    let mut file_metadata = Vec::new();
     for path in files {
         let relative = relative_of(root, path);
-        let mtime = fs::metadata(path)
-            .and_then(|m| m.modified())
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH))
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-        cached.push(CachedSourceFile { relative, mtime });
+        let metadata = fs::metadata(path)
+            .ok()
+            .and_then(|m| {
+                let mtime = m.modified()
+                    .ok()?
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .ok()?
+                    .as_secs();
+                Some((mtime, m))
+            });
+
+        if let Some((mtime, _m)) = metadata {
+            let text = fs::read_to_string(path).ok()?;
+            let content_hash = format!("{:x}", md5::compute(text.as_bytes()));
+            file_metadata.push((FileMetadata {
+                path: relative,
+                mtime,
+                content_hash,
+            }, text));
+        }
     }
 
-    let cache_path = root.join(".doc").join("source_cache");
-    let json = serde_json::to_string(&cached)
-        .map_err(|e| format!("failed to serialize source cache: {e}"))?;
-    fs::write(&cache_path, json)
-        .map_err(|e| format!("failed to write source cache: {e}"))
+    let index = SourceIndex::build_from(file_metadata)
+        .map_err(|e| format!("failed to build source index: {e}"))?;
+
+    let index_path = root.join(".doc").join("source_index");
+    let bytes = index.to_bytes();
+    fs::write(&index_path, bytes)
+        .map_err(|e| format!("failed to write source index: {e}"))
 }
 
 #[cfg(test)]
@@ -1911,6 +1861,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn documents_still_resolve_when_the_medium_is_read_only() {
         // The dev.dx sandbox mounts the repository read-only; so does a checkout on
         // mounted media. A store that cannot be *written* must still answer reads —
