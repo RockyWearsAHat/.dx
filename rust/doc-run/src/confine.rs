@@ -350,13 +350,26 @@ fn seatbelt_profile(grant: &Grant) -> String {
         rules.push(format!("(deny file-read* {denied})"));
     }
 
-    let writable = grant
+    let mut writable_paths: Vec<String> = grant
         .writable
         .iter()
         .map(|path| format!("(subpath {})", quote(&resolved(path))))
-        .collect::<Vec<_>>()
-        .join(" ");
-    if !writable.is_empty() {
+        .collect();
+
+    // On macOS, allow writes to per-user temp and cache directories so Apple's toolchain
+    // (xcrun, cc, etc.) can create and write to cache files without spamming warnings.
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(temp) = macos_temp_dir() {
+            writable_paths.push(format!("(subpath {})", quote(&temp)));
+        }
+        if let Some(cache) = macos_cache_dir() {
+            writable_paths.push(format!("(subpath {})", quote(&cache)));
+        }
+    }
+
+    if !writable_paths.is_empty() {
+        let writable = writable_paths.join(" ");
         rules.push(format!("(allow file-write* {writable})"));
     }
 
@@ -506,6 +519,49 @@ fn bubblewrap(spec: &CommandSpec, grant: &Grant) -> Result<CommandSpec, String> 
         args,
         env: spec.env.clone(),
     })
+}
+
+/// Get the macOS per-user temporary directory via confstr, if available.
+///
+/// Apple's toolchain (xcrun, cc) resolves the temp directory via confstr(_CS_DARWIN_USER_TEMP_DIR)
+/// instead of $TMPDIR. This function retrieves that path so the sandbox can grant write access to it.
+#[cfg(target_os = "macos")]
+fn macos_temp_dir() -> Option<String> {
+    use std::ffi::CStr;
+
+    unsafe {
+        let mut buf = [0u8; 1024];
+        let len = libc::confstr(libc::_CS_DARWIN_USER_TEMP_DIR, buf.as_mut_ptr() as *mut i8, buf.len());
+        if len > 0 && len <= buf.len() {
+            CStr::from_bytes_until_nul(&buf[..len])
+                .ok()
+                .and_then(|s| s.to_str().ok())
+                .map(|s| s.to_string())
+        } else {
+            None
+        }
+    }
+}
+
+/// Get the macOS per-user cache directory via confstr, if available.
+///
+/// Apple's toolchain caches build artifacts and other data in this directory.
+#[cfg(target_os = "macos")]
+fn macos_cache_dir() -> Option<String> {
+    use std::ffi::CStr;
+
+    unsafe {
+        let mut buf = [0u8; 1024];
+        let len = libc::confstr(libc::_CS_DARWIN_USER_CACHE_DIR, buf.as_mut_ptr() as *mut i8, buf.len());
+        if len > 0 && len <= buf.len() {
+            CStr::from_bytes_until_nul(&buf[..len])
+                .ok()
+                .and_then(|s| s.to_str().ok())
+                .map(|s| s.to_string())
+        } else {
+            None
+        }
+    }
 }
 
 /// A path as the kernel sees it, following the symlinks it will follow.
@@ -789,5 +845,33 @@ mod tests {
             std::fs::read_to_string(&config_file).is_ok(),
             "config file must be readable"
         );
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn macos_temp_and_cache_dirs_are_writable() {
+        // The Seatbelt profile should allow writes to macOS per-user temp and cache dirs
+        // so xcrun and other Apple tools do not spam warnings about inaccessible cache files.
+        let profile = seatbelt_profile(&grant());
+        let temp_dir = macos_temp_dir();
+        let cache_dir = macos_cache_dir();
+
+        if let Some(temp) = temp_dir {
+            assert!(
+                profile.contains(&format!("(subpath {})", quote(&temp))),
+                "profile must allow write to macOS temp dir {}: {}",
+                temp,
+                profile
+            );
+        }
+
+        if let Some(cache) = cache_dir {
+            assert!(
+                profile.contains(&format!("(subpath {})", quote(&cache))),
+                "profile must allow write to macOS cache dir {}: {}",
+                cache,
+                profile
+            );
+        }
     }
 }
