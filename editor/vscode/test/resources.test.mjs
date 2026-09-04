@@ -23,7 +23,7 @@ import { dirname, join } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { resourcesFor } from '../src/engine.ts';
+import { resourcesFor } from '../dist/engine.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const dx = createRequire(import.meta.url)(join(here, '..', 'wasm', 'doc_wasm.js'));

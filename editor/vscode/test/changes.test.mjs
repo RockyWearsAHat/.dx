@@ -18,7 +18,7 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import test from 'node:test';
 
-import { documentText, revisionText } from '../src/changes.ts';
+import { documentText, revisionText } from '../dist/changes.js';
 
 const POINTER = '~ dx1 c939d5becfb64b14193566ffed7ccf8217c90bf5c90e6ba2a5ce8bf87903c823\n';
 const DOCUMENT = '::heading level=1 id=title\nGuide\n::end\n';
