@@ -214,6 +214,10 @@ pub struct Store {
 
 impl Store {
     /// An open store over `connection`, in normal (non-repairing) operation.
+    #[cfg(test)]
+    pub fn connection_mut(&mut self) -> &mut Connection {
+        &mut self.connection
+    }
     fn over(root: PathBuf, connection: Connection) -> Self {
         Self {
             root,
@@ -434,6 +438,7 @@ impl Store {
         // This prevents a crash between pointer write and pack write from leaving a
         // dangling pointer naming content not yet in any pack.
         self.export_packs()?;
+        self.export_source_index()?;
         self.write_stub(&relative, &source)?;
         Ok(saved)
     }
@@ -587,7 +592,8 @@ impl Store {
                 StoreError::Backend(format!("could not remove {}: {error}", path.display()))
             })?;
         }
-        self.export_packs()
+        self.export_packs()?;
+        self.export_source_index()
     }
 
     /// Every stored document, ordered by path.
@@ -795,6 +801,65 @@ impl Store {
         )
     }
 
+    fn export_source_index(&self) -> Result<(), StoreError> {
+        let source_index_path = self.root.join(pack::SOURCE_INDEX);
+        let mut lines = String::new();
+
+        let mut stmt = self
+            .connection
+            .prepare("SELECT DISTINCT path FROM source_files ORDER BY path")
+            .map_err(StoreError::backend)?;
+
+        let file_paths: Vec<String> = stmt
+            .query_map([], |row| row.get(0))
+            .map_err(StoreError::backend)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(StoreError::backend)?;
+
+        for path in file_paths {
+            let mut tokens_stmt = self
+                .connection
+                .prepare("SELECT token FROM source_tokens WHERE path = ?1 ORDER BY token")
+                .map_err(StoreError::backend)?;
+
+            let tokens: Vec<String> = tokens_stmt
+                .query_map([&path], |row| row.get(0))
+                .map_err(StoreError::backend)?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(StoreError::backend)?;
+
+            if !tokens.is_empty() {
+                lines.push_str(&path);
+                for token in tokens {
+                    lines.push('\t');
+                    lines.push_str(&token);
+                }
+                lines.push('\n');
+            }
+        }
+
+        // Write the file, or remove it if there's nothing to index
+        if lines.is_empty() {
+            if source_index_path.exists() {
+                fs::remove_file(&source_index_path).map_err(|error| {
+                    StoreError::Backend(format!(
+                        "could not remove {}: {error}",
+                        source_index_path.display()
+                    ))
+                })?;
+            }
+        } else {
+            fs::write(&source_index_path, &lines).map_err(|error| {
+                StoreError::Backend(format!(
+                    "could not write {}: {error}",
+                    source_index_path.display()
+                ))
+            })?;
+        }
+
+        Ok(())
+    }
+
     /// Reconcile the workspace with the store so every `.dx` file resolves correctly.
     ///
     /// This is the repair path, and it is deliberately conservative — it never discards
@@ -827,6 +892,7 @@ impl Store {
         let mut report = reconciled?;
 
         self.export_packs()?;
+        self.export_source_index()?;
 
         // Write deferred stubs now that packs are durable. These are stubs that need
         // rewriting after recovery from the packs, ensuring they are written only after
@@ -2024,6 +2090,89 @@ mod tests {
         assert_eq!(
             expected_digest, actual_digest,
             "pointer digest should match stored content digest"
+        );
+    }
+
+    #[test]
+    fn source_index_is_exported_when_source_files_and_tokens_exist() {
+        let root = std::env::temp_dir().join("dx-source-index-test");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).expect("scratch root");
+
+        let mut store = Store::open(&root).expect("open");
+
+        // Manually insert source files and tokens since the indexer doesn't populate them yet
+        {
+            let tx = store.connection_mut().transaction().expect("transaction");
+            tx.execute(
+                "INSERT INTO source_files (path, size, mtime) VALUES (?1, ?2, ?3)",
+                ["src/main.rs", "100", "2025-01-01T00:00:00Z"],
+            )
+            .expect("insert file 1");
+            tx.execute(
+                "INSERT INTO source_files (path, size, mtime) VALUES (?1, ?2, ?3)",
+                ["src/lib.rs", "200", "2025-01-01T00:00:00Z"],
+            )
+            .expect("insert file 2");
+
+            tx.execute(
+                "INSERT INTO source_tokens (path, token) VALUES (?1, ?2)",
+                ["src/main.rs", "fn"],
+            )
+            .expect("insert token 1");
+            tx.execute(
+                "INSERT INTO source_tokens (path, token) VALUES (?1, ?2)",
+                ["src/main.rs", "struct"],
+            )
+            .expect("insert token 2");
+            tx.execute(
+                "INSERT INTO source_tokens (path, token) VALUES (?1, ?2)",
+                ["src/lib.rs", "impl"],
+            )
+            .expect("insert token 3");
+
+            tx.commit().expect("commit");
+        }
+
+        // Export the source index
+        store.export_source_index().expect("export");
+
+        // Verify the file exists
+        let source_index_path = root.join(pack::SOURCE_INDEX);
+        assert!(
+            source_index_path.exists(),
+            "source_index file should be created at {}",
+            source_index_path.display()
+        );
+
+        // Verify the content
+        let content = fs::read_to_string(&source_index_path).expect("read file");
+        assert!(content.contains("src/main.rs"), "should contain first file path");
+        assert!(content.contains("src/lib.rs"), "should contain second file path");
+        assert!(content.contains("fn"), "should contain first token");
+        assert!(content.contains("struct"), "should contain second token");
+        assert!(content.contains("impl"), "should contain third token");
+    }
+
+    #[test]
+    fn source_index_is_removed_when_there_are_no_source_files() {
+        let root = std::env::temp_dir().join("dx-source-index-empty-test");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).expect("scratch root");
+
+        let mut store = Store::open(&root).expect("open");
+
+        // Create the file first
+        let source_index_path = root.join(pack::SOURCE_INDEX);
+        fs::write(&source_index_path, "dummy content").expect("write dummy file");
+        assert!(source_index_path.exists());
+
+        // Export with no source files should remove it
+        store.export_source_index().expect("export");
+
+        assert!(
+            !source_index_path.exists(),
+            "source_index file should be removed when empty"
         );
     }
 }

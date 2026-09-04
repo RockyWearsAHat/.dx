@@ -35,6 +35,7 @@ edit invisible to git.
 | `.doc/repo.dxcp` | The repository's documents, chunk-deduplicated, stored uncompressed so git can delta it | **yes** — this is the content |
 | `.doc/local.dxcp` | Git-ignored scratch documents | no |
 | `.doc/index.db` | SQLite: the queryable local authority, rebuildable from the packs | no |
+| `.doc/source_index` | Source code paths and their indexed tokens for efficient search without decompressing the database | **yes** — committed for search functionality |
 
 `dx sync` reconciles all of it: it adopts plain-text `.dx` files anything else wrote, restores
 documents from the packs when the index is missing, and reports what it cannot resolve rather

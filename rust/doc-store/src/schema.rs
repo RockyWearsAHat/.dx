@@ -51,7 +51,8 @@ use crate::StoreError;
 /// the wrong documents. Derived data that no longer matches how it is queried is stale data.
 /// Version 4 adds `source_files` and `source_tokens` tables to index source code without
 /// writing to the schema on every read.
-pub const VERSION: i64 = 4;
+/// Version 5 introduces `.doc/source_index` as a committed artifact for source code search data.
+pub const VERSION: i64 = 5;
 
 /// Drop every table this schema owns, in dependency order.
 ///
