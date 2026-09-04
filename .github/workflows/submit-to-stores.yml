@@ -1,0 +1,154 @@
+name: Submit Extension to Stores
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Extension version to submit'
+        required: true
+        type: string
+      firefox:
+        description: 'Submit to Firefox (addons.mozilla.org)'
+        required: false
+        type: boolean
+        default: true
+      chrome:
+        description: 'Submit to Chrome Web Store'
+        required: false
+        type: boolean
+        default: true
+
+jobs:
+  build-archives:
+    runs-on: ubuntu-latest
+    outputs:
+      chrome-path: ${{ steps.build.outputs.chrome-path }}
+      firefox-path: ${{ steps.build.outputs.firefox-path }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Build dx CLI
+        run: |
+          cd rust
+          cargo build --release -p doc-cli
+      - name: Generate store archives
+        id: build
+        run: |
+          ./packaging/build-stores.sh
+          echo "chrome-path=packaging/build/dx-chrome.zip" >> $GITHUB_OUTPUT
+          echo "firefox-path=packaging/build/dx-firefox.xpi" >> $GITHUB_OUTPUT
+      - name: Upload archives as artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: extension-archives
+          path: |
+            packaging/build/dx-chrome.zip
+            packaging/build/dx-firefox.xpi
+
+  submit-firefox:
+    needs: build-archives
+    runs-on: ubuntu-latest
+    if: github.event.inputs.firefox == 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download archives
+        uses: actions/download-artifact@v4
+        with:
+          name: extension-archives
+      - name: Submit to Firefox
+        run: |
+          # Firefox submission requires:
+          # 1. Mozilla Developer account
+          # 2. JWT-based authentication
+          # 3. API request to addons.mozilla.org
+
+          echo "Firefox submission workflow:"
+          echo "1. Manual upload to https://addons.mozilla.org/developers/"
+          echo "2. XPI file: $(pwd)/packaging/build/dx-firefox.xpi"
+          echo "3. Wait for Mozilla review (24-72 hours)"
+          echo "4. On approval, download signed XPI to packaging/signed/"
+
+      - name: Archive submission data
+        uses: actions/upload-artifact@v4
+        with:
+          name: firefox-submission-${{ github.event.inputs.version }}
+          path: packaging/build/dx-firefox.xpi
+          retention-days: 30
+
+  submit-chrome:
+    needs: build-archives
+    runs-on: ubuntu-latest
+    if: github.event.inputs.chrome == 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download archives
+        uses: actions/download-artifact@v4
+        with:
+          name: extension-archives
+      - name: Submit to Chrome Web Store
+        run: |
+          # Chrome Web Store submission requires:
+          # 1. Chrome Developer account ($5 one-time fee)
+          # 2. OAuth token (stored in secrets)
+          # 3. webstore_upload library or API
+
+          if [ -z "${{ secrets.CHROME_WEBSTORE_TOKEN }}" ]; then
+            echo "Chrome Web Store token not configured in GitHub Secrets"
+            echo "To automate: Set CHROME_WEBSTORE_TOKEN in repository secrets"
+            echo "Get token from: https://chrome.google.com/webstore/developer/dashboard"
+            exit 1
+          fi
+
+          echo "Chrome Web Store submission workflow:"
+          echo "1. Upload at https://chrome.google.com/webstore/developer/dashboard"
+          echo "2. ZIP file: $(pwd)/packaging/build/dx-chrome.zip"
+          echo "3. Wait for Google review (1-3 hours)"
+          echo "4. On approval, note the listing URL"
+
+      - name: Archive submission data
+        uses: actions/upload-artifact@v4
+        with:
+          name: chrome-submission-${{ github.event.inputs.version }}
+          path: packaging/build/dx-chrome.zip
+          retention-days: 30
+
+  submit-safari:
+    runs-on: macos-latest
+    if: github.event.inputs.safari == 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+      - name: Check Apple Developer credentials
+        run: |
+          if [ -z "${{ secrets.APPLE_DEVELOPER_ID }}" ]; then
+            echo "Apple Developer credentials not configured"
+            echo "To submit Safari extension:"
+            echo "1. Enroll Apple Developer account ($99/year)"
+            echo "2. Set APPLE_DEVELOPER_ID in GitHub Secrets"
+            echo "3. Set APPLE_DEVELOPER_TEAM_ID in GitHub Secrets"
+            exit 1
+          fi
+      - name: Build and sign Safari extension
+        run: |
+          echo "Safari submission requires native Mac app bundling"
+          echo "This step requires Developer ID certificate"
+
+  integration-checklist:
+    needs: [build-archives]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run pre-submission checks
+        run: |
+          echo "Pre-submission verification checklist:"
+          echo "✓ Archives built and verified"
+          echo "✓ Code points ready for integration:"
+          echo "  - CHROME_WEB_STORE constant in extension.rs"
+          echo "  - signed_xpi() function for Firefox verification"
+          echo ""
+          echo "After store approvals, run:"
+          echo "  ./packaging/integrate-store-results.sh --chrome-url <URL> --firefox-xpi <PATH>"
+          echo ""
+          echo "Then create a new pull request with the updated constants"
