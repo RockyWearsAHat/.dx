@@ -1,2 +1,2 @@
-*.dx diff=dx merge=dx
-.doc/repo.dxcp diff=dx merge=dx
+*.dx diff=dx merge=dx text eol=lf
+.doc/repo.dxcp diff=dx merge=dx text eol=lf
