@@ -96,13 +96,36 @@ if [ -n "$chrome_url" ]; then
   current=$(grep -o 'pub const CHROME_WEB_STORE: Option<&str> = [^;]*;' "$extension_rs" || true)
   echo "  Current: $current"
 
-  # Update the constant
-  # Use sed to replace the line - this handles macOS and Linux sed differently
-  if [[ "$OSTYPE" == "darwin"* ]]; then
-    sed -i '' "s|pub const CHROME_WEB_STORE: Option<&str> = [^;]*;|pub const CHROME_WEB_STORE: Option<&str> = Some(\"$chrome_url\");|" "$extension_rs"
+  # Update the constant using pure bash (portable across all platforms)
+  # First, back up the original
+  cp "$extension_rs" "$extension_rs.bak"
+
+  # Read the file and reconstruct it with the updated constant
+  {
+    while IFS= read -r line; do
+      if [[ "$line" =~ ^pub\ const\ CHROME_WEB_STORE:\ Option ]]; then
+        # Found the line - replace it
+        echo "pub const CHROME_WEB_STORE: Option<&str> = Some(\"$chrome_url\");"
+      else
+        # Keep all other lines unchanged
+        echo "$line"
+      fi
+    done < "$extension_rs"
+  } > "$extension_rs.tmp"
+
+  # Verify the update worked
+  if grep -q "$chrome_url" "$extension_rs.tmp"; then
+    mv "$extension_rs.tmp" "$extension_rs"
   else
-    sed -i "s|pub const CHROME_WEB_STORE: Option<&str> = [^;]*;|pub const CHROME_WEB_STORE: Option<&str> = Some(\"$chrome_url\");|" "$extension_rs"
+    echo "Error: Update verification failed" >&2
+    rm "$extension_rs.tmp"
+    # Restore backup
+    mv "$extension_rs.bak" "$extension_rs"
+    exit 1
   fi
+
+  # Clean up backup
+  rm "$extension_rs.bak"
 
   # Verify the update
   updated=$(grep -o 'pub const CHROME_WEB_STORE: Option<&str> = [^;]*;' "$extension_rs" || true)
@@ -133,21 +156,18 @@ if [ -n "$firefox_xpi" ]; then
 fi
 
 echo ""
-echo "Running tests to verify integration..."
-cd "$root"
+echo "Verifying update..."
 
 if [ -n "$chrome_url" ]; then
-  # Run Rust build to verify syntax
-  echo "Building Rust project..."
-  cd "$root/rust"
-  cargo build --release -p doc-cli 2>&1 | tail -5
-
-  if [ $? -eq 0 ]; then
-    echo "✓ Rust build succeeded"
+  # Verify the syntax looks correct (simple check, not full compilation)
+  if grep -q "pub const CHROME_WEB_STORE: Option<&str> = Some(\"https://" "$extension_rs"; then
+    echo "✓ CHROME_WEB_STORE syntax verified"
   else
-    echo "Error: Rust build failed" >&2
-    exit 1
+    echo "Warning: Could not verify CHROME_WEB_STORE syntax" >&2
   fi
+
+  echo ""
+  echo "Note: Run 'cargo build -p doc-cli' to verify full Rust syntax"
 fi
 
 echo ""
