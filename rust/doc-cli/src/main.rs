@@ -24,6 +24,7 @@ mod install;
 mod intake;
 mod mcp;
 mod policies;
+mod rename_approvals;
 mod reports;
 mod service;
 mod state;
