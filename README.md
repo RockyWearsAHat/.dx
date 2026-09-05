@@ -85,7 +85,7 @@ My First Document
 This document demonstrates running code in dx.
 ::end
 
-::code lang=javascript
+::code lang=javascript run
 console.log("Hello from dx!")
 const result = 2 + 3
 console.log("2 + 3 =", result)
