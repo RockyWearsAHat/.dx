@@ -728,6 +728,11 @@ WRITE
                                                 line endings, spacing). Use --check to
                                                 verify files are already formatted
 
+  dx rename   <old> <new> [dir]                  structural rename: changes an identifier at
+              [--review] [--approve]             every site a reference graph names for it.
+                                                --review shows changes without approval.
+                                                --approve records approval in the ledger
+
 REPORT — report dx bugs and suggestions
   dx report   bug|suggestion|observation        file a report: --title T --detail D
               --title T --detail D              [--route R] [--repro X]. Goes to the dx
