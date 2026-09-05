@@ -2280,7 +2280,7 @@ mod tests {
             .expect("modify");
 
         // Third search detects staleness and rescans. The cache file exists but is stale.
-        let cache_before = fs::metadata(&cache_path).expect("cache exists").modified().ok();
+        let _cache_before = fs::metadata(&cache_path).expect("cache exists").modified().ok();
         let hits3 = search(&root, "kubernetes", 10).expect("third search");
         // Verify the search still works (didn't fail due to stale cache).
         assert!(
