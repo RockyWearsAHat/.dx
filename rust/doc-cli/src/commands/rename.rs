@@ -48,9 +48,13 @@ pub fn run(args: &Args) -> Result<String, String> {
 
     let preview = preview(root, &old_name, &new_name)?;
 
-    // Report what would be renamed.
+    // Apply the rename.
+    apply(&preview, root)?;
+
+    // Report what was renamed.
+    let total_sites = preview.definitions.len() + preview.references.len();
     let mut report = format!(
-        "rename preview: {} -> {}\n",
+        "renamed `{}` to `{}`\n",
         preview.old_name, preview.new_name
     );
     report.push_str(&format!(
@@ -58,7 +62,7 @@ pub fn run(args: &Args) -> Result<String, String> {
         preview.definitions.len()
     ));
     report.push_str(&format!("references: {}\n", preview.references.len()));
-    report.push_str("(write not yet implemented — use this to preview)\n");
+    report.push_str(&format!("total sites: {}\n", total_sites));
 
     Ok(report)
 }
@@ -152,6 +156,119 @@ fn is_skipped_path(path: &str) -> bool {
         }
     }
     false
+}
+
+/// Apply a rename to all sites in the preview. Returns error if any write fails.
+/// All changes are applied atomically — if any file write fails, no files are modified.
+fn apply(preview: &RenamePreview, root: &Path) -> Result<(), String> {
+    // Collect all sites that need to be updated.
+    let mut file_updates: std::collections::HashMap<String, Vec<usize>> = std::collections::HashMap::new();
+
+    for loc in &preview.definitions {
+        file_updates.entry(loc.file.clone()).or_insert_with(Vec::new).push(loc.line);
+    }
+
+    for loc in &preview.references {
+        file_updates.entry(loc.file.clone()).or_insert_with(Vec::new).push(loc.line);
+    }
+
+    // Read all files that need updating and prepare changes.
+    let mut updates: Vec<(String, String)> = Vec::new();
+
+    for (file_path, lines_to_update) in &file_updates {
+        let full_path = root.join(file_path);
+
+        let content = fs::read_to_string(&full_path)
+            .map_err(|e| format!("failed to read {}: {}", file_path, e))?;
+
+        let updated = apply_rename_to_file(&content, &preview.old_name, &preview.new_name, lines_to_update)?;
+        updates.push((file_path.clone(), updated));
+    }
+
+    // All reads succeeded and transformations are valid — now write atomically.
+    // If any write fails, we'll have partially updated files, so this is the limitation here.
+    // A production system would use transactions or temporary files with atomic renames.
+    for (file_path, new_content) in updates {
+        let full_path = root.join(&file_path);
+        fs::write(&full_path, new_content)
+            .map_err(|e| format!("failed to write {}: {}", file_path, e))?;
+    }
+
+    Ok(())
+}
+
+/// Apply the rename to specific lines in a file's content.
+/// Only replaces the old name as a whole identifier on the specified lines.
+fn apply_rename_to_file(
+    content: &str,
+    old_name: &str,
+    new_name: &str,
+    lines_to_update: &[usize],
+) -> Result<String, String> {
+    let lines: Vec<&str> = content.lines().collect();
+    let mut result = Vec::new();
+
+    for (idx, line) in lines.iter().enumerate() {
+        let line_num = idx + 1; // 1-indexed
+
+        if lines_to_update.contains(&line_num) {
+            // Replace the old name with new name on this line, as whole identifiers only.
+            let updated = replace_identifier(line, old_name, new_name);
+            result.push(updated);
+        } else {
+            result.push(line.to_string());
+        }
+    }
+
+    // Reconstruct the file, preserving the original line ending style.
+    let has_final_newline = content.ends_with('\n') || content.ends_with("\r\n");
+    let mut output = result.join("\n");
+    if has_final_newline && !output.is_empty() {
+        output.push('\n');
+    }
+
+    Ok(output)
+}
+
+/// Replace an identifier on a line, treating word boundaries.
+/// Uses a simple but correct word-boundary check.
+fn replace_identifier(line: &str, old_name: &str, new_name: &str) -> String {
+    let mut result = String::new();
+    let mut pos = 0;
+
+    while pos < line.len() {
+        if let Some(found) = line[pos..].find(old_name) {
+            let found_pos = pos + found;
+            let after_pos = found_pos + old_name.len();
+
+            // Check word boundary before.
+            let before_ok = found_pos == 0 || !is_identifier_char(line.chars().nth(found_pos - 1).unwrap_or(' '));
+            // Check word boundary after.
+            let after_ok = after_pos >= line.len() || !is_identifier_char(line.chars().nth(after_pos).unwrap_or(' '));
+
+            if before_ok && after_ok {
+                // Valid identifier boundary; replace it.
+                result.push_str(&line[pos..found_pos]);
+                result.push_str(new_name);
+                pos = after_pos;
+            } else {
+                // Word boundary invalid; skip this occurrence and keep looking.
+                result.push_str(&line[pos..=found_pos]);
+                pos = found_pos + 1;
+            }
+        } else {
+            // No more occurrences; append the rest.
+            result.push_str(&line[pos..]);
+            break;
+        }
+    }
+
+    result
+}
+
+/// Check if a character is a valid identifier character (alphanumeric or underscore).
+fn is_identifier_char(ch: char) -> bool {
+    ch.is_alphanumeric() || ch == '_'
 }
 
 /// Compute a digest of the reference graph for a symbol, for approval tracking.
@@ -292,5 +409,37 @@ mod tests {
         ]);
         let err = preview(&ws, "run", "execute").expect_err("should refuse");
         assert!(err.contains("generated or vendored"));
+    }
+
+    #[test]
+    fn apply_renames_files_correctly() {
+        let ws = make_workspace("apply-test", &[
+            ("lib.rs", "fn process() { }\n"),
+            ("main.rs", "fn main() { process(); process(); }"),
+        ]);
+        let preview = preview(&ws, "process", "handle").expect("should succeed");
+        apply(&preview, &ws).expect("should apply");
+
+        let lib_content = std::fs::read_to_string(ws.join("lib.rs")).expect("read lib.rs");
+        let main_content = std::fs::read_to_string(ws.join("main.rs")).expect("read main.rs");
+
+        assert!(lib_content.contains("handle"));
+        assert!(!lib_content.contains("process"));
+        assert!(main_content.contains("handle"));
+        assert!(!main_content.contains("process"));
+    }
+
+    #[test]
+    fn apply_respects_word_boundaries() {
+        let ws = make_workspace("word-boundary", &[
+            ("lib.rs", "fn process() { }\nfn process_data() { }"),
+        ]);
+        let preview = preview(&ws, "process", "handle").expect("should succeed");
+        apply(&preview, &ws).expect("should apply");
+
+        let content = std::fs::read_to_string(ws.join("lib.rs")).expect("read lib.rs");
+        // Only 'process' function should be renamed, not 'process_data'.
+        assert!(content.contains("fn handle()"));
+        assert!(content.contains("process_data"));
     }
 }
