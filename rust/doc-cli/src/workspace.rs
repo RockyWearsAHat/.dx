@@ -1250,41 +1250,6 @@ fn build_source_corpus_from_index(root: &Path, index: &SourceIndex) -> Vec<Loade
     .collect()
 }
 
-/// Build a SourceIndex from current source files and save it to `.doc/source_index`.
-fn build_and_save_source_index(root: &Path, files: &[PathBuf]) -> Result<(), String> {
-    let mut file_metadata = Vec::new();
-    for path in files {
-        let relative = relative_of(root, path);
-        let metadata = fs::metadata(path)
-            .ok()
-            .and_then(|m| {
-                let mtime = m.modified()
-                    .ok()?
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .ok()?
-                    .as_secs();
-                Some((mtime, m))
-            });
-
-        if let Some((mtime, _m)) = metadata {
-            let text = fs::read_to_string(path).ok()?;
-            let content_hash = format!("{:x}", md5::compute(text.as_bytes()));
-            file_metadata.push((FileMetadata {
-                path: relative,
-                mtime,
-                content_hash,
-            }, text));
-        }
-    }
-
-    let index = SourceIndex::build_from(file_metadata)
-        .map_err(|e| format!("failed to build source index: {e}"))?;
-
-    let index_path = root.join(".doc").join("source_index");
-    let bytes = index.to_bytes();
-    fs::write(&index_path, bytes)
-        .map_err(|e| format!("failed to write source index: {e}"))
-}
 
 #[cfg(test)]
 mod tests {
