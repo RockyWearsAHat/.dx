@@ -30,7 +30,7 @@ pub const HARNESS_FILE: &str = "dev.dx";
 
 /// Directories the map never descends into: version control, stores, caches, build
 /// output, and test fixtures — none of them orient a reader.
-const SKIPPED_DIRECTORIES: &[&str] = &[
+pub const SKIPPED_DIRECTORIES: &[&str] = &[
     "node_modules",
     "target",
     "dist",
