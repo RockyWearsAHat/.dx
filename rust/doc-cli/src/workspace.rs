@@ -1246,32 +1246,33 @@ fn build_source_corpus_from_index(root: &Path, index: &SourceIndex) -> Vec<Loade
     .collect()
 }
 
-<<<<<<< HEAD
 /// Build a SourceIndex from current source files and save it to `.doc/source_index`.
 fn build_and_save_source_index(root: &Path, files: &[PathBuf]) -> Result<(), String> {
     let mut file_metadata = Vec::new();
     for path in files {
         let relative = relative_of(root, path);
-        let metadata = fs::metadata(path)
-            .ok()
-            .and_then(|m| {
-                let mtime = m.modified()
-                    .ok()?
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .ok()?
-                    .as_secs();
-                Some((mtime, m))
-            });
+        let metadata = fs::metadata(path).ok().and_then(|m| {
+            let mtime = m
+                .modified()
+                .ok()?
+                .duration_since(std::time::UNIX_EPOCH)
+                .ok()?
+                .as_secs();
+            Some((mtime, m))
+        });
 
         if let Some((mtime, _m)) = metadata {
             let text = fs::read_to_string(path)
                 .map_err(|e| format!("failed to read {}: {}", path.display(), e))?;
             let content_hash = format!("{:x}", md5::compute(text.as_bytes()));
-            file_metadata.push((FileMetadata {
-                path: relative,
-                mtime,
-                content_hash,
-            }, text));
+            file_metadata.push((
+                FileMetadata {
+                    path: relative,
+                    mtime,
+                    content_hash,
+                },
+                text,
+            ));
         }
     }
 
@@ -1280,8 +1281,7 @@ fn build_and_save_source_index(root: &Path, files: &[PathBuf]) -> Result<(), Str
 
     let index_path = root.join(".doc").join("source_index");
     let bytes = index.to_bytes();
-    fs::write(&index_path, bytes)
-        .map_err(|e| format!("failed to write source index: {e}"))
+    fs::write(&index_path, bytes).map_err(|e| format!("failed to write source index: {e}"))
 }
 
 #[cfg(test)]
@@ -2250,8 +2250,11 @@ mod tests {
         // Create document and source files.
         fs::write(root.join("a.dx"), NOTES).expect("write");
         fs::create_dir_all(root.join("src")).expect("dirs");
-        fs::write(root.join("src/algo.rs"), "fn quicksort() { // kubernetes\n}\n")
-            .expect("write");
+        fs::write(
+            root.join("src/algo.rs"),
+            "fn quicksort() { // kubernetes\n}\n",
+        )
+        .expect("write");
 
         // First search builds the cache.
         let hits1 = search(&root, "kubernetes", 10).expect("first search");
@@ -2273,11 +2276,17 @@ mod tests {
 
         // Modify a source file to stale the cache.
         std::thread::sleep(std::time::Duration::from_millis(10)); // Ensure mtime differs.
-        fs::write(root.join("src/algo.rs"), "fn quicksort() { // modified\n}\n")
-            .expect("modify");
+        fs::write(
+            root.join("src/algo.rs"),
+            "fn quicksort() { // modified\n}\n",
+        )
+        .expect("modify");
 
         // Third search detects staleness and rescans. The cache file exists but is stale.
-        let cache_before = fs::metadata(&cache_path).expect("cache exists").modified().ok();
+        let cache_before = fs::metadata(&cache_path)
+            .expect("cache exists")
+            .modified()
+            .ok();
         let hits3 = search(&root, "kubernetes", 10).expect("third search");
         // Verify the search still works (didn't fail due to stale cache).
         assert!(
