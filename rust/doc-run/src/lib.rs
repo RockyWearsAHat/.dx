@@ -47,7 +47,7 @@
 //! Execution is never implicit either: it happens only through `dx run` or the `dx_run`
 //! tool, never while reading or rendering. `DX_NO_EXEC=1` disables it entirely.
 
-#![forbid(unsafe_code)]
+#![warn(unsafe_code)]
 #![warn(missing_docs)]
 #![warn(clippy::all)]
 
