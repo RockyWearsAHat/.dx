@@ -2450,17 +2450,50 @@ if exist OPERATOR_MARKER (
 
     #[test]
     fn read_admin_token_via_ssh_with_mock_responder() {
-        // Test that read_admin_token_via_ssh correctly parses a valid token response.
-        // We can't test real SSH connectivity in isolation, but we can verify the parsing
-        // logic works correctly when given proper input.
-        // This test verifies the function signature and return type.
+        // Test that setup falls back to SSH when local selfhost is not available.
+        let _env = crate::env_lock();
+        let _no_selfhost = NoSelfhost::new();
+        let root = scratch("cli-setup-ssh-fallback");
+        std::env::set_var("DX_SUBSCRIPTIONS_FILE", root.join("subscriptions.json"));
+        std::env::set_var("DX_REPORT_TOKEN_FILE", root.join("token"));
+        std::env::set_var("DX_REPORT_ENDPOINT", "https://example.invalid/report");
 
-        // In a real scenario with proper SSH setup, this would work:
-        // let result = read_admin_token_via_ssh("localhost", "test-project");
-        // For now, we just verify the function exists and can be called.
+        // Set DX_SELFHOST_HOST but do NOT set DX_SELFHOST_DIR (so no local selfhost).
+        // This tests that setup would attempt SSH, though it may fail without a real SSH server.
+        std::env::set_var("DX_SELFHOST_HOST", "127.0.0.1");
 
-        // The actual test of read_admin_token_via_ssh with a mock SSH connection would
-        // require mocking execute_ssh_command, which we can do in a more comprehensive test.
+        // When trying to claim a token with no local selfhost and SSH configured,
+        // try_claim_scoped_token should attempt the SSH fallback (even if it fails
+        // because there's no real SSH server configured).
+        let result = try_claim_scoped_token("test-project");
+
+        // The result depends on whether SSH is available, but we can verify the function
+        // attempts the SSH path by checking that it doesn't return NoOperator
+        // when DX_SELFHOST_HOST is set. If it returns NoOperator, it didn't try SSH.
+        // If SSH actually works, we get Claimed. If SSH fails, we get Refused with a reason.
+        match result {
+            ScopedToken::Claimed(_) => {
+                // SSH succeeded (unlikely unless there's a real SSH setup)
+                () // This is the ideal case
+            }
+            ScopedToken::Refused(msg) => {
+                // SSH was attempted but failed - this is expected when no real SSH server
+                assert!(
+                    msg.contains("command execution") && msg.contains("127.0.0.1"),
+                    "Error message should show SSH command execution failure: {}",
+                    msg
+                );
+                ()
+            }
+            ScopedToken::NoOperator => {
+                panic!("Expected SSH fallback to be attempted, but got NoOperator");
+            }
+        }
+
+        std::env::remove_var("DX_SELFHOST_HOST");
+        std::env::remove_var("DX_SUBSCRIPTIONS_FILE");
+        std::env::remove_var("DX_REPORT_TOKEN_FILE");
+        std::env::remove_var("DX_REPORT_ENDPOINT");
     }
 
     #[test]
