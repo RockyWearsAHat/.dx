@@ -1240,7 +1240,7 @@ fn build_source_corpus_from_index(root: &Path, index: &SourceIndex) -> Vec<Loade
         let text = fs::read_to_string(path).ok()?;
         let document = doc_core::search::source_document(&relative, &text);
         (!document.blocks.is_empty()).then(|| Loaded {
-            path: path.clone(),
+            path: path.to_path_buf(),
             relative,
             document,
         })
@@ -1268,7 +1268,7 @@ fn build_and_save_source_index(root: &Path, files: &[PathBuf]) -> Result<(), Str
 
         if let Some((mtime, _m)) = metadata {
             let text = fs::read_to_string(path)
-                .map_err(|e| format!("could not read {}: {e}", path.display()))?;
+                .map_err(|e| format!("failed to read {}: {}", path.display(), e))?;
             let content_hash = format!("{:x}", md5::compute(text.as_bytes()));
             file_metadata.push((FileMetadata {
                 path: relative,
@@ -2280,7 +2280,7 @@ mod tests {
             .expect("modify");
 
         // Third search detects staleness and rescans. The cache file exists but is stale.
-        let _cache_before = fs::metadata(&cache_path).expect("cache exists").modified().ok();
+        let cache_before = fs::metadata(&cache_path).expect("cache exists").modified().ok();
         let hits3 = search(&root, "kubernetes", 10).expect("third search");
         // Verify the search still works (didn't fail due to stale cache).
         assert!(

@@ -6,4 +6,5 @@
 # the same thing, and this file is what makes CI and a fresh clone agree with it.
 [toolchain]
 channel = "1.96.0"
+targets = ["x86_64-pc-windows-msvc", "wasm32-unknown-unknown"]
 components = ["rustfmt", "clippy"]
