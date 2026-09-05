@@ -253,6 +253,57 @@ fn parse_scoped_token(stdout: &str) -> (String, bool) {
     (String::new(), false)
 }
 
+/// Try to claim a scoped reader token from the operator via SSH.
+///
+/// Runs `selfhost reports project add <project>` on a remote box over SSH and parses the
+/// returned token. The SSH host is read from `DX_SELFHOST_HOST` environment variable.
+/// This allows `dx report setup` to work from machines without local operator access,
+/// as long as they have SSH access to the box.
+fn try_claim_via_ssh(project: &str) -> ScopedToken {
+    let host = match std::env::var("DX_SELFHOST_HOST") {
+        Ok(h) if !h.trim().is_empty() => h,
+        _ => return ScopedToken::NoOperator, // SSH host not configured
+    };
+
+    let mut command = std::process::Command::new("ssh");
+    command
+        .arg(&host)
+        .arg("selfhost")
+        .arg("reports")
+        .arg("project")
+        .arg("add")
+        .arg(project);
+
+    let output = match command.output() {
+        Ok(output) => output,
+        Err(_) => return ScopedToken::NoOperator, // ssh not found or exec error
+    };
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let reason = stderr
+            .lines()
+            .next_back()
+            .filter(|line| !line.trim().is_empty())
+            .unwrap_or("no diagnostic on stderr")
+            .trim();
+        return ScopedToken::Refused(format!(
+            "`ssh {host} selfhost reports project add {project}` exited with {}: {reason}",
+            output.status
+        ));
+    }
+
+    let (token, valid) = parse_scoped_token(&String::from_utf8_lossy(&output.stdout));
+    if valid {
+        ScopedToken::Claimed(token)
+    } else {
+        ScopedToken::Refused(format!(
+            "`ssh {host} selfhost reports project add {project}` exited successfully but \
+             printed no usable reader token"
+        ))
+    }
+}
+
 /// Try to claim a scoped reader token from the local operator via `selfhost reports project add`.
 ///
 /// `selfhost` locates its own `selfhost.config.toml` by walking up from *its* current
@@ -260,6 +311,8 @@ fn parse_scoped_token(stdout: &str) -> (String, bool) {
 /// run. Off the one machine tree that config lives in, that walk finds nothing and the claim
 /// silently loses even when an operator genuinely exists. `DX_SELFHOST_DIR`, when set, points
 /// the child at the operator's project directory directly so the walk-up still lands.
+///
+/// If the local claim fails, falls back to trying SSH when `DX_SELFHOST_HOST` is set.
 fn try_claim_scoped_token(project: &str) -> ScopedToken {
     let mut command = std::process::Command::new("selfhost");
     command
@@ -275,7 +328,10 @@ fn try_claim_scoped_token(project: &str) -> ScopedToken {
 
     let output = match command.output() {
         Ok(output) => output,
-        Err(_) => return ScopedToken::NoOperator, // selfhost not found or exec error
+        Err(_) => {
+            // selfhost not found locally, try SSH as fallback
+            return try_claim_via_ssh(project);
+        }
     };
 
     if !output.status.success() {
@@ -286,6 +342,10 @@ fn try_claim_scoped_token(project: &str) -> ScopedToken {
             .filter(|line| !line.trim().is_empty())
             .unwrap_or("no diagnostic on stderr")
             .trim();
+        // Local claim failed, try SSH as fallback
+        if std::env::var("DX_SELFHOST_HOST").is_ok() {
+            return try_claim_via_ssh(project);
+        }
         return ScopedToken::Refused(format!(
             "`selfhost reports project add {project}` exited with {}: {reason}",
             output.status
@@ -441,7 +501,7 @@ fn setup(args: &Args) -> Result<String, String> {
 
     let mut out = String::new();
 
-    // Try to claim a scoped token from the local operator
+    // Try to claim a scoped token from the local operator or over SSH
     match try_claim_scoped_token(&project) {
         ScopedToken::Claimed(scoped_token) => {
             // Store the scoped token with the project as the service qualifier
@@ -463,7 +523,8 @@ fn setup(args: &Args) -> Result<String, String> {
             out.push_str(&format!(
                 "scoped token claim skipped: {reason} — falling back to a machine-wide \
                  subscribe; set DX_SELFHOST_DIR to the operator's project directory if one \
-                 exists but was not found here\n"
+                 exists but was not found locally, or DX_SELFHOST_HOST to the remote box \
+                 address if claiming over SSH\n"
             ));
             fallback_to_stated_or_adopted_token(args, &endpoint, &mut out)?;
         }
@@ -2303,6 +2364,36 @@ fi
         );
 
         std::env::remove_var("DX_SELFHOST_DIR");
+        std::env::remove_var("DX_SUBSCRIPTIONS_FILE");
+        std::env::remove_var("DX_REPORT_TOKEN_FILE");
+    }
+
+    #[test]
+    fn setup_falls_back_to_adopted_token_when_local_claim_fails_without_ssh_host() {
+        let _env = crate::env_lock();
+        let _no_selfhost = NoSelfhost::new();
+        let root = scratch("setup-no-ssh-no-selfhost");
+        std::env::set_var("DX_SUBSCRIPTIONS_FILE", root.join("subscriptions.json"));
+        std::env::set_var("DX_REPORT_TOKEN_FILE", root.join("token"));
+
+        // Ensure no DX_SELFHOST_HOST is set
+        std::env::remove_var("DX_SELFHOST_HOST");
+
+        let result = run(&args(&[
+            "setup",
+            root.to_str().expect("path"),
+            "--endpoint",
+            "https://example.invalid/report",
+        ]))
+        .expect("setup");
+
+        let text = result.text();
+        // Should fall back to the normal subscribe behavior
+        assert!(
+            text.contains("now receives"),
+            "should fall back to normal subscribe: {text}"
+        );
+
         std::env::remove_var("DX_SUBSCRIPTIONS_FILE");
         std::env::remove_var("DX_REPORT_TOKEN_FILE");
     }
