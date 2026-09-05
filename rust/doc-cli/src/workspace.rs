@@ -1231,8 +1231,7 @@ fn load_source_index(root: &Path) -> Option<SourceIndex> {
 /// Assumes all files in the index still exist and have not been modified.
 fn build_source_corpus_from_index(root: &Path, index: &SourceIndex) -> Vec<Loaded> {
     let paths: Vec<PathBuf> = index
-        .metadata()
-        .iter()
+        .metadata_iter()
         .map(|(relative, _)| root.join(relative))
         .collect();
 
@@ -1241,7 +1240,7 @@ fn build_source_corpus_from_index(root: &Path, index: &SourceIndex) -> Vec<Loade
         let text = fs::read_to_string(path).ok()?;
         let document = doc_core::search::source_document(&relative, &text);
         (!document.blocks.is_empty()).then(|| Loaded {
-            path: path.clone(),
+            path: path.to_path_buf(),
             relative,
             document,
         })
@@ -1268,7 +1267,8 @@ fn build_and_save_source_index(root: &Path, files: &[PathBuf]) -> Result<(), Str
             });
 
         if let Some((mtime, _m)) = metadata {
-            let text = fs::read_to_string(path).ok()?;
+            let text = fs::read_to_string(path)
+                .map_err(|e| format!("failed to read {}: {}", path.display(), e))?;
             let content_hash = format!("{:x}", md5::compute(text.as_bytes()));
             file_metadata.push((FileMetadata {
                 path: relative,
