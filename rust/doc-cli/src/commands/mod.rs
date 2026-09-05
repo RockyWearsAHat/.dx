@@ -18,6 +18,7 @@ pub mod find;
 pub mod index;
 pub mod merge;
 pub mod play;
+pub mod rename;
 pub mod report;
 pub mod setup;
 pub mod store;
@@ -245,6 +246,11 @@ const COMMANDS: &[Command] = &[
         names: &["fmt", "format"],
         flags: &["check"],
         run: |args| edit::run_fmt(args).map(Output::Report),
+    },
+    Command {
+        names: &["rename"],
+        flags: &["review", "approve"],
+        run: |args| rename::run(args).map(Output::Report),
     },
     // Reporting on dx itself.
     Command {

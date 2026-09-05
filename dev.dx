@@ -1,1 +1,300 @@
-~ dx1 a4c826664b5f12a27c023ed20bbebed2dcf93499fbd3bf7c4b527dbc36ac2771
+::heading level=1 id=dev
+The development harness
+::end
+
+::paragraph id=dev-intro
+One command proves this repository: `dx run dev.dx`. Every gate below is a run block whose verdict is recorded in this document — a claim here is a thing the engine measured, never a thing a session remembered. Each gate declares the tree it judges (`reads=rust`, `reads=editor`, `reads=examples`), so editing any source file stales exactly the gates that read it, and the next plain run — or an agent's next read — re-proves them by itself. `dx run dev.dx --force` re-runs everything regardless, which is the honest move after changing anything the gates cannot see, like this machine's toolchains.
+::end
+
+::paragraph id=pipeline-engine hidden
+engine suites
+::end
+
+::paragraph id=pipeline-lints hidden
+fmt + clippy
+::end
+
+::paragraph id=pipeline-surfaces hidden
+both JS suites
+::end
+
+::paragraph id=pipeline-corpus hidden
+corpus resolves, canonical
+::end
+
+::paragraph id=pipeline-boundary hidden
+attacks + doc-shot + full suite
+::end
+
+::board id=pipeline height=220
+- pipeline-engine x=0 y=0 w=220 h=84 to=pipeline-lints:r-l
+- pipeline-lints x=300 y=0 w=220 h=84 to=pipeline-surfaces:r-l
+- pipeline-surfaces x=600 y=0 w=220 h=84 to=pipeline-corpus:b-t
+- pipeline-corpus x=600 y=170 w=220 h=84 to=pipeline-boundary:l-r:host%20shell
+- pipeline-boundary x=150 y=170 w=300 h=84
+::end
+
+::heading level=2 id=gates
+The gates dx runs itself
+::end
+
+::paragraph id=gates-note
+Each gate runs inside the same kernel sandbox every document gets: reads scoped to this repository, no network, writes only where the block's `writes=` grant says. The cargo gates find the rustup toolchain themselves — the sandbox redirects `$HOME`, so `CARGO_HOME` has to be stated, not assumed.
+::end
+
+::code id=engine lang=bash run reads=rust writes=rust/target timeout=900
+CARGO_BIN="$(type -ap cargo 2>/dev/null | grep "/\.cargo/bin/cargo" | head -1)"
+[ -n "$CARGO_BIN" ] || { echo "rustup cargo not found on PATH"; exit 1; }
+export CARGO_HOME="${CARGO_BIN%/bin/cargo}"
+export RUSTUP_HOME="${CARGO_HOME%/.cargo}/.rustup"
+export PATH="${CARGO_BIN%/cargo}:$PATH"
+cd rust
+fail=0
+for crate in doc-core doc-store; do
+  log="$DX_SANDBOX/$crate.log"
+  if cargo test -p "$crate" --offline --locked >"$log" 2>&1; then
+    grep "^test result" "$log" | awk -F'[ ;]+' -v c="$crate" '{p+=$4} END {print c": "p" passed"}'
+  else
+    fail=1; echo "$crate: FAILED"; tail -5 "$log"
+  fi
+done
+[ "$fail" = 0 ] && echo "ok - engine crates green inside the sandbox (doc-wasm is held by the JS parity suites below)" || exit 1
+::end
+
+::output id=engine-output for=engine status=blocked exit=126 hash=ac2efa8b2230fe519d5f78dc07fbaddf4b495ea8a6d65fb2734e1da9296b863c
+no shell toolchain found — install bash and make sure it is on your PATH, then run this block again
+::end
+
+::code id=lints lang=bash run reads=rust writes=rust/target timeout=900
+CARGO_BIN="$(type -ap cargo 2>/dev/null | grep "/\.cargo/bin/cargo" | head -1)"
+[ -n "$CARGO_BIN" ] || { echo "rustup cargo not found on PATH"; exit 1; }
+export CARGO_HOME="${CARGO_BIN%/bin/cargo}"
+export RUSTUP_HOME="${CARGO_HOME%/.cargo}/.rustup"
+export PATH="${CARGO_BIN%/cargo}:$PATH"
+cd rust
+fail=0
+cargo fmt --check >/dev/null 2>&1 && echo "fmt: one shape" || { echo "fmt: drift"; fail=1; }
+log="$DX_SANDBOX/clippy.log"
+if cargo clippy --all-targets --offline --locked -- -D warnings >"$log" 2>&1; then
+  echo "clippy: no warning survives"
+else
+  fail=1; echo "clippy: FAILED"; tail -5 "$log"
+fi
+[ "$fail" = 0 ] && echo "ok - the tree lints clean" || exit 1
+::end
+
+::output id=lints-output for=lints status=blocked exit=126 hash=4a154448deb264bdc4e9bfaa9f2cca14e1e7ea2c702770ade38d7e6a22650e34
+no shell toolchain found — install bash and make sure it is on your PATH, then run this block again
+::end
+
+::code id=surfaces lang=bash run reads=editor timeout=300
+fail=0
+for suite in github vscode; do
+  log="$DX_SANDBOX/$suite.log"
+  if node --test editor/$suite/test/*.test.mjs >"$log" 2>&1; then
+    n="$(grep -E "pass [0-9]+" "$log" | head -1 | awk '{print $NF}')"
+    echo "$suite: $n passed"
+  else
+    fail=1; echo "$suite: FAILED"; tail -5 "$log"
+  fi
+done
+[ "$fail" = 0 ] && echo "ok - both JS surfaces green, engine parity held" || exit 1
+::end
+
+::output id=surfaces-output for=surfaces status=blocked exit=126 hash=644fe40ec4565675a5dc81304a0c76a31b395a83d04113b6e1661adce84a5e7f
+no shell toolchain found — install bash and make sure it is on your PATH, then run this block again
+::end
+
+::code id=corpus lang=bash run reads=examples,index.dx timeout=120
+fail=0; count=0
+for f in $(dx ls . 2>/dev/null | awk '{print $1}'); do
+  [ "$f" = "dev.dx" ] && continue   # this very run is writing it
+  count=$((count + 1))
+  dx text "$f" >/dev/null 2>&1 || { echo "does not resolve: $f"; fail=1; }
+  dx fmt "$f" --check >/dev/null 2>&1 || { echo "not canonical: $f"; fail=1; }
+done
+[ "$count" -ge 10 ] || { echo "only $count documents listed — the corpus is ~a dozen, so an empty ls is a broken resolver, not a clean pass"; fail=1; }
+[ "$fail" = 0 ] && echo "ok - $count documents resolve and are canonical" || exit 1
+::end
+
+::output id=corpus-output for=corpus status=blocked exit=126 hash=5ca9d4d4612c4068e78c78efcfacd06ab0f3f30353aaa4f3498333a7f84929b4
+no shell toolchain found — install bash and make sure it is on your PATH, then run this block again
+::end
+
+::code id=page-contract lang=bash run reads=rust,examples timeout=120
+fail=0
+out="$DX_SANDBOX/render"
+mkdir -p "$out"
+dx render examples/showcase.dx --out "$out/showcase.html" >/dev/null 2>&1 || { echo "render failed: showcase"; exit 1; }
+dx render examples/GETTING_STARTED.dx --out "$out/guide.html" >/dev/null 2>&1 || { echo "render failed: guide"; exit 1; }
+grep -q "<details" "$out/showcase.html" && echo "fold: details/summary, CSS-only" || { echo "fold missing"; fail=1; }
+if grep -q "<script" "$out/showcase.html" "$out/guide.html"; then echo "a script reached the page"; fail=1; else echo "scripts: none on any page"; fi
+if grep -Eq "(src|href)=\"https?://" "$out/showcase.html"; then echo "an external fetch reached the page"; fail=1; else echo "external fetches: none"; fi
+grep -q "sandbox=\"\"" "$out/guide.html" && echo "view frame: sandbox stays empty" || { echo "view frame sandbox not empty"; fail=1; }
+[ "$fail" = 0 ] && echo "ok - the rendered page holds its contract" || exit 1
+::end
+
+::output id=page-contract-output for=page-contract status=blocked exit=126 hash=446334d5ed07f434b128151faab7aad69fb3095f6e6302406877bda66baa35e8
+no shell toolchain found — install bash and make sure it is on your PATH, then run this block again
+::end
+
+::paragraph id=paragraph-21
+The `.dx-sync` gate checks whether substantial code changes land without a matching document change. It diffs the working tree against its merge-base with the default branch (falling back to reporting nothing to compare, on the default branch itself), then counts files and lines changed outside `.dx` paths against the same for `.dx` paths. If the non-`.dx` change is large — **3 or more files, or 150 or more inserted lines** — and the `.dx` side is untouched or touched by nothing bigger than pointer bumps (a pointer swap is always a fixed, tiny diff no matter how much content changed behind it, so a bumped pointer must not read as "it was documented"), the gate prints a loud warning naming the counts. This is a best-effort heuristic, never a blocker: it always exits 0, because a false positive on a refactor or a test-only change is expected and must never fail a real commit.
+::end
+
+::code id=dx-sync lang=bash run reads=CLAUDE.md,LICENSE,README.md,dev.dx,docs,editor,examples,index.dx,packaging,reports.dx,rust,validation.dx
+# Determine the base commit for comparison
+base=""
+if git rev-parse origin/main >/dev/null 2>&1; then
+  base=$(git merge-base origin/main HEAD)
+elif git rev-parse master >/dev/null 2>&1; then
+  base=$(git merge-base master HEAD)
+fi
+
+# If on default branch with no upstream divergence, nothing to check
+if [ -z "$base" ] || [ "$(git rev-parse HEAD)" = "$base" ]; then
+  echo "ok - nothing to compare"
+  exit 0
+fi
+
+# Get the stat diff
+diff_stat=$(git diff --stat "$base" HEAD 2>/dev/null)
+
+# Count files and lines outside .dx paths, and the same for .dx paths
+non_dx_count=$(echo "$diff_stat" | grep -v '\.dx ' | grep -c '|' || true)
+non_dx_lines=$(echo "$diff_stat" | grep -v '\.dx ' | awk -F'|' '{sum += $2} END {print sum+0}')
+dx_file_count=$(echo "$diff_stat" | grep -c '\.dx ' || true)
+dx_lines=$(echo "$diff_stat" | grep '\.dx ' | awk -F'|' '{sum += $2} END {print sum+0}')
+
+# Thresholds: 3+ non-.dx files OR 150+ lines outside .dx paths. The .dx side must be
+# either untouched, or touched by nothing more than pointer bumps — a pointer swap is
+# always a tiny, fixed-size diff (one line replaced) regardless of how much content
+# actually changed behind it, so "the pointer moved" must not read as "it was documented".
+if ([ "$non_dx_count" -ge 3 ] || [ "$non_dx_lines" -ge 150 ]) && [ "$dx_lines" -le $((dx_file_count * 3)) ]; then
+  echo "warning: real code changes with no matching document change"
+  echo "  non-.dx files changed: $non_dx_count, lines: $non_dx_lines"
+  echo "  .dx files touched: $dx_file_count, lines: $dx_lines (pointer-bump-sized or less)"
+  echo "  consider whether this work should be reflected in a document"
+  # Continue without exit 1 - a suggestion, never a blocker; false positives are expected.
+fi
+
+echo "ok - .dx-sync gate: checked $non_dx_count non-.dx files ($non_dx_lines lines) against $dx_file_count .dx docs ($dx_lines lines)"
+::end
+
+::output id=dx-sync-output for=dx-sync status=blocked exit=126 hash=9e0f5baeb8ac86d0608394ca3fa1544a827b1c76234ec4ec2ef07325be4ac83b
+no shell toolchain found — install bash and make sure it is on your PATH, then run this block again
+::end
+
+::paragraph id=coverage-self-check-lead
+A coverage floor in this repository's own pipeline would be a product decision about this project's own tolerance, which `docs/search-coverage.dx#gateable-body` deliberately does not presume on a project's behalf. What this harness proves instead is the mechanism itself, end to end, against a scratch workspace: a document hit, a source-file fallback, and a hit on nothing are each recorded correctly to `.doc/coverage.jsonl`; `dx coverage` reports the rate and the fallback queries, most-repeated first, never the document hit among them; `--min-rate` passes below the observed rate and fails above it; a workspace never searched at all reports "no data" and never fails a floor it has no evidence for; and the log actually prunes itself once real searches carry it past its bound.
+::end
+
+::code id=coverage-self-check lang=bash run reads=rust writes=rust/target timeout=600
+CARGO_BIN="$(type -ap cargo 2>/dev/null | grep "/\.cargo/bin/cargo" | head -1)"
+[ -n "$CARGO_BIN" ] || { echo "rustup cargo not found on PATH"; exit 1; }
+export CARGO_HOME="${CARGO_BIN%/bin/cargo}"
+export RUSTUP_HOME="${CARGO_HOME%/.cargo}/.rustup"
+export PATH="${CARGO_BIN%/cargo}:$PATH"
+fail=0
+
+(cd rust && cargo build --offline --locked --quiet -p doc-cli) || { echo "build failed"; exit 1; }
+dx_bin="$PWD/rust/target/debug/dx"
+[ -x "$dx_bin" ] || { echo "no dx binary at $dx_bin"; exit 1; }
+
+ws="$DX_SANDBOX/coverage-ws"
+rm -rf "$ws"
+mkdir -p "$ws"
+
+# A document a search can land on, and a source file a search can only fall back to.
+"$dx_bin" new "$ws/guide.dx" --title "Coverage fixture" >/dev/null
+"$dx_bin" set "$ws/guide.dx" intro --text "A kumquat grove borders the west field." >/dev/null
+printf 'The driftwood tally sits beside the pier.\n' > "$ws/notes.rs"
+
+"$dx_bin" search kumquat "$ws" >/dev/null       # 1. lands on the document
+"$dx_bin" search driftwood "$ws" >/dev/null     # 2. falls back to the source file
+"$dx_bin" search zzquorxblat "$ws" >/dev/null   # 3. lands on nothing
+
+log="$ws/.doc/coverage.jsonl"
+[ -f "$log" ] || { echo "FAIL no coverage.jsonl after three searches"; fail=1; }
+recorded=$(wc -l < "$log" | tr -d ' ')
+[ "$recorded" = 3 ] || { echo "FAIL expected 3 recorded searches, found $recorded"; fail=1; }
+
+line_for() { grep "\"query\":\"$1\"" "$log"; }
+line_for kumquat     | grep -q '"landed":"document"' || { echo "FAIL document hit not recorded as document"; fail=1; }
+line_for driftwood   | grep -q '"landed":"source"'   || { echo "FAIL source hit not recorded as source"; fail=1; }
+line_for zzquorxblat | grep -q '"landed":"none"'     || { echo "FAIL empty hit not recorded as none"; fail=1; }
+
+# `dx coverage` reports the rate and lists exactly the two fallbacks, never the document hit.
+report=$("$dx_bin" coverage "$ws")
+echo "$report" | grep -q "1/3"         || { echo "FAIL coverage report did not show 1/3"; fail=1; }
+echo "$report" | grep -q "driftwood"   || { echo "FAIL coverage report dropped the driftwood fallback"; fail=1; }
+echo "$report" | grep -q "zzquorxblat" || { echo "FAIL coverage report dropped the zzquorxblat fallback"; fail=1; }
+echo "$report" | grep -q "kumquat"     && { echo "FAIL coverage report listed a document hit as a fallback"; fail=1; }
+
+# `--min-rate` is a normal gate: it passes below the observed rate and fails above it.
+"$dx_bin" coverage "$ws" --min-rate 0.1 >/dev/null || { echo "FAIL --min-rate 0.1 should pass at a 1/3 rate"; fail=1; }
+"$dx_bin" coverage "$ws" --min-rate 0.9 >/dev/null 2>&1 && { echo "FAIL --min-rate 0.9 should fail at a 1/3 rate"; fail=1; }
+
+# A workspace that has never been searched reports "no data" and never fails a floor.
+fresh="$DX_SANDBOX/coverage-fresh"
+rm -rf "$fresh"
+mkdir -p "$fresh"
+"$dx_bin" new "$fresh/seed.dx" >/dev/null
+"$dx_bin" coverage "$fresh" --min-rate 0.99 >/dev/null || { echo "FAIL a workspace with no data failed a floor"; fail=1; }
+
+# Pruning: seed the log past its bound directly (no need to spend 2000+ real searches on
+# it), then one more real search must trip the same prune a real workload would.
+before=2500
+: > "$log"
+for i in $(seq 1 "$before"); do
+  printf '{"query":"synthetic-%s","landed":"source","path":"seed.rs"}\n' "$i"
+done >> "$log"
+"$dx_bin" search kumquat "$ws" >/dev/null
+after=$(wc -l < "$log" | tr -d ' ')
+[ "$after" -gt 0 ] || { echo "FAIL log emptied instead of pruning"; fail=1; }
+[ "$after" -lt $((before / 2)) ] || { echo "FAIL log did not shrink after crossing its bound: $after of $before lines"; fail=1; }
+
+[ "$fail" = 0 ] && echo "ok - coverage records, reports, gates on --min-rate, and prunes itself, all end to end" || exit 1
+::end
+
+::output id=coverage-self-check-output for=coverage-self-check status=blocked exit=126 hash=8b4d30702d39bd665f29c10322dad34261a34c7079e00a721df4284d63da4d18
+no shell toolchain found — install bash and make sure it is on your PATH, then run this block again
+::end
+
+::heading level=2 id=outside
+What must watch from outside
+::end
+
+::paragraph id=outside-why
+Two suites cannot run inside the sandbox, by their own nature. The attack payloads prove the kernel boundary by standing outside it and watching real escapes fail — run them confined and the outer wall fails their positive controls. And doc-shot drives a real Chromium, which does not launch inside the boundary. The full workspace suite includes both, plus the doc-run and doc-cli tests that execute blocks (a sandbox does not nest). They stay a host-shell command:
+::end
+
+::code id=outside-commands lang=bash
+export PATH="$HOME/.cargo/bin:$PATH"        # rustup ahead of any Homebrew cargo on this machine
+cd rust
+cargo test                                  # the whole suite, attacks and Chromium included
+cargo clippy --all-targets -- -D warnings
+cargo fmt --check
+./editor/build.sh                           # after touching doc-core: rebuild both wasm engines
+::end
+
+::heading level=2 id=driving
+Driving the rendered surfaces
+::end
+
+::paragraph id=driving-note
+`dx play` is a read with hands: it loads the same script-free render every screenshot uses, performs scripted input, and returns stamped frames — nothing the document says executes. These are the standing checks; each is a command, and what it must show is stated beside it.
+::end
+
+::code id=driving-commands lang=bash
+dx play examples/GETTING_STARTED.dx --script "wait 400ms; scroll 1600; wait 400ms"   # the framed site scrolls inside its sandboxed view
+dx png examples/example_site_plan.dx --block plan --out /tmp/board.png               # a board at natural size, no node clipped
+dx play examples/showcase.dx --script "wait 300ms; scroll 800; wait 300ms"           # stamped frames of the page under input
+::end
+
+::checklist id=driving-seen
+[x] The site-plan board renders every node at its stated box, edges legible
+[x] The getting-started view frames the shipped site and scrolls inside its frame
+[x] Play returns frames stamped with their moment and action
+[x] DX.app rebuilt from this tree; `dx doctor` reports every surface current
+::end
