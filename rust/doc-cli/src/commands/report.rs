@@ -262,8 +262,9 @@ fn parse_scoped_token(stdout: &str) -> (String, bool) {
 /// silently loses even when an operator genuinely exists. `DX_SELFHOST_DIR`, when set, points
 /// the child at the operator's project directory directly so the walk-up still lands.
 ///
-/// If the local `selfhost` command is not found or fails, and `DX_SELFHOST_HOST` is set,
-/// attempts to claim the token via SSH on the remote host.
+/// If the local `selfhost` command is not found, and `DX_SELFHOST_HOST` is set,
+/// attempts to claim the token via SSH on the remote host. If the local command runs but is
+/// refused, returns that refusal without trying SSH.
 fn try_claim_scoped_token(project: &str) -> ScopedToken {
     let mut command = std::process::Command::new("selfhost");
     command
@@ -277,38 +278,45 @@ fn try_claim_scoped_token(project: &str) -> ScopedToken {
         }
     }
 
-    match command.output() {
-        Ok(output) => {
-            if output.status.success() {
-                let (token, valid) = parse_scoped_token(&String::from_utf8_lossy(&output.stdout));
-                if valid {
-                    return ScopedToken::Claimed(token);
-                } else {
-                    return ScopedToken::Refused(format!(
-                        "`selfhost reports project add {project}` exited successfully but printed no \
-                         usable reader token"
-                    ));
+    let output = match command.output() {
+        Ok(output) => output,
+        Err(_) => {
+            // selfhost not found; try SSH if configured
+            if let Ok(host) = std::env::var("DX_SELFHOST_HOST") {
+                if !host.is_empty() {
+                    match read_admin_token_via_ssh(&host, project) {
+                        Ok(token) => return ScopedToken::Claimed(token),
+                        Err(reason) => return ScopedToken::Refused(reason),
+                    }
                 }
             }
-            // Local command failed; fall through to SSH attempt
+            return ScopedToken::NoOperator;
         }
-        Err(_) => {
-            // selfhost not found; fall through to SSH attempt
-        }
+    };
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let reason = stderr
+            .lines()
+            .next_back()
+            .filter(|line| !line.trim().is_empty())
+            .unwrap_or("no diagnostic on stderr")
+            .trim();
+        return ScopedToken::Refused(format!(
+            "`selfhost reports project add {project}` exited with {}: {reason}",
+            output.status
+        ));
     }
 
-    // Try SSH if DX_SELFHOST_HOST is set
-    if let Ok(host) = std::env::var("DX_SELFHOST_HOST") {
-        if !host.is_empty() {
-            match read_admin_token_via_ssh(&host, project) {
-                Ok(token) => return ScopedToken::Claimed(token),
-                Err(reason) => return ScopedToken::Refused(reason),
-            }
-        }
+    let (token, valid) = parse_scoped_token(&String::from_utf8_lossy(&output.stdout));
+    if valid {
+        ScopedToken::Claimed(token)
+    } else {
+        ScopedToken::Refused(format!(
+            "`selfhost reports project add {project}` exited successfully but printed no \
+             usable reader token"
+        ))
     }
-
-    // No local selfhost or SSH; no token can be claimed
-    ScopedToken::NoOperator
 }
 
 /// Write or merge a project-local MCP configuration file at `.mcp.json`.
