@@ -70,6 +70,11 @@ impl SourceIndex {
         Ok(index)
     }
 
+    /// Returns an iterator over the indexed file metadata (path → (mtime, hash)).
+    pub fn metadata_iter(&self) -> impl Iterator<Item = (&String, &(u64, String))> {
+        self.metadata.iter()
+    }
+
     /// Queries the index for files containing a given token.
     ///
     /// Returns a list of file paths (in the order they were added) that contain the token.
@@ -79,6 +84,11 @@ impl SourceIndex {
             .get(&token.to_lowercase())
             .cloned()
             .unwrap_or_default()
+    }
+
+    /// Returns an iterator over the file paths and their metadata.
+    pub fn metadata(&self) -> impl Iterator<Item = (&String, &(u64, String))> {
+        self.metadata.iter()
     }
 
     /// Detects whether the index is stale relative to current file metadata.

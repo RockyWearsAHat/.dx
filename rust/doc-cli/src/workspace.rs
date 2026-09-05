@@ -26,7 +26,7 @@ use std::path::{Path, PathBuf};
 use doc_core::format::parse;
 use doc_core::model::Document;
 use doc_core::resolve::Resolver;
-use doc_core::source_index::{FileMetadata, SourceIndex};
+use doc_core::source_index::SourceIndex;
 use doc_store::{pack, stub, Stats, Store, StoreError, SyncReport};
 
 /// Markers that identify a workspace root, in the order they are trusted.
@@ -1084,11 +1084,7 @@ pub fn search(directory: &Path, query: &str, limit: usize) -> Result<Vec<Hit>, S
         build_source_corpus_from_index(directory, &index)
     } else {
         eprintln!("source index stale, rescanning");
-        let docs = source_corpus(directory);
-        // Collect the file paths to rebuild index for next time.
-        let source_paths: Vec<PathBuf> = docs.iter().map(|d| d.path.clone()).collect();
-        let _ = build_and_save_source_index(directory, &source_paths);
-        docs
+        source_corpus(directory)
     };
 
     documents.extend(source_docs);
@@ -1231,8 +1227,7 @@ fn load_source_index(root: &Path) -> Option<SourceIndex> {
 /// Assumes all files in the index still exist and have not been modified.
 fn build_source_corpus_from_index(root: &Path, index: &SourceIndex) -> Vec<Loaded> {
     let paths: Vec<PathBuf> = index
-        .metadata()
-        .iter()
+        .metadata_iter()
         .map(|(relative, _)| root.join(relative))
         .collect();
 
@@ -1241,7 +1236,7 @@ fn build_source_corpus_from_index(root: &Path, index: &SourceIndex) -> Vec<Loade
         let text = fs::read_to_string(path).ok()?;
         let document = doc_core::search::source_document(&relative, &text);
         (!document.blocks.is_empty()).then(|| Loaded {
-            path: path.clone(),
+            path: path.to_path_buf(),
             relative,
             document,
         })
@@ -1251,6 +1246,7 @@ fn build_source_corpus_from_index(root: &Path, index: &SourceIndex) -> Vec<Loade
     .collect()
 }
 
+<<<<<<< HEAD
 /// Build a SourceIndex from current source files and save it to `.doc/source_index`.
 fn build_and_save_source_index(root: &Path, files: &[PathBuf]) -> Result<(), String> {
     let mut file_metadata = Vec::new();
@@ -1268,7 +1264,8 @@ fn build_and_save_source_index(root: &Path, files: &[PathBuf]) -> Result<(), Str
             });
 
         if let Some((mtime, _m)) = metadata {
-            let text = fs::read_to_string(path).ok()?;
+            let text = fs::read_to_string(path)
+                .map_err(|e| format!("failed to read {}: {}", path.display(), e))?;
             let content_hash = format!("{:x}", md5::compute(text.as_bytes()));
             file_metadata.push((FileMetadata {
                 path: relative,
