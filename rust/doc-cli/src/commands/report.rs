@@ -2488,7 +2488,7 @@ fi
     #[test]
     fn integrate_ssh_token_fetch_into_dx_report_setup_tries_ssh_first() {
         let _env = crate::env_lock();
-        let bin_dir = scratch("ssh-setup-test");
+        let _bin_dir = scratch("ssh-setup-test");
 
         // Set up scenario where local selfhost is not available
         // but SSH host is configured
