@@ -11,7 +11,9 @@ use std::path::Path;
 
 use crate::args::Args;
 use crate::commands::index::{collect_files, SKIPPED_DIRECTORIES, CODE_EXTENSIONS};
+use crate::rename_approvals::RenameLedger;
 use doc_core::trace::{trace, Trace};
+use doc_run::RunOptions;
 
 /// Largest file to read, matching trace.rs's READ_CAP.
 const READ_CAP: u64 = 2 * 1024 * 1024;
@@ -29,6 +31,8 @@ pub struct RenamePreview {
     pub references: Vec<RenameLocation>,
     /// Reference graph digest for approval tracking.
     pub graph_digest: String,
+    /// Fingerprint for the approval ledger, computed from old/new names, sites, and graph digest.
+    pub fingerprint: String,
 }
 
 /// One location where a name appears and will be changed.
@@ -47,6 +51,45 @@ pub fn run(args: &Args) -> Result<String, String> {
     let root = Path::new(args.positional(2).unwrap_or("."));
 
     let preview = preview(root, &old_name, &new_name)?;
+
+    // Handle --review flag: show preview without writing or approving.
+    if args.present("review") {
+        let total_sites = preview.definitions.len() + preview.references.len();
+        let mut report = format!(
+            "preview: rename `{}` to `{}`\n",
+            preview.old_name, preview.new_name
+        );
+        report.push_str(&format!(
+            "definitions: {}\n",
+            preview.definitions.len()
+        ));
+        report.push_str(&format!("references: {}\n", preview.references.len()));
+        report.push_str(&format!("total sites: {}\n", total_sites));
+        report.push_str(&format!("fingerprint: {}\n", preview.fingerprint));
+        return Ok(report);
+    }
+
+    // Handle --approve flag: record approval in ledger without writing.
+    if args.present("approve") {
+        let cache_root = RunOptions::default().cache_root;
+        let ledger = RenameLedger::at(&cache_root);
+        ledger.approve(&preview.fingerprint)?;
+        return Ok(format!(
+            "approved rename `{}` to `{}`\nfingerprint: {}\n",
+            preview.old_name, preview.new_name, preview.fingerprint
+        ));
+    }
+
+    // Normal flow: check approval, then apply the rename.
+    let cache_root = RunOptions::default().cache_root;
+    let ledger = RenameLedger::at(&cache_root);
+
+    if !ledger.is_approved(&preview.fingerprint) {
+        return Err(format!(
+            "rename `{}` to `{}` is not approved\nfingerprint: {}\nrun with --approve to approve, or --review to preview",
+            preview.old_name, preview.new_name, preview.fingerprint
+        ));
+    }
 
     // Apply the rename.
     apply(&preview, root)?;
@@ -138,12 +181,16 @@ pub fn preview(
     // Compute a digest of the reference graph for approval tracking.
     let graph_digest = compute_graph_digest(&traced, old_name);
 
+    // Compute the fingerprint for the approval ledger.
+    let fingerprint = compute_fingerprint(old_name, new_name, &definitions, &references, &graph_digest);
+
     Ok(RenamePreview {
         old_name: old_name.to_string(),
         new_name: new_name.to_string(),
         definitions,
         references,
         graph_digest,
+        fingerprint,
     })
 }
 
@@ -302,6 +349,42 @@ fn compute_graph_digest(traced: &Trace, name: &str) -> String {
     format!("{:x}", hasher.finish())
 }
 
+/// Compute the fingerprint for a rename operation.
+///
+/// The fingerprint is derived from the old name, new name, sorted list of all sites
+/// (definitions and references), and the reference graph digest. This ensures that
+/// approving a rename refuses it if the graph changes or the sites change.
+fn compute_fingerprint(
+    old_name: &str,
+    new_name: &str,
+    definitions: &[RenameLocation],
+    references: &[RenameLocation],
+    graph_digest: &str,
+) -> String {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = DefaultHasher::new();
+
+    // Hash the old and new names.
+    old_name.hash(&mut hasher);
+    new_name.hash(&mut hasher);
+
+    // Hash all sites in sorted order.
+    let mut all_sites: Vec<_> = definitions
+        .iter()
+        .map(|l| (&l.file, l.line))
+        .chain(references.iter().map(|l| (&l.file, l.line)))
+        .collect();
+    all_sites.sort();
+    all_sites.hash(&mut hasher);
+
+    // Hash the graph digest itself.
+    graph_digest.hash(&mut hasher);
+
+    format!("{:x}", hasher.finish())
+}
+
 /// Build a trace of the codebase rooted at `root`.
 fn build_trace(root: &Path) -> Result<Trace, String> {
     if !root.is_dir() {
@@ -392,6 +475,7 @@ mod tests {
         assert_eq!(preview.definitions[0].file, "lib.rs");
         assert_eq!(preview.definitions[0].line, 1);
         assert_eq!(preview.references[0].file, "main.rs");
+        assert!(!preview.fingerprint.is_empty());
     }
 
     #[test]
@@ -449,5 +533,73 @@ mod tests {
         // Only 'process' function should be renamed, not 'process_data'.
         assert!(content.contains("fn handle()"));
         assert!(content.contains("process_data"));
+    }
+
+    #[test]
+    fn rename_fingerprint_is_deterministic() {
+        let ws = make_workspace("fingerprint-det", &[
+            ("lib.rs", "fn process() { }\n"),
+            ("main.rs", "fn main() { process(); }"),
+        ]);
+        let preview1 = preview(&ws, "process", "handle").expect("should succeed");
+        let preview2 = preview(&ws, "process", "handle").expect("should succeed");
+        // Same preview should have the same fingerprint.
+        assert_eq!(preview1.fingerprint, preview2.fingerprint);
+    }
+
+    #[test]
+    fn rename_fingerprint_differs_for_different_old_names() {
+        let ws = make_workspace("fingerprint-diff-old", &[
+            ("lib.rs", "fn process() { }\nfn execute() { }\n"),
+            ("main.rs", "fn main() { process(); }"),
+        ]);
+        let preview1 = preview(&ws, "process", "handle").expect("should succeed");
+        let preview2 = preview(&ws, "execute", "handle").expect("should succeed");
+        // Different old names should have different fingerprints.
+        assert_ne!(preview1.fingerprint, preview2.fingerprint);
+    }
+
+    #[test]
+    fn rename_fingerprint_differs_for_different_new_names() {
+        let ws = make_workspace("fingerprint-diff-new", &[
+            ("lib.rs", "fn process() { }\n"),
+            ("main.rs", "fn main() { process(); }"),
+        ]);
+        let preview1 = preview(&ws, "process", "handle").expect("should succeed");
+        let preview2 = preview(&ws, "process", "execute").expect("should succeed");
+        // Different new names should have different fingerprints.
+        assert_ne!(preview1.fingerprint, preview2.fingerprint);
+    }
+
+    #[test]
+    fn approval_workflow_integration() {
+        use crate::rename_approvals::RenameLedger;
+
+        let ws = make_workspace("approval-workflow", &[
+            ("lib.rs", "fn process() { }\n"),
+            ("main.rs", "fn main() { process(); }"),
+        ]);
+        let cache = std::env::temp_dir().join("dx-rename-approval-workflow-test");
+        let _ = std::fs::remove_dir_all(&cache);
+        std::fs::create_dir_all(&cache).expect("create cache");
+
+        let ledger = RenameLedger::at(&cache);
+        let preview = preview(&ws, "process", "handle").expect("should get preview");
+
+        // Before approval, the rename should refuse.
+        assert!(!ledger.is_approved(&preview.fingerprint));
+
+        // Approve the rename.
+        ledger.approve(&preview.fingerprint).expect("should approve");
+        assert!(ledger.is_approved(&preview.fingerprint));
+
+        // After approval, apply should succeed.
+        apply(&preview, &ws).expect("should apply");
+
+        // Verify the files were actually updated.
+        let lib_content = std::fs::read_to_string(ws.join("lib.rs")).expect("read lib.rs");
+        let main_content = std::fs::read_to_string(ws.join("main.rs")).expect("read main.rs");
+        assert!(lib_content.contains("fn handle()"));
+        assert!(main_content.contains("handle();"));
     }
 }

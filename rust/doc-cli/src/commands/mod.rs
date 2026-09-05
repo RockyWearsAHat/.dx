@@ -249,7 +249,7 @@ const COMMANDS: &[Command] = &[
     },
     Command {
         names: &["rename"],
-        flags: &[],
+        flags: &["review", "approve"],
         run: |args| rename::run(args).map(Output::Report),
     },
     // Reporting on dx itself.
