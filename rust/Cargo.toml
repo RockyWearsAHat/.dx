@@ -1,11 +1,11 @@
-[workspace]
+﻿[workspace]
 resolver = "2"
 members = ["doc-cli", "doc-core", "doc-run", "doc-shot", "doc-store", "doc-wasm"]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-license = "MIT"
+license = "PolyForm-Noncommercial-1.0.0"
 repository = "https://github.com/RockyWearsAHat/.dx"
 
 # Optimise the compiled artifacts: small, fast binaries and wasm.
