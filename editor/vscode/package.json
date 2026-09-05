@@ -4,7 +4,7 @@
   "description": "Open .dx documents as rendered pages, edit their source, and run the code inside them.",
   "version": "1.0.0",
   "publisher": "dx",
-  "license": "MIT",
+  "license": "PolyForm-Noncommercial-1.0.0",
   "engines": {
     "vscode": "^1.90.0"
   },
