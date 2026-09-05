@@ -26,7 +26,7 @@ use std::path::{Path, PathBuf};
 use doc_core::format::parse;
 use doc_core::model::Document;
 use doc_core::resolve::Resolver;
-use doc_core::source_index::{FileMetadata, SourceIndex};
+use doc_core::source_index::SourceIndex;
 use doc_store::{pack, stub, Stats, Store, StoreError, SyncReport};
 
 /// Markers that identify a workspace root, in the order they are trusted.
@@ -1084,11 +1084,7 @@ pub fn search(directory: &Path, query: &str, limit: usize) -> Result<Vec<Hit>, S
         build_source_corpus_from_index(directory, &index)
     } else {
         eprintln!("source index stale, rescanning");
-        let docs = source_corpus(directory);
-        // Collect the file paths to rebuild index for next time.
-        let source_paths: Vec<PathBuf> = docs.iter().map(|d| d.path.clone()).collect();
-        let _ = build_and_save_source_index(directory, &source_paths);
-        docs
+        source_corpus(directory)
     };
 
     documents.extend(source_docs);
