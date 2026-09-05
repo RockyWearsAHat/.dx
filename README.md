@@ -59,6 +59,8 @@ dx doctor    # what is installed, what is missing, and what is out of date
 
 ## First ten minutes
 
+### Create and view your first document
+
 ```bash
 mkdir /tmp/pad && cd /tmp/pad && git init -q .
 dx new notes.dx --title "First notes"
@@ -69,14 +71,292 @@ dx text notes.dx     # the document
 dx open notes.dx     # the rendered page, in your browser
 ```
 
-Then read the guide, which is itself a dx document in this repository:
+### Run your first code block
+
+Create a document with executable code:
+
+```bash
+cat > example.dx << 'EOF'
+::heading level=1
+My First Document
+::end
+
+::paragraph
+This document demonstrates running code in dx.
+::end
+
+::code lang=javascript
+console.log("Hello from dx!")
+const result = 2 + 3
+console.log("2 + 3 =", result)
+::end
+EOF
+
+dx run example.dx     # Execute the code block in a sandbox
+dx text example.dx    # View the document with output
+dx open example.dx    # View rendered in browser
+```
+
+### Verify shipped work
+
+Create a document that verifies files match their spec:
+
+```bash
+cat > verify-spec.dx << 'EOF'
+::heading level=1
+API Response Verification
+::end
+
+::paragraph
+This verify block ensures our API returns the expected format.
+::end
+
+::code id=api_spec lang=bash run reads=spec.json
+cat spec.json
+::end
+
+::code id=verify lang=bash run reads=response.json
+diff <(cat spec.json | jq -S .) <(cat response.json | jq -S .)
+echo "✓ Response matches specification"
+::end
+EOF
+
+# Run with dx run verify-spec.dx
+```
+
+### Edit content on a board
+
+```bash
+dx board         # Opens a visual node editor for your documents
+                 # Drag boxes, draw connections, edit inline
+                 # Saves directly to your .dx files
+```
+
+### Search across documents
+
+```bash
+dx search "how does error handling work?"        # Finds answers in docs and source
+dx search "CONFIG_" --type rust                  # Search source code by type
+dx search "pattern" examples/                    # Search in a specific folder
+```
+
+### Key commands
+
+| Command | What it does |
+|---------|------------|
+| `dx text <file>` | View document as text in terminal |
+| `dx open <file>` | Open rendered document in browser |
+| `dx render <file>` | Generate self-contained HTML |
+| `dx png <file>` | Capture as high-res PNG (2x scale) |
+| `dx run <file>` | Execute all code blocks in sandbox |
+| `dx run <file> --review` | Preview what would run before approving |
+| `dx set <file> <path> <value>` | Edit a block's attribute |
+| `dx board` | Visual node editor on the page |
+| `dx outline <file>` | List all blocks with IDs |
+| `dx search <query>` | Search documents and source |
+| `dx sync .` | Make directory a dx workspace |
+
+Read the full guide, which is itself a dx document in this repository:
 
 ```bash
 dx text examples/GETTING_STARTED.dx    # or: dx open examples/GETTING_STARTED.dx
 ```
 
-`dx help` lists every command. The ones you will use daily: `dx text`, `dx outline`,
-`dx render`, `dx png`, `dx run`, `dx set`, `dx ls`, `dx search`, `dx sync`.
+`dx help` lists every command with options.
+
+## Common Usage Patterns
+
+### Pattern 1: Document with Computed Output
+
+Create a document whose code blocks compute and store results:
+
+```dx
+::heading level=1
+Project Metrics Report
+::end
+
+::code id=fetch_metrics lang=python run=true
+import json
+metrics = {"requests": 42000, "p95_latency_ms": 125, "uptime": 99.95}
+print(json.dumps(metrics, indent=2))
+::end
+
+::code id=analyze lang=python run=true reads=metrics deps=numpy
+import json
+# This would parse the output above in a real scenario
+performance = {"score": 8.7, "trend": "improving"}
+print(f"Performance Score: {performance['score']}")
+::end
+```
+
+After running with `dx run`, the `::output` blocks below each code section contain the captured results. Commit these to git; they become part of your specification.
+
+### Pattern 2: Verification and Proof
+
+Hold shipped files to their documented spec:
+
+```dx
+::heading level=2
+API Contract Verification
+::end
+
+::code id=load_spec lang=bash run=true reads=api-spec.json
+cat api-spec.json | jq '.endpoints | length'
+::end
+
+::code id=verify lang=bash run=true reads=build/api.json
+# Verify our built API matches the spec
+jq -e '.version == "1.0"' build/api.json
+echo "✓ API version correct"
+::end
+```
+
+Run `dx run` to prove the spec holds. Every edit to your code invalidates the proof; re-run to prove the fix.
+
+### Pattern 3: Design on a Board
+
+Use visual planning alongside your documentation:
+
+```dx
+::board x=0 y=0 w=800 h=500
+node id=req x=50 y=50 w=120 h=40 "Client Request"
+node id=auth x=250 y=50 w=120 h=40 "Auth Service"
+node id=db x=450 y=50 w=120 h=40 "Database"
+edge from=req to=auth
+edge from=auth to=db
+::end
+```
+
+Click any node to edit. Drag boxes and edges to rearrange. Your visual design and the live code stay in sync.
+
+### Pattern 4: Multi-Language Workflow
+
+Use different languages in the same document:
+
+```dx
+::code id=setup lang=bash run=true
+npm install --save-dev jest
+echo "Dependencies installed"
+::end
+
+::code id=test lang=bash run=true reads=*.test.js
+npm test 2>&1 | head -20
+::end
+
+::code id=summary lang=python run=true reads=package.json
+import json
+with open("package.json") as f:
+    pkg = json.load(f)
+print(f"Project: {pkg.get('name', 'unnamed')}")
+print(f"Version: {pkg.get('version', '0.0.0')}")
+::end
+```
+
+### Pattern 5: Iterate with Verify Blocks
+
+Structure your document to build, then prove:
+
+```dx
+::heading level=1
+Build and Proof
+::end
+
+::code id=build lang=bash run=true writes=bin
+cargo build --release 2>&1 | grep -E 'Compiling|Finished'
+::end
+
+::code id=verify lang=bash run=true reads=bin/myapp
+# This runs after build and reads the output
+./bin/myapp --version
+echo "✓ Binary built successfully"
+::end
+```
+
+Change the code, run `dx run`, and the proof auto-updates. A stale proof means the code changed.
+
+### Pattern 6: Documentation That Stays Correct
+
+Write guides that verify themselves:
+
+```dx
+::heading level=2
+Installation Steps
+
+To install, run:
+
+::code lang=bash
+./install.sh
+::end
+
+Verify installation:
+
+::code id=verify_install lang=bash run=true
+which myapp || echo "Installation failed"
+myapp --help | head -3
+::end
+
+If the command succeeds, installation worked.
+::end
+```
+
+Run `dx run` before committing documentation. Stale output in the docs is a visible error.
+
+## Advanced Features
+
+### Sandbox Permissions
+
+Control what each code block can read and write:
+
+```dx
+::code lang=bash run=true reads=config.json writes=build
+# reads= specifies paths this block can open
+# writes= specifies directories it can write to
+# Network is never permitted during run
+cat config.json
+mkdir -p build
+cp config.json build/config.json
+::end
+```
+
+### Dependencies in Setup
+
+Declare dependencies that install once per document, then run offline:
+
+```dx
+::code id=setup lang=python run=true
+pip install pandas numpy scipy
+print("Dependencies ready")
+::end
+
+::code id=analyze lang=python run=true
+import pandas
+import numpy
+# Network is OFF during run — all deps came from setup
+result = numpy.mean([1, 2, 3, 4, 5])
+print(f"Mean: {result}")
+::end
+```
+
+### Approval and Review
+
+Approve code before it runs:
+
+```bash
+dx run document.dx --review    # Preview what would run
+dx run document.dx --approve   # Record approval, then run
+```
+
+A local edit is automatically approved as you save. A document that arrives from elsewhere waits for review.
+
+## Real-World Examples
+
+The `examples/` directory contains complete, working documents:
+
+- **`examples/showcase.dx`** — Working code with captured output and charts
+- **`examples/GETTING_STARTED.dx`** — Full tutorial with figures
+- **`examples/example_site_plan.dx`** — Design a site, ship it from one board
+- **`examples/tutorial.dx`** — Learn the format hands-on
+- **`examples/route-economics.dx`** — Measure your docs' token cost
 
 ## The documentation is dx documents
 
