@@ -2461,6 +2461,7 @@ if exist OPERATOR_MARKER (
         let _env = crate::env_lock();
         let _no_selfhost = NoSelfhost::new();
         let root = scratch("cli-setup-ssh-fallback-e2e");
+        let root_canonical = workspace::workspace_root(&root);
         std::env::set_var("DX_SUBSCRIPTIONS_FILE", root.join("subscriptions.json"));
         std::env::set_var("DX_REPORT_TOKEN_FILE", root.join("token"));
 
@@ -2485,7 +2486,7 @@ if exist OPERATOR_MARKER (
         );
 
         // Verify the subscription was created
-        let sub = intake::subscription_for(&root)
+        let sub = intake::subscription_for(&root_canonical)
             .expect("read subscriptions")
             .expect("subscription exists after SSH fallback");
         assert_eq!(sub.endpoint, "https://example.invalid/report");
