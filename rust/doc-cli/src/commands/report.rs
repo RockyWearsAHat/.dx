@@ -266,6 +266,59 @@ fn parse_scoped_token(stdout: &str) -> (String, bool) {
 /// attempts to claim the token via SSH on the remote host. If the local command runs but is
 /// refused, returns that refusal without trying SSH.
 fn try_claim_scoped_token(project: &str) -> ScopedToken {
+    // On Windows, Command::new() doesn't search PATH for .bat files like the shell does.
+    // We need to explicitly try the .bat extension if available.
+    #[cfg(windows)]
+    {
+        use std::env;
+        // On Windows, try to find selfhost.bat in PATH
+        if let Ok(path_var) = env::var("PATH") {
+            for path_dir in env::split_paths(&path_var) {
+                let potential_bat = path_dir.join("selfhost.bat");
+                if potential_bat.exists() {
+                    let mut command = std::process::Command::new(&potential_bat);
+                    command
+                        .arg("reports")
+                        .arg("project")
+                        .arg("add")
+                        .arg(project);
+                    if let Ok(dir) = env::var("DX_SELFHOST_DIR") {
+                        if !dir.is_empty() {
+                            command.current_dir(dir);
+                        }
+                    }
+                    if let Ok(output) = command.output() {
+                        if output.status.success() {
+                            let (token, valid) = parse_scoped_token(&String::from_utf8_lossy(&output.stdout));
+                            if valid {
+                                return ScopedToken::Claimed(token);
+                            } else {
+                                return ScopedToken::Refused(format!(
+                                    "`selfhost reports project add {project}` exited successfully but printed no \
+                                     usable reader token"
+                                ));
+                            }
+                        } else {
+                            let stderr = String::from_utf8_lossy(&output.stderr);
+                            let stdout = String::from_utf8_lossy(&output.stdout);
+                            let combined = format!("{}\n{}", stderr, stdout);
+                            let reason = combined
+                                .lines()
+                                .find(|line| !line.trim().is_empty())
+                                .unwrap_or("no diagnostic from selfhost")
+                                .trim();
+                            return ScopedToken::Refused(format!(
+                                "`selfhost reports project add {project}` exited with {}: {reason}",
+                                output.status
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Try regular selfhost command (works on Unix, and on Windows if in PATH with extension)
     let mut command = std::process::Command::new("selfhost");
     command
         .arg("reports")
@@ -1107,6 +1160,9 @@ mod tests {
     impl FakeSelfhost {
         fn install(bin_dir: &Path, script: &str) -> Self {
             std::fs::create_dir_all(bin_dir).expect("bin dir");
+            #[cfg(windows)]
+            let selfhost_path = bin_dir.join("selfhost.bat");
+            #[cfg(unix)]
             let selfhost_path = bin_dir.join("selfhost");
             std::fs::write(&selfhost_path, script).expect("write fake selfhost");
             #[cfg(unix)]
@@ -2267,6 +2323,7 @@ mod tests {
     /// A fake `selfhost` that refuses unless run with a specific directory as its cwd —
     /// standing in for the real `selfhost`'s upward walk from cwd to find its config, which
     /// fails off the one machine tree that config happens to live in.
+    #[cfg(unix)]
     const FAKE_SELFHOST_CWD_GATED: &str = r#"#!/bin/sh
 if [ -f ./OPERATOR_MARKER ]; then
   echo 'reader token: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
@@ -2275,6 +2332,18 @@ else
   echo 'refused: no project `dx-report-mock-verify` on this box' 1>&2
   exit 1
 fi
+"#;
+
+    #[cfg(windows)]
+    const FAKE_SELFHOST_CWD_GATED: &str = r#"@echo off
+setlocal
+if exist OPERATOR_MARKER (
+  echo reader token: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+  exit /b 0
+) else (
+  echo refused: no project `dx-report-mock-verify` on this box
+  exit /b 1
+)
 "#;
 
     #[test]
@@ -2326,6 +2395,7 @@ fi
         let _env = crate::env_lock();
         let bin_dir = scratch("fake-selfhost-bin-found");
         let _fake_selfhost = FakeSelfhost::install(&bin_dir, FAKE_SELFHOST_CWD_GATED);
+
 
         // The operator's own project directory — distinct from both the test process's cwd
         // and the repo being set up, exactly as `~/Desktop/Self-Host` is distinct from
