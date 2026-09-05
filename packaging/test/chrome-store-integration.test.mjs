@@ -11,7 +11,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execSync } from 'node:child_process';
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, statSync, unlinkSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -33,7 +33,8 @@ class MockChromeWebStore {
       throw new Error(`Archive not found: ${zipPath}`);
     }
 
-    const uploadSize = execSync(`wc -c < "${zipPath}"`, { encoding: 'utf8' }).trim();
+    const stats = statSync(zipPath);
+    const uploadSize = stats.size.toString();
     console.log(`  [Mock Store] Received upload: ${zipPath} (${uploadSize} bytes)`);
 
     return {
@@ -102,8 +103,8 @@ test('Chrome Web Store: End-to-end integration workflow', async (t) => {
     await t.test('1. Archive validation', (t) => {
       assert.ok(existsSync(archivePath), 'Archive exists');
 
-      const size = execSync(`wc -c < "${archivePath}"`, { encoding: 'utf8' });
-      const sizeKb = Math.round(parseInt(size) / 1024);
+      const stats = statSync(archivePath);
+      const sizeKb = Math.round(stats.size / 1024);
       console.log(`  Archive size: ${sizeKb} KB`);
       assert.ok(sizeKb > 100, 'Archive is reasonable size (>100 KB)');
     });
@@ -245,7 +246,7 @@ test('Chrome Web Store: End-to-end integration workflow', async (t) => {
   } finally {
     // Clean up temp file
     if (existsSync(testExtensionRs)) {
-      execSync(`rm -f "${testExtensionRs}"`);
+      unlinkSync(testExtensionRs);
     }
   }
 });
