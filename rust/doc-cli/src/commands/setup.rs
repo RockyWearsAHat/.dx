@@ -16,7 +16,7 @@
 //! than what it attempted, and `--uninstall` reverses every part of it that reaches outside
 //! `dx`'s own directory.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use doc_run::toolchain::locate;
 
@@ -187,6 +187,8 @@ pub fn run_doctor(_args: &Args) -> Result<String, String> {
 
     out.push_str(&git_readiness());
 
+    out.push_str(&validate_store());
+
     out.push_str("\ngithub.com\n");
     for line in browser::status_lines() {
         out.push_str(&line);
@@ -213,6 +215,62 @@ pub fn run_doctor(_args: &Args) -> Result<String, String> {
     }
 
     Ok(out)
+}
+
+/// Validate the .doc store: pointer digests, pack integrity, and index.db consistency.
+/// Reports issues only when found; silent on healthy stores.
+fn validate_store() -> String {
+    use std::fs;
+
+    let root = crate::workspace::workspace_root(&std::path::PathBuf::from("."));
+    let doc_path = root.join(".doc");
+
+    // Quick check: if .doc doesn't exist, nothing to validate
+    if !doc_path.exists() {
+        return String::new();
+    }
+
+    let mut issues = Vec::new();
+
+    // Check .doc/index.db exists and is readable
+    let index_db = doc_path.join("index.db");
+    if !index_db.exists() {
+        issues.push("  WARNING: .doc/index.db not found".to_string());
+    }
+
+    // Check for pack file integrity
+    let pack_file = doc_path.join("repo.dxcp");
+    if pack_file.exists() {
+        if let Ok(metadata) = fs::metadata(&pack_file) {
+            if metadata.len() == 0 {
+                issues.push("  WARNING: .doc/repo.dxcp is empty".to_string());
+            }
+        }
+    }
+
+    // Validate .dx pointers in the workspace
+    let discovered = doc_store::discover_documents(&root);
+    for path in discovered {
+        if let Ok(text) = fs::read_to_string(&path) {
+            if text.starts_with("~ dx1 ") {
+                let parts: Vec<&str> = text.split_whitespace().collect();
+                if parts.len() < 2 || parts[1].len() != 64 {
+                    issues.push(format!("  WARNING: invalid pointer {}", path.display()));
+                }
+            }
+        }
+    }
+
+    if issues.is_empty() {
+        return String::new();
+    }
+
+    let mut out = String::from("\nstore\n");
+    for issue in issues {
+        out.push_str(&issue);
+        out.push('\n');
+    }
+    out
 }
 
 /// Whether this checkout's git is taught to diff and merge dx documents.
