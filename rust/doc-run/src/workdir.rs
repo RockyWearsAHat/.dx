@@ -102,7 +102,12 @@ fn write_file(directory: &Path, name: &str, contents: &str) -> Result<(), String
         fs::create_dir_all(parent)
             .map_err(|error| format!("could not create {}: {error}", parent.display()))?;
     }
-    fs::write(&target, contents)
+    let normalized = if name.ends_with(".sh") {
+        contents.replace("\r\n", "\n")
+    } else {
+        contents.to_string()
+    };
+    fs::write(&target, normalized)
         .map_err(|error| format!("could not write {}: {error}", target.display()))
 }
 
