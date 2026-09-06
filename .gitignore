@@ -58,3 +58,6 @@ editor/github/wasm/*.d.ts
 .doc/index.db-shm
 .doc/coverage.jsonl
 .doc/local.dxcp
+*.rej
+*.rej.rej
+*.orig
