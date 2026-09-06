@@ -526,12 +526,17 @@ fn bubblewrap(spec: &CommandSpec, grant: &Grant) -> Result<CommandSpec, String> 
 /// Apple's toolchain (xcrun, cc) resolves the temp directory via confstr(_CS_DARWIN_USER_TEMP_DIR)
 /// instead of $TMPDIR. This function retrieves that path so the sandbox can grant write access to it.
 #[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
 fn macos_temp_dir() -> Option<String> {
     use std::ffi::CStr;
 
     unsafe {
         let mut buf = [0u8; 1024];
-        let len = libc::confstr(libc::_CS_DARWIN_USER_TEMP_DIR, buf.as_mut_ptr() as *mut i8, buf.len());
+        let len = libc::confstr(
+            libc::_CS_DARWIN_USER_TEMP_DIR,
+            buf.as_mut_ptr() as *mut i8,
+            buf.len(),
+        );
         if len > 0 && len <= buf.len() {
             CStr::from_bytes_until_nul(&buf[..len])
                 .ok()
@@ -547,12 +552,17 @@ fn macos_temp_dir() -> Option<String> {
 ///
 /// Apple's toolchain caches build artifacts and other data in this directory.
 #[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
 fn macos_cache_dir() -> Option<String> {
     use std::ffi::CStr;
 
     unsafe {
         let mut buf = [0u8; 1024];
-        let len = libc::confstr(libc::_CS_DARWIN_USER_CACHE_DIR, buf.as_mut_ptr() as *mut i8, buf.len());
+        let len = libc::confstr(
+            libc::_CS_DARWIN_USER_CACHE_DIR,
+            buf.as_mut_ptr() as *mut i8,
+            buf.len(),
+        );
         if len > 0 && len <= buf.len() {
             CStr::from_bytes_until_nul(&buf[..len])
                 .ok()
