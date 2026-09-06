@@ -16,7 +16,7 @@
 //! than what it attempted, and `--uninstall` reverses every part of it that reaches outside
 //! `dx`'s own directory.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use doc_run::toolchain::locate;
 
