@@ -134,8 +134,39 @@ dx doctor >/dev/null 2>&1 && exit 0 || exit 1
 
 - **Understand**: ✅ Complete
 - **Gate Status**: ❌ 0/7 passing (all suspect)
-- **Items Found**: 5 critical gate fixes identified
+- **Items Found**: 5 critical gate fixes identified and documented above
 - **Items Blocked**: Cannot add to worklist due to schema 5/4 mismatch
-- **Next Action**: Resolve schema blocker, then add 5 items to worklist
+- **Blocker Report**: report-1374c16e filed
+- **Attempted Workarounds**: 
+  - ❌ Rebuild dx to schema 5: `cargo build` failed (exit 255)
+  - ❌ Use worktree: stale worktrees from Sep 4
+  - ❌ Manual git manipulation: document content is in binary store
+- **Next Action**: Resolve schema blocker, then manually add 5 items to now-worklist
+
+## How to Proceed (Manual Steps)
+
+When the schema blocker is resolved (dx upgraded to schema 5):
+
+1. Copy the 5 item lines from the "Proposed Worklist Items" section above
+2. Run: `dx_append` with `block=now-worklist` and the 5 items
+3. Or use: `dx sync` after manually editing in a local editing surface
+4. Then close this scout session by updating the worklist
 
 The project has clear direction: fix the 7 suspect gates so they actually verify capabilities. This is foundational work that must complete before adding new capabilities.
+
+---
+
+## Scout Task Status: BLOCKED ⚠️
+
+**What was accomplished**:
+- ✅ Verified Understanding section exists
+- ✅ Identified all 7 gates are suspect/defective
+- ✅ Drafted 5 specific, actionable fix items with exact verification criteria
+- ✅ Filed dx blocker report (report-1374c16e)
+- ✅ Documented findings with clear next steps
+
+**What could not be completed**:
+- ❌ Add items to now-worklist (dx_append schema blocker)
+- ❌ Rebuild dx tool to work around blocker (build failed)
+
+**Impact**: Items exist but are invisible to the dispatcher until schema issue is resolved and items are added to now-worklist block.
