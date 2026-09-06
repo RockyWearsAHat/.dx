@@ -1,0 +1,46 @@
+﻿CAPABILITY GATE VERIFICATION RESULTS
+====================================
+
+Sub-item 1: cap-dx-render [PASS]
+- Command: dx render examples/showcase.dx --out /tmp/showcase.html
+- Result: Successfully rendered 24,551 bytes HTML file
+- Status: Gate verified - dx rendering pipeline works
+
+Sub-item 2: cap-dx-run [BLOCKED]
+- Issue: bash not found in PATH - shell code blocks cannot execute
+- Blocker: Windows environment requires bash/Git Bash on PATH
+- Status: Gate blocked - requires environment configuration
+- Fixture: tests/fixtures/cap-run.dx exists and is ready
+- Next: Run on Unix-like system or install Git Bash
+
+Sub-item 3: cap-vscode [FAIL]
+- Missing: editor/wasm/doc_wasm.js (wasm artifact)
+- Status: Found: editor/surface/edit.js (✓)
+- Action needed: Run ./editor/build.sh to compile wasm
+- Blocker: build.sh requires bash
+- Status: Gate failed - wasm not built
+
+Sub-item 4: cap-archives [PASS]
+- Files found: packaging/signed/dx-chrome.zip (247,594 bytes)
+- Files found: packaging/signed/dx-firefox.xpi (247,656 bytes)
+- Validation: Both have valid ZIP magic bytes (PK)
+- Status: Gate verified - archives valid
+
+SUMMARY
+=======
+2 gates pass (cap-dx-render, cap-archives)
+1 gate fails (cap-vscode)
+1 gate blocked (cap-dx-run)
+
+ENVIRONMENT BLOCKERS
+====================
+- bash/sh not on PATH - prevents code execution in dx blocks
+- Impact: Cannot build wasm, cannot run dev.dx gates
+
+NEXT ACTIONS
+============
+1. Install Git Bash or MSYS2 bash to unblock environment
+2. Add bash to PATH
+3. Re-run gate verifications once bash available
+4. Build wasm with ./editor/build.sh
+5. Re-run cap-dx-run tests
