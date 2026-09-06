@@ -49,6 +49,7 @@
 //! database says is left byte-for-byte alone, so a sync that has nothing to add writes
 //! nothing and git sees no change.
 
+use std::io::Read;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
