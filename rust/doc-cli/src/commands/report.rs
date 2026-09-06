@@ -289,7 +289,8 @@ fn try_claim_scoped_token(project: &str) -> ScopedToken {
                     }
                     if let Ok(output) = command.output() {
                         if output.status.success() {
-                            let (token, valid) = parse_scoped_token(&String::from_utf8_lossy(&output.stdout));
+                            let (token, valid) =
+                                parse_scoped_token(&String::from_utf8_lossy(&output.stdout));
                             if valid {
                                 return ScopedToken::Claimed(token);
                             } else {
@@ -530,7 +531,7 @@ fn setup(args: &Args) -> Result<String, String> {
         ScopedToken::NoOperator => {
             out.push_str(
                 "no operator available (set DX_SELFHOST_DIR for local operator or \
-                 DX_SELFHOST_HOST for SSH access) — falling back to machine-wide subscription\n"
+                 DX_SELFHOST_HOST for SSH access) — falling back to machine-wide subscription\n",
             );
             fallback_to_stated_or_adopted_token(args, &endpoint, &mut out)?;
         }
@@ -762,9 +763,9 @@ fn execute_ssh_command(host: &str, command: &str) -> Result<String, String> {
     let mut cmd = std::process::Command::new("ssh");
     cmd.arg(host).arg(command);
 
-    let output = cmd.output().map_err(|e| {
-        format!("SSH connection to {host} failed: {e}")
-    })?;
+    let output = cmd
+        .output()
+        .map_err(|e| format!("SSH connection to {host} failed: {e}"))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -2402,7 +2403,6 @@ if exist OPERATOR_MARKER (
         let bin_dir = scratch("fake-selfhost-bin-found");
         let _fake_selfhost = FakeSelfhost::install(&bin_dir, FAKE_SELFHOST_CWD_GATED);
 
-
         // The operator's own project directory — distinct from both the test process's cwd
         // and the repo being set up, exactly as `~/Desktop/Self-Host` is distinct from
         // whatever repo `dx report setup` runs from.
@@ -2547,11 +2547,15 @@ if exist OPERATOR_MARKER (
     fn read_admin_token_via_ssh_parses_token_correctly() {
         // Test the token parsing logic by directly calling parse_scoped_token
         // with the format that SSH command execution would return.
-        let valid_token_output = "reader token: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let valid_token_output =
+            "reader token: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
         let (token, valid) = parse_scoped_token(valid_token_output);
 
         assert!(valid, "valid token should be detected");
-        assert_eq!(token, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
+        assert_eq!(
+            token,
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        );
         assert_eq!(token.len(), 64, "token should be 64 hex characters");
     }
 
@@ -2559,15 +2563,19 @@ if exist OPERATOR_MARKER (
     fn read_admin_token_via_ssh_detects_invalid_token() {
         // Test that invalid token formats are rejected
         let invalid_outputs = vec![
-            "reader token: ",  // empty token
-            "reader token: 0123456789abcdef",  // too short
-            "reader token: xyz",  // non-hex
-            "something else",  // no token line
+            "reader token: ",                 // empty token
+            "reader token: 0123456789abcdef", // too short
+            "reader token: xyz",              // non-hex
+            "something else",                 // no token line
         ];
 
         for output in invalid_outputs {
             let (_, valid) = parse_scoped_token(output);
-            assert!(!valid, "invalid output should not be detected as valid token: {}", output);
+            assert!(
+                !valid,
+                "invalid output should not be detected as valid token: {}",
+                output
+            );
         }
     }
 }

@@ -1,4 +1,4 @@
-﻿//! Index over source file paths and content, tracking staleness via file metadata.
+//! Index over source file paths and content, tracking staleness via file metadata.
 //!
 //! Provides an in-memory index of source files that can be queried by token, and tracks
 //! staleness by monitoring file modification times and content hashes. Designed for
@@ -46,9 +46,7 @@ impl SourceIndex {
     /// modification time and content hash are stored to later detect staleness.
     ///
     /// Returns an error if tokenization fails (e.g., invalid UTF-8).
-    pub fn build_from(
-        files: Vec<(FileMetadata, String)>,
-    ) -> Result<SourceIndex, String> {
+    pub fn build_from(files: Vec<(FileMetadata, String)>) -> Result<SourceIndex, String> {
         let mut index = SourceIndex::new();
 
         for (metadata, content) in files {

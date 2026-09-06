@@ -2147,8 +2147,14 @@ mod tests {
 
         // Verify the content
         let content = fs::read_to_string(&source_index_path).expect("read file");
-        assert!(content.contains("src/main.rs"), "should contain first file path");
-        assert!(content.contains("src/lib.rs"), "should contain second file path");
+        assert!(
+            content.contains("src/main.rs"),
+            "should contain first file path"
+        );
+        assert!(
+            content.contains("src/lib.rs"),
+            "should contain second file path"
+        );
         assert!(content.contains("fn"), "should contain first token");
         assert!(content.contains("struct"), "should contain second token");
         assert!(content.contains("impl"), "should contain third token");
@@ -2175,5 +2181,4 @@ mod tests {
             "source_index file should be removed when empty"
         );
     }
-
 }

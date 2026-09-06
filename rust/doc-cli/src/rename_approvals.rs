@@ -100,7 +100,9 @@ mod tests {
     #[test]
     fn approval_rejects_malformed_fingerprints() {
         let ledger = RenameLedger::at(&scratch("malformed"));
-        let err = ledger.approve("NOT-HEX").expect_err("should reject uppercase");
+        let err = ledger
+            .approve("NOT-HEX")
+            .expect_err("should reject uppercase");
         assert!(err.contains("not a rename fingerprint"));
     }
 

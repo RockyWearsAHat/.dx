@@ -204,7 +204,10 @@ fn build_and_write_source_index(root: &Path) -> Result<(), String> {
         .map_err(|e| format!("failed to write source index: {e}"))?;
 
     let elapsed = start.elapsed().as_millis();
-    eprintln!("source index built in {} ms for {} files", elapsed, file_count);
+    eprintln!(
+        "source index built in {} ms for {} files",
+        elapsed, file_count
+    );
 
     Ok(())
 }
@@ -222,8 +225,7 @@ fn walk_directory(dir: &Path, root: &Path, files: &mut Vec<PathBuf>) -> Result<(
         .map_err(|e| format!("failed to read directory {}: {e}", dir.display()))?;
 
     for entry in entries {
-        let entry = entry
-            .map_err(|e| format!("failed to read entry in {}: {e}", dir.display()))?;
+        let entry = entry.map_err(|e| format!("failed to read entry in {}: {e}", dir.display()))?;
         let path = entry.path();
 
         if path.is_dir() {
@@ -1345,9 +1347,7 @@ mod tests {
             index_path.display()
         );
 
-        let index_size = std::fs::metadata(&index_path)
-            .expect("read metadata")
-            .len();
+        let index_size = std::fs::metadata(&index_path).expect("read metadata").len();
         assert!(index_size > 0, "source_index should have content");
     }
 }

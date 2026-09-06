@@ -105,7 +105,6 @@ pub(crate) fn export(store: &Store, loss: Loss) -> Result<(), StoreError> {
     Ok(())
 }
 
-
 /// Fail if any pack carries a document `keeping` does not, while its `.dx` file is still there.
 ///
 /// Both packs are checked against the *whole* store rather than pack by pack, because a

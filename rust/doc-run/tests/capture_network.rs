@@ -258,10 +258,6 @@ fn capture_localhost_allowed() {
     let run = report.runs.first().expect("one run");
 
     assert_eq!(run.status, "ok", "{}", run.output);
-    assert!(
-        run.output.contains("localhost works"),
-        "{}",
-        run.output
-    );
+    assert!(run.output.contains("localhost works"), "{}", run.output);
     assert!(root.join("out").join("shot.png").exists(), "{}", run.output);
 }

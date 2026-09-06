@@ -10,7 +10,7 @@ use std::fs;
 use std::path::Path;
 
 use crate::args::Args;
-use crate::commands::index::{collect_files, SKIPPED_DIRECTORIES, CODE_EXTENSIONS};
+use crate::commands::index::{collect_files, CODE_EXTENSIONS, SKIPPED_DIRECTORIES};
 use crate::rename_approvals::RenameLedger;
 use doc_core::trace::{trace, Trace};
 use doc_run::RunOptions;
@@ -59,10 +59,7 @@ pub fn run(args: &Args) -> Result<String, String> {
             "preview: rename `{}` to `{}`\n",
             preview.old_name, preview.new_name
         );
-        report.push_str(&format!(
-            "definitions: {}\n",
-            preview.definitions.len()
-        ));
+        report.push_str(&format!("definitions: {}\n", preview.definitions.len()));
         report.push_str(&format!("references: {}\n", preview.references.len()));
         report.push_str(&format!("total sites: {}\n", total_sites));
         report.push_str(&format!("fingerprint: {}\n", preview.fingerprint));
@@ -96,14 +93,8 @@ pub fn run(args: &Args) -> Result<String, String> {
 
     // Report what was renamed.
     let total_sites = preview.definitions.len() + preview.references.len();
-    let mut report = format!(
-        "renamed `{}` to `{}`\n",
-        preview.old_name, preview.new_name
-    );
-    report.push_str(&format!(
-        "definitions: {}\n",
-        preview.definitions.len()
-    ));
+    let mut report = format!("renamed `{}` to `{}`\n", preview.old_name, preview.new_name);
+    report.push_str(&format!("definitions: {}\n", preview.definitions.len()));
     report.push_str(&format!("references: {}\n", preview.references.len()));
     report.push_str(&format!("total sites: {}\n", total_sites));
 
@@ -113,11 +104,7 @@ pub fn run(args: &Args) -> Result<String, String> {
 /// `dx rename <old> <new>` — preview and validate a rename before writing.
 ///
 /// Returns a preview that can be written to disk only after approval.
-pub fn preview(
-    root: &Path,
-    old_name: &str,
-    new_name: &str,
-) -> Result<RenamePreview, String> {
+pub fn preview(root: &Path, old_name: &str, new_name: &str) -> Result<RenamePreview, String> {
     // Refuse if old and new are identical.
     if old_name == new_name {
         return Err(format!(
@@ -182,7 +169,8 @@ pub fn preview(
     let graph_digest = compute_graph_digest(&traced, old_name);
 
     // Compute the fingerprint for the approval ledger.
-    let fingerprint = compute_fingerprint(old_name, new_name, &definitions, &references, &graph_digest);
+    let fingerprint =
+        compute_fingerprint(old_name, new_name, &definitions, &references, &graph_digest);
 
     Ok(RenamePreview {
         old_name: old_name.to_string(),
@@ -197,8 +185,7 @@ pub fn preview(
 /// Check whether a path is in a skipped directory (generated or vendored).
 fn is_skipped_path(path: &str) -> bool {
     for skipped in SKIPPED_DIRECTORIES {
-        if path.contains(&format!("{}/", skipped)) || path.starts_with(&format!("{}/", skipped))
-        {
+        if path.contains(&format!("{}/", skipped)) || path.starts_with(&format!("{}/", skipped)) {
             return true;
         }
     }
@@ -209,14 +196,21 @@ fn is_skipped_path(path: &str) -> bool {
 /// All changes are applied atomically — if any file write fails, no files are modified.
 fn apply(preview: &RenamePreview, root: &Path) -> Result<(), String> {
     // Collect all sites that need to be updated.
-    let mut file_updates: std::collections::HashMap<String, Vec<usize>> = std::collections::HashMap::new();
+    let mut file_updates: std::collections::HashMap<String, Vec<usize>> =
+        std::collections::HashMap::new();
 
     for loc in &preview.definitions {
-        file_updates.entry(loc.file.clone()).or_insert_with(Vec::new).push(loc.line);
+        file_updates
+            .entry(loc.file.clone())
+            .or_insert_with(Vec::new)
+            .push(loc.line);
     }
 
     for loc in &preview.references {
-        file_updates.entry(loc.file.clone()).or_insert_with(Vec::new).push(loc.line);
+        file_updates
+            .entry(loc.file.clone())
+            .or_insert_with(Vec::new)
+            .push(loc.line);
     }
 
     // Read all files that need updating and prepare changes.
@@ -228,7 +222,12 @@ fn apply(preview: &RenamePreview, root: &Path) -> Result<(), String> {
         let content = fs::read_to_string(&full_path)
             .map_err(|e| format!("failed to read {}: {}", file_path, e))?;
 
-        let updated = apply_rename_to_file(&content, &preview.old_name, &preview.new_name, lines_to_update)?;
+        let updated = apply_rename_to_file(
+            &content,
+            &preview.old_name,
+            &preview.new_name,
+            lines_to_update,
+        )?;
         updates.push((file_path.clone(), updated));
     }
 
@@ -289,9 +288,11 @@ fn replace_identifier(line: &str, old_name: &str, new_name: &str) -> String {
             let after_pos = found_pos + old_name.len();
 
             // Check word boundary before.
-            let before_ok = found_pos == 0 || !is_identifier_char(line.chars().nth(found_pos - 1).unwrap_or(' '));
+            let before_ok = found_pos == 0
+                || !is_identifier_char(line.chars().nth(found_pos - 1).unwrap_or(' '));
             // Check word boundary after.
-            let after_ok = after_pos >= line.len() || !is_identifier_char(line.chars().nth(after_pos).unwrap_or(' '));
+            let after_ok = after_pos >= line.len()
+                || !is_identifier_char(line.chars().nth(after_pos).unwrap_or(' '));
 
             if before_ok && after_ok {
                 // Valid identifier boundary; replace it.
@@ -461,12 +462,14 @@ mod tests {
 
     #[test]
     fn rename_finds_definition_and_references() {
-        let ws = make_workspace("def-ref", &[
-            ("lib.rs", "fn process() { }\n"),
-            ("main.rs", "fn main() { process(); process(); }"),
-        ]);
-        let preview = preview(&ws, "process", "handle")
-            .expect("should succeed");
+        let ws = make_workspace(
+            "def-ref",
+            &[
+                ("lib.rs", "fn process() { }\n"),
+                ("main.rs", "fn main() { process(); process(); }"),
+            ],
+        );
+        let preview = preview(&ws, "process", "handle").expect("should succeed");
 
         assert_eq!(preview.old_name, "process");
         assert_eq!(preview.new_name, "handle");
@@ -484,31 +487,35 @@ mod tests {
         // not collected by collect_files(), so they never appear in trace results.
         // The is_skipped_path() check is a failsafe, but this test documents that
         // skipped directories are already excluded at the collection stage.
-        let _ws = make_workspace("skipped-def", &[
-            ("lib.rs", "fn run() {}\n"),
-        ]);
+        let _ws = make_workspace("skipped-def", &[("lib.rs", "fn run() {}\n")]);
     }
 
     #[test]
     fn rename_refuses_reference_in_skipped_path() {
-        let ws = make_workspace("skipped-ref", &[
-            ("lib.rs", "fn run() {}\n"),
-            // Files in skipped directories are never collected, so we can't
-            // create a reference there. The path validation is still important
-            // for when the repository structure might list such paths.
-            // For now, verify it accepts a rename when everything is in valid paths.
-            ("main.rs", "fn main() { run(); }"),
-        ]);
+        let ws = make_workspace(
+            "skipped-ref",
+            &[
+                ("lib.rs", "fn run() {}\n"),
+                // Files in skipped directories are never collected, so we can't
+                // create a reference there. The path validation is still important
+                // for when the repository structure might list such paths.
+                // For now, verify it accepts a rename when everything is in valid paths.
+                ("main.rs", "fn main() { run(); }"),
+            ],
+        );
         let preview = preview(&ws, "run", "execute").expect("should succeed");
         assert_eq!(preview.definitions.len(), 1);
     }
 
     #[test]
     fn apply_renames_files_correctly() {
-        let ws = make_workspace("apply-test", &[
-            ("lib.rs", "fn process() { }\n"),
-            ("main.rs", "fn main() { process(); process(); }"),
-        ]);
+        let ws = make_workspace(
+            "apply-test",
+            &[
+                ("lib.rs", "fn process() { }\n"),
+                ("main.rs", "fn main() { process(); process(); }"),
+            ],
+        );
         let preview = preview(&ws, "process", "handle").expect("should succeed");
         apply(&preview, &ws).expect("should apply");
 
@@ -523,9 +530,10 @@ mod tests {
 
     #[test]
     fn apply_respects_word_boundaries() {
-        let ws = make_workspace("word-boundary", &[
-            ("lib.rs", "fn process() { }\nfn process_data() { }"),
-        ]);
+        let ws = make_workspace(
+            "word-boundary",
+            &[("lib.rs", "fn process() { }\nfn process_data() { }")],
+        );
         let preview = preview(&ws, "process", "handle").expect("should succeed");
         apply(&preview, &ws).expect("should apply");
 
@@ -537,10 +545,13 @@ mod tests {
 
     #[test]
     fn rename_fingerprint_is_deterministic() {
-        let ws = make_workspace("fingerprint-det", &[
-            ("lib.rs", "fn process() { }\n"),
-            ("main.rs", "fn main() { process(); }"),
-        ]);
+        let ws = make_workspace(
+            "fingerprint-det",
+            &[
+                ("lib.rs", "fn process() { }\n"),
+                ("main.rs", "fn main() { process(); }"),
+            ],
+        );
         let preview1 = preview(&ws, "process", "handle").expect("should succeed");
         let preview2 = preview(&ws, "process", "handle").expect("should succeed");
         // Same preview should have the same fingerprint.
@@ -549,10 +560,13 @@ mod tests {
 
     #[test]
     fn rename_fingerprint_differs_for_different_old_names() {
-        let ws = make_workspace("fingerprint-diff-old", &[
-            ("lib.rs", "fn process() { }\nfn execute() { }\n"),
-            ("main.rs", "fn main() { process(); }"),
-        ]);
+        let ws = make_workspace(
+            "fingerprint-diff-old",
+            &[
+                ("lib.rs", "fn process() { }\nfn execute() { }\n"),
+                ("main.rs", "fn main() { process(); }"),
+            ],
+        );
         let preview1 = preview(&ws, "process", "handle").expect("should succeed");
         let preview2 = preview(&ws, "execute", "handle").expect("should succeed");
         // Different old names should have different fingerprints.
@@ -561,10 +575,13 @@ mod tests {
 
     #[test]
     fn rename_fingerprint_differs_for_different_new_names() {
-        let ws = make_workspace("fingerprint-diff-new", &[
-            ("lib.rs", "fn process() { }\n"),
-            ("main.rs", "fn main() { process(); }"),
-        ]);
+        let ws = make_workspace(
+            "fingerprint-diff-new",
+            &[
+                ("lib.rs", "fn process() { }\n"),
+                ("main.rs", "fn main() { process(); }"),
+            ],
+        );
         let preview1 = preview(&ws, "process", "handle").expect("should succeed");
         let preview2 = preview(&ws, "process", "execute").expect("should succeed");
         // Different new names should have different fingerprints.
@@ -575,10 +592,13 @@ mod tests {
     fn approval_workflow_integration() {
         use crate::rename_approvals::RenameLedger;
 
-        let ws = make_workspace("approval-workflow", &[
-            ("lib.rs", "fn process() { }\n"),
-            ("main.rs", "fn main() { process(); }"),
-        ]);
+        let ws = make_workspace(
+            "approval-workflow",
+            &[
+                ("lib.rs", "fn process() { }\n"),
+                ("main.rs", "fn main() { process(); }"),
+            ],
+        );
         let cache = std::env::temp_dir().join("dx-rename-approval-workflow-test");
         let _ = std::fs::remove_dir_all(&cache);
         std::fs::create_dir_all(&cache).expect("create cache");
@@ -590,7 +610,9 @@ mod tests {
         assert!(!ledger.is_approved(&preview.fingerprint));
 
         // Approve the rename.
-        ledger.approve(&preview.fingerprint).expect("should approve");
+        ledger
+            .approve(&preview.fingerprint)
+            .expect("should approve");
         assert!(ledger.is_approved(&preview.fingerprint));
 
         // After approval, apply should succeed.
