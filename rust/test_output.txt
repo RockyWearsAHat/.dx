@@ -1,0 +1,13 @@
+﻿cargo :     Blocking waiting for file lock on package cache
+At line:1 char:376
++ ... a\worktrees\wk-now-worklist-6-e246e149\rust"; cargo test 2>&1 | Tee-O ...
++                                                   ~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (    Blocking wa...n package cache:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+    Blocking waiting for file lock on package cache
+   Compiling libsqlite3-sys v0.30.1
+   Compiling doc-shot v0.1.0 (D:\SARA\Desktop\DOC\.sara\worktrees\wk-now-worklist-6-e246e149\rust\doc-shot)
+   Compiling doc-core v0.1.0 (D:\SARA\Desktop\DOC\.sara\worktrees\wk-now-worklist-6-e246e149\rust\doc-core)
+   Compiling serde_derive v1.0.228
+   Compiling wasm-bindgen-macro v0.2.125
