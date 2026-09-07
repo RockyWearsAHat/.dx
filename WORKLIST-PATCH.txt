@@ -1,0 +1,71 @@
+WORKLIST UPDATE PATCH
+====================
+
+This document specifies the changes needed to index.dx#now-worklist in the main project.
+
+CHANGE 1: Mark Original Failed Item as Complete
+================================================
+
+FIND:
+  [ ] [scout] Verify 4 capability gates (team dispatch failed: team-general-0 already dispatched)
+
+REPLACE WITH:
+  [x] [scout] Verify 4 capability gates (DECOMPOSED into 5 mechanical sub-items - see below)
+
+CHANGE 2: Add Decomposed Sub-Items After the Ticked Item
+=========================================================
+
+ADD the following 5 new lines to now-worklist immediately after the ticked item above:
+
+- [ ] [scout] [ask: charter-DOC] [cap: cap-doc-cli-build] Build Rust CLI to verify doc-cli binary compiles without errors; exact command: cd rust && cargo build -p doc-cli; exit 0 if build succeeds
+
+- [ ] [scout] [ask: charter-DOC] [cap: cap-dx-render] Render sample document to verify dx render produces valid HTML output; exact command: dx render examples/showcase.dx --out /tmp/test.html; exit 0 if HTML file created with size > 1KB
+
+- [ ] [scout] [ask: charter-DOC] [cap: cap-dx-run] Execute test document with code blocks in sandbox; exact command: dx run --review tests/fixtures/cap-run.dx; exit 0 if code executes and output recorded
+
+- [ ] [scout] [ask: charter-DOC] [cap: cap-vscode] Verify VS Code extension WASM artifact exists and is valid; exact command: test -f editor/wasm/doc_wasm.js && file editor/wasm/doc_wasm.js | grep -q "WebAssembly"; exit 0 if WASM valid
+
+- [ ] [scout] [ask: charter-DOC] [cap: cap-archives] Verify signed browser archives and doctor tool; exact commands: (1) test -f packaging/signed/dx-chrome.zip && file packaging/signed/dx-chrome.zip | grep -q "Zip", (2) dx version | grep -E '^[0-9]+\.[0-9]+\.[0-9]+', (3) dx doctor | grep -q "Status:"; exit 0 if all three pass
+
+VERIFICATION
+============
+
+After applying this patch to index.dx#now-worklist:
+
+1. Original failed dispatch item: now marked as [x] (complete, decomposed)
+2. Five new mechanical sub-items added: all marked as [ ] (open, ready for work)
+3. Each new item:
+   - References [scout] team
+   - Has ask: charter-DOC identifier
+   - References one or more capability gates (cap: ...)
+   - Contains exact command(s) to run
+   - Specifies verifiable outcome (exit 0 condition)
+   - Fits within 10-minute time budget
+4. Items are independent and can be processed in parallel
+5. Dispatch conflicts avoided by serializing into distinct capabilities
+
+IMPLEMENTATION NOTES
+====================
+
+Option A: Use dx_append MCP tool (if schema compatible)
+  Command: dx_append "D:\SARA\Desktop\DOC\index.dx" now-worklist
+  Format: Each line starting with "- [ ] [scout]" appended to block
+  Issue: Schema v5/v4 mismatch may cause compatibility issues
+
+Option B: Direct git/text editing (if schema issues prevent dx_append)
+  1. Locate the index.dx#now-worklist block in the document store
+  2. Find the original dispatch failure item
+  3. Mark it with [x]
+  4. Add the 5 new sub-items after it
+  5. Commit the changes
+
+RELATED DOCUMENTS
+=================
+
+- DECOMP-GATE-DISPATCH.md: Detailed decomposition with rationale
+- WORKLIST-DECOMPOSITION.txt: Worklist-formatted items
+- DECOMPOSITION-SUMMARY.md: Complete summary and status
+- Commit e77043f: Full decomposition with documentation
+- Commit af727b3: Decomposition summary
+
+STATUS: Ready for worklist integration ✅

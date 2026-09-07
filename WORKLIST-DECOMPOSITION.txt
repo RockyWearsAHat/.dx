@@ -1,0 +1,28 @@
+WORKLIST DECOMPOSITION - Failed Team Dispatch
+===============================================
+
+ORIGINAL FAILED ITEM (to be marked [x]):
+[x] [scout] Verify 4 capability gates (team dispatch failed: team-general-0 already dispatched)
+
+DECOMPOSED SUB-ITEMS (5 mechanical tasks for now-worklist):
+===============================================
+
+- [ ] [scout] [ask: charter-DOC] [cap: cap-doc-cli-build] Build Rust CLI to verify doc-cli binary compiles without errors; exact command: cd rust && cargo build -p doc-cli; exit 0 if build succeeds
+
+- [ ] [scout] [ask: charter-DOC] [cap: cap-dx-render] Render sample document to verify dx render produces valid HTML output; exact command: dx render examples/showcase.dx --out /tmp/test.html; exit 0 if HTML file created with size > 1KB
+
+- [ ] [scout] [ask: charter-DOC] [cap: cap-dx-run] Execute test document with code blocks in sandbox; exact command: dx run --review tests/fixtures/cap-run.dx; exit 0 if code executes and output recorded
+
+- [ ] [scout] [ask: charter-DOC] [cap: cap-vscode] Verify VS Code extension WASM artifact exists and is valid; exact command: test -f editor/wasm/doc_wasm.js && file editor/wasm/doc_wasm.js | grep -q "WebAssembly"; exit 0 if WASM valid
+
+- [ ] [scout] [ask: charter-DOC] [cap: cap-archives] Verify signed browser archives and doctor tool; exact commands: (1) test -f packaging/signed/dx-chrome.zip && file packaging/signed/dx-chrome.zip | grep -q "Zip", (2) dx version | grep -E '^[0-9]+\.[0-9]+\.[0-9]+', (3) dx doctor | grep -q "Status:"; exit 0 if all three pass
+
+RATIONALE:
+- Original dispatch failed because team was already handling the item
+- Decomposed into 5 independent, mechanical sub-items
+- Each item targets <10 minutes with specific file/command and verifiable exit code
+- Items can be processed in parallel without task conflicts
+- Prevents duplicate dispatch conflicts by serializing into distinct capabilities
+
+Each sub-item follows format:
+  - [ ] [scout] [ask: charter-DOC] [cap: <capability_id>] <description with exact command and verifiable outcome>
