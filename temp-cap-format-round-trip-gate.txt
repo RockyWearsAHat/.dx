@@ -1,0 +1,32 @@
+::code id=cap-format-round-trip run
+set -euo pipefail
+
+# Verify documents round-trip byte-for-byte through parse/stringify cycles.
+# This gate tests the core format contract: parse then stringify converges to
+# canonical form, and stringify is idempotent on already-canonical input.
+# See docs/dx-format-contract.dx for the authoritative spec.
+
+CARGO_BIN="$(type -ap cargo 2>/dev/null | grep "\.cargo/bin/cargo" | head -1)" \
+  || { echo "rustup cargo not found on PATH"; exit 1; }
+export CARGO_HOME="${CARGO_HOME:=$HOME/.cargo}"
+export RUSTUP_HOME="${RUSTUP_HOME:=$HOME/.rustup}"
+export PATH="${CARGO_BIN%/*}:$PATH"
+
+cd rust
+
+# Run the format round-trip test that compares canonical output against fixtures
+# The test verifies that parsing and stringifying documents yields byte-identical output
+output="$("$CARGO_BIN" test --lib real_documents_round_trip 2>&1)"
+if echo "$output" | grep -q "test format::tests::real_documents_round_trip_byte_identical.*ok" && \
+   echo "$output" | grep -q "test result: ok. 1 passed"; then
+  echo "ok - documents round-trip byte-for-byte through parse/stringify cycle"
+  exit 0
+else
+  echo "FAIL - format round-trip test failed"
+  exit 1
+fi
+::end
+
+::output id=cap-format-round-trip-output for=cap-format-round-trip status=ok
+ok - documents round-trip byte-for-byte through parse/stringify cycle
+::end
