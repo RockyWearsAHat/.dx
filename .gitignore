@@ -15,6 +15,11 @@
 # recorded it, and never meant to be shared or reviewed as a diff.
 /.doc/coverage.jsonl
 
+# Environment configuration files
+.env
+.env.local
+.env.*.local
+
 # Rust build output
 rust/target/
 

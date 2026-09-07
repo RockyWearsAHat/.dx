@@ -1,2 +1,21 @@
+# Enforce LF line endings for all text files to prevent CRLF issues on macOS/Linux
+* text=auto
+*.sh text eol=lf
+*.bash text eol=lf
+*.js text eol=lf
+*.ts text eol=lf
+*.tsx text eol=lf
+*.json text eol=lf
+*.toml text eol=lf
+*.md text eol=lf
 *.dx diff=dx merge=dx
 .doc/repo.dxcp diff=dx merge=dx
+*.rs text eol=lf
+*.css text eol=lf
+
+# Binary files
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.wasm binary
