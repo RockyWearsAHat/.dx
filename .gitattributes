@@ -8,8 +8,8 @@
 *.json text eol=lf
 *.toml text eol=lf
 *.md text eol=lf
-*.dx diff=dx merge=dx eol=lf
-.doc/repo.dxcp diff=dx merge=dx eol=lf
+*.dx diff=dx merge=dx
+.doc/repo.dxcp diff=dx merge=dx
 *.rs text eol=lf
 *.css text eol=lf
 
