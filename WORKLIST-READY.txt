@@ -1,0 +1,24 @@
+INTEGRATION READY: Decomposed gate dispatch sub-items
+
+To be added to index.dx#now-worklist after existing items:
+
+============ ADD THESE LINES TO WORKLIST ============
+
+- [x] [scout] [cap: gates-dispatch-v1] dispatch 7 gates to haiku workers — each gate replaces stub with single mechanical test
+- [ ] [scout] [ask: decomp-gates-1] [cap: cap-doc-cli-build] Replace stub with `cargo build -p doc-cli` check, verify exit 0
+- [ ] [scout] [ask: decomp-gates-2] [cap: cap-dx-render] Replace stub with `dx render index.dx` check, verify exit 0
+- [ ] [scout] [ask: decomp-gates-3] [cap: cap-dx-run] Replace stub with `dx run --review index.dx` check, verify exit 0
+- [ ] [scout] [ask: decomp-gates-4] [cap: cap-vscode] Replace stub with VS Code extension build check, verify exit 0
+- [ ] [scout] [ask: decomp-gates-5] [cap: cap-archives] Replace stub with packaging build check, verify exit 0
+
+==================================================
+
+BLOCKER: Schema v5/v4 mismatch prevents dx_append.
+RESOLUTION PATH: Once schema is fixed, use:
+  dx_append D:\SARA\Desktop\DOC\index.dx now-worklist < WORKLIST-READY.txt
+
+Each sub-item:
+  - Mechanical (single replace in dev.dx gate)
+  - Verifiable (exit code 0)
+  - Under 10 minutes
+  - Non-overlapping
