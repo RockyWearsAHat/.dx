@@ -1,0 +1,7 @@
+﻿cargo :    Compiling rusqlite v0.32.1
+At line:1 char:333
++ ... :\SARA\Desktop\DOC\rust"; cargo build --release --bin dx 2>&1 | Tee-O ...
++                               ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (   Compiling rusqlite v0.32.1:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
