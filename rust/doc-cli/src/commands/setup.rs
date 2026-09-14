@@ -974,163 +974,136 @@ EXAMPLE: A runnable block
 
 /// Register the drift hook in `~/.claude/settings.json`, returning whether anything changed.
 ///
-/// Adds an entry under `hooks.PostToolUse` to run `dx drift` on every Claude Code tool use,
-/// but only if no entry with a command ending in ` drift` exists. Idempotent: running twice
-/// changes nothing the second time.
+/// The entry runs `<binary> drift` after every `Bash` and `mcp__dx__*` tool use. An entry
+/// that already names this binary is left alone; one naming another path — a previous
+/// install, a build directory that moved — is replaced, because a hook pointing at a binary
+/// that is not there fails on every tool call and says nothing.
 fn register_drift_hook(binary: &Path) -> Result<bool, String> {
-    use serde_json::{json, Map, Value};
-
     let Some(home) = crate::home::home() else {
-        return Ok(false); // No home directory: silent no-op
+        return Ok(false);
     };
+    register_drift_hook_in(&home.join(".claude").join("settings.json"), binary)
+}
 
-    let config_path = home.join(".claude").join("settings.json");
+/// [`register_drift_hook`] against an explicit settings file.
+fn register_drift_hook_in(config_path: &Path, binary: &Path) -> Result<bool, String> {
+    use serde_json::json;
+
     let drift_command = format!("{} drift", binary.display());
-
-    // Check if already registered
-    if is_drift_hook_registered(&config_path) {
+    let mut config = read_settings(config_path)?;
+    let entries = post_tool_use(&mut config, config_path)?;
+    let already = entries
+        .iter()
+        .any(|entry| drift_commands(entry).any(|command| command == drift_command));
+    if already {
         return Ok(false);
     }
+    entries.retain(|entry| drift_commands(entry).next().is_none());
+    entries.push(json!({
+        "matcher": "Bash|mcp__dx__.*",
+        "hooks": [{ "type": "command", "command": drift_command }]
+    }));
+    write_settings(config_path, &config)?;
+    Ok(true)
+}
 
-    // Create parent directory
+/// Remove the drift hook from `~/.claude/settings.json`, returning whether one was there.
+fn unregister_drift_hook() -> Result<bool, String> {
+    let Some(home) = crate::home::home() else {
+        return Ok(false);
+    };
+    unregister_drift_hook_in(&home.join(".claude").join("settings.json"))
+}
+
+/// [`unregister_drift_hook`] against an explicit settings file. Only dx's own entries go;
+/// every other hook stays exactly as written.
+fn unregister_drift_hook_in(config_path: &Path) -> Result<bool, String> {
+    if !config_path.exists() {
+        return Ok(false);
+    }
+    let mut config = read_settings(config_path)?;
+    let entries = post_tool_use(&mut config, config_path)?;
+    let before = entries.len();
+    entries.retain(|entry| drift_commands(entry).next().is_none());
+    if entries.len() == before {
+        return Ok(false);
+    }
+    write_settings(config_path, &config)?;
+    Ok(true)
+}
+
+/// Whether a `dx drift` hook is registered in `config_path`, for `dx doctor`.
+fn is_drift_hook_registered(config_path: &Path) -> bool {
+    let Ok(mut config) = read_settings(config_path) else {
+        return false;
+    };
+    post_tool_use(&mut config, config_path)
+        .map(|entries| {
+            entries
+                .iter()
+                .any(|entry| drift_commands(entry).next().is_some())
+        })
+        .unwrap_or(false)
+}
+
+/// The `dx drift` commands one `PostToolUse` entry carries — normally none or one.
+fn drift_commands(entry: &serde_json::Value) -> impl Iterator<Item = &str> {
+    entry
+        .get("hooks")
+        .and_then(|hooks| hooks.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|hook| hook.get("command").and_then(|command| command.as_str()))
+        .filter(|command| *command == "dx drift" || command.ends_with("/dx drift"))
+}
+
+/// The settings file as JSON, or an empty object when it is missing or blank.
+fn read_settings(config_path: &Path) -> Result<serde_json::Value, String> {
+    let config = match std::fs::read_to_string(config_path) {
+        Ok(text) if !text.trim().is_empty() => serde_json::from_str(&text)
+            .map_err(|e| format!("{} is not valid JSON: {e}", config_path.display()))?,
+        _ => serde_json::Value::Object(serde_json::Map::new()),
+    };
+    if !config.is_object() {
+        return Err(format!("{} is not a JSON object", config_path.display()));
+    }
+    Ok(config)
+}
+
+/// The `hooks.PostToolUse` array inside `config`, created empty when absent.
+fn post_tool_use<'a>(
+    config: &'a mut serde_json::Value,
+    config_path: &Path,
+) -> Result<&'a mut Vec<serde_json::Value>, String> {
+    use serde_json::{Map, Value};
+    let root = config
+        .as_object_mut()
+        .ok_or_else(|| format!("{} is not a JSON object", config_path.display()))?;
+    let hooks = root
+        .entry("hooks".to_string())
+        .or_insert_with(|| Value::Object(Map::new()))
+        .as_object_mut()
+        .ok_or_else(|| format!("`hooks` in {} is not an object", config_path.display()))?;
+    hooks
+        .entry("PostToolUse".to_string())
+        .or_insert_with(|| Value::Array(Vec::new()))
+        .as_array_mut()
+        .ok_or_else(|| {
+            format!(
+                "`hooks.PostToolUse` in {} is not an array",
+                config_path.display()
+            )
+        })
+}
+
+/// Write `config` back, pretty-printed, creating the directory when needed.
+fn write_settings(config_path: &Path, config: &serde_json::Value) -> Result<(), String> {
     if let Some(parent) = config_path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("could not create {}: {e}", parent.display()))?;
     }
-
-    // Read or create config
-    let mut config = match std::fs::read_to_string(&config_path) {
-        Ok(text) if !text.trim().is_empty() => serde_json::from_str::<Value>(&text)
-            .map_err(|e| format!("{} is not valid JSON: {e}", config_path.display()))?,
-        _ => Value::Object(Map::new()),
-    };
-
-    if !config.is_object() {
-        return Err(format!("{} is not a JSON object", config_path.display()));
-    }
-
-    let root = config.as_object_mut().expect("checked object");
-    let hooks = root
-        .entry("hooks".to_string())
-        .or_insert_with(|| Value::Object(Map::new()));
-    let hooks = hooks
-        .as_object_mut()
-        .ok_or_else(|| format!("`hooks` in {} is not an object", config_path.display()))?;
-
-    let post_tool_use = hooks
-        .entry("PostToolUse".to_string())
-        .or_insert_with(|| Value::Array(Vec::new()));
-    let post_tool_use = post_tool_use.as_array_mut().ok_or_else(|| {
-        format!(
-            "`hooks.PostToolUse` in {} is not an array",
-            config_path.display()
-        )
-    })?;
-
-    // Add the drift hook entry
-    post_tool_use.push(json!({
-        "matcher": "Bash|mcp__dx__.*",
-        "hooks": [
-            {
-                "type": "command",
-                "command": drift_command,
-            }
-        ]
-    }));
-
-    // Write the config
-    crate::state::write_file(
-        &config_path,
-        format!(
-            "{}\n",
-            serde_json::to_string_pretty(&config).map_err(|e| e.to_string())?
-        )
-        .as_bytes(),
-    )?;
-
-    Ok(true)
-}
-
-/// Check if the drift hook is already registered in `~/.claude/settings.json`.
-fn is_drift_hook_registered(config_path: &Path) -> bool {
-    use serde_json::Value;
-
-    let Ok(text) = std::fs::read_to_string(config_path) else {
-        return false;
-    };
-    let Ok(config) = serde_json::from_str::<Value>(&text) else {
-        return false;
-    };
-
-    if let Some(hooks) = config.get("hooks").and_then(|h| h.get("PostToolUse")) {
-        if let Some(array) = hooks.as_array() {
-            for hook in array {
-                if let Some(hook_array) = hook.get("hooks").and_then(|h| h.as_array()) {
-                    for entry in hook_array {
-                        if let Some(command) = entry.get("command").and_then(|c| c.as_str()) {
-                            if command.ends_with(" drift") {
-                                return true;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-    false
-}
-
-/// Remove the drift hook from `~/.claude/settings.json`.
-fn unregister_drift_hook() -> Result<bool, String> {
-    use serde_json::Value;
-
-    let Some(home) = crate::home::home() else {
-        return Ok(false); // No home directory: silent no-op
-    };
-
-    let config_path = home.join(".claude").join("settings.json");
-
-    if !config_path.exists() {
-        return Ok(false);
-    }
-
-    let text = std::fs::read_to_string(&config_path)
-        .map_err(|e| format!("could not read {}: {e}", config_path.display()))?;
-    let mut config: Value = serde_json::from_str(&text)
-        .map_err(|e| format!("{} is not valid JSON: {e}", config_path.display()))?;
-
-    if let Some(hooks) = config
-        .get_mut("hooks")
-        .and_then(|h| h.get_mut("PostToolUse"))
-    {
-        if let Some(array) = hooks.as_array_mut() {
-            // Remove any hooks with a command ending in " drift"
-            array.retain(|hook| {
-                if let Some(hook_array) = hook.get("hooks").and_then(|h| h.as_array()) {
-                    !hook_array.iter().any(|entry| {
-                        entry
-                            .get("command")
-                            .and_then(|c| c.as_str())
-                            .map(|cmd| cmd.ends_with(" drift"))
-                            .unwrap_or(false)
-                    })
-                } else {
-                    true
-                }
-            });
-        }
-    }
-
-    crate::state::write_file(
-        &config_path,
-        format!(
-            "{}\n",
-            serde_json::to_string_pretty(&config).map_err(|e| e.to_string())?
-        )
-        .as_bytes(),
-    )?;
-
-    Ok(true)
+    let text = serde_json::to_string_pretty(config).map_err(|e| e.to_string())?;
+    crate::state::write_file(config_path, format!("{text}\n").as_bytes())
 }
 
 #[cfg(test)]
@@ -1297,39 +1270,75 @@ mod tests {
         assert_eq!(binary_name(), expected);
     }
 
-    #[test]
-    fn drift_hook_registration_does_not_panic() {
-        // Test that hook registration can be called without panicking.
-        // We can't fully test it without mocking the home directory, but we verify
-        // it returns a Result without crashing.
-        let result = register_drift_hook(std::path::Path::new("/usr/local/bin/dx"));
-        // Result may be Ok or Err depending on environment, but should not panic
-        let _ = result;
+    fn settings_scratch(label: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("dx-setup-tests-{label}"));
+        let _ = std::fs::remove_dir_all(&root);
+        root.join(".claude").join("settings.json")
+    }
+
+    fn drift_entries(path: &Path) -> Vec<String> {
+        let config: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(path).expect("settings")).expect("json");
+        config["hooks"]["PostToolUse"]
+            .as_array()
+            .expect("array")
+            .iter()
+            .flat_map(drift_commands)
+            .map(str::to_string)
+            .collect()
     }
 
     #[test]
-    fn drift_hook_is_checked_by_command_ending() {
-        // The hook is detected by checking if any command ends with " drift"
-        let commands = vec![
-            "/usr/local/bin/dx drift",
-            "/home/user/.local/bin/dx drift",
-            "dx drift",
-        ];
-        for cmd in commands {
-            assert!(
-                cmd.ends_with(" drift"),
-                "command '{}' should end with ' drift'",
-                cmd
-            );
-        }
+    fn the_drift_hook_names_this_binary_and_registers_once() {
+        let settings = settings_scratch("register");
+        let binary = Path::new("/opt/dx/bin/dx");
+        assert_eq!(register_drift_hook_in(&settings, binary), Ok(true));
+        assert_eq!(register_drift_hook_in(&settings, binary), Ok(false));
+        assert_eq!(drift_entries(&settings), vec!["/opt/dx/bin/dx drift"]);
+        assert!(is_drift_hook_registered(&settings));
     }
 
     #[test]
-    fn drift_hook_registers_with_correct_matcher() {
-        // The matcher should handle both Bash and mcp__dx__* patterns
-        let matcher = "Bash|mcp__dx__.*";
-        // Verify the pattern can match what we expect
-        assert!(matcher.contains("Bash"));
-        assert!(matcher.contains("mcp__dx__"));
+    fn a_hook_naming_another_binary_is_replaced_not_kept_beside_the_new_one() {
+        let settings = settings_scratch("replace");
+        register_drift_hook_in(&settings, Path::new("/usr/local/bin/dx")).expect("first");
+        assert_eq!(
+            register_drift_hook_in(&settings, Path::new("/home/me/.local/bin/dx")),
+            Ok(true)
+        );
+        assert_eq!(
+            drift_entries(&settings),
+            vec!["/home/me/.local/bin/dx drift"]
+        );
+    }
+
+    #[test]
+    fn unrelated_hooks_survive_registration_and_removal() {
+        let settings = settings_scratch("unrelated");
+        std::fs::create_dir_all(settings.parent().expect("parent")).expect("dir");
+        std::fs::write(
+            &settings,
+            r#"{"theme":"dark","hooks":{"PostToolUse":[{"matcher":"Write","hooks":[{"type":"command","command":"prettier --write"}]}],"Stop":[]}}"#,
+        )
+        .expect("write");
+        register_drift_hook_in(&settings, Path::new("/opt/dx/bin/dx")).expect("register");
+        assert_eq!(unregister_drift_hook_in(&settings), Ok(true));
+        assert_eq!(unregister_drift_hook_in(&settings), Ok(false));
+        let config: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&settings).expect("read")).expect("json");
+        assert_eq!(config["theme"], "dark");
+        assert_eq!(config["hooks"]["Stop"], serde_json::json!([]));
+        assert_eq!(
+            config["hooks"]["PostToolUse"][0]["hooks"][0]["command"],
+            "prettier --write"
+        );
+        assert_eq!(
+            config["hooks"]["PostToolUse"]
+                .as_array()
+                .expect("array")
+                .len(),
+            1
+        );
+        assert!(!is_drift_hook_registered(&settings));
     }
 }
