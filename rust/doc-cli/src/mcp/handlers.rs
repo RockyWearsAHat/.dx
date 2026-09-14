@@ -331,6 +331,74 @@ fn every_nth(indices: &[usize], count: usize) -> Vec<usize> {
         .collect()
 }
 
+/// Parse a line range string like "120-160" or "120" into (start, end) 1-indexed line numbers.
+///
+/// Returns `Err` with a user-facing message if the format is invalid.
+fn parse_line_range(lines_arg: &str) -> Result<(usize, usize), String> {
+    let trimmed = lines_arg.trim();
+    if let Some((start_str, end_str)) = trimmed.split_once('-') {
+        let start = start_str
+            .trim()
+            .parse::<usize>()
+            .map_err(|_| format!("invalid line range `{lines_arg}`: start is not a number"))?;
+        let end = end_str
+            .trim()
+            .parse::<usize>()
+            .map_err(|_| format!("invalid line range `{lines_arg}`: end is not a number"))?;
+        if start == 0 || end == 0 {
+            return Err(format!(
+                "invalid line range `{lines_arg}`: line numbers must be 1-indexed, not 0"
+            ));
+        }
+        if start > end {
+            return Err(format!(
+                "invalid line range `{lines_arg}`: start line {start} is after end line {end}"
+            ));
+        }
+        Ok((start, end))
+    } else {
+        let line = trimmed
+            .parse::<usize>()
+            .map_err(|_| format!("invalid line range `{lines_arg}`: not a number"))?;
+        if line == 0 {
+            return Err("line numbers must be 1-indexed, not 0".to_string());
+        }
+        Ok((line, line))
+    }
+}
+
+/// Extract specified lines from text, with 1-indexed line numbers as prefix.
+///
+/// `start_line` and `end_line` are 1-indexed and inclusive. Returns an error if the range
+/// is out of bounds, naming the file's actual line count.
+fn extract_lines_with_numbers(
+    text: &str,
+    start_line: usize,
+    end_line: usize,
+    path_for_error: &str,
+) -> Result<String, String> {
+    let lines: Vec<&str> = text.lines().collect();
+    let line_count = lines.len();
+
+    if start_line > line_count || end_line > line_count {
+        return Err(format!(
+            "line range {}-{} is out of bounds for `{}` ({} lines)",
+            start_line, end_line, path_for_error, line_count
+        ));
+    }
+
+    let mut result = String::new();
+    for (i, line) in lines[start_line - 1..=end_line - 1].iter().enumerate() {
+        let line_num = start_line + i;
+        result.push_str(&format!("{}: {}\n", line_num, line));
+    }
+    // Remove trailing newline if present
+    if result.ends_with('\n') {
+        result.pop();
+    }
+    Ok(result)
+}
+
 /// `dx_source` — the document's exact text, for quoting and editing.
 ///
 /// A text read is live too: the same refresh `dx_read` performs runs first, so the
@@ -346,6 +414,36 @@ fn source_in(args: &Value, root: &Path, cache_root: &Path) -> ToolResult {
     // a conflict has no other window onto the file — and what it needs is the marker lines
     // exactly as git wrote them, not a parse that would invent blocks around them.
     let path = resolve(required(args, "path")?, root);
+
+    // If a line range was requested, handle it specially for both source files and documents
+    if let Some(lines_arg) = string(args, "lines") {
+        let (start_line, end_line) = parse_line_range(lines_arg)?;
+        let relative_path = path
+            .strip_prefix(root)
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|_| path.to_string_lossy().to_string());
+
+        // For .dx documents, get the canonical text; for source files, read directly
+        let full_text = if path.to_string_lossy().ends_with(".dx") {
+            // Read and parse the .dx document to get canonical text
+            let document = document_at(args, root)?;
+            text(
+                &document,
+                &TextOptions {
+                    include_ids: boolean(args, "ids"),
+                    ..TextOptions::default()
+                },
+            )
+        } else {
+            // Read source file directly
+            workspace::read(&path)?
+        };
+
+        let lines_text =
+            extract_lines_with_numbers(&full_text, start_line, end_line, &relative_path)?;
+        return Ok(vec![text_content(&lines_text)]);
+    }
+
     if let Some(conflicted) = workspace::half_merged_text(&path) {
         return Ok(vec![
             text_content(&workspace::half_merged(&path)),
@@ -1743,6 +1841,120 @@ mod tests {
         );
         assert!(body.contains("Install it first."));
         assert!(!body.contains("Then run it."));
+    }
+
+    #[test]
+    fn source_with_lines_on_a_document_returns_numbered_lines() {
+        let root = project("lines-doc");
+        // Use the standard guide.dx from the project() helper
+        // It has: "# Guide\n\n## Setup\n\nInstall it first.\n\n## Usage\n\nThen run it."
+
+        let body = text_of(
+            &call(
+                "dx_source",
+                &json!({ "path": "guide.dx", "lines": "1-3" }),
+                &root,
+            )
+            .expect("source with lines"),
+        );
+        // Should return lines 1-3 with line numbers
+        assert!(body.contains("1:"), "should have line 1 prefix: {body}");
+        assert!(body.contains("2:"), "should have line 2 prefix: {body}");
+        assert!(body.contains("3:"), "should have line 3 prefix: {body}");
+        // Should not have line 4
+        assert!(!body.contains("4:"), "should not include line 4: {body}");
+    }
+
+    #[test]
+    fn source_with_lines_on_a_source_file_returns_numbered_lines() {
+        let root = project("lines-source");
+        // Create a source file with multiple lines
+        std::fs::write(
+            root.join("example.rs"),
+            "fn main() {\n    println!(\"hello\");\n    println!(\"world\");\n}\n",
+        )
+        .expect("seed source file");
+
+        let body = text_of(
+            &call(
+                "dx_source",
+                &json!({ "path": "example.rs", "lines": "2-3" }),
+                &root,
+            )
+            .expect("source with lines"),
+        );
+        // Should return lines 2-3 with line numbers
+        assert!(body.contains("2:"), "should have line 2 prefix: {body}");
+        assert!(body.contains("3:"), "should have line 3 prefix: {body}");
+        assert!(
+            body.contains("println!(\"hello\")"),
+            "should contain line 2 content"
+        );
+        assert!(
+            body.contains("println!(\"world\")"),
+            "should contain line 3 content"
+        );
+        // Line 1 should not be included
+        assert!(!body.contains("1:"), "should not include line 1");
+    }
+
+    #[test]
+    fn source_with_single_line_range_returns_that_line() {
+        let root = project("lines-single");
+        std::fs::write(root.join("test.rs"), "line one\nline two\nline three\n").expect("seed");
+
+        let body = text_of(
+            &call(
+                "dx_source",
+                &json!({ "path": "test.rs", "lines": "2" }),
+                &root,
+            )
+            .expect("single line"),
+        );
+        assert!(
+            body.contains("2: line two"),
+            "should have line 2 only: {body}"
+        );
+        assert!(!body.contains("1:"), "should not include line 1");
+        assert!(!body.contains("3:"), "should not include line 3");
+    }
+
+    #[test]
+    fn source_with_out_of_range_lines_reports_file_line_count() {
+        let root = project("lines-oob");
+        std::fs::write(root.join("short.rs"), "line one\nline two\n").expect("seed");
+
+        let error = call(
+            "dx_source",
+            &json!({ "path": "short.rs", "lines": "5-10" }),
+            &root,
+        )
+        .expect_err("should fail on out of range");
+        assert!(
+            error.contains("line range"),
+            "should say range is out of bounds: {error}"
+        );
+        assert!(
+            error.contains("2 lines"),
+            "should report file has 2 lines: {error}"
+        );
+    }
+
+    #[test]
+    fn source_with_invalid_line_format_gives_helpful_error() {
+        let root = project("lines-bad");
+        std::fs::write(root.join("test.rs"), "content").expect("seed");
+
+        let error = call(
+            "dx_source",
+            &json!({ "path": "test.rs", "lines": "abc" }),
+            &root,
+        )
+        .expect_err("should fail on invalid format");
+        assert!(
+            error.contains("not a number"),
+            "should indicate parse error: {error}"
+        );
     }
 
     #[test]

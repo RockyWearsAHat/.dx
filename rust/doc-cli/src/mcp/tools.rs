@@ -205,15 +205,24 @@ fn source_tool() -> Value {
                         and code — a fraction of the tokens of dx_read's page images — and \
                         the exact characters, for quoting or preparing a dx_edit. Pass \
                         `section` (any block id) to read one part instead of the whole \
-                        document; set `ids` to true for the block ids dx_edit and section \
-                        selection need. The read is live: stale output of approved code is \
-                        refreshed first. Reach for dx_read only when the page carries what \
-                        text cannot: boards, diagrams, charts, layout.",
+                        document; pass `lines` to read a range of lines by number (e.g. \
+                        \"120-160\" or \"120\"), which dx_search returns for source file hits. \
+                        Set `ids` to true for the block ids dx_edit and section selection need. \
+                        The read is live: stale output of approved code is refreshed first. \
+                        Reach for dx_read only when the page carries what text cannot: \
+                        boards, diagrams, charts, layout.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "path": path_property(),
                 "section": section_property(),
+                "lines": {
+                    "type": "string",
+                    "description": "Optional line range for source files or documents: \"120-160\" \
+                                    for lines 120-160 (inclusive), or \"120\" for line 120 only. \
+                                    Returns the lines prefixed with their 1-indexed line numbers. \
+                                    This is the format dx_search returns for source file hits."
+                },
                 "refresh": refresh_property(),
                 "ids": {
                     "type": "boolean",
