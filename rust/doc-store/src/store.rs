@@ -187,15 +187,17 @@ impl SyncReport {
     }
 }
 
-/// Whether the index at `root` was written by an older dx and would be rebuilt on open.
+/// Whether the index at `root` was written by a different dx version and would be rebuilt on open.
 ///
 /// A reader asks this before opening: [`Store::open`] migrates, and migrating discards the
 /// derived tables, so opening a stale index turns a read into a write. `false` when there is
 /// no index at all — there is nothing stale about a store that does not exist yet.
 ///
-/// A store from a *newer* dx is not stale, it is unreadable, and [`Store::open`] says so.
+/// An index from either an older or newer dx version is stale; both are rebuilt at this
+/// build's version, so an older binary can continue working after a newer one upgrades the
+/// index, or vice versa.
 pub fn stale_index(root: &Path) -> Result<bool, StoreError> {
-    Ok(schema::version_at(&root.join(DB_RELATIVE))?.is_some_and(|found| found < schema::VERSION))
+    Ok(schema::version_at(&root.join(DB_RELATIVE))?.is_some_and(|found| found != schema::VERSION))
 }
 
 /// The document store rooted at a workspace directory.
@@ -1572,32 +1574,95 @@ mod tests {
     }
 
     /// Opening a store migrates it, and migrating discards the derived tables — so a read
-    /// has to be able to see that an index is old without rewriting it. This is the guard
+    /// has to be able to see that an index is stale without rewriting it. This is the guard
     /// that keeps `dx search` on a just-upgraded install from silently rebuilding the index.
+    /// Older and newer schemas both read as stale.
     #[test]
-    fn an_index_from_an_older_dx_reads_as_stale_and_is_left_exactly_as_it_was() {
+    fn stale_schema_reads_as_stale_without_writing() {
         let root = scratch("stale-index");
         {
             let mut store = Store::open(&root).expect("open");
             store.ingest("notes.dx", NOTES).expect("ingest");
         }
         let database = root.join(DB_RELATIVE);
-        let connection = Connection::open(&database).expect("reopen");
-        connection
-            .pragma_update(None, "user_version", schema::VERSION - 1)
-            .expect("stamp an older version");
-        drop(connection);
 
-        assert!(stale_index(&root).expect("ask"));
-        assert_eq!(
-            schema::version_at(&database).expect("version"),
-            Some(schema::VERSION - 1),
-            "asking must not upgrade what it asked about"
+        // Test older schema.
+        {
+            let connection = Connection::open(&database).expect("reopen");
+            connection
+                .pragma_update(None, "user_version", schema::VERSION - 1)
+                .expect("stamp an older version");
+            drop(connection);
+
+            assert!(
+                stale_index(&root).expect("ask"),
+                "older schema should read as stale"
+            );
+            assert_eq!(
+                schema::version_at(&database).expect("version"),
+                Some(schema::VERSION - 1),
+                "asking must not upgrade what it asked about"
+            );
+        }
+
+        // Test newer schema.
+        {
+            let connection = Connection::open(&database).expect("reopen");
+            connection
+                .pragma_update(None, "user_version", schema::VERSION + 3)
+                .expect("stamp a newer version");
+            drop(connection);
+
+            assert!(
+                stale_index(&root).expect("ask"),
+                "newer schema should read as stale"
+            );
+            assert_eq!(
+                schema::version_at(&database).expect("version"),
+                Some(schema::VERSION + 3),
+                "asking must not modify what it asked about"
+            );
+        }
+    }
+
+    /// When an older dx upgraded the index to a newer version, an older binary that
+    /// re-opens the store should rebuild it, not refuse it. Documents are resolvable
+    /// after the rebuild via sync, which restores them from the packs.
+    #[test]
+    fn a_newer_schema_is_rebuilt_on_open_and_documents_resolve_after_sync() {
+        let root = scratch("newer-schema");
+        // Write a document with the current schema version.
+        {
+            let mut store = Store::open(&root).expect("open");
+            store.ingest("notes.dx", NOTES).expect("ingest");
+        }
+        let database = root.join(DB_RELATIVE);
+
+        // Simulate the newer dx having upgraded the schema.
+        {
+            let connection = Connection::open(&database).expect("reopen");
+            connection
+                .pragma_update(None, "user_version", schema::VERSION + 5)
+                .expect("bump to future version");
+            drop(connection);
+        }
+
+        // An older binary opens the store. It should rebuild, not refuse.
+        let mut store = Store::open(&root).expect("open store with future schema");
+
+        // The rebuilt index is empty, so reads would fail.
+        assert!(
+            store.source("notes.dx").is_err(),
+            "index was rebuilt and is empty"
         );
 
-        // The write path is where the upgrade belongs, and it happens there.
-        let _ = Store::open(&root).expect("open");
-        assert!(!stale_index(&root).expect("ask again"));
+        // After sync, the document is restored from the pack.
+        let report = store.sync().expect("sync to repopulate from packs");
+        assert!(
+            report.restored.contains(&"notes.dx".to_string()),
+            "document was restored"
+        );
+        assert_eq!(store.source("notes.dx").expect("restored"), NOTES);
     }
 
     #[test]
@@ -2166,7 +2231,7 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).expect("scratch root");
 
-        let mut store = Store::open(&root).expect("open");
+        let store = Store::open(&root).expect("open");
 
         // Create the file first
         let source_index_path = root.join(pack::SOURCE_INDEX);

@@ -43,10 +43,16 @@ use rusqlite::Connection;
 
 use crate::StoreError;
 
-/// Current schema version. A database at an older version is rebuilt (see [`apply`]).
+/// Current schema version. A database at any other version is rebuilt (see [`apply`]).
 ///
-/// It rises for a change of *meaning* as well as of shape: version 3 carries the same tables
-/// as 2, but `tokens` now holds stemmed words and identifier parts
+/// The version is not a lock, only a signal to rebuild. A database written by a newer dx
+/// (when a newer CLI upgrades to a format this build does not understand) is rebuilt exactly
+/// as an older one would be: all tables are dropped and recreated, and `Store::sync` repopulates
+/// them from the packs. This keeps an older binary working even after a newer one upgrades
+/// the index.
+///
+/// The version rises for a change of *meaning* as well as of shape: version 3 carries the same
+/// tables as 2, but `tokens` now holds stemmed words and identifier parts
 /// ([`doc_core::search`]), and a row written by the older tokeniser would narrow a search to
 /// the wrong documents. Derived data that no longer matches how it is queried is stale data.
 /// Version 4 adds `source_files` and `source_tokens` tables to index source code without
@@ -184,11 +190,15 @@ pub fn version_at(path: &Path) -> Result<Option<i64>, StoreError> {
 }
 
 /// Open `connection` for use as a document store: enforce foreign keys, pick a durable but
-/// fast journal, and migrate the schema up to [`VERSION`].
+/// fast journal, and migrate the schema to [`VERSION`].
 ///
 /// This is the **write** path. It may drop and recreate the derived tables, so a caller that
 /// is only reading must check [`version_at`] first rather than opening its way through an
 /// upgrade.
+///
+/// A database written by a newer dx is treated the same as one from an older dx: all tables
+/// are dropped and recreated at this build's version. The index is derived data rebuildable
+/// from the packs, so a schema mismatch in either direction is safe to rebuild.
 ///
 /// `PRAGMA foreign_keys` must be set per connection, not once per database, which is why it
 /// belongs here rather than in the DDL.
@@ -205,16 +215,11 @@ pub fn apply(connection: &Connection) -> Result<(), StoreError> {
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .map_err(StoreError::backend)?;
 
-    if found > VERSION {
-        return Err(StoreError::Backend(format!(
-            "this document store was written by a newer dx (schema {found}, this build \
-             understands {VERSION}); upgrade dx to open it"
-        )));
-    }
-
-    if found > 0 && found < VERSION {
-        // An index written by an older dx. Rebuild rather than migrate: it is derived data,
-        // and `Store::sync` restores every document from the packs.
+    if found > 0 && found != VERSION {
+        // An index written by an older or newer dx. Rebuild rather than migrate: it is
+        // derived data, and `Store::sync` restores every document from the packs. This
+        // handles both directions: older versions need to pick up new schema changes,
+        // and newer versions need to rebuild because this build does not understand them.
         connection
             .execute_batch(DROP_ALL)
             .map_err(StoreError::backend)?;
@@ -262,13 +267,34 @@ mod tests {
     }
 
     #[test]
-    fn a_future_schema_is_refused_with_advice_rather_than_corrupted() {
+    fn a_future_schema_is_rebuilt_not_refused() {
         let connection = Connection::open_in_memory().expect("memory db");
+        // Simulate a database written by a newer dx version.
+        apply(&connection).expect("initial schema");
+        // Manually bump the version to simulate a newer build having upgraded it.
         connection
             .pragma_update(None, "user_version", VERSION + 5)
-            .expect("bump");
-        let error = apply(&connection).expect_err("should refuse");
-        assert!(error.to_string().contains("upgrade dx"), "{error}");
+            .expect("bump to future version");
+
+        // Re-opening (e.g., after the user runs an older dx) should rebuild, not refuse.
+        apply(&connection).expect("apply should rebuild, not error");
+
+        // Verify the schema was recreated at this build's version.
+        let version: i64 = connection
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .expect("version");
+        assert_eq!(version, VERSION);
+
+        // Verify the tables are intact and functional.
+        let tables: i64 = connection
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name IN \
+                 ('chunks', 'manifests', 'manifest_chunks', 'documents', 'sections', 'tokens', 'source_files', 'source_tokens')",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count");
+        assert_eq!(tables, 8);
     }
 
     #[test]
