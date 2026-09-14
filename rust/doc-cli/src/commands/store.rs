@@ -54,6 +54,10 @@ pub fn run_sync(args: &Args) -> Result<String, String> {
     // After the repair, not before: the pack this asks about is the one sync just left behind.
     let pending = pending_pull(&root);
 
+    // Build source index before returning, even if the workspace is clean.
+    // This ensures the index is always kept up-to-date with the source files.
+    build_and_write_source_index(&root)?;
+
     let mut out = format!("dx sync — {}\n", root.display());
     // A workspace subscribed to a report project is reconciled with the intake too: `dx sync`
     // is the command a person runs to make a checkout true, and a `reports.dx` missing what
@@ -150,30 +154,61 @@ pub fn run_sync(args: &Args) -> Result<String, String> {
         out.push_str(&warning);
     }
 
-    build_and_write_source_index(&root)?;
-
     Ok(out)
 }
 
 /// Builds the source index from all source files in the workspace and writes it to `.doc/source_index`.
+///
+/// Skips binary files (non-UTF-8 or larger than 2 MiB), directories listed in
+/// [`doc_store::SKIPPED_DIRECTORIES`], and continues past individual file read errors
+/// rather than failing the entire sync.
 fn build_and_write_source_index(root: &Path) -> Result<(), String> {
     let start = std::time::Instant::now();
     let files = collect_source_files(root)?;
     let file_count = files.len();
 
     let mut index_files = Vec::new();
-    for path in files {
-        let metadata = std::fs::metadata(&path)
-            .map_err(|e| format!("failed to read metadata for {}: {e}", path.display()))?;
-        let mtime = metadata
-            .modified()
-            .map_err(|e| format!("failed to get mtime for {}: {e}", path.display()))?
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_err(|e| format!("failed to compute mtime for {}: {e}", path.display()))?
-            .as_secs();
+    let mut skipped_count = 0;
 
-        let content = std::fs::read_to_string(&path)
-            .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
+    for path in files {
+        let metadata = match std::fs::metadata(&path) {
+            Ok(meta) => meta,
+            Err(_) => {
+                skipped_count += 1;
+                continue;
+            }
+        };
+
+        // Skip large files (> 2 MiB) — source index is meaningless for binary blobs.
+        const MAX_SOURCE_SIZE: u64 = 2 * 1024 * 1024;
+        if metadata.len() > MAX_SOURCE_SIZE {
+            skipped_count += 1;
+            continue;
+        }
+
+        let mtime = match metadata.modified() {
+            Ok(modified_time) => match modified_time.duration_since(std::time::UNIX_EPOCH) {
+                Ok(duration) => duration.as_secs(),
+                Err(_) => {
+                    skipped_count += 1;
+                    continue;
+                }
+            },
+            Err(_) => {
+                skipped_count += 1;
+                continue;
+            }
+        };
+
+        // Read file as bytes and skip if not valid UTF-8.
+        let content = match std::fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(_) => {
+                // Non-UTF-8 file (binary); skip it.
+                skipped_count += 1;
+                continue;
+            }
+        };
         let content_hash = digest::sha256_hex(content.as_bytes());
 
         let relative = path
@@ -205,14 +240,15 @@ fn build_and_write_source_index(root: &Path) -> Result<(), String> {
 
     let elapsed = start.elapsed().as_millis();
     eprintln!(
-        "source index built in {} ms for {} files",
-        elapsed, file_count
+        "source index built in {} ms for {} files ({} skipped)",
+        elapsed, file_count, skipped_count
     );
 
     Ok(())
 }
 
-/// Collects all source files under `root` (excluding `.doc`, `.git`, and hidden directories).
+/// Collects all source files under `root`, excluding directories listed in
+/// [`doc_store::SKIPPED_DIRECTORIES`].
 fn collect_source_files(root: &Path) -> Result<Vec<PathBuf>, String> {
     let mut files = Vec::new();
     walk_directory(root, root, &mut files)?;
@@ -229,14 +265,11 @@ fn walk_directory(dir: &Path, root: &Path, files: &mut Vec<PathBuf>) -> Result<(
         let path = entry.path();
 
         if path.is_dir() {
-            let name = path
-                .file_name()
-                .map(|n| n.to_string_lossy())
-                .unwrap_or_default();
-
-            // Skip internal directories and hidden files
-            if name.starts_with('.') || name == "node_modules" || name == "target" {
-                continue;
+            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                // Skip internal directories using the same list as doc-store
+                if doc_store::SKIPPED_DIRECTORIES.contains(&name) {
+                    continue;
+                }
             }
 
             walk_directory(&path, root, files)?;
@@ -1338,7 +1371,11 @@ mod tests {
         std::fs::write(root.join("file1.rs"), "hello world").expect("write file1");
         std::fs::write(root.join("file2.rs"), "goodbye world").expect("write file2");
 
-        run_sync(&args(&[&root.to_string_lossy()])).expect("sync");
+        let result = run_sync(&args(&[&root.to_string_lossy()]));
+        if let Err(e) = &result {
+            eprintln!("sync error: {e}");
+        }
+        let _report = result.expect("sync");
 
         let index_path = root.join(".doc").join("source_index");
         assert!(
@@ -1349,5 +1386,68 @@ mod tests {
 
         let index_size = std::fs::metadata(&index_path).expect("read metadata").len();
         assert!(index_size > 0, "source_index should have content");
+    }
+
+    #[test]
+    fn sync_skips_binary_files_and_succeeds() {
+        // This test pins the behavior that `dx sync` does not fail when the workspace
+        // contains binary files (non-UTF-8 content). Binary files are skipped from the
+        // source index because an index of binary blobs is meaningless.
+        let root = scratch("sync-binary-files");
+
+        // Create an actual dx document so sync will build the source index.
+        workspace::save(&root.join("notes.dx"), &parse(NOTES)).expect("save");
+
+        // Write a UTF-8 source file.
+        std::fs::write(root.join("source.rs"), "fn main() { println!(\"hello\"); }")
+            .expect("write source file");
+
+        // Write a binary file (PNG magic bytes + junk).
+        let png_magic = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR";
+        std::fs::write(root.join("image.png"), png_magic).expect("write PNG");
+
+        // Write a database file (SQLite magic bytes + junk).
+        let sqlite_magic = b"SQLite format 3\x00\x00\x00\x00\x00\x00";
+        std::fs::write(root.join("data.db"), sqlite_magic).expect("write SQLite");
+
+        // Sync should succeed despite the binary files.
+        let report = run_sync(&args(&[&root.to_string_lossy()])).expect("sync");
+        assert!(
+            !report.contains("failed to read"),
+            "sync should not fail on binary files: {report}"
+        );
+
+        // The source index should exist after sync.
+        let index_path = root.join(".doc").join("source_index");
+        assert!(index_path.exists(), "source_index should exist after sync");
+        let index_bytes = std::fs::read(&index_path).expect("read index");
+        assert!(!index_bytes.is_empty(), "source_index should have content");
+    }
+
+    #[test]
+    fn sync_handles_large_binary_files_gracefully() {
+        // Verify that very large files (>2 MiB) are skipped from the source index,
+        // allowing sync to complete successfully.
+        let root = scratch("sync-large-binary");
+
+        // Create a document so sync will build the source index.
+        workspace::save(&root.join("doc.dx"), &parse(NOTES)).expect("save");
+
+        // Write a normal source file.
+        std::fs::write(root.join("code.rs"), "// Rust code\nfn main() {}").expect("write code");
+
+        // Write a large binary-like file (3 MiB of zeros).
+        let large_binary = vec![0u8; 3 * 1024 * 1024];
+        std::fs::write(root.join("large.bin"), &large_binary).expect("write large binary");
+
+        // Sync should succeed and skip the large file.
+        let report = run_sync(&args(&[&root.to_string_lossy()])).expect("sync");
+        assert!(
+            !report.contains("failed to read"),
+            "sync should skip large files: {report}"
+        );
+
+        let index_path = root.join(".doc").join("source_index");
+        assert!(index_path.exists(), "source_index should exist after sync");
     }
 }

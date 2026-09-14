@@ -38,7 +38,7 @@ const DB_RELATIVE: &str = ".doc/index.db";
 /// `fixture`/`fixtures` are here because test fixtures are files whose exact bytes *are*
 /// the test — adopting one into the store replaces it with a pointer and silently turns
 /// the suite that reads it into a suite that reads pointers.
-const SKIPPED_DIRECTORIES: &[&str] = &[
+pub const SKIPPED_DIRECTORIES: &[&str] = &[
     ".git",
     "node_modules",
     "target",

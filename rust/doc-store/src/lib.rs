@@ -36,12 +36,12 @@ pub mod git;
 pub mod merge;
 pub mod pack;
 mod schema;
-mod store;
+pub mod store;
 pub mod stub;
 
 pub use store::{
     discover as discover_documents, stale_index, timestamp, Saved, Stats, Store, Summary,
-    SyncReport,
+    SyncReport, SKIPPED_DIRECTORIES,
 };
 
 use core::fmt;
