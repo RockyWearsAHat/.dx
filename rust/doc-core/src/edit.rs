@@ -312,6 +312,77 @@ pub fn set_block(source: &str, id: &str, text: &str) -> Result<String, String> {
     Ok(stringify(&document))
 }
 
+/// Normalize a single character for near-miss detection by folding Unicode variants to ASCII.
+fn normalize_char(c: char) -> char {
+    match c {
+        // Dashes: em dash (—), en dash (–), hyphen (‐) to hyphen-minus (-)
+        '\u{2014}' | '\u{2013}' | '\u{2010}' => '-', // em dash, en dash, hyphen
+        // Curly quotes to straight quotes
+        '\u{201C}' | '\u{201D}' => '"', // left and right double quotation marks
+        '\u{2018}' | '\u{2019}' => '\'', // left and right single quotation marks
+        // Various spaces to regular space
+        '\u{00A0}' | '\u{2009}' => ' ', // non-breaking space, thin space
+        c if c.is_whitespace() && c != ' ' => ' ',
+        c => c,
+    }
+}
+
+/// Normalize text for near-miss detection by folding Unicode variants and collapsing whitespace.
+fn normalize_for_matching(text: &str) -> String {
+    let normalized: String = text.chars().map(normalize_char).collect();
+    // Collapse consecutive spaces
+    normalized.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Find where a normalized pattern appears in the original text, returning the matched span as a string.
+fn find_near_match(original: &str, normalized_pattern: &str) -> Option<String> {
+    // Try matching the pattern starting at each position in the original
+    for start_idx in 0..original.len() {
+        let mut norm_idx = 0;
+        let mut chars_matched = Vec::new();
+        let mut prev_was_ws = false;
+
+        for orig_char in original[start_idx..].chars() {
+            let norm_char = normalize_char(orig_char);
+
+            // Skip consecutive whitespace
+            if norm_char.is_whitespace() && prev_was_ws {
+                chars_matched.push(orig_char);
+                continue;
+            }
+
+            if norm_idx < normalized_pattern.len() {
+                if norm_char == normalized_pattern.chars().nth(norm_idx).unwrap() {
+                    chars_matched.push(orig_char);
+                    norm_idx += 1;
+                    prev_was_ws = norm_char.is_whitespace();
+
+                    if norm_idx == normalized_pattern.len() {
+                        return Some(chars_matched.iter().collect());
+                    }
+                } else {
+                    break; // This position doesn't match
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Compare two strings and return the first position where they differ.
+fn first_diff_info(stored: &str, provided: &str) -> Option<(usize, char, char)> {
+    let stored_chars: Vec<char> = stored.chars().collect();
+    let provided_chars: Vec<char> = provided.chars().collect();
+
+    for (i, (s_char, p_char)) in stored_chars.iter().zip(provided_chars.iter()).enumerate() {
+        if s_char != p_char {
+            return Some((i, *s_char, *p_char));
+        }
+    }
+
+    None
+}
+
 /// Replace an exact string inside one block's body, returning the new canonical source and
 /// how many occurrences changed.
 ///
@@ -329,6 +400,9 @@ pub fn set_block(source: &str, id: &str, text: &str) -> Result<String, String> {
 /// # Errors
 /// Returns a message when no block carries `id`, when `old` is empty, when `old` does not
 /// appear in the block's body, or when it appears more than once and `all` was not given.
+/// When there is no exact match but a near miss exists (differing only by Unicode
+/// variants like dashes or quotes), returns a helpful error message showing the stored
+/// text and the differing character.
 pub fn replace_in_block(
     source: &str,
     id: &str,
@@ -344,6 +418,28 @@ pub fn replace_in_block(
     let current = body(&document.blocks[index]);
     let count = current.matches(old).count();
     if count == 0 {
+        // No exact match found; look for a near miss by normalization
+        let normalized_old = normalize_for_matching(old);
+        let normalized_current = normalize_for_matching(&current);
+
+        // Find if the normalized text appears exactly once
+        if normalized_current.matches(&normalized_old).count() == 1 {
+            // Found exactly one normalized match; find the matched span in the original
+            if let Some(matched_text) = find_near_match(&current, &normalized_old) {
+                // Find the first differing character and report it
+                if let Some((pos, stored_char, provided_char)) = first_diff_info(&matched_text, old)
+                {
+                    let stored_code = stored_char as u32;
+                    let provided_code = provided_char as u32;
+                    return Err(format!(
+                        "no exact match in `{id}`; the body has `…{matched_text}…` where you wrote `…{old}…` \
+                         (differs at char {}: U+{:04X} vs U+{:04X}) — pass the body's text",
+                        pos, stored_code, provided_code
+                    ));
+                }
+            }
+        }
+
         return Err(format!("`{old}` does not appear in the body of `{id}`"));
     }
     if count > 1 && !all {
@@ -1352,6 +1448,50 @@ mod tests {
         let refusal =
             replace_in_block(SAMPLE, "intro", "no such words", "x", false).expect_err("refuse");
         assert!(refusal.contains("intro"), "{refusal}");
+    }
+
+    /// When the text to replace differs from the stored body only by Unicode variants
+    /// (like em dash vs hyphen), return a helpful error showing the differing characters.
+    #[test]
+    fn replacing_with_wrong_dash_variant_shows_near_miss_with_unicode_codes() {
+        // Store text with em dash (—, U+2014)
+        let source = "::paragraph id=note\nMax settings — required for launch\n::end\n";
+        // Try to replace with hyphen-minus (--, U+002D)
+        let error = replace_in_block(source, "note", "Max settings - required", "x", false)
+            .expect_err("should detect near miss");
+
+        // Should show the near miss, not just "does not appear"
+        assert!(error.contains("no exact match"), "{error}");
+        assert!(error.contains("the body has"), "{error}");
+        assert!(error.contains("U+2014"), "{error}"); // em dash code
+        assert!(error.contains("U+002D"), "{error}"); // hyphen code
+        assert!(error.contains("differs at char"), "{error}");
+    }
+
+    /// Curly quotes also trigger near-miss detection.
+    #[test]
+    fn replacing_with_wrong_quote_variant_shows_near_miss() {
+        // Store text with curly quotes (using Unicode escapes: U+201C and U+201D)
+        let source = "::paragraph id=note\nSay \u{201C}hello\u{201D} to everyone\n::end\n";
+        // Try to replace with straight quotes
+        let error = replace_in_block(source, "note", "Say \"hello\" to", "x", false)
+            .expect_err("should detect near miss");
+
+        assert!(error.contains("no exact match"), "{error}");
+        assert!(error.contains("the body has"), "{error}");
+        assert!(error.contains("differs at char"), "{error}");
+    }
+
+    /// When text is genuinely absent (not a near-miss), the original error still applies.
+    #[test]
+    fn replacing_genuinely_absent_text_shows_original_error() {
+        let source = "::paragraph id=note\nSome text here\n::end\n";
+        let error = replace_in_block(source, "note", "completely different text", "x", false)
+            .expect_err("should refuse");
+
+        // Should show the original error, not near-miss
+        assert!(error.contains("does not appear in the body"), "{error}");
+        assert!(!error.contains("no exact match in"), "{error}");
     }
 
     /// The change-sized edit goes through the same body rules as a whole-body save: a
