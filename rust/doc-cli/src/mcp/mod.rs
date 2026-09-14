@@ -317,10 +317,23 @@ mod code {
 /// Returns the first I/O error; a clean end-of-input is success.
 pub fn serve(root: &Path) -> std::io::Result<()> {
     let engine = engine_fingerprint();
+    let restarted = std::env::var_os(REEXEC_MARK).is_some();
     keep_reports_current(root);
     let mut input = BufReader::new(std::io::stdin().lock());
     let mut output = std::io::stdout().lock();
-    serve_buffered(root, &mut input, &mut output, engine.as_ref())
+    serve_buffered(root, &mut input, &mut output, engine.as_ref(), restarted)
+}
+
+/// Set in the environment of a re-exec'd server, and nowhere else, so the fresh process
+/// knows it replaced one the client had already listed tools from.
+const REEXEC_MARK: &str = "DX_MCP_REEXECED";
+
+/// The notification a re-exec'd server sends first: the client fetched `tools/list` from
+/// the old engine at session start and holds it for the life of the session, so without
+/// this a tool or a parameter the new engine added stays invisible until the assistant is
+/// restarted — the exact gap the re-exec exists to close.
+fn tools_changed_notification() -> String {
+    json!({ "jsonrpc": "2.0", "method": "notifications/tools/list_changed" }).to_string()
 }
 
 /// How often a subscribed workspace's `reports.dx` is brought up to date underneath the
@@ -376,7 +389,12 @@ fn serve_buffered<R: std::io::Read, W: Write>(
     input: &mut BufReader<R>,
     output: &mut W,
     engine: Option<&(PathBuf, EngineFingerprint)>,
+    restarted: bool,
 ) -> std::io::Result<()> {
+    if restarted {
+        writeln!(output, "{}", tools_changed_notification())?;
+        output.flush()?;
+    }
     let mut line = String::new();
     loop {
         line.clear();
@@ -445,6 +463,7 @@ fn reexec(exe: &Path) {
     use std::os::unix::process::CommandExt;
     let error = std::process::Command::new(exe)
         .args(std::env::args_os().skip(1))
+        .env(REEXEC_MARK, "1")
         .exec();
     let _ = writeln!(std::io::stderr(), "dx mcp — restart failed: {error}");
 }
@@ -514,7 +533,7 @@ fn initialize() -> Value {
                         project key of its own and reuses this machine's stored token.";
     json!({
         "protocolVersion": PROTOCOL_VERSION,
-        "capabilities": { "tools": {}, "resources": {} },
+        "capabilities": { "tools": { "listChanged": true }, "resources": {} },
         "serverInfo": { "name": SERVER_NAME, "version": SERVER_VERSION },
         "instructions": instructions
     })
@@ -642,6 +661,10 @@ mod tests {
         assert_eq!(response["result"]["protocolVersion"], PROTOCOL_VERSION);
         assert_eq!(response["result"]["serverInfo"]["name"], "dx");
         assert!(response["result"]["capabilities"]["tools"].is_object());
+        assert_eq!(
+            response["result"]["capabilities"]["tools"]["listChanged"], true,
+            "the client must expect a list_changed notification after a re-exec"
+        );
         let instructions = response["result"]["instructions"].as_str().expect("text");
 
         // The compact handshake summarizes the loop and points to the full method.
@@ -897,6 +920,7 @@ mod tests {
             &mut BufReader::new(input.as_bytes()),
             &mut output,
             None,
+            false,
         )
         .expect("serve");
 
@@ -908,6 +932,34 @@ mod tests {
         assert_eq!(lines.len(), 2);
         let second: Value = serde_json::from_str(lines[1]).expect("json");
         assert_eq!(second["id"], 2);
+    }
+
+    #[test]
+    fn a_restarted_server_announces_its_tool_list_before_answering_anything() {
+        let root = project("restarted");
+        let input = format!(
+            "{}\n",
+            serde_json::to_string(&request(1, "ping", json!({}))).expect("json")
+        );
+        let mut output = Vec::new();
+        serve_buffered(
+            &root,
+            &mut BufReader::new(input.as_bytes()),
+            &mut output,
+            None,
+            true,
+        )
+        .expect("serve");
+        let lines: Vec<&str> = std::str::from_utf8(&output)
+            .expect("utf8")
+            .lines()
+            .collect();
+        assert_eq!(lines.len(), 2);
+        let first: Value = serde_json::from_str(lines[0]).expect("json");
+        assert_eq!(first["method"], "notifications/tools/list_changed");
+        assert!(first.get("id").is_none(), "a notification carries no id");
+        let second: Value = serde_json::from_str(lines[1]).expect("json");
+        assert_eq!(second["id"], 1);
     }
 
     #[test]
@@ -923,6 +975,7 @@ mod tests {
             &mut BufReader::new(input.as_bytes()),
             &mut output,
             None,
+            false,
         )
         .expect("serve");
 
