@@ -69,8 +69,9 @@ pub fn run(args: &Args) -> Result<String, String> {
         }
     }
 
-    // Append drift summary if available
-    out.push_str(&crate::drift::summary(None));
+    // The same project's sessions, so one report says both what was searched and who
+    // worked through the documents at all.
+    out.push_str(&crate::drift::summary(&root));
 
     Ok(out)
 }

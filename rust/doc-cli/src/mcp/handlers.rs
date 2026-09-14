@@ -623,6 +623,24 @@ fn excerpt(answer: &str, query: &str) -> String {
 const DEFAULT_COVERAGE_WINDOW: usize = 200;
 
 /// `dx_coverage` — the document-hit rate over recent searches, and what fell back.
+/// The project's sessions as `dx drift` reports them, for the coverage answer: which
+/// sessions worked through the documents and which went off method.
+fn drift_sessions(directory: &Path) -> Vec<Value> {
+    crate::drift::report(directory)
+        .iter()
+        .map(|s| {
+            json!({
+                "session": s.id,
+                "raw": s.raw,
+                "dx": s.dx,
+                "raw_percent": s.raw_percent(),
+                "off_method": s.off_method(),
+                "last_at": s.last_at,
+            })
+        })
+        .collect()
+}
+
 fn coverage(args: &Value, root: &Path) -> ToolResult {
     let directory = directory_arg(args, root);
     let window = number(args, "window").map_or(DEFAULT_COVERAGE_WINDOW, |window| window as usize);
@@ -648,6 +666,7 @@ fn coverage(args: &Value, root: &Path) -> ToolResult {
         "none_hits": report.none_hits,
         "document_rate": report.document_rate,
         "fallbacks": fallbacks,
+        "drift": drift_sessions(&directory),
     }))])
 }
 

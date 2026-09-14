@@ -773,14 +773,18 @@ READ
                                                 first — hints for what to document next.
                                                 Use --min-rate R to fail if below R%
 
-DRIFT
-  dx drift    [--session ID]                    record raw shell vs dx call ratio for a
-                                                session. Reads Claude Code PostToolUse hook
-                                                JSON from stdin, classifies Bash as raw and
-                                                mcp__dx__* as dx, records to a machine-local
-                                                ledger, and nudges when raw work reaches a
-                                                multiple of 10. Without stdin, summarizes
-                                                the most recent session (or --session ID)
+DRIFT — work outside dx, counted per project
+  dx drift    [dir] [--session ID]              every session recorded in <dir>'s project,
+                                                most recent first: raw shell calls against dx
+                                                calls, with the off-method ones marked — the
+                                                view that says which agents to tune the
+                                                method against. `dx setup` registers the
+                                                Claude Code hook that feeds it: after every
+                                                tool call, dx counts it against the project
+                                                the call was made in (.doc/drift.jsonl; a
+                                                project with no .doc lands in one machine-
+                                                local file) and at every tenth raw call hands
+                                                the agent one sentence naming its own ratio
 
   dx doctor                                     check installation health and find missing
                                                 toolchains
