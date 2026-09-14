@@ -18,6 +18,7 @@ mod commands;
 mod coverage;
 mod daemon;
 mod desktop;
+mod drift;
 mod extension;
 mod home;
 mod install;

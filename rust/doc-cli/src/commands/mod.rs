@@ -12,6 +12,7 @@
 
 pub mod browser;
 pub mod coverage;
+pub mod drift;
 pub mod edit;
 pub mod exec;
 pub mod find;
@@ -134,6 +135,11 @@ const COMMANDS: &[Command] = &[
         names: &["coverage"],
         flags: &["window", "min-rate", "out"],
         run: |args| coverage::run(args).map(Output::Document),
+    },
+    Command {
+        names: &["drift"],
+        flags: &["session"],
+        run: |args| drift::run(args).map(Output::Report),
     },
     Command {
         names: &["help", "--help", "-h"],
@@ -436,6 +442,7 @@ mod tests {
             ("search", vec!["limit"]),
             ("coverage", vec!["window", "min-rate"]),
             ("source", vec!["block", "header"]),
+            ("drift", vec!["session"]),
             (
                 "set",
                 vec!["text", "from", "header", "replace", "with", "all"],

@@ -21,6 +21,8 @@ const DEFAULT_WINDOW: usize = 200;
 /// Returns a sentence when `--min-rate` is given and the observed rate falls below it. A
 /// workspace with no coverage data yet never fails a floor it has no evidence for — it reports
 /// "no data" and succeeds regardless of `--min-rate`.
+///
+/// Appends a single-line drift summary if any sessions have been recorded.
 pub fn run(args: &Args) -> Result<String, String> {
     let root = root_of(args, 0);
     let window = args
@@ -66,6 +68,9 @@ pub fn run(args: &Args) -> Result<String, String> {
             ));
         }
     }
+
+    // Append drift summary if available
+    out.push_str(&crate::drift::summary(None));
 
     Ok(out)
 }

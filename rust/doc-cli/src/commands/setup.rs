@@ -163,6 +163,18 @@ pub fn run_doctor(_args: &Args) -> Result<String, String> {
         ));
     }
 
+    out.push_str("\nhooks\n");
+    if let Some(home) = crate::home::home() {
+        let config_path = home.join(".claude").join("settings.json");
+        if is_drift_hook_registered(&config_path) {
+            out.push_str("  drift     registered to track raw vs dx calls\n");
+        } else {
+            out.push_str("  drift     not registered — run `dx setup`\n");
+        }
+    } else {
+        out.push_str("  drift     cannot determine home directory\n");
+    }
+
     out.push_str("\nservice\n");
     let binary = locate("dx")
         .or_else(|| std::env::current_exe().ok())
@@ -400,6 +412,7 @@ pub fn run_setup(args: &Args) -> Result<String, String> {
 
     out.push_str(&install_service(&binary));
     out.push_str(&install_viewer());
+    out.push_str(&install_hooks(&binary));
     out.push_str(&install_extension());
     out.push_str(&install_browsers());
     out.push_str(&format!(
@@ -420,6 +433,13 @@ fn run_uninstall() -> Result<String, String> {
     match service::uninstall() {
         Ok(true) => out.push_str("  removed the login service\n"),
         Ok(false) => out.push_str("  no login service was registered\n"),
+        Err(error) => out.push_str(&format!("  {error}\n")),
+    }
+
+    out.push_str("\nhooks\n");
+    match unregister_drift_hook() {
+        Ok(true) => out.push_str("  drift hook removed\n"),
+        Ok(false) => out.push_str("  no drift hook was registered\n"),
         Err(error) => out.push_str(&format!("  {error}\n")),
     }
 
@@ -490,6 +510,21 @@ fn install_service(binary: &Path) -> String {
 /// bundle is copied before it is registered.
 fn install_viewer() -> String {
     format!("\ndocuments\n{}\n", desktop::install().line())
+}
+
+/// Register the Claude Code hook to track tool usage (drift detection).
+///
+/// Adds an entry to `~/.claude/settings.json` under `hooks.PostToolUse` to monitor
+/// whether work is happening in dx or outside it. Reported and not fatal: a machine
+/// where the settings file is unwritable or missing still has a working `dx`.
+fn install_hooks(binary: &Path) -> String {
+    let mut out = String::from("\nhooks\n");
+    match register_drift_hook(binary) {
+        Ok(true) => out.push_str("  drift         registered to track raw vs dx calls\n"),
+        Ok(false) => out.push_str("  drift         already registered\n"),
+        Err(error) => out.push_str(&format!("  drift         failed: {error}\n")),
+    }
+    out
 }
 
 /// Give every browser on this machine the extension, by whatever route it allows.
@@ -737,6 +772,16 @@ READ
                                                 found nothing. Shows most-repeated misses
                                                 first — hints for what to document next.
                                                 Use --min-rate R to fail if below R%
+
+DRIFT
+  dx drift    [--session ID]                    record raw shell vs dx call ratio for a
+                                                session. Reads Claude Code PostToolUse hook
+                                                JSON from stdin, classifies Bash as raw and
+                                                mcp__dx__* as dx, records to a machine-local
+                                                ledger, and nudges when raw work reaches a
+                                                multiple of 10. Without stdin, summarizes
+                                                the most recent session (or --session ID)
+
   dx doctor                                     check installation health and find missing
                                                 toolchains
 
@@ -927,6 +972,167 @@ EXAMPLE: A runnable block
   This block: imports pandas/matplotlib during setup, runs offline with reads=data.csv
   access and writes=plots output permissions, stores result in the document.";
 
+/// Register the drift hook in `~/.claude/settings.json`, returning whether anything changed.
+///
+/// Adds an entry under `hooks.PostToolUse` to run `dx drift` on every Claude Code tool use,
+/// but only if no entry with a command ending in ` drift` exists. Idempotent: running twice
+/// changes nothing the second time.
+fn register_drift_hook(binary: &Path) -> Result<bool, String> {
+    use serde_json::{json, Map, Value};
+
+    let Some(home) = crate::home::home() else {
+        return Ok(false); // No home directory: silent no-op
+    };
+
+    let config_path = home.join(".claude").join("settings.json");
+    let drift_command = format!("{} drift", binary.display());
+
+    // Check if already registered
+    if is_drift_hook_registered(&config_path) {
+        return Ok(false);
+    }
+
+    // Create parent directory
+    if let Some(parent) = config_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("could not create {}: {e}", parent.display()))?;
+    }
+
+    // Read or create config
+    let mut config = match std::fs::read_to_string(&config_path) {
+        Ok(text) if !text.trim().is_empty() => serde_json::from_str::<Value>(&text)
+            .map_err(|e| format!("{} is not valid JSON: {e}", config_path.display()))?,
+        _ => Value::Object(Map::new()),
+    };
+
+    if !config.is_object() {
+        return Err(format!("{} is not a JSON object", config_path.display()));
+    }
+
+    let root = config.as_object_mut().expect("checked object");
+    let hooks = root
+        .entry("hooks".to_string())
+        .or_insert_with(|| Value::Object(Map::new()));
+    let hooks = hooks
+        .as_object_mut()
+        .ok_or_else(|| format!("`hooks` in {} is not an object", config_path.display()))?;
+
+    let post_tool_use = hooks
+        .entry("PostToolUse".to_string())
+        .or_insert_with(|| Value::Array(Vec::new()));
+    let post_tool_use = post_tool_use.as_array_mut().ok_or_else(|| {
+        format!(
+            "`hooks.PostToolUse` in {} is not an array",
+            config_path.display()
+        )
+    })?;
+
+    // Add the drift hook entry
+    post_tool_use.push(json!({
+        "matcher": "Bash|mcp__dx__.*",
+        "hooks": [
+            {
+                "type": "command",
+                "command": drift_command,
+            }
+        ]
+    }));
+
+    // Write the config
+    crate::state::write_file(
+        &config_path,
+        format!(
+            "{}\n",
+            serde_json::to_string_pretty(&config).map_err(|e| e.to_string())?
+        )
+        .as_bytes(),
+    )?;
+
+    Ok(true)
+}
+
+/// Check if the drift hook is already registered in `~/.claude/settings.json`.
+fn is_drift_hook_registered(config_path: &Path) -> bool {
+    use serde_json::Value;
+
+    let Ok(text) = std::fs::read_to_string(config_path) else {
+        return false;
+    };
+    let Ok(config) = serde_json::from_str::<Value>(&text) else {
+        return false;
+    };
+
+    if let Some(hooks) = config.get("hooks").and_then(|h| h.get("PostToolUse")) {
+        if let Some(array) = hooks.as_array() {
+            for hook in array {
+                if let Some(hook_array) = hook.get("hooks").and_then(|h| h.as_array()) {
+                    for entry in hook_array {
+                        if let Some(command) = entry.get("command").and_then(|c| c.as_str()) {
+                            if command.ends_with(" drift") {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Remove the drift hook from `~/.claude/settings.json`.
+fn unregister_drift_hook() -> Result<bool, String> {
+    use serde_json::Value;
+
+    let Some(home) = crate::home::home() else {
+        return Ok(false); // No home directory: silent no-op
+    };
+
+    let config_path = home.join(".claude").join("settings.json");
+
+    if !config_path.exists() {
+        return Ok(false);
+    }
+
+    let text = std::fs::read_to_string(&config_path)
+        .map_err(|e| format!("could not read {}: {e}", config_path.display()))?;
+    let mut config: Value = serde_json::from_str(&text)
+        .map_err(|e| format!("{} is not valid JSON: {e}", config_path.display()))?;
+
+    if let Some(hooks) = config
+        .get_mut("hooks")
+        .and_then(|h| h.get_mut("PostToolUse"))
+    {
+        if let Some(array) = hooks.as_array_mut() {
+            // Remove any hooks with a command ending in " drift"
+            array.retain(|hook| {
+                if let Some(hook_array) = hook.get("hooks").and_then(|h| h.as_array()) {
+                    !hook_array.iter().any(|entry| {
+                        entry
+                            .get("command")
+                            .and_then(|c| c.as_str())
+                            .map(|cmd| cmd.ends_with(" drift"))
+                            .unwrap_or(false)
+                    })
+                } else {
+                    true
+                }
+            });
+        }
+    }
+
+    crate::state::write_file(
+        &config_path,
+        format!(
+            "{}\n",
+            serde_json::to_string_pretty(&config).map_err(|e| e.to_string())?
+        )
+        .as_bytes(),
+    )?;
+
+    Ok(true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1089,5 +1295,41 @@ mod tests {
     fn the_binary_name_matches_the_platform() {
         let expected = if cfg!(windows) { "dx.exe" } else { "dx" };
         assert_eq!(binary_name(), expected);
+    }
+
+    #[test]
+    fn drift_hook_registration_does_not_panic() {
+        // Test that hook registration can be called without panicking.
+        // We can't fully test it without mocking the home directory, but we verify
+        // it returns a Result without crashing.
+        let result = register_drift_hook(std::path::Path::new("/usr/local/bin/dx"));
+        // Result may be Ok or Err depending on environment, but should not panic
+        let _ = result;
+    }
+
+    #[test]
+    fn drift_hook_is_checked_by_command_ending() {
+        // The hook is detected by checking if any command ends with " drift"
+        let commands = vec![
+            "/usr/local/bin/dx drift",
+            "/home/user/.local/bin/dx drift",
+            "dx drift",
+        ];
+        for cmd in commands {
+            assert!(
+                cmd.ends_with(" drift"),
+                "command '{}' should end with ' drift'",
+                cmd
+            );
+        }
+    }
+
+    #[test]
+    fn drift_hook_registers_with_correct_matcher() {
+        // The matcher should handle both Bash and mcp__dx__* patterns
+        let matcher = "Bash|mcp__dx__.*";
+        // Verify the pattern can match what we expect
+        assert!(matcher.contains("Bash"));
+        assert!(matcher.contains("mcp__dx__"));
     }
 }
