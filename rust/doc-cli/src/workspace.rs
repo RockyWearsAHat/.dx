@@ -275,14 +275,15 @@ impl Sources {
             Some(source) if names_it(source) => Ok(source.clone()),
             Some(_) => Err(format!(
                 "{} names version {}, and neither this workspace's store nor its packs holds \
-                 that version — they hold a different one. Run `dx sync` to reconcile them, or \
-                 restore .doc/repo.dxcp",
+                 that version — they hold a different one. Run `dx sync` (dx_sync from an agent) \
+                 to reconcile them, or restore .doc/repo.dxcp",
                 path.display(),
                 named.unwrap_or_default()
             )),
             None if is_pointer => Err(format!(
                 "{} is a dx pointer, but its content is not in this workspace's store or packs; \
-                 run `dx sync` to rebuild from .doc/, or restore .doc/repo.dxcp",
+                 run `dx sync` (dx_sync from an agent) to rebuild from .doc/, or restore \
+                 .doc/repo.dxcp",
                 path.display()
             )),
             // The plain "no such file" case, and the one a person hits most: say what is
@@ -387,7 +388,7 @@ fn resolve_contents_impl(
     } else {
         Err(format!(
             "this dx pointer names version {digest}, which is not in {}'s store or packs; \
-             run `dx sync` there, or restore .doc/repo.dxcp",
+             run `dx sync` (dx_sync from an agent) there, or restore .doc/repo.dxcp",
             root.display()
         ))
     }

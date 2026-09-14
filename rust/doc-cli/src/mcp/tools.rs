@@ -33,6 +33,7 @@ pub const TOOL_NAMES: &[&str] = &[
     "dx_check",
     "dx_report",
     "dx_run",
+    "dx_sync",
 ];
 
 /// Build the `tools/list` payload.
@@ -55,6 +56,7 @@ pub fn catalogue() -> Value {
         check_tool(),
         report_tool(),
         run_tool(),
+        sync_tool(),
     ])
 }
 
@@ -464,10 +466,12 @@ fn edit_tool() -> Value {
                 "header": {
                     "type": "string",
                     "description": "New `::kind attrs` opening line for the block, e.g. \
-                                    `::code lang=py run reads=src writes=target`. The body \
-                                    is still `text`. The block keeps its id unless the \
-                                    header states one; an empty string retypes the block \
-                                    as plain prose. Omit to leave the header untouched."
+                                    `::code lang=py run reads=src writes=target`. Retype \
+                                    the block's kind or attributes — pass it alone to keep \
+                                    the existing body, or with `text` to replace both. The \
+                                    block keeps its id unless the header states one; an empty \
+                                    string retypes the block as plain prose. Omit to leave \
+                                    the header untouched."
                 },
                 "run": {
                     "type": "boolean",
@@ -827,6 +831,34 @@ fn run_tool() -> Value {
     })
 }
 
+/// `dx_sync` — reconcile workspace pointers.
+fn sync_tool() -> Value {
+    json!({
+        "name": "dx_sync",
+        "description": "Reconcile workspace pointers: adopts plain-text .dx files anything \
+                        else wrote, restores documents from the committed pack when the local \
+                        index is missing, rewrites drifted pointers, and collects unreferenced \
+                        chunks. Use this after any \"run dx sync\" error, after a git \
+                        pull/checkout, or after another tool wrote plain-text .dx files. \
+                        Returns the report text describing what was resolved, any problems \
+                        found, and next steps if resolutions are incomplete. An agent calling \
+                        this tool has no CLI to run — this MCP tool is how an agent fixes \
+                        unresolved-pointer errors.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Path to the workspace root, absolute or relative to the \
+                                    server's root — the directory this server was started in. \
+                                    Optional; defaults to the server root."
+                }
+            },
+            "required": []
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1030,5 +1062,25 @@ mod tests {
         let description = write["description"].as_str().expect("description");
         assert!(description.contains("::heading"));
         assert!(description.contains("::end"));
+    }
+
+    #[test]
+    fn the_sync_tool_is_listed() {
+        let tools = catalogue();
+        let sync = tools
+            .as_array()
+            .expect("array")
+            .iter()
+            .find(|tool| tool["name"] == "dx_sync")
+            .expect("dx_sync");
+        let description = sync["description"].as_str().expect("description");
+        // The tool says what to use it for and when an agent would reach for it.
+        assert!(description.to_lowercase().contains("reconcile"));
+        assert!(description.contains("error"));
+        assert!(description.contains("agent"));
+        // The schema must be valid.
+        assert_eq!(sync["inputSchema"]["type"], "object");
+        assert!(sync["inputSchema"]["properties"].is_object());
+        assert_eq!(sync["inputSchema"]["required"], json!([]));
     }
 }

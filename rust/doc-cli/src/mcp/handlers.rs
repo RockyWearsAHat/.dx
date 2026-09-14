@@ -46,6 +46,7 @@ pub fn call(name: &str, args: &Value, root: &Path) -> ToolResult {
         "dx_check" => check(args, root),
         "dx_report" => report(args, root),
         "dx_run" => run(args, root),
+        "dx_sync" => sync(args, root),
         other => Err(format!("unknown tool: {other}")),
     }
 }
@@ -629,9 +630,15 @@ fn edit_in(args: &Value, root: &Path, cache_root: PathBuf) -> ToolResult {
             doc_core::edit::replace_in_block(&workspace::read(&path)?, wanted, old, new, all)?;
         (parse(&updated), wanted.to_string(), Some(count))
     } else if let Some(header) = string(args, "header") {
-        let body = required(args, "text")?;
-        let (updated, focus) =
-            doc_core::edit::replace_block(&workspace::read(&path)?, wanted, header, body)?;
+        let source = workspace::read(&path)?;
+        let document = parse(&source);
+        let index = doc_core::edit::find(&document, wanted)?;
+        let body = if let Some(new_body) = string(args, "text") {
+            new_body.to_string()
+        } else {
+            doc_core::edit::body(&document.blocks[index])
+        };
+        let (updated, focus) = doc_core::edit::replace_block(&source, wanted, header, &body)?;
         (parse(&updated), focus, None)
     } else {
         // The body goes through the engine's own `set_block`, never a direct field
@@ -1040,6 +1047,17 @@ fn run_in(args: &Value, root: &Path, cache_root: PathBuf) -> ToolResult {
         "saved": saved,
         "results": results,
         "next": "Call dx_read on this path to see the results rendered.",
+    }))])
+}
+
+/// `dx_sync` — reconcile workspace pointers.
+fn sync(args: &Value, _root: &Path) -> ToolResult {
+    let target_path = string(args, "path").unwrap_or(".");
+    // Construct Args by parsing the target path as a positional argument.
+    let sync_args = crate::args::Args::parse(&[target_path.to_string()]);
+    let report = crate::commands::store::run_sync(&sync_args)?;
+    Ok(vec![json_content(&json!({
+        "report": report,
     }))])
 }
 
@@ -2521,6 +2539,56 @@ mod tests {
             !final_doc.contains("C content"),
             "C content should not exist: {}",
             final_doc
+        );
+    }
+
+    #[test]
+    fn edit_with_header_only_keeps_the_block_body() {
+        let root = project("edit-header-only");
+        workspace::write_text(
+            &root.join("doc.dx"),
+            "::paragraph id=para\nThe original body text.\n::end\n",
+        )
+        .expect("seed");
+
+        let items = edit_in(
+            &json!({ "path": "doc.dx", "block": "para", "header": "::code lang=python" }),
+            &root,
+            root.join("cache"),
+        )
+        .expect("edit");
+        let body = text_of(&items);
+        assert!(body.contains("Updated `para`"), "{body}");
+
+        let saved = workspace::read(&root.join("doc.dx")).expect("resolve");
+        assert!(
+            saved.contains("::code id=para lang=python"),
+            "header should be changed to code block: {}",
+            saved
+        );
+        assert!(
+            saved.contains("The original body text."),
+            "body should be kept unchanged: {}",
+            saved
+        );
+    }
+
+    /// dx_sync reconciles workspace pointers after unresolved errors occur.
+    #[test]
+    fn dx_sync_reconciles_the_workspace() {
+        let root = project("sync");
+        // Create a simple workspace with a document
+        workspace::write_text(&root.join("doc.dx"), "::paragraph\nContent\n::end\n").expect("seed");
+
+        // Call dx_sync with no arguments (should use current directory)
+        let items = call("dx_sync", &json!({}), &root).expect("sync");
+        let report = text_of(&items);
+
+        // The report should mention success or status
+        assert!(
+            report.contains("dx sync") || report.contains("reconcile"),
+            "sync report should mention reconciliation: {}",
+            report
         );
     }
 }

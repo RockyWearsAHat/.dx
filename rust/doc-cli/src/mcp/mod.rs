@@ -128,7 +128,9 @@ pub const METHOD: &str = "This project works through .dx documents: block docume
                          that prompted the setup. Find before reading: dx_search — a hit \
                          carries the best block's id and text, so a search that lands is \
                          the read. Map with dx_outline (one row per block) and read one \
-                         `section` with dx_source; never page through a document.\n\n\
+                         `section` with dx_source; never page through a document. If any \
+                         tool reports unresolved pointers, or after a git pull/checkout, \
+                         use dx_sync to reconcile the workspace.\n\n\
                          READ ECONOMY. Prose and code are text: dx_source, a fraction of \
                          what images cost. Spend dx_read's page images only on what text \
                          cannot carry — boards, diagrams, charts, rendered views — one \
