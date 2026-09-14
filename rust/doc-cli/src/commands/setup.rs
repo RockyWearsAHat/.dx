@@ -713,9 +713,11 @@ READ
                                                 the moment and action. --node clips every
                                                 frame to one block and reads x,y targets
                                                 inside that block (0,0 is corner, bare
-                                                scroll its center); without --node, x,y
-                                                is viewport pixels. Nothing executes;
-                                                targets are block ids or x,y coordinates
+                                                scroll its center); clip and coordinates
+                                                share one frame of reference. Without
+                                                --node, x,y is viewport pixels. Nothing
+                                                executes; targets are block ids or x,y
+                                                coordinates
   dx open     <file> [--section ID]             render in browser — if no browser found,
                                                 prints a file:// URL instead
   dx ls       [dir]                             list every .dx document in the directory

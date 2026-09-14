@@ -256,6 +256,10 @@ fn collect_source_files(root: &Path) -> Result<Vec<PathBuf>, String> {
 }
 
 /// Recursively walks a directory, collecting source files and skipping internal directories.
+///
+/// Also skips directories that contain their own `.doc/` store directory, as they represent
+/// nested workspaces and belong to a different workspace root.
+#[allow(clippy::only_used_in_recursion)]
 fn walk_directory(dir: &Path, root: &Path, files: &mut Vec<PathBuf>) -> Result<(), String> {
     let entries = std::fs::read_dir(dir)
         .map_err(|e| format!("failed to read directory {}: {e}", dir.display()))?;
@@ -270,6 +274,11 @@ fn walk_directory(dir: &Path, root: &Path, files: &mut Vec<PathBuf>) -> Result<(
                 if doc_store::SKIPPED_DIRECTORIES.contains(&name) {
                     continue;
                 }
+            }
+
+            // Skip directories that contain their own .doc/ store (nested workspaces)
+            if path.join(doc_store::STORE_DIR).is_dir() {
+                continue;
             }
 
             walk_directory(&path, root, files)?;

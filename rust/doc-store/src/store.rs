@@ -29,7 +29,7 @@ use crate::git::{self, Route};
 use crate::{pack, schema, stub, StoreError};
 
 /// Directory holding the store and its packs, relative to the workspace root.
-pub(crate) const STORE_DIR: &str = ".doc";
+pub const STORE_DIR: &str = ".doc";
 /// The SQLite database file, relative to the workspace root.
 const DB_RELATIVE: &str = ".doc/index.db";
 
@@ -1207,6 +1207,9 @@ fn unwalked_directory(relative: &str) -> Option<&str> {
 }
 
 /// Recursively collect `.dx` files, skipping build output and the store itself.
+///
+/// Also skips directories that contain their own `.doc/` store directory, as they represent
+/// nested workspaces and belong to a different workspace root.
 fn walk(directory: &Path, found: &mut Vec<PathBuf>) {
     let Ok(entries) = fs::read_dir(directory) else {
         return;
@@ -1215,9 +1218,14 @@ fn walk(directory: &Path, found: &mut Vec<PathBuf>) {
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().into_owned();
         if path.is_dir() {
-            if !(name.starts_with('.') || SKIPPED_DIRECTORIES.contains(&name.as_str())) {
-                walk(&path, found);
+            if name.starts_with('.') || SKIPPED_DIRECTORIES.contains(&name.as_str()) {
+                continue;
             }
+            // Skip directories that contain their own .doc/ store (nested workspaces)
+            if path.join(STORE_DIR).is_dir() {
+                continue;
+            }
+            walk(&path, found);
             continue;
         }
         if path.extension().is_some_and(|extension| extension == "dx") {
@@ -2244,6 +2252,45 @@ mod tests {
         assert!(
             !source_index_path.exists(),
             "source_index file should be removed when empty"
+        );
+    }
+
+    #[test]
+    fn sync_does_not_adopt_or_list_nested_workspace_documents() {
+        // A parent workspace with a child directory holding its own .doc/ store should not
+        // adopt the child's documents or report them as unresolved when listing.
+        let parent_root = scratch("parent-workspace");
+        let child_dir = parent_root.join("ai-studio");
+        fs::create_dir_all(&child_dir).expect("create child directory");
+
+        // Create parent workspace
+        let mut parent_store = Store::open(&parent_root).expect("open parent");
+        parent_store.ingest("parent.dx", NOTES).expect("parent doc");
+
+        // Create child workspace with its own .doc/ store
+        let mut child_store = Store::open(&child_dir).expect("open child");
+        child_store.ingest("index.dx", NOTES).expect("child doc");
+
+        // Now sync the parent workspace — it should not adopt or list the child's index.dx
+        let report = parent_store.sync().expect("sync parent");
+
+        // The child workspace's index.dx should not be in the parent's list or sync report
+        assert!(
+            !report.ingested.iter().any(|p| p.contains("ai-studio")),
+            "should not adopt child workspace documents"
+        );
+        assert!(
+            !report.unresolved.iter().any(|p| p.contains("ai-studio")),
+            "should not report child workspace documents as unresolved"
+        );
+
+        // List the parent's documents — should only see parent.dx, not ai-studio/index.dx
+        let listed = parent_store.list().expect("list");
+        assert_eq!(listed.len(), 1, "should only list parent documents");
+        assert_eq!(listed[0].path, "parent.dx");
+        assert!(
+            !listed.iter().any(|doc| doc.path.contains("ai-studio")),
+            "nested workspace documents should not appear in parent's listing"
         );
     }
 }

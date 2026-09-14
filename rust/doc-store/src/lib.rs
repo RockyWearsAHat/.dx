@@ -41,7 +41,7 @@ pub mod stub;
 
 pub use store::{
     discover as discover_documents, stale_index, timestamp, Saved, Stats, Store, Summary,
-    SyncReport, SKIPPED_DIRECTORIES,
+    SyncReport, SKIPPED_DIRECTORIES, STORE_DIR,
 };
 
 use core::fmt;

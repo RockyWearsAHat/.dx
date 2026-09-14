@@ -30,6 +30,7 @@ pub struct RenamePreview {
     /// Reference site(s) that will be changed.
     pub references: Vec<RenameLocation>,
     /// Reference graph digest for approval tracking.
+    #[expect(dead_code)]
     pub graph_digest: String,
     /// Fingerprint for the approval ledger, computed from old/new names, sites, and graph digest.
     pub fingerprint: String,
@@ -50,7 +51,7 @@ pub fn run(args: &Args) -> Result<String, String> {
     let new_name = args.positional(1).ok_or("missing new name")?;
     let root = Path::new(args.positional(2).unwrap_or("."));
 
-    let preview = preview(root, &old_name, &new_name)?;
+    let preview = preview(root, old_name, new_name)?;
 
     // Handle --review flag: show preview without writing or approving.
     if args.present("review") {
@@ -202,14 +203,14 @@ fn apply(preview: &RenamePreview, root: &Path) -> Result<(), String> {
     for loc in &preview.definitions {
         file_updates
             .entry(loc.file.clone())
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(loc.line);
     }
 
     for loc in &preview.references {
         file_updates
             .entry(loc.file.clone())
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(loc.line);
     }
 

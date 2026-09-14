@@ -60,7 +60,7 @@ impl SourceIndex {
                 index
                     .token_index
                     .entry(token)
-                    .or_insert_with(Vec::new)
+                    .or_default()
                     .push(metadata.path.clone());
             }
         }
