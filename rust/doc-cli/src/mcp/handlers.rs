@@ -47,6 +47,7 @@ pub fn call(name: &str, args: &Value, root: &Path) -> ToolResult {
         "dx_report" => report(args, root),
         "dx_run" => run(args, root),
         "dx_sync" => sync(args, root),
+        "dx_live" => live(args, root),
         other => Err(format!("unknown tool: {other}")),
     }
 }
@@ -1343,6 +1344,27 @@ fn directory_arg(args: &Value, root: &Path) -> PathBuf {
     string(args, "directory").map_or_else(|| root.to_path_buf(), |value| resolve(value, root))
 }
 
+/// `dx_live` — the cached live snapshot of the repo containing `directory`, refreshed
+/// first when none exists or `refresh` is true.
+fn live(args: &Value, root: &Path) -> ToolResult {
+    let repo = crate::live::repo_of(&directory_arg(args, root));
+    let cached = if boolean(args, "refresh") {
+        Err(String::new())
+    } else {
+        crate::live::read_text(&repo)
+    };
+    let text = match cached {
+        Ok(text) => text,
+        Err(_) => {
+            let base = crate::live::default_base(&repo);
+            let snapshot = crate::live::refresh(&repo, &base, false)?;
+            crate::live::write(&repo, &snapshot)?;
+            crate::live::render_text(&snapshot)
+        }
+    };
+    Ok(vec![text_content(&text)])
+}
+
 /// A required string argument.
 fn required<'a>(args: &'a Value, key: &str) -> Result<&'a str, String> {
     string(args, key)
@@ -1392,6 +1414,31 @@ fn json_content(value: &Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dx_live_names_the_branch_of_a_temp_repo() {
+        let dir = std::env::temp_dir().join(format!("dxlive-mcp-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let git = |a: &[&str]| {
+            let ok = std::process::Command::new("git")
+                .arg("-C").arg(&dir)
+                .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+                .args(a).output().unwrap().status.success();
+            assert!(ok, "git {a:?}");
+        };
+        git(&["init", "-q", "-b", "main"]);
+        git(&["commit", "-q", "--allow-empty", "-m", "base"]);
+        git(&["checkout", "-q", "-b", "feature-x"]);
+        std::fs::write(dir.join("f.txt"), "x").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-q", "-m", "work"]);
+        git(&["checkout", "-q", "main"]);
+        let out = call("dx_live", &json!({ "directory": dir.display().to_string(), "refresh": true }), &dir).unwrap();
+        let text = out[0]["text"].as_str().unwrap().to_string();
+        assert!(text.contains("feature-x"), "{text}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     fn project(label: &str) -> PathBuf {
         let root = std::env::temp_dir().join(format!("dx-mcp-tests-{label}"));

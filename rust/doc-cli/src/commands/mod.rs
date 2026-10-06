@@ -17,6 +17,7 @@ pub mod edit;
 pub mod exec;
 pub mod find;
 pub mod index;
+pub mod live;
 pub mod merge;
 pub mod play;
 pub mod rename;
@@ -297,6 +298,12 @@ const COMMANDS: &[Command] = &[
         names: &["merge-driver"],
         flags: &["ancestor", "ours", "theirs", "path", "marker-size", "root"],
         run: |args| merge::run_merge_driver(args).map(Output::Report),
+    },
+    // Live branch state.
+    Command {
+        names: &["live"],
+        flags: &["repo", "base", "once", "json", "no-run", "add", "prune"],
+        run: |args| live::run(args).map(Output::Report),
     },
     // The platform.
     Command {
