@@ -54,6 +54,12 @@ pub(crate) fn block_header(block: &Block) -> String {
             if !block.writes.is_empty() {
                 attributes.push(format!("writes={}", format_attribute_value(&block.writes)));
             }
+            if !block.confine.is_empty() {
+                attributes.push(format!(
+                    "confine={}",
+                    format_attribute_value(&block.confine)
+                ));
+            }
             if !block.target.is_empty() {
                 attributes.push(format!("target={}", format_attribute_value(&block.target)));
             }

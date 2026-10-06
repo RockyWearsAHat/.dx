@@ -695,3 +695,51 @@ fn a_block_cannot_write_into_the_per_user_temp_dir() {
     );
     assert_absent(&target, "a write into the per-user temp dir");
 }
+
+/// `confine=host` is the reviewed, per-block way out of the boundary: the positive control
+/// is that an approved host block really writes outside the document's folder, and the
+/// negative control is that the identical block without the declaration still cannot.
+#[test]
+fn confine_host_runs_an_approved_block_outside_the_boundary_and_only_that_block() {
+    if !confined() {
+        return;
+    }
+    let _guard = SANDBOX_LOCK
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    let (_root, options) = scene("confine-host");
+    let outside = std::env::temp_dir().join("dx-attack-confine-host-outside");
+    let _ = fs::remove_dir_all(&outside);
+    fs::create_dir_all(&outside).expect("outside dir");
+    let target = outside.join("planted.txt");
+
+    let code = format!("echo host > {}", target.display());
+    let sandboxed = attack_unlocked(&code, &options);
+    assert_absent(&target, "the same block without confine=host");
+    assert!(
+        !sandboxed.contains("ran on the host"),
+        "a sandboxed block claimed the host: {sandboxed}"
+    );
+
+    let source = format!("::code id=payload lang=bash run confine=host\n{code}\n::end\n");
+    let report = run_document(&source, &options, &Nowhere).expect("acyclic run");
+    let run = report.runs.first().expect("the host block ran");
+    assert_eq!(
+        run.status, "ok",
+        "the approved host block failed: {}",
+        run.output
+    );
+    assert!(
+        run.output.starts_with(doc_run::HOST_NOTICE),
+        "the host run must announce itself first: {}",
+        run.output
+    );
+    assert!(!run.output.contains("DX_UNCONFINED"), "{}", run.output);
+    assert_eq!(
+        fs::read_to_string(&target)
+            .expect("the host block wrote outside")
+            .trim(),
+        "host"
+    );
+    let _ = fs::remove_dir_all(&outside);
+}

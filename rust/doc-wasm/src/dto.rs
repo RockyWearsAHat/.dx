@@ -97,6 +97,10 @@ pub struct BlockDto {
     /// document's own folder.
     #[serde(default)]
     pub writes: String,
+    /// Where an executable `code` block runs: empty for the sandbox, `host` for a
+    /// reviewed host run (`confine=` attribute).
+    #[serde(default)]
+    pub confine: String,
     /// The live URL a `lang=capture` block opens (`target=` attribute).
     #[serde(default)]
     pub target: String,
@@ -201,6 +205,7 @@ impl From<&Block> for BlockDto {
             deps: block.deps.clone(),
             reads: block.reads.clone(),
             writes: block.writes.clone(),
+            confine: block.confine.clone(),
             target: block.target.clone(),
             setup: block.setup.clone(),
             timeout: block.timeout,
@@ -239,6 +244,7 @@ impl From<&BlockDto> for Block {
             deps: dto.deps.clone(),
             reads: dto.reads.clone(),
             writes: dto.writes.clone(),
+            confine: dto.confine.clone(),
             target: dto.target.clone(),
             setup: dto.setup.clone(),
             timeout: dto.timeout,

@@ -280,6 +280,7 @@ fn seatbelt(spec: &CommandSpec, grant: &Grant) -> CommandSpec {
         program: "/usr/bin/sandbox-exec".to_string(),
         args,
         env: spec.env.clone(),
+        host_environment: false,
     }
 }
 
@@ -533,6 +534,7 @@ fn bubblewrap(spec: &CommandSpec, grant: &Grant) -> Result<CommandSpec, String> 
         program: "bwrap".to_string(),
         args,
         env: spec.env.clone(),
+        host_environment: false,
     })
 }
 

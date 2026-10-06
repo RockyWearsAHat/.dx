@@ -74,9 +74,15 @@ pub struct Plan {
 /// Absolute paths into `dirs.block` are baked into the returned commands, so the code can be
 /// run from the document's directory and still find the files that were written for it.
 ///
+/// The code is written with LF line endings for every runner: a document saved with CRLF
+/// would otherwise hand bash `do\r` and fail with a syntax error. The fingerprint is computed
+/// from the block as stored, so this changes what is written, never what was approved.
+///
 /// # Errors
 /// Returns a sentence naming what to install when the language's toolchain is absent.
 pub fn build(runner: &str, code: &str, deps: &[String], dirs: &Dirs) -> Result<Plan, String> {
+    let lf = code.replace("\r\n", "\n");
+    let code = lf.as_str();
     match runner {
         "python" => python(code, deps, dirs),
         "node" => node(code, deps, dirs),

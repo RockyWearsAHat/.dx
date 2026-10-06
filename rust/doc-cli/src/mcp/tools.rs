@@ -769,7 +769,12 @@ fn run_tool() -> Value {
                         created if missing; the grant joins the fingerprint, so review \
                         shows it and widening it re-opens review. It grants folders, never \
                         loose files, so a tool that rewrites one beside the document needs \
-                        the flag that tells it not to (`cargo test --locked`). The sandbox \
+                        the flag that tells it not to (`cargo test --locked`). A block that \
+                        cannot nest inside a sandbox (a suite that confines its own \
+                        children, a real browser) declares confine=host — the one accepted \
+                        value — and, once approved, runs on the host with your own \
+                        permissions; it joins the fingerprint like writes=, so review \
+                        shows it and adding it re-opens review. The sandbox \
                         otherwise keeps the folder read-only, and the network stays gone — \
                         with one deliberate exception: lang=capture. A block \
                         `::code lang=capture run target=<url> writes=out` opens a live, \

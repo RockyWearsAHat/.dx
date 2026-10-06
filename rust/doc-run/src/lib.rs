@@ -105,6 +105,14 @@ const BLOCKED_EXIT: i32 = 126;
 pub const FORCED_NOTICE: &str =
     "--- ran without approval: --force bypassed the review gate for this block ---";
 
+/// The line stamped into the output of an approved `confine=host` block.
+///
+/// The per-block, reviewed counterpart of [`confine::UNCONFINED_NOTICE`]: the block ran
+/// outside the sandbox because its header asked to and that header was approved with the
+/// code, and the record says so.
+pub const HOST_NOTICE: &str = "--- ran on the host: this block declares confine=host \
+     (reviewed), so it had your own permissions ---";
+
 /// How to run a document.
 #[derive(Debug, Clone)]
 pub struct RunOptions {
@@ -303,6 +311,13 @@ pub fn run_document(
                 continue;
             }
         };
+        let host = match declared_host(block) {
+            Ok(host) => host,
+            Err(sentence) => {
+                refuse(block, &sentence, options, &mut runs, &mut outputs);
+                continue;
+            }
+        };
         // Approval names the *declared* paths, never a directory's current expansion —
         // a file appearing under a declared folder is new data, not a new power.
         let read_paths = match declared_read_paths(&block.reads) {
@@ -313,7 +328,7 @@ pub fn run_document(
             }
         };
         let material = approval_material(block);
-        let approval = approval_fingerprint(runner, &material, &deps, &read_paths, &writes);
+        let approval = approval_fingerprint(runner, &material, &deps, &read_paths, &writes, host);
         let reads = match declared_reads(block, resolver, &writes, Some(&options.document_dir)) {
             Ok(reads) => reads,
             Err(sentence) if options.review_only => {
@@ -332,6 +347,7 @@ pub fn run_document(
                             ledger.is_approved(&approval),
                             &read_paths,
                             &writes,
+                            host,
                             &options.document_dir,
                         )
                     ),
@@ -344,7 +360,15 @@ pub fn run_document(
                 continue;
             }
         };
-        let fingerprint = fingerprint(runner, &material, &deps, &reads, &writes, block.timeout);
+        let fingerprint = fingerprint(
+            runner,
+            &material,
+            &deps,
+            &reads,
+            &writes,
+            host,
+            block.timeout,
+        );
         let existing = existing_output(&document, index, &block.id);
 
         // Review mode: show what would run without executing — and without recording
@@ -361,6 +385,7 @@ pub fn run_document(
                     ledger.is_approved(&approval),
                     &read_paths,
                     &writes,
+                    host,
                     &options.document_dir,
                 ),
                 duration_ms: 0,
@@ -421,12 +446,17 @@ pub fn run_document(
         // Reachable unapproved only through `--force`, which is the bypass that must say so.
         let bypassed = !approved;
         let started = Instant::now();
+        // The host run is part of what was approved, so only an approved block gets it: a
+        // block forced past review runs inside the sandbox like any other.
         let mut capture = execute(
             runner,
             block,
             &deps,
-            &writes,
-            &read_paths,
+            &Powers {
+                writes: &writes,
+                reads: &read_paths,
+                host: host && approved,
+            },
             &fingerprint,
             options,
         );
@@ -684,13 +714,15 @@ fn approval_material(block: &Block) -> std::borrow::Cow<'_, str> {
 /// text, which the document's author controls, so a suffix could be forged into an
 /// ungranted block's material. No runner name starts with `writes=`, so a block with a
 /// grant and a block without one can never share material — approving one never approves
-/// the other.
+/// the other. A `confine=host` declaration is prepended the same way, so approving the
+/// code approves the host run and a block toggled to the host re-opens review.
 fn fingerprint(
     runner: &str,
     code: &str,
     deps: &[String],
     reads: &[(String, String)],
     writes: &[String],
+    host: bool,
     timeout: u32,
 ) -> String {
     let mut material = format!("{runner}\u{1f}{}\u{1f}{code}", deps.join(","));
@@ -702,6 +734,9 @@ fn fingerprint(
     }
     if !writes.is_empty() {
         material = format!("writes={}\u{1e}{material}", writes.join(","));
+    }
+    if host {
+        material = format!("confine=host\u{1e}{material}");
     }
     if timeout > 0 {
         material = format!("timeout={}\u{1e}{material}", timeout);
@@ -728,6 +763,7 @@ fn approval_fingerprint(
     deps: &[String],
     read_paths: &[String],
     writes: &[String],
+    host: bool,
 ) -> String {
     let mut material = format!(
         "approval\u{1e}{runner}\u{1f}{}\u{1f}{code}\u{1f}reads={}",
@@ -737,7 +773,26 @@ fn approval_fingerprint(
     if !writes.is_empty() {
         material = format!("writes={}\u{1e}{material}", writes.join(","));
     }
+    if host {
+        material = format!("confine=host\u{1e}{material}");
+    }
     sha256_hex(material.as_bytes())
+}
+
+/// Whether a block declares the host run (`confine=host`), the one value `confine=` takes.
+///
+/// Any other value is refused with a sentence rather than read as the sandbox: a typo in a
+/// header that asks for more power must not silently run with less, nor the other way round.
+fn declared_host(block: &Block) -> Result<bool, String> {
+    match block.confine.trim() {
+        "" => Ok(false),
+        "host" => Ok(true),
+        other => Err(format!(
+            "confine={other} is not a value this block may declare — the one accepted \
+             value is `confine=host`, which runs the reviewed block on the host with your \
+             own permissions instead of inside the sandbox."
+        )),
+    }
 }
 
 /// The folders a block declares it may write (`writes=`), validated but not yet resolved.
@@ -948,6 +1003,7 @@ fn review_text(
     approved: bool,
     reads: &[String],
     writes: &[String],
+    host: bool,
     document_dir: &Path,
 ) -> String {
     let standing = if approved {
@@ -978,6 +1034,13 @@ fn review_text(
             "writes {} — approving grants this code write access to these folders",
             writes.join(", ")
         ));
+    }
+    if host {
+        grants.push(
+            "confine=host — approving runs this code on the host with your own permissions, \
+             outside the sandbox"
+                .to_string(),
+        );
     }
     let grant_text = if grants.is_empty() {
         String::new()
@@ -1017,11 +1080,14 @@ pub fn approve_edited_block(block: &Block, cache_root: &Path) -> Result<Option<S
         return Ok(None);
     }
     let deps = parse_deps(&block.deps);
-    let (Ok(read_paths), Ok(writes)) = (declared_read_paths(&block.reads), declared_writes(block))
-    else {
+    let (Ok(read_paths), Ok(writes), Ok(host)) = (
+        declared_read_paths(&block.reads),
+        declared_writes(block),
+        declared_host(block),
+    ) else {
         return Ok(None);
     };
-    let approval = approval_fingerprint(runner, &block.text, &deps, &read_paths, &writes);
+    let approval = approval_fingerprint(runner, &block.text, &deps, &read_paths, &writes, host);
     approvals::Ledger::at(cache_root).approve(&approval)?;
     Ok(Some(approval))
 }
@@ -1038,16 +1104,28 @@ fn pending_review(fingerprint: &str) -> String {
     )
 }
 
+/// What a block's header grants it at run time: the folders it may write, the paths it
+/// declared it reads, and whether its approved `confine=host` takes it out of the sandbox.
+struct Powers<'a> {
+    writes: &'a [String],
+    reads: &'a [String],
+    host: bool,
+}
+
 /// Execute one block, returning a capture even when nothing could be started.
 fn execute(
     runner: &str,
     block: &Block,
     deps: &[String],
-    writes: &[String],
-    reads: &[String],
+    powers: &Powers<'_>,
     fingerprint: &str,
     options: &RunOptions,
 ) -> Capture {
+    let Powers {
+        writes,
+        reads,
+        host,
+    } = *powers;
     if execution_disabled() {
         return blocked("execution is disabled (DX_NO_EXEC is set); no code was run");
     }
@@ -1111,16 +1189,23 @@ fn execute(
     };
     let mut writable = writable;
     writable.extend(granted);
-    let command = match confine::confine(
-        &home_in_block(&prepared.run, block, &dirs),
-        &Grant::offline(writable).reading(readable),
-    ) {
-        Ok(command) => command,
-        Err(message) => return blocked(&message),
+    // An approved `confine=host` block runs as the reader would have run it: no sandbox,
+    // and the reader's own environment — `HOME`, `TMPDIR`, `USER` unchanged — with only the
+    // `DX_*` variables every block gets. The sandbox's redirections exist for the sandbox.
+    let command = if host {
+        with_dx_variables(prepared.run.clone(), block, &dirs).on_host()
+    } else {
+        let run = home_in_block(&prepared.run, block, &dirs);
+        match confine::confine(&run, &Grant::offline(writable).reading(readable)) {
+            Ok(command) => command,
+            Err(message) => return blocked(&message),
+        }
     };
 
     let mut capture = process::run(&command, &options.document_dir, timeout);
-    if confine::overridden() {
+    if host {
+        capture.output = format!("{HOST_NOTICE}\n{}", capture.output);
+    } else if confine::overridden() {
         capture.output = format!("{}\n{}", confine::UNCONFINED_NOTICE, capture.output);
     } else if !capture.succeeded() {
         // A sandbox denial surfaces as the tool's own error — cargo's "failed to get
@@ -1234,17 +1319,16 @@ fn home_in_block(
     dirs: &plan::Dirs,
 ) -> process::CommandSpec {
     let block_dir = dirs.block.to_string_lossy().into_owned();
-    let mut cmd = run
+    let redirected = run
         .clone()
         .with_env("HOME", block_dir.clone())
         .with_env("TMPDIR", block_dir.clone())
-        .with_env("TEMP", block_dir.clone())
+        .with_env("TEMP", block_dir)
         .with_env(
             "XDG_CACHE_HOME",
             dirs.toolchains.to_string_lossy().into_owned(),
-        )
-        .with_env("DX_BLOCK_ID", block.id.clone())
-        .with_env("DX_SANDBOX", block_dir);
+        );
+    let mut cmd = with_dx_variables(redirected, block, dirs);
 
     // Pass Rust toolchain environment variables into the sandbox.
     for (key, value) in rust_toolchain_env() {
@@ -1252,6 +1336,17 @@ fn home_in_block(
     }
 
     cmd
+}
+
+/// The `DX_*` variables every block gets, sandboxed or on the host: its id, and its own
+/// scratch directory (`$DX_SANDBOX`).
+fn with_dx_variables(
+    run: process::CommandSpec,
+    block: &Block,
+    dirs: &plan::Dirs,
+) -> process::CommandSpec {
+    run.with_env("DX_BLOCK_ID", block.id.clone())
+        .with_env("DX_SANDBOX", dirs.block.to_string_lossy().into_owned())
 }
 
 /// Whether the `DX_NO_EXEC` kill switch is set.
@@ -1801,13 +1896,19 @@ mod tests {
 
     #[test]
     fn fingerprints_change_with_code_and_dependencies() {
-        let base = fingerprint("python", "print(1)", &[], &[], &[], 0);
-        assert_ne!(base, fingerprint("python", "print(2)", &[], &[], &[], 0));
+        let base = fingerprint("python", "print(1)", &[], &[], &[], false, 0);
         assert_ne!(
             base,
-            fingerprint("python", "print(1)", &["rich".into()], &[], &[], 0)
+            fingerprint("python", "print(2)", &[], &[], &[], false, 0)
         );
-        assert_ne!(base, fingerprint("node", "print(1)", &[], &[], &[], 0));
+        assert_ne!(
+            base,
+            fingerprint("python", "print(1)", &["rich".into()], &[], &[], false, 0)
+        );
+        assert_ne!(
+            base,
+            fingerprint("node", "print(1)", &[], &[], &[], false, 0)
+        );
         // The full digest: this value is the approval identity, and a truncated one is
         // a collision a hostile author could manufacture.
         assert_eq!(base.len(), 64);
@@ -1815,13 +1916,14 @@ mod tests {
 
     #[test]
     fn fingerprints_change_with_declared_reads() {
-        let base = fingerprint("python", "print(1)", &[], &[], &[], 0);
+        let base = fingerprint("python", "print(1)", &[], &[], &[], false, 0);
         let read = fingerprint(
             "python",
             "print(1)",
             &[],
             &[("site.css".into(), "body{}".into())],
             &[],
+            false,
             0,
         );
         assert_ne!(base, read);
@@ -1835,6 +1937,7 @@ mod tests {
                 &[],
                 &[("site.css".into(), "body{color:red}".into())],
                 &[],
+                false,
                 0,
             )
         );
@@ -1847,6 +1950,7 @@ mod tests {
                 &[],
                 &[("other.css".into(), "body{}".into())],
                 &[],
+                false,
                 0,
             )
         );
@@ -1854,8 +1958,8 @@ mod tests {
 
     #[test]
     fn fingerprints_change_with_the_write_grant_and_cannot_be_forged_onto_one() {
-        let bare = fingerprint("bash", "make", &[], &[], &[], 0);
-        let granted = fingerprint("bash", "make", &[], &[], &["target".into()], 0);
+        let bare = fingerprint("bash", "make", &[], &[], &[], false, 0);
+        let granted = fingerprint("bash", "make", &[], &[], &["target".into()], false, 0);
         assert_ne!(bare, granted, "a grant is part of what review approves");
         assert_ne!(
             granted,
@@ -1865,6 +1969,7 @@ mod tests {
                 &[],
                 &[],
                 &["target".into(), "gen".into()],
+                false,
                 0
             ),
             "a wider grant is a different approval"
@@ -1878,6 +1983,7 @@ mod tests {
             &[],
             &[("writes".into(), "target".into())],
             &[],
+            false,
             0,
         );
         assert_ne!(
@@ -1888,15 +1994,15 @@ mod tests {
 
     #[test]
     fn fingerprints_change_with_timeout() {
-        let base = fingerprint("python", "print(1)", &[], &[], &[], 0);
-        let with_timeout = fingerprint("python", "print(1)", &[], &[], &[], 300);
+        let base = fingerprint("python", "print(1)", &[], &[], &[], false, 0);
+        let with_timeout = fingerprint("python", "print(1)", &[], &[], &[], false, 300);
         assert_ne!(
             base, with_timeout,
             "a timeout is part of what review approves"
         );
         assert_ne!(
             with_timeout,
-            fingerprint("python", "print(1)", &[], &[], &[], 600),
+            fingerprint("python", "print(1)", &[], &[], &[], false, 600),
             "a different timeout is a different approval"
         );
     }
@@ -1993,14 +2099,14 @@ mod tests {
             ..Block::default()
         };
         let before = declared_reads(&block, &provided, &[], None).expect("resolves");
-        let recorded = fingerprint("python", &block.text, &[], &before, &[], 0);
+        let recorded = fingerprint("python", &block.text, &[], &before, &[], false, 0);
 
         let mut edited = resolve::Provided::new();
         edited.add_file("site.css", "body{color:red}");
         let after = declared_reads(&block, &edited, &[], None).expect("resolves");
         assert_ne!(
             recorded,
-            fingerprint("python", &block.text, &[], &after, &[], 0)
+            fingerprint("python", &block.text, &[], &after, &[], false, 0)
         );
     }
 
@@ -2032,7 +2138,7 @@ mod tests {
         let before = Walked(vec![("data/a.txt".into(), "one".into())]);
         let reads = declared_reads(&block, &before, &[], None).expect("resolves");
         assert_eq!(reads, vec![("data/a.txt".to_string(), "one".to_string())]);
-        let recorded = fingerprint("bash", &block.text, &[], &reads, &[], 0);
+        let recorded = fingerprint("bash", &block.text, &[], &reads, &[], false, 0);
 
         // A file appearing under the declared folder is a change the record must see.
         let grown = Walked(vec![
@@ -2042,14 +2148,14 @@ mod tests {
         let after = declared_reads(&block, &grown, &[], None).expect("resolves");
         assert_ne!(
             recorded,
-            fingerprint("bash", &block.text, &[], &after, &[], 0)
+            fingerprint("bash", &block.text, &[], &after, &[], false, 0)
         );
 
         // But not a change to the block's powers: approval names the declared path.
         let paths = declared_read_paths(&block.reads).expect("lawful");
         assert_eq!(
-            approval_fingerprint("bash", &block.text, &[], &paths, &[]),
-            approval_fingerprint("bash", &block.text, &[], &paths, &[])
+            approval_fingerprint("bash", &block.text, &[], &paths, &[], false),
+            approval_fingerprint("bash", &block.text, &[], &paths, &[], false)
         );
         assert_eq!(paths, vec!["data".to_string()]);
     }
@@ -2201,20 +2307,20 @@ mod tests {
 
     #[test]
     fn approval_names_the_code_and_its_powers_never_the_data() {
-        let base = approval_fingerprint("python", "print(1)", &[], &["a.css".into()], &[]);
+        let base = approval_fingerprint("python", "print(1)", &[], &["a.css".into()], &[], false);
         // The same program over the same declared paths is one approval — a `reads=`
         // file's text is not an input here at all, which is the whole point.
         assert_eq!(
             base,
-            approval_fingerprint("python", "print(1)", &[], &["a.css".into()], &[])
+            approval_fingerprint("python", "print(1)", &[], &["a.css".into()], &[], false)
         );
         assert_ne!(
             base,
-            approval_fingerprint("python", "print(2)", &[], &["a.css".into()], &[])
+            approval_fingerprint("python", "print(2)", &[], &["a.css".into()], &[], false)
         );
         assert_ne!(
             base,
-            approval_fingerprint("python", "print(1)", &[], &["b.css".into()], &[])
+            approval_fingerprint("python", "print(1)", &[], &["b.css".into()], &[], false)
         );
         assert_ne!(
             base,
@@ -2223,7 +2329,8 @@ mod tests {
                 "print(1)",
                 &[],
                 &["a.css".into()],
-                &["target".into()]
+                &["target".into()],
+                false
             )
         );
         assert_ne!(
@@ -2233,7 +2340,8 @@ mod tests {
                 "print(1)",
                 &["rich".into()],
                 &["a.css".into()],
-                &[]
+                &[],
+                false
             )
         );
         assert_eq!(base.len(), 64, "the full digest is the approval identity");
@@ -2341,7 +2449,7 @@ mod tests {
     /// like, since the fingerprint is a pure function of content its author controls.
     fn document_with_a_matching_run_record(code: &str) -> String {
         let body = format!("echo {code}");
-        let hash = fingerprint("bash", &body, &[], &[], &[], 0);
+        let hash = fingerprint("bash", &body, &[], &[], &[], false, 0);
         format!(
             "::code id=forged lang=bash run\n{body}\n::end\n\n\
 ::output id=forged-output for=forged status=ok exit=0 hash={hash}\n{code}\n::end\n"
@@ -2530,5 +2638,125 @@ mod tests {
             report2.runs[0].output.contains("done"),
             "output should contain the expected result"
         );
+    }
+
+    #[test]
+    fn a_crlf_bash_block_runs_with_lf_line_endings() {
+        let source =
+            "::code id=crlf lang=bash run\nfor i in 1 2; do\r\n echo $i\r\ndone\r\n::end\n";
+        assert!(
+            parse(source).blocks[0].text.contains("\r\n"),
+            "the stored code must carry CRLF for this test to mean anything"
+        );
+        let report = run_isolated(source, "crlf");
+        assert_eq!(report.runs.len(), 1);
+        assert_eq!(report.runs[0].status, "ok", "{}", report.runs[0].output);
+        assert_eq!(report.runs[0].output.trim(), "1\n2");
+    }
+
+    #[test]
+    fn crlf_code_is_written_with_lf_and_the_fingerprint_is_untouched() {
+        let code = "for i in 1 2; do\r\n echo $i\r\ndone\r\n";
+        let dirs = plan::Dirs {
+            block: std::env::temp_dir().join("dx-plan-crlf"),
+            toolchains: std::env::temp_dir().join("dx-plan-crlf-tc"),
+        };
+        let prepared = plan::build("bash", code, &[], &dirs).expect("bash exists");
+        assert_eq!(prepared.files[0].1, "for i in 1 2; do\n echo $i\ndone\n");
+        assert_ne!(
+            fingerprint("bash", code, &[], &[], &[], false, 0),
+            fingerprint("bash", &code.replace("\r\n", "\n"), &[], &[], &[], false, 0),
+            "the fingerprint stays computed from the block as stored"
+        );
+    }
+
+    #[test]
+    fn confine_host_joins_both_fingerprints() {
+        assert_ne!(
+            fingerprint("bash", "make", &[], &[], &[], false, 0),
+            fingerprint("bash", "make", &[], &[], &[], true, 0)
+        );
+        assert_ne!(
+            approval_fingerprint("bash", "make", &[], &[], &[], false),
+            approval_fingerprint("bash", "make", &[], &[], &[], true)
+        );
+        // The declaration is prepended like a grant, so it composes with one.
+        assert_ne!(
+            approval_fingerprint("bash", "make", &[], &[], &["out".into()], false),
+            approval_fingerprint("bash", "make", &[], &[], &["out".into()], true)
+        );
+    }
+
+    #[test]
+    fn confine_accepts_host_and_names_it_when_refusing_anything_else() {
+        let block = |value: &str| Block {
+            kind: "code".into(),
+            confine: value.into(),
+            ..Block::default()
+        };
+        assert_eq!(declared_host(&block("")), Ok(false));
+        assert_eq!(declared_host(&block("host")), Ok(true));
+        let refused = declared_host(&block("none")).expect_err("only host is accepted");
+        assert!(refused.contains("confine=host"), "{refused}");
+
+        let source = "::code id=c lang=bash run confine=sandbox\necho hi\n::end\n";
+        let report =
+            run_document(source, &gate_options("confine-bad"), &resolve::Nowhere).expect("acyclic");
+        assert_eq!(report.runs[0].status, "blocked");
+        assert!(report.runs[0].output.contains("`confine=host`"));
+    }
+
+    #[test]
+    fn an_unapproved_confine_host_block_does_not_run() {
+        let options = gate_options("confine-host-unapproved");
+        let marker = options.document_dir.join("ran.txt");
+        let source = format!(
+            "::code id=h lang=bash run confine=host\necho ran > {}\n::end\n",
+            marker.display()
+        );
+        let report = run_document(&source, &options, &resolve::Nowhere).expect("acyclic");
+        assert_eq!(report.runs[0].status, "blocked");
+        assert!(report.runs[0].output.contains("blocked pending review"));
+        assert!(!marker.exists(), "an unapproved host block ran");
+    }
+
+    /// "It had your own permissions" includes your own environment: an approved host block
+    /// sees dx's `HOME` and `TMPDIR`, not the sandbox's redirection, and still gets the
+    /// `DX_*` variables every block gets.
+    #[test]
+    fn an_approved_confine_host_block_runs_with_dx_s_own_environment() {
+        // Other tests point HOME elsewhere for a moment; read it while none of them can.
+        let _env = crate::env_lock();
+        let home = std::env::var("HOME").expect("HOME is set for the test process");
+        let source = "::code id=h lang=bash run confine=host\n\
+                      echo \"$HOME\"\necho \"${TMPDIR:-unset}\"\necho \"$DX_BLOCK_ID\"\n\
+                      test -d \"$DX_SANDBOX\" && echo sandbox-dir\n::end\n";
+        let report = run_isolated(source, "confine-host-environment");
+        let run = &report.runs[0];
+        assert_eq!(run.status, "ok", "{}", run.output);
+        let tmpdir = std::env::var("TMPDIR").unwrap_or_else(|_| "unset".into());
+        assert_eq!(
+            run.output,
+            format!("{HOST_NOTICE}\n{home}\n{tmpdir}\nh\nsandbox-dir")
+        );
+    }
+
+    #[test]
+    fn review_lists_confine_host() {
+        let options = RunOptions {
+            review_only: true,
+            ..gate_options("confine-host-review")
+        };
+        let source = "::code id=h lang=bash run confine=host\necho hi\n::end\n";
+        let report = run_document(source, &options, &resolve::Nowhere).expect("acyclic");
+        assert_eq!(report.runs[0].status, "review");
+        assert!(
+            report.runs[0].output.contains("confine=host"),
+            "{}",
+            report.runs[0].output
+        );
+        let plain = "::code id=h lang=bash run\necho hi\n::end\n";
+        let report = run_document(plain, &options, &resolve::Nowhere).expect("acyclic");
+        assert!(!report.runs[0].output.contains("confine=host"));
     }
 }

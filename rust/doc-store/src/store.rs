@@ -1878,7 +1878,10 @@ mod tests {
             .expect("one stale pointer must not block an unrelated write");
 
         // (1) the restorable one is back in the index, with no warning.
-        assert_eq!(store.source("lost.dx").expect("restored"), stringify(&parse(NOTES)));
+        assert_eq!(
+            store.source("lost.dx").expect("restored"),
+            stringify(&parse(NOTES))
+        );
         // (2) the other is kept in the packs and named in a warning.
         let packed = pack::load_all(&root).expect("load");
         assert!(packed.contains_key("odd.dx"), "never dropped");

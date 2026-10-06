@@ -118,29 +118,14 @@ impl Cdp {
             Some(host) => format!("MAP {host} {host}, MAP * ~NOTFOUND"),
             None => "MAP * ~NOTFOUND".to_string(),
         };
-        let mut command = Command::new(browser);
-        command.args([
-            "--headless",
-            "--disable-gpu",
-            "--no-sandbox",
-            "--hide-scrollbars",
-            "--no-first-run",
-            "--disable-extensions",
-            "--force-device-scale-factor=1",
-            "--remote-debugging-port=0",
-        ]);
-        command.arg(format!("--host-resolver-rules={resolver_rules}"));
-        if let Some(port) = proxy {
-            command.arg(format!("--proxy-server=127.0.0.1:{port}"));
-            // Chromium bypasses any configured proxy for loopback destinations by
-            // default — exactly the case this proxy exists to scope. Negating it forces
-            // every destination, loopback included, through the proxy.
-            command.arg("--proxy-bypass-list=<-loopback>");
-        }
-        let mut child = command
-            .arg(format!("--user-data-dir={}", profile_dir.display()))
-            .arg(format!("--window-size={width},{height}"))
-            .arg("about:blank")
+        let mut child = Command::new(browser)
+            .args(launch_args(
+                profile_dir,
+                width,
+                height,
+                &resolver_rules,
+                proxy,
+            ))
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
             .spawn()
@@ -632,9 +617,73 @@ fn connect(url: &str) -> Result<TcpStream, String> {
     Ok(socket)
 }
 
+/// The complete argument list for a headless, automated Chromium launch. Pure, so a test
+/// can pin it without starting a browser. The keychain/password flags keep Chromium off
+/// the user's login keychain (no "Keychain Not Found" dialog, no UI of any kind), and
+/// `--user-data-dir` is always the caller's throwaway profile, never a real one.
+pub(crate) fn launch_args(
+    profile_dir: &Path,
+    width: u32,
+    height: u32,
+    resolver_rules: &str,
+    proxy: Option<u16>,
+) -> Vec<String> {
+    let mut args: Vec<String> = [
+        "--headless",
+        "--disable-gpu",
+        "--no-sandbox",
+        "--hide-scrollbars",
+        "--no-first-run",
+        "--disable-extensions",
+        "--force-device-scale-factor=1",
+        "--remote-debugging-port=0",
+        "--use-mock-keychain",
+        "--password-store=basic",
+        "--no-default-browser-check",
+        "--disable-background-networking",
+        "--disable-component-update",
+        "--disable-sync",
+    ]
+    .iter()
+    .map(|flag| (*flag).to_string())
+    .collect();
+    args.push(format!("--host-resolver-rules={resolver_rules}"));
+    if let Some(port) = proxy {
+        args.push(format!("--proxy-server=127.0.0.1:{port}"));
+        // Chromium bypasses any configured proxy for loopback destinations by
+        // default — exactly the case this proxy exists to scope. Negating it forces
+        // every destination, loopback included, through the proxy.
+        args.push("--proxy-bypass-list=<-loopback>".to_string());
+    }
+    args.push(format!("--user-data-dir={}", profile_dir.display()));
+    args.push(format!("--window-size={width},{height}"));
+    args.push("about:blank".to_string());
+    args
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn launch_args_keep_the_browser_off_the_user_keychain() {
+        let profile = Path::new("/tmp/dx-profile");
+        for proxy in [None, Some(9)] {
+            let args = launch_args(profile, 800, 600, "MAP * ~NOTFOUND", proxy);
+            for flag in [
+                "--use-mock-keychain",
+                "--password-store=basic",
+                "--headless",
+            ] {
+                assert!(args.iter().any(|a| a == flag), "missing {flag}");
+            }
+            assert!(args.contains(&"--user-data-dir=/tmp/dx-profile".to_string()));
+            assert_eq!(
+                args.iter().any(|a| a.starts_with("--proxy-server=")),
+                proxy.is_some()
+            );
+        }
+    }
 
     #[test]
     fn a_short_frame_is_masked_and_carries_its_length_inline() {
