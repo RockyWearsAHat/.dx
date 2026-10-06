@@ -414,6 +414,27 @@ fn source_in(args: &Value, root: &Path, cache_root: &Path) -> ToolResult {
     // a conflict has no other window onto the file — and what it needs is the marker lines
     // exactly as git wrote them, not a parse that would invent blocks around them.
     let path = resolve(required(args, "path")?, root);
+    let not_checked_out = path
+        .strip_prefix(root)
+        .ok()
+        .and_then(|relative| relative.to_str())
+        .is_some_and(|relative| workspace::is_not_checked_out(root, relative));
+    let mut result = source_text(args, root, cache_root, &path)?;
+    if not_checked_out {
+        result.insert(
+            0,
+            text_content(
+                "not checked out in this sparse worktree: text from git, read-only \
+                 (`git sparse-checkout add` the path to edit it)",
+            ),
+        );
+    }
+    Ok(result)
+}
+
+/// The text of [`source_in`], without the not-checked-out note.
+fn source_text(args: &Value, root: &Path, cache_root: &Path, path: &Path) -> ToolResult {
+    let path = path.to_path_buf();
 
     // If a line range was requested, handle it specially for both source files and documents
     if let Some(lines_arg) = string(args, "lines") {
@@ -579,6 +600,10 @@ fn search(args: &Value, root: &Path) -> ToolResult {
                 "title": hit.document.title(),
                 "score": hit.score,
             });
+            if workspace::is_not_checked_out(&directory, &hit.document.relative) {
+                item["checkedOut"] = json!(false);
+                item["readOnly"] = json!(true);
+            }
             if let Some(id) = &hit.block {
                 if let Some(scoped) = section(&hit.document.document, id) {
                     item["block"] = json!(id);
