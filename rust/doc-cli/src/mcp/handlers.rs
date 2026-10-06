@@ -89,7 +89,7 @@ fn refresh_outputs(args: &Value, root: &Path, cache_root: &Path) -> Option<Strin
     let refreshed: Vec<&str> = report
         .runs
         .iter()
-        .filter(|run| run.status == "ok" || run.status == "error")
+        .filter(|run| run.status == "ok" || run.status == "error" || run.status == "interrupted")
         .map(|run| run.id.as_str())
         .collect();
     let blocked = report

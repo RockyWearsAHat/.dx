@@ -93,16 +93,27 @@ pub fn run_fmt(args: &Args) -> Result<String, String> {
 /// edit ([`edit::replace_in_block`]), priced at the characters that changed rather than
 /// the whole block. `OLD` must match exactly once unless `--all` says every occurrence.
 ///
+/// The body comes from `--text`, `--from <file>`, or standard input when asked for by
+/// name (`--text -` or `--from -`) — never from a stdin nobody mentioned, which an agent's
+/// open pipe turned into a read that never returned (report-763be282). `--header` alone
+/// retypes the block and keeps its body; with neither a header nor a body the command
+/// refuses with a sentence naming `--text`.
+///
 /// A `--header` retype whose body arrives empty from anywhere but an explicit
-/// `--text ''` is refused when the block has words to lose: a closed stdin was never
+/// `--text ''` is refused when the block has words to lose: an empty pipe was never
 /// how anyone meant to erase a block, and it has erased them (part 40's field note).
 pub fn run_set(args: &Args) -> Result<String, String> {
-    set_in(args, &doc_run::RunOptions::default().cache_root)
+    set_in(
+        args,
+        &doc_run::RunOptions::default().cache_root,
+        &mut std::io::stdin().lock(),
+    )
 }
 
 /// The body of [`run_set`], with the approval ledger's location stated rather than
-/// defaulted, so the suite never approves anything in the developer's real one.
-fn set_in(args: &Args, cache_root: &Path) -> Result<String, String> {
+/// defaulted, so the suite never approves anything in the developer's real one, and with
+/// the body's standard input handed in, so the suite never blocks on the real one.
+fn set_in(args: &Args, cache_root: &Path, stdin: &mut dyn std::io::Read) -> Result<String, String> {
     let path = path_argument(args, 0, "a .dx file is required")?;
     let id = args
         .positional(1)
@@ -138,19 +149,23 @@ fn set_in(args: &Args, cache_root: &Path) -> Result<String, String> {
             path.display()
         ));
     }
-    let body = body_argument(args)?;
+    let body = body_argument(args, stdin)?;
 
     if args.present("header") {
         let header = args.value("header").unwrap_or_default();
         let source = workspace::read(&path)?;
+        // A header alone retypes the block around the words it already has.
+        let body = match body {
+            Some(body) => body,
+            None => edit::block_source(&source, id)?,
+        };
         if body.is_empty() && args.value("text") != Some("") {
             let document = parse(&source);
             if let Ok(index) = edit::find(&document, id) {
                 if !edit::body(&document.blocks[index]).is_empty() {
                     return Err(format!(
                         "a --header retype with an empty body would erase what `{id}` says — \
-                         pass the body with --text or a pipe, or say --text '' to empty it \
-                         on purpose"
+                         pass the body with --text, or say --text '' to empty it on purpose"
                     ));
                 }
             }
@@ -165,6 +180,13 @@ fn set_in(args: &Args, cache_root: &Path) -> Result<String, String> {
         return Ok(format!("{focus}\n{note}{warnings}"));
     }
 
+    let body = body.ok_or_else(|| {
+        format!(
+            "`dx set` needs the new body of `{id}` — pass --text TEXT (multi-line is fine), \
+             --from <file>, or --text - to read standard input; --header alone retypes \
+             the block and keeps its body"
+        )
+    })?;
     let updated = edit::set_block(&workspace::read(&path)?, id, &body)?;
     let document = parse(&updated);
     workspace::save(&path, &document)?;
@@ -211,16 +233,29 @@ fn edit_is_the_review(updated: &str, id: &str, cache_root: &Path) -> String {
 /// set: the new block's id is stable against the document's existing ids, and an explicit
 /// `--id` some block already answers to is refused with a sentence, never silently renamed.
 pub fn run_append(args: &Args) -> Result<String, String> {
-    append_in(args, &doc_run::RunOptions::default().cache_root)
+    append_in(
+        args,
+        &doc_run::RunOptions::default().cache_root,
+        &mut std::io::stdin().lock(),
+    )
 }
 
-/// The body of [`run_append`], with the approval ledger's location stated for the suite.
-fn append_in(args: &Args, cache_root: &Path) -> Result<String, String> {
+/// The body of [`run_append`], with the approval ledger's location and the body's standard
+/// input stated for the suite.
+fn append_in(
+    args: &Args,
+    cache_root: &Path,
+    stdin: &mut dyn std::io::Read,
+) -> Result<String, String> {
     let path = path_argument(args, 0, "a .dx file is required")?;
     refuse_extra_positionals(args, 1)?;
     let kind = args.value("type").unwrap_or("paragraph");
     require_code_for_attributes(kind, args)?;
-    let body = body_argument(args)?;
+    let body = body_argument(args, stdin)?.ok_or_else(|| {
+        "`dx append` needs the new block's body — pass --text TEXT (multi-line is fine), \
+         --from <file>, or --text - to read standard input"
+            .to_string()
+    })?;
 
     let source = workspace::read(&path)?;
     let insertion = edit::Insertion {
@@ -502,23 +537,34 @@ fn refuse_extra_positionals(args: &Args, expected: usize) -> Result<(), String> 
     match args.positionals().get(expected) {
         Some(stray) => Err(format!(
             "unexpected argument `{stray}` — a block's body is passed with --text \
-             (multi-line is fine), --from <file>, or piped on stdin"
+             (multi-line is fine), --from <file>, or --text - to read standard input"
         )),
         None => Ok(()),
     }
 }
 
-/// Read the new block body from `--text`, `--from <file>`, or standard input.
-fn body_argument(args: &Args) -> Result<String, String> {
-    if let Some(text) = args.value("text") {
-        if text != "-" {
-            return Ok(text.to_string());
-        }
+/// Read the new block body from `--text`, `--from <file>`, or — only when `--text -` or
+/// `--from -` asks for it by name — `stdin`, which the commands hand the process's own and
+/// the suite hands a reader of its choosing. `None` when no body was given at all: an
+/// unmentioned stdin is never read, because an agent's shell leaves an open pipe there and
+/// the read never returns (report-763be282).
+fn body_argument(args: &Args, stdin: &mut dyn std::io::Read) -> Result<Option<String>, String> {
+    let text = args.value("text");
+    let from = args.value("from");
+    if let Some(text) = text.filter(|text| *text != "-") {
+        return Ok(Some(text.to_string()));
     }
-    if let Some(file) = args.value("from") {
-        return workspace::read(Path::new(file));
+    if let Some(file) = from.filter(|file| *file != "-") {
+        return workspace::read(Path::new(file)).map(Some);
     }
-    workspace::read(Path::new("-"))
+    if text.is_none() && from.is_none() {
+        return Ok(None);
+    }
+    let mut buffer = String::new();
+    stdin
+        .read_to_string(&mut buffer)
+        .map(|_| Some(buffer))
+        .map_err(|error| format!("could not read standard input: {error}"))
 }
 
 /// Read a required path from positional `index`.
@@ -534,6 +580,25 @@ mod tests {
 
     fn args(tokens: &[&str]) -> Args {
         Args::parse(&tokens.iter().map(|t| (*t).to_string()).collect::<Vec<_>>())
+    }
+
+    /// The suite's `dx set`: the real one with an empty standard input, so a test that
+    /// leaves the body to stdin never blocks on the runner's own (report-763be282).
+    fn run_set(args: &Args) -> Result<String, String> {
+        set_in(
+            args,
+            &doc_run::RunOptions::default().cache_root,
+            &mut std::io::empty(),
+        )
+    }
+
+    /// The suite's `dx append`, with the same empty standard input as [`run_set`].
+    fn run_append(args: &Args) -> Result<String, String> {
+        append_in(
+            args,
+            &doc_run::RunOptions::default().cache_root,
+            &mut std::io::empty(),
+        )
     }
 
     fn scratch(label: &str) -> PathBuf {
@@ -643,7 +708,12 @@ mod tests {
         workspace::write_text(&path, "::code id=job lang=bash run\necho old\n::end\n")
             .expect("seed");
 
-        set_in(&args(&[&file, "job", "--text", "echo typed"]), &cache).expect("set");
+        set_in(
+            &args(&[&file, "job", "--text", "echo typed"]),
+            &cache,
+            &mut std::io::empty(),
+        )
+        .expect("set");
 
         let report = doc_run::run_document(
             &workspace::read(&path).expect("resolve"),
@@ -709,16 +779,105 @@ mod tests {
     #[test]
     fn a_header_retype_with_nothing_on_stdin_keeps_the_words() {
         // `dx set doc.dx p --header "::quote"` with no --text and a closed stdin
-        // silently emptied the block (part 40's field note). It refuses now, and the
-        // refusal names the deliberate way to empty.
+        // silently emptied the block (part 40's field note); with an open pipe it never
+        // returned (report-763be282). A header alone now never reads stdin: it retypes
+        // the block and keeps its words.
         let path = scratch("set-header-empty").join("doc.dx");
         let file = path.to_string_lossy().into_owned();
         workspace::write_text(&path, "::paragraph id=p\nkeep me\n::end\n").expect("seed");
-        let error =
-            run_set(&args(&[&file, "p", "--header", "::quote"])).expect_err("should refuse");
+        run_set(&args(&[&file, "p", "--header", "::quote"])).expect("retype");
+        let raw = workspace::read(&path).expect("resolve");
+        assert!(raw.contains("::quote"), "not retyped: {raw}");
+        assert!(raw.contains("keep me"), "body was touched: {raw}");
+    }
+
+    #[test]
+    fn a_header_alone_keeps_the_body_and_never_reads_the_reader() {
+        let path = scratch("set-header-alone").join("doc.dx");
+        let file = path.to_string_lossy().into_owned();
+        workspace::write_text(&path, "::paragraph id=p\nkeep me\n::end\n").expect("seed");
+        set_in(
+            &args(&[&file, "p", "--header", "::quote id=p"]),
+            &doc_run::RunOptions::default().cache_root,
+            &mut "should not be read".as_bytes(),
+        )
+        .expect("retype");
+        let raw = workspace::read(&path).expect("resolve");
+        let document = parse(&raw);
+        let index = edit::find(&document, "p").expect("the retyped block");
+        assert_eq!(document.blocks[index].kind, "quote", "{raw}");
+        assert_eq!(edit::body(&document.blocks[index]), "keep me", "{raw}");
+    }
+
+    #[test]
+    fn an_explicitly_requested_empty_pipe_still_refuses_to_erase_on_a_retype() {
+        let path = scratch("set-header-empty-pipe").join("doc.dx");
+        let file = path.to_string_lossy().into_owned();
+        workspace::write_text(&path, "::paragraph id=p\nkeep me\n::end\n").expect("seed");
+        let error = run_set(&args(&[&file, "p", "--header", "::quote", "--text", "-"]))
+            .expect_err("should refuse");
         assert!(error.contains("--text ''"), "{error}");
         let raw = workspace::read(&path).expect("resolve");
         assert!(raw.contains("keep me"), "body was touched: {raw}");
+    }
+
+    #[test]
+    fn set_and_append_with_no_body_refuse_naming_text_and_never_read_stdin() {
+        let path = scratch("no-body").join("doc.dx");
+        let file = path.to_string_lossy().into_owned();
+        workspace::write_text(&path, "::paragraph id=p\nkeep me\n::end\n").expect("seed");
+        let cache = doc_run::RunOptions::default().cache_root;
+        let set = set_in(
+            &args(&[&file, "p"]),
+            &cache,
+            &mut "should not be read".as_bytes(),
+        )
+        .expect_err("set should refuse");
+        assert!(set.contains("--text"), "{set}");
+        let append = append_in(
+            &args(&[&file]),
+            &cache,
+            &mut "should not be read".as_bytes(),
+        )
+        .expect_err("append should refuse");
+        assert!(append.contains("--text"), "{append}");
+        let raw = workspace::read(&path).expect("resolve");
+        assert!(!raw.contains("should not be read"), "{raw}");
+        assert!(raw.contains("keep me"), "{raw}");
+    }
+
+    #[test]
+    fn from_dash_reads_the_reader_too() {
+        let path = scratch("from-dash").join("doc.dx");
+        let file = path.to_string_lossy().into_owned();
+        workspace::write_text(&path, "::paragraph id=p\nold\n::end\n").expect("seed");
+        set_in(
+            &args(&[&file, "p", "--from", "-"]),
+            &doc_run::RunOptions::default().cache_root,
+            &mut "from the pipe".as_bytes(),
+        )
+        .expect("set");
+        assert!(workspace::read(&path)
+            .expect("resolve")
+            .contains("from the pipe"));
+    }
+
+    #[test]
+    fn a_header_retype_reads_its_body_from_the_reader_it_is_handed() {
+        let path = scratch("set-header-piped").join("doc.dx");
+        let file = path.to_string_lossy().into_owned();
+        workspace::write_text(&path, "::paragraph id=p\nold words\n::end\n").expect("seed");
+        set_in(
+            &args(&[&file, "p", "--header", "::quote id=p", "--text", "-"]),
+            &doc_run::RunOptions::default().cache_root,
+            &mut "piped words".as_bytes(),
+        )
+        .expect("set");
+        let raw = workspace::read(&path).expect("resolve");
+        assert!(raw.contains("::quote"), "{raw}");
+        let document = parse(&raw);
+        let index = edit::find(&document, "p").expect("the retyped block");
+        assert_eq!(edit::body(&document.blocks[index]), "piped words", "{raw}");
     }
 
     #[test]

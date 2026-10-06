@@ -174,7 +174,7 @@ pub struct BlockRun {
     pub id: String,
     /// Language as the author wrote it.
     pub language: String,
-    /// `ok`, `error`, `skipped`, `blocked`, or `review`.
+    /// `ok`, `error`, `interrupted`, `skipped`, `blocked`, or `review`.
     pub status: String,
     /// Process exit code (`0` for skipped blocks).
     pub exit: i32,
@@ -199,8 +199,9 @@ impl BlockRun {
 pub struct RunReport {
     /// The document source with `::output` blocks refreshed.
     pub source: String,
-    /// One entry per runnable block, in the order they ran — document order, unless
-    /// [`RunOptions::follow_board_edges`] reordered them.
+    /// One entry per runnable block, in run order — document order, unless
+    /// [`RunOptions::follow_board_edges`] reordered them — even when independent blocks
+    /// executed concurrently and finished in another order.
     pub runs: Vec<BlockRun>,
     /// Whether `source` differs from the input.
     pub changed: bool,
@@ -219,7 +220,7 @@ impl RunReport {
     pub fn executed(&self) -> usize {
         self.runs
             .iter()
-            .filter(|run| run.status == "ok" || run.status == "error")
+            .filter(|run| run.status == "ok" || run.status == "error" || run.status == INTERRUPTED)
             .count()
     }
 }
@@ -227,9 +228,16 @@ impl RunReport {
 /// Run every runnable code block in `source` and return the updated document.
 ///
 /// Blocks execute in document order, so a later block sees files an earlier one wrote.
+/// Independent blocks overlap: consecutive blocks run concurrently unless a later one
+/// declares a `reads=` path an earlier one's `writes=` covers, and a block with no `reads=`
+/// at all runs alone, in its place (see `order::waves`). At most `DX_RUN_JOBS` blocks
+/// execute at once — by default half the machine's parallelism, capped at four — and
+/// `DX_RUN_JOBS=1` is the plain serial run. Results are reported and folded in run order
+/// whatever order the executions finish in, so the document comes out the same either way.
 /// [`RunOptions::follow_board_edges`] orders them by the document's board edges instead —
 /// there an edge that defers a block lets later blocks (on a board or not) run before it,
-/// so only the stated edges order side effects, not document position. The order is still
+/// so only the stated edges order side effects, not document position; a block starts once
+/// its edge predecessors finish, beside any other ready block. The order is still
 /// deterministic, and it is the only way this function fails: a cycle among the selected
 /// runnable blocks is `Err` with a sentence naming the cycle, because a cycle states no
 /// order. [`RunOptions::only`] narrows the graph before the order is computed, so a cycle
@@ -273,8 +281,6 @@ pub fn run_document(
     let mut hydrated = document.clone();
     let unresolved = resolve::hydrate(&mut hydrated, resolver);
     let ledger = approvals::Ledger::at(&options.cache_root);
-    let mut runs: Vec<BlockRun> = Vec::new();
-    let mut outputs: Vec<(String, Block)> = Vec::new();
 
     // `only` narrows the set here, ahead of the edge sort, so a cycle among blocks the
     // caller did not select cannot veto the one they did.
@@ -285,200 +291,43 @@ pub fn run_document(
         .filter(|(_, block)| runnable_runner(block).is_some() && selected(block, options))
         .map(|(index, _)| index)
         .collect();
-    let ordered = if options.follow_board_edges {
-        order::edge_order(&document, &runnable)?
+    let (ordered, predecessors) = if options.follow_board_edges {
+        let (ordered, constraints) = order::edge_schedule(&document, &runnable)?;
+        let predecessors = edge_predecessors(&ordered, &constraints);
+        (ordered, predecessors)
     } else {
-        runnable
+        let predecessors = wave_predecessors(&document, &runnable);
+        (runnable, predecessors)
     };
 
-    for index in ordered {
-        let Some(runner) = runnable_runner(&document.blocks[index]) else {
-            continue;
-        };
-
-        // Hydration edits blocks in place and only ever appends, so the indices agree.
-        let block = &hydrated.blocks[index];
-        if let Some(problem) = unresolved.iter().find(|entry| entry.block == block.id) {
-            refuse(block, &problem.sentence, options, &mut runs, &mut outputs);
-            continue;
-        }
-
-        let deps = parse_deps(&block.deps);
-        let writes = match declared_writes(block) {
-            Ok(writes) => writes,
-            Err(sentence) => {
-                refuse(block, &sentence, options, &mut runs, &mut outputs);
-                continue;
-            }
-        };
-        let host = match declared_host(block) {
-            Ok(host) => host,
-            Err(sentence) => {
-                refuse(block, &sentence, options, &mut runs, &mut outputs);
-                continue;
-            }
-        };
-        // Approval names the *declared* paths, never a directory's current expansion —
-        // a file appearing under a declared folder is new data, not a new power.
-        let read_paths = match declared_read_paths(&block.reads) {
-            Ok(paths) => paths,
-            Err(sentence) => {
-                refuse(block, &sentence, options, &mut runs, &mut outputs);
-                continue;
-            }
-        };
-        let material = approval_material(block);
-        let approval = approval_fingerprint(runner, &material, &deps, &read_paths, &writes, host);
-        let reads = match declared_reads(block, resolver, &writes, Some(&options.document_dir)) {
-            Ok(reads) => reads,
-            Err(sentence) if options.review_only => {
-                // A grant that cannot be satisfied must not hide the code: review still
-                // shows what would run, with the problem named above it.
-                runs.push(BlockRun {
-                    id: block.id.clone(),
-                    language: block.language.clone(),
-                    status: "review".to_string(),
-                    exit: 0,
-                    output: format!(
-                        "{sentence}\n{}",
-                        review_text(
-                            &material,
-                            &approval,
-                            ledger.is_approved(&approval),
-                            &read_paths,
-                            &writes,
-                            host,
-                            &options.document_dir,
-                        )
-                    ),
-                    duration_ms: 0,
-                });
-                continue;
-            }
-            Err(sentence) => {
-                refuse(block, &sentence, options, &mut runs, &mut outputs);
-                continue;
-            }
-        };
-        let fingerprint = fingerprint(
-            runner,
-            &material,
-            &deps,
-            &reads,
-            &writes,
-            host,
-            block.timeout,
-        );
-        let existing = existing_output(&document, index, &block.id);
-
-        // Review mode: show what would run without executing — and without recording
-        // anything, because reading never writes.
-        if options.review_only {
-            runs.push(BlockRun {
-                id: block.id.clone(),
-                language: block.language.clone(),
-                status: "review".to_string(),
-                exit: 0,
-                output: review_text(
-                    &material,
-                    &approval,
-                    ledger.is_approved(&approval),
-                    &read_paths,
-                    &writes,
-                    host,
-                    &options.document_dir,
-                ),
-                duration_ms: 0,
-            });
-            continue;
-        }
-
-        if options.approve {
-            if let Err(sentence) = ledger.approve(&approval) {
-                runs.push(BlockRun {
-                    id: block.id.clone(),
-                    language: block.language.clone(),
-                    status: "blocked".to_string(),
-                    exit: BLOCKED_EXIT,
-                    output: sentence,
-                    duration_ms: 0,
-                });
-                continue;
-            }
-        }
-
-        // Approval is this machine's own record and nothing else. The document's `::output`
-        // block cannot vouch for the code above it: it is content the same hand wrote, and
-        // its `hash=` is computable by whoever authored the block. Approval names the code
-        // and its powers — not the current text of its `reads=` files — so editing an input
-        // re-runs reviewed code instead of re-opening review of a program nobody changed.
-        let approved = ledger.is_approved(&approval);
-
-        // The gate stands ahead of the cache, so a document that arrives carrying a matching
-        // run record is still reviewed rather than quietly accepted as already proven. The
-        // refusal names its way forward, and the block's stale output is left as it was.
-        if !approved && !options.force {
-            runs.push(BlockRun {
-                id: block.id.clone(),
-                language: block.language.clone(),
-                status: "blocked".to_string(),
-                exit: BLOCKED_EXIT,
-                output: pending_review(&approval),
-                duration_ms: 0,
-            });
-            continue;
-        }
-
-        if !options.force && existing.is_some_and(|output| output.hash == fingerprint) {
-            runs.push(BlockRun {
-                id: block.id.clone(),
-                language: block.language.clone(),
-                status: "skipped".to_string(),
-                exit: 0,
-                output: existing
-                    .map(|output| output.text.clone())
-                    .unwrap_or_default(),
-                duration_ms: 0,
-            });
-            continue;
-        }
-
-        // Reachable unapproved only through `--force`, which is the bypass that must say so.
-        let bypassed = !approved;
-        let started = Instant::now();
-        // The host run is part of what was approved, so only an approved block gets it: a
-        // block forced past review runs inside the sandbox like any other.
-        let mut capture = execute(
-            runner,
-            block,
-            &deps,
-            &Powers {
-                writes: &writes,
-                reads: &read_paths,
-                host: host && approved,
-            },
-            &fingerprint,
-            options,
-        );
-        if bypassed {
-            capture.output = format!("{FORCED_NOTICE}\n{}", capture.output);
-        }
-        let elapsed = started.elapsed().as_millis() as u64;
-        let output = truncate(&capture.output);
-        let status = status_of(&capture);
-
-        runs.push(BlockRun {
-            id: block.id.clone(),
-            language: block.language.clone(),
-            status: status.clone(),
-            exit: capture.exit,
-            output: output.clone(),
-            duration_ms: elapsed,
-        });
-        outputs.push((
-            block.id.clone(),
-            output_block(block, &status, capture.exit, &fingerprint, &output),
-        ));
+    // Each position in `ordered` fills its own slot, so results are reported and folded in
+    // run order however the concurrent executions happen to finish.
+    let mut slots: Vec<Slot> = vec![Slot::default(); ordered.len()];
+    schedule(
+        &ordered,
+        &predecessors,
+        run_jobs(),
+        |position, slot: &mut Slot| {
+            prepare(
+                ordered[position],
+                &document,
+                &hydrated,
+                &unresolved,
+                resolver,
+                &ledger,
+                options,
+                slot,
+            )
+        },
+        |job: &Job<'_>| run_job(job, options),
+        |job, (capture, elapsed), slot: &mut Slot| finish(job, capture, elapsed, slot),
+        &mut slots,
+    );
+    let mut runs: Vec<BlockRun> = Vec::new();
+    let mut outputs: Vec<(String, Block)> = Vec::new();
+    for slot in slots {
+        runs.extend(slot.runs);
+        outputs.extend(slot.outputs);
     }
 
     let updated = fold_outputs(&document, &runs, &outputs);
@@ -564,6 +413,419 @@ pub fn standing(
         out.push(entry);
     }
     out
+}
+
+/// What one runnable block produced: its report entry and, when it ran or was refused,
+/// the `::output` block to fold in.
+#[derive(Default, Clone)]
+struct Slot {
+    runs: Vec<BlockRun>,
+    outputs: Vec<(String, Block)>,
+}
+
+/// One block cleared to execute: everything [`execute`] needs, decided before it starts.
+struct Job<'a> {
+    block: &'a Block,
+    runner: &'static str,
+    deps: Vec<String>,
+    writes: Vec<String>,
+    read_paths: Vec<String>,
+    host: bool,
+    approved: bool,
+    fingerprint: String,
+}
+
+/// How many blocks may execute at once: `DX_RUN_JOBS`, else half the machine's
+/// parallelism capped at four, and never fewer than one. `DX_RUN_JOBS=1` is the serial run.
+fn run_jobs() -> usize {
+    let parallelism = std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get);
+    jobs_from(std::env::var("DX_RUN_JOBS").ok().as_deref(), parallelism)
+}
+
+/// [`run_jobs`] over its inputs: an unreadable `DX_RUN_JOBS` falls back to the default.
+fn jobs_from(requested: Option<&str>, parallelism: usize) -> usize {
+    match requested.and_then(|value| value.trim().parse::<usize>().ok()) {
+        Some(jobs) => jobs.max(1),
+        None => (parallelism / 2).clamp(1, 4),
+    }
+}
+
+/// Document order's predecessors, as positions in `runnable`: every block of a wave waits
+/// for every block of the wave before it (see [`order::waves`]).
+fn wave_predecessors(document: &Document, runnable: &[usize]) -> Vec<Vec<usize>> {
+    let footprints: Vec<(usize, Option<order::Footprint>)> = runnable
+        .iter()
+        .enumerate()
+        .map(|(position, &index)| {
+            let block = &document.blocks[index];
+            // A header the run will refuse anyway keeps document order: it runs alone.
+            let footprint = match (declared_read_paths(&block.reads), declared_writes(block)) {
+                (Ok(reads), Ok(writes)) => Some(order::Footprint { reads, writes }),
+                _ => None,
+            };
+            (position, footprint)
+        })
+        .collect();
+    let mut predecessors = vec![Vec::new(); runnable.len()];
+    let mut previous: Vec<usize> = Vec::new();
+    for wave in order::waves(&footprints) {
+        for &position in &wave {
+            predecessors[position].clone_from(&previous);
+        }
+        previous = wave;
+    }
+    predecessors
+}
+
+/// Edge order's predecessors, as positions in `ordered`: a block waits for exactly the
+/// blocks with a direct edge constraint into it.
+fn edge_predecessors(
+    ordered: &[usize],
+    constraints: &std::collections::HashSet<(usize, usize)>,
+) -> Vec<Vec<usize>> {
+    let position: std::collections::HashMap<usize, usize> = ordered
+        .iter()
+        .enumerate()
+        .map(|(position, &index)| (index, position))
+        .collect();
+    let mut predecessors = vec![Vec::new(); ordered.len()];
+    for (before, after) in constraints {
+        if let (Some(&before), Some(&after)) = (position.get(before), position.get(after)) {
+            predecessors[after].push(before);
+        }
+    }
+    for list in &mut predecessors {
+        list.sort_unstable();
+    }
+    predecessors
+}
+
+/// Run `ordered` with at most `jobs` executions at once, each starting once all its
+/// `predecessors` (positions in `ordered`) have finished.
+///
+/// `prepare` decides a ready block on this thread — refusals, review, the approval gate,
+/// and the cache all finish there — and hands back a [`Job`] only when the block must
+/// execute; `execute` runs on a scoped thread; `finish` records the result on this thread.
+/// Among ready blocks the earliest position goes first, so with `jobs` at one this is
+/// exactly the serial run, and edge order's earliest-ready rule is kept.
+fn schedule<'a, T: Send>(
+    ordered: &[usize],
+    predecessors: &[Vec<usize>],
+    jobs: usize,
+    mut prepare: impl FnMut(usize, &mut Slot) -> Option<Job<'a>>,
+    execute: impl Fn(&Job<'a>) -> T + Sync,
+    mut finish: impl FnMut(Job<'a>, T, &mut Slot),
+    slots: &mut [Slot],
+) {
+    let count = ordered.len();
+    let mut waiting: Vec<usize> = predecessors.iter().map(Vec::len).collect();
+    let mut successors: Vec<Vec<usize>> = vec![Vec::new(); count];
+    for (position, list) in predecessors.iter().enumerate() {
+        for &before in list {
+            successors[before].push(position);
+        }
+    }
+    // Keyed by document index: with follow-edges the earliest ready block by document
+    // position goes next, and in document order position and index agree.
+    let mut ready: std::collections::BTreeSet<(usize, usize)> = (0..count)
+        .filter(|&position| waiting[position] == 0)
+        .map(|position| (ordered[position], position))
+        .collect();
+    let mut release = |position: usize, ready: &mut std::collections::BTreeSet<(usize, usize)>| {
+        for &after in &successors[position] {
+            waiting[after] -= 1;
+            if waiting[after] == 0 {
+                ready.insert((ordered[after], after));
+            }
+        }
+    };
+
+    let execute = &execute;
+    std::thread::scope(|scope| {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let mut running = 0;
+        let mut done = 0;
+        while done < count {
+            while running < jobs.max(1) {
+                let Some((_, position)) = ready.pop_first() else {
+                    break;
+                };
+                match prepare(position, &mut slots[position]) {
+                    Some(job) => {
+                        running += 1;
+                        let sender = sender.clone();
+                        scope.spawn(move || {
+                            let result =
+                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                    execute(&job)
+                                }));
+                            let _ = sender.send((position, job, result));
+                        });
+                    }
+                    None => {
+                        done += 1;
+                        release(position, &mut ready);
+                    }
+                }
+            }
+            if running == 0 {
+                // Nothing executing and nothing ready: the predecessors were acyclic by
+                // construction, so this only ends a finished run.
+                if ready.is_empty() {
+                    break;
+                }
+                continue;
+            }
+            let (position, job, result) = receiver
+                .recv()
+                .expect("a running block always reports back");
+            running -= 1;
+            match result {
+                Ok(result) => finish(job, result, &mut slots[position]),
+                Err(panic) => std::panic::resume_unwind(panic),
+            }
+            done += 1;
+            release(position, &mut ready);
+        }
+    });
+}
+
+/// Decide one ready block on the scheduling thread: everything up to execution.
+///
+/// Refusals, review, the approval gate, and a still-current cached result are recorded
+/// into `slot` here and return `None`; a block that must execute returns its [`Job`].
+#[allow(clippy::too_many_arguments)]
+fn prepare<'a>(
+    index: usize,
+    document: &Document,
+    hydrated: &'a Document,
+    unresolved: &[resolve::Unresolved],
+    resolver: &dyn Resolver,
+    ledger: &approvals::Ledger,
+    options: &RunOptions,
+    slot: &mut Slot,
+) -> Option<Job<'a>> {
+    let Slot { runs, outputs } = slot;
+    let runner = runnable_runner(&document.blocks[index])?;
+
+    // Hydration edits blocks in place and only ever appends, so the indices agree.
+    let block = &hydrated.blocks[index];
+    if let Some(problem) = unresolved.iter().find(|entry| entry.block == block.id) {
+        refuse(block, &problem.sentence, options, runs, outputs);
+        return None;
+    }
+
+    let deps = parse_deps(&block.deps);
+    let writes = match declared_writes(block) {
+        Ok(writes) => writes,
+        Err(sentence) => {
+            refuse(block, &sentence, options, runs, outputs);
+            return None;
+        }
+    };
+    let host = match declared_host(block) {
+        Ok(host) => host,
+        Err(sentence) => {
+            refuse(block, &sentence, options, runs, outputs);
+            return None;
+        }
+    };
+    // Approval names the *declared* paths, never a directory's current expansion —
+    // a file appearing under a declared folder is new data, not a new power.
+    let read_paths = match declared_read_paths(&block.reads) {
+        Ok(paths) => paths,
+        Err(sentence) => {
+            refuse(block, &sentence, options, runs, outputs);
+            return None;
+        }
+    };
+    let material = approval_material(block);
+    let approval = approval_fingerprint(runner, &material, &deps, &read_paths, &writes, host);
+    let reads = match declared_reads(block, resolver, &writes, Some(&options.document_dir)) {
+        Ok(reads) => reads,
+        Err(sentence) if options.review_only => {
+            // A grant that cannot be satisfied must not hide the code: review still
+            // shows what would run, with the problem named above it.
+            runs.push(BlockRun {
+                id: block.id.clone(),
+                language: block.language.clone(),
+                status: "review".to_string(),
+                exit: 0,
+                output: format!(
+                    "{sentence}\n{}",
+                    review_text(
+                        &material,
+                        &approval,
+                        ledger.is_approved(&approval),
+                        &read_paths,
+                        &writes,
+                        host,
+                        &options.document_dir,
+                    )
+                ),
+                duration_ms: 0,
+            });
+            return None;
+        }
+        Err(sentence) => {
+            refuse(block, &sentence, options, runs, outputs);
+            return None;
+        }
+    };
+    let fingerprint = fingerprint(
+        runner,
+        &material,
+        &deps,
+        &reads,
+        &writes,
+        host,
+        block.timeout,
+    );
+    let existing = existing_output(document, index, &block.id);
+
+    // Review mode: show what would run without executing — and without recording
+    // anything, because reading never writes.
+    if options.review_only {
+        runs.push(BlockRun {
+            id: block.id.clone(),
+            language: block.language.clone(),
+            status: "review".to_string(),
+            exit: 0,
+            output: review_text(
+                &material,
+                &approval,
+                ledger.is_approved(&approval),
+                &read_paths,
+                &writes,
+                host,
+                &options.document_dir,
+            ),
+            duration_ms: 0,
+        });
+        return None;
+    }
+
+    if options.approve {
+        if let Err(sentence) = ledger.approve(&approval) {
+            runs.push(BlockRun {
+                id: block.id.clone(),
+                language: block.language.clone(),
+                status: "blocked".to_string(),
+                exit: BLOCKED_EXIT,
+                output: sentence,
+                duration_ms: 0,
+            });
+            return None;
+        }
+    }
+
+    // Approval is this machine's own record and nothing else. The document's `::output`
+    // block cannot vouch for the code above it: it is content the same hand wrote, and
+    // its `hash=` is computable by whoever authored the block. Approval names the code
+    // and its powers — not the current text of its `reads=` files — so editing an input
+    // re-runs reviewed code instead of re-opening review of a program nobody changed.
+    let approved = ledger.is_approved(&approval);
+
+    // The gate stands ahead of the cache, so a document that arrives carrying a matching
+    // run record is still reviewed rather than quietly accepted as already proven. The
+    // refusal names its way forward, and the block's stale output is left as it was.
+    if !approved && !options.force {
+        runs.push(BlockRun {
+            id: block.id.clone(),
+            language: block.language.clone(),
+            status: "blocked".to_string(),
+            exit: BLOCKED_EXIT,
+            output: pending_review(&approval),
+            duration_ms: 0,
+        });
+        return None;
+    }
+
+    if !options.force
+        && existing.is_some_and(|output| output.hash == fingerprint && recorded_pass(output))
+    {
+        runs.push(BlockRun {
+            id: block.id.clone(),
+            language: block.language.clone(),
+            status: "skipped".to_string(),
+            exit: 0,
+            output: existing
+                .map(|output| output.text.clone())
+                .unwrap_or_default(),
+            duration_ms: 0,
+        });
+        return None;
+    }
+
+    Some(Job {
+        block,
+        runner,
+        deps,
+        writes,
+        read_paths,
+        host,
+        approved,
+        fingerprint,
+    })
+}
+
+/// Execute one prepared block, off the scheduling thread.
+fn run_job(job: &Job<'_>, options: &RunOptions) -> (Capture, u64) {
+    let Job {
+        block,
+        runner,
+        ref deps,
+        ref writes,
+        ref read_paths,
+        host,
+        approved,
+        ref fingerprint,
+    } = *job;
+    // Reachable unapproved only through `--force`, which is the bypass that must say so.
+    let bypassed = !approved;
+    let started = Instant::now();
+    // The host run is part of what was approved, so only an approved block gets it: a
+    // block forced past review runs inside the sandbox like any other.
+    let mut capture = execute(
+        runner,
+        block,
+        deps,
+        &Powers {
+            writes,
+            reads: read_paths,
+            host: host && approved,
+        },
+        fingerprint,
+        options,
+    );
+    if bypassed {
+        capture.output = format!("{FORCED_NOTICE}\n{}", capture.output);
+    }
+    let elapsed = started.elapsed().as_millis() as u64;
+    (capture, elapsed)
+}
+
+/// Record one executed block's result into its slot, on the scheduling thread.
+fn finish(job: Job<'_>, capture: Capture, elapsed: u64, slot: &mut Slot) {
+    let Slot { runs, outputs } = slot;
+    let Job {
+        block, fingerprint, ..
+    } = job;
+    let output = truncate(&capture.output);
+    let status = status_of(&capture);
+
+    runs.push(BlockRun {
+        id: block.id.clone(),
+        language: block.language.clone(),
+        status: status.clone(),
+        exit: capture.exit,
+        output: output.clone(),
+        duration_ms: elapsed,
+    });
+    outputs.push((
+        block.id.clone(),
+        output_block(block, &status, capture.exit, &fingerprint, &output),
+    ));
 }
 
 /// The runner for a block, when the block is executable code in a supported language.
@@ -1436,7 +1698,24 @@ fn blocked(message: &str) -> Capture {
         output: message.to_string(),
         exit: BLOCKED_EXIT,
         timed_out: false,
+        signaled: false,
     }
+}
+
+/// Status of a block whose process was killed (signal or timeout): not a verdict.
+const INTERRUPTED: &str = "interrupted";
+
+/// Whether an exit code and output read as a kill: a shell's 128 + signal, with the
+/// shell's own "Terminated" / "Killed" marker.
+fn looks_killed(exit: i32, output: &str) -> bool {
+    (128..=159).contains(&exit) && (output.contains("Terminated") || output.contains("Killed"))
+}
+
+/// Whether a recorded `::output` is a pass: only passes are cache hits. A failure re-runs
+/// every time, and an interrupted run (signal or timeout, including an older document's
+/// `error` with exit 128..=159 and a kill marker) was never a verdict.
+fn recorded_pass(output: &Block) -> bool {
+    output.status == "ok" && output.exit == 0
 }
 
 /// Classify a capture into the status recorded on the `::output` block.
@@ -1445,6 +1724,8 @@ fn status_of(capture: &Capture) -> String {
         "blocked".to_string()
     } else if capture.succeeded() {
         "ok".to_string()
+    } else if capture.timed_out || capture.signaled || looks_killed(capture.exit, &capture.output) {
+        INTERRUPTED.to_string()
     } else {
         "error".to_string()
     }
@@ -1807,6 +2088,145 @@ mod tests {
         assert_eq!(report.runs[0].status, "ok");
     }
 
+    /// Run `source` from a fresh folder holding `files`, with `DX_RUN_JOBS` set to `jobs`
+    /// for the run, returning the report and its wall time.
+    fn run_with_jobs(
+        source: &str,
+        label: &str,
+        files: &[&str],
+        jobs: &str,
+        follow_board_edges: bool,
+    ) -> (RunReport, Duration, PathBuf) {
+        let root = std::env::temp_dir().join(format!("dx-run-tests-jobs-{label}"));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("scene");
+        for file in files {
+            std::fs::write(root.join(file), *file).expect("fixture");
+        }
+        let _env = env_lock();
+        let previous = std::env::var("DX_RUN_JOBS").ok();
+        std::env::set_var("DX_RUN_JOBS", jobs);
+        let started = Instant::now();
+        let report = run_document(
+            source,
+            &RunOptions {
+                document_dir: root.clone(),
+                cache_root: root.join("cache"),
+                default_timeout: Duration::from_secs(60),
+                approve: true,
+                follow_board_edges,
+                ..RunOptions::default()
+            },
+            &Folder(root.clone()),
+        );
+        let elapsed = started.elapsed();
+        match previous {
+            Some(value) => std::env::set_var("DX_RUN_JOBS", value),
+            None => std::env::remove_var("DX_RUN_JOBS"),
+        }
+        (report.expect("acyclic run"), elapsed, root)
+    }
+
+    /// Three blocks that each sleep a second and declare disjoint `reads=`.
+    const THREE_SLEEPERS: &str =
+        "::code id=a lang=bash run reads=a.txt\nsleep 1; echo a\n::end\n\n\
+::code id=b lang=bash run reads=b.txt\nsleep 1; echo b\n::end\n\n\
+::code id=c lang=bash run reads=c.txt\nsleep 1; echo c\n::end\n";
+
+    fn ids(report: &RunReport) -> Vec<&str> {
+        report.runs.iter().map(|run| run.id.as_str()).collect()
+    }
+
+    #[test]
+    fn independent_declared_blocks_run_concurrently() {
+        let files = ["a.txt", "b.txt", "c.txt"];
+        let (parallel, elapsed, _) = run_with_jobs(THREE_SLEEPERS, "par3", &files, "3", false);
+        assert!(parallel.all_succeeded(), "{:?}", parallel.runs);
+        assert_eq!(parallel.executed(), 3);
+        assert!(
+            elapsed < Duration::from_millis(2500),
+            "three one-second blocks with DX_RUN_JOBS=3 took {elapsed:?}"
+        );
+        assert_eq!(
+            ids(&parallel),
+            vec!["a", "b", "c"],
+            "reported in document order"
+        );
+
+        let (serial, elapsed, _) = run_with_jobs(THREE_SLEEPERS, "par1", &files, "1", false);
+        assert!(serial.all_succeeded(), "{:?}", serial.runs);
+        assert!(
+            elapsed >= Duration::from_secs(3),
+            "DX_RUN_JOBS=1 must run them one at a time, took {elapsed:?}"
+        );
+        assert_eq!(ids(&serial), vec!["a", "b", "c"]);
+        // The document comes out identical whichever way the blocks were scheduled.
+        assert_eq!(parallel.source, serial.source);
+    }
+
+    #[test]
+    fn a_block_reading_another_blocks_writes_runs_after_it() {
+        let source = "::code id=make lang=bash run reads=seed.txt writes=out\n\
+sleep 1; echo made > out/made.txt\n::end\n\n\
+::code id=use lang=bash run reads=out/made.txt\ncat out/made.txt\n::end\n";
+        let (report, _, root) = run_with_jobs(source, "raw", &["seed.txt"], "4", false);
+        assert_eq!(ids(&report), vec!["make", "use"]);
+        assert_eq!(report.runs[0].status, "ok", "{}", report.runs[0].output);
+        assert_eq!(report.runs[1].status, "ok", "{}", report.runs[1].output);
+        assert_eq!(
+            report.runs[1].output, "made",
+            "the reader saw the writer's file"
+        );
+        assert!(root.join("out/made.txt").exists());
+    }
+
+    #[test]
+    fn blocks_without_reads_stay_serial_and_ordered() {
+        // Each appends to one log; were any two overlapped, the slow first block would
+        // land its line after the quick ones.
+        let source =
+            "::code id=first lang=bash run writes=log\nsleep 1; echo first >> log/order\n::end\n\n\
+::code id=second lang=bash run writes=log\necho second >> log/order\n::end\n\n\
+::code id=third lang=bash run writes=log\necho third >> log/order\n::end\n";
+        let (report, elapsed, root) = run_with_jobs(source, "undeclared", &[], "4", false);
+        assert!(report.all_succeeded(), "{:?}", report.runs);
+        assert_eq!(ids(&report), vec!["first", "second", "third"]);
+        assert_eq!(
+            std::fs::read_to_string(root.join("log/order")).expect("log"),
+            "first\nsecond\nthird\n"
+        );
+        assert!(elapsed >= Duration::from_secs(1));
+    }
+
+    #[test]
+    fn follow_edges_starts_a_block_after_its_predecessor_and_overlaps_the_rest() {
+        // Document order is use, make, aside; the board states make -> use. aside is on
+        // no board, so it runs beside make; use waits for make's file.
+        let source = "::code id=use lang=bash run hidden\ncat out/made.txt\n::end\n\n\
+::code id=make lang=bash run hidden writes=out\nsleep 1; echo made > out/made.txt\n::end\n\n\
+::code id=aside lang=bash run hidden\nsleep 1; echo aside\n::end\n\n\
+::board id=plan\n- make x=0 y=0 to=use\n- use x=0 y=200\n::end\n";
+        let (report, elapsed, _) = run_with_jobs(source, "edges", &[], "4", true);
+        assert!(report.all_succeeded(), "{:?}", report.runs);
+        assert_eq!(ids(&report), vec!["make", "use", "aside"]);
+        assert_eq!(report.runs[1].output, "made");
+        assert!(
+            elapsed < Duration::from_millis(1900),
+            "aside overlaps make, took {elapsed:?}"
+        );
+    }
+
+    #[test]
+    fn run_jobs_reads_the_variable_and_defaults_to_half_the_cores_capped_at_four() {
+        assert_eq!(jobs_from(Some("1"), 16), 1);
+        assert_eq!(jobs_from(Some(" 6 "), 2), 6);
+        assert_eq!(jobs_from(Some("0"), 16), 1);
+        assert_eq!(jobs_from(Some("lots"), 16), 4);
+        assert_eq!(jobs_from(None, 16), 4);
+        assert_eq!(jobs_from(None, 6), 3);
+        assert_eq!(jobs_from(None, 1), 1);
+    }
+
     /// The real thing, end to end: a `lang=ts` block executes on the machine's own Node
     /// toolchain — npm installs `tsx` in setup, the annotated code runs offline, and the
     /// output folds into the document.
@@ -1934,7 +2354,7 @@ mod tests {
     fn a_block_that_overruns_its_timeout_is_killed() {
         let source = "::code id=slow lang=bash run timeout=1\nsleep 30\n::end\n";
         let report = run_isolated(source, "timeout");
-        assert_eq!(report.runs[0].status, "error");
+        assert_eq!(report.runs[0].status, "interrupted");
         assert!(report.runs[0].output.contains("timed out"));
     }
 
@@ -2685,6 +3105,64 @@ mod tests {
         assert!(!report.source.contains("::output"));
     }
 
+    fn count_runs(report: &RunReport, dir: &std::path::Path) -> usize {
+        let _ = report;
+        std::fs::read_to_string(dir.join("out/count"))
+            .map(|text| text.lines().count())
+            .unwrap_or(0)
+    }
+
+    fn run_counting(body: &str, label: &str, runs: usize) -> (usize, Vec<String>) {
+        let root = std::env::temp_dir().join(format!("dx-run-tests-{label}"));
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::create_dir_all(&root);
+        let mut source = format!("::code id=b lang=bash run writes=out\n{body}\n::end\n");
+        let mut statuses = Vec::new();
+        let mut last = None;
+        for _ in 0..runs {
+            let report = run_document(
+                &source,
+                &RunOptions {
+                    document_dir: root.clone(),
+                    cache_root: root.join("cache"),
+                    default_timeout: Duration::from_secs(60),
+                    approve: true,
+                    ..RunOptions::default()
+                },
+                &resolve::Nowhere,
+            )
+            .expect("no cycle");
+            statuses.push(report.runs[0].status.clone());
+            source = report.source.clone();
+            last = Some(report);
+        }
+        (count_runs(&last.expect("ran"), &root), statuses)
+    }
+
+    #[test]
+    fn a_signal_killed_block_is_interrupted_and_reruns() {
+        let (count, statuses) = run_counting("echo x >> out/count\nkill -TERM $$", "sig", 2);
+        assert_eq!(count, 2, "{statuses:?}");
+        assert_eq!(statuses, ["interrupted", "interrupted"]);
+    }
+
+    #[test]
+    fn a_failing_block_reruns_and_a_passing_block_is_cached() {
+        let (count, statuses) = run_counting("echo x >> out/count\nexit 3", "fail", 2);
+        assert_eq!(count, 2, "{statuses:?}");
+        assert_eq!(statuses, ["error", "error"]);
+        let (count, statuses) = run_counting("echo x >> out/count", "pass", 2);
+        assert_eq!(count, 1, "{statuses:?}");
+        assert_eq!(statuses, ["ok", "skipped"]);
+    }
+
+    #[test]
+    fn an_older_recorded_143_with_a_kill_marker_counts_as_killed() {
+        assert!(looks_killed(143, "Terminated: 15"));
+        assert!(!looks_killed(3, "Terminated"));
+        assert!(!looks_killed(143, "plain"));
+    }
+
     #[test]
     fn timeout_attribute_causes_timeout_at_specified_seconds() {
         // A block that sleeps 2 seconds with timeout=1 should timeout
@@ -2693,8 +3171,8 @@ mod tests {
         let report = run_isolated(source_timeout_too_short, "timeout-fail");
         assert_eq!(report.runs.len(), 1);
         assert_eq!(
-            report.runs[0].status, "error",
-            "block should timeout and error"
+            report.runs[0].status, "interrupted",
+            "block should timeout and be interrupted"
         );
         assert!(
             report.runs[0].output.contains("timed out"),
