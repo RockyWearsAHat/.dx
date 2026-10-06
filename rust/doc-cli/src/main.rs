@@ -23,6 +23,7 @@ mod extension;
 mod home;
 mod install;
 mod intake;
+mod live;
 mod mcp;
 mod policies;
 mod rename_approvals;

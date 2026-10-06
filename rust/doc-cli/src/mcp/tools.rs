@@ -34,6 +34,7 @@ pub const TOOL_NAMES: &[&str] = &[
     "dx_report",
     "dx_run",
     "dx_sync",
+    "dx_live",
 ];
 
 /// Build the `tools/list` payload.
@@ -57,6 +58,7 @@ pub fn catalogue() -> Value {
         report_tool(),
         run_tool(),
         sync_tool(),
+        live_tool(),
     ])
 }
 
@@ -1120,4 +1122,28 @@ mod tests {
         assert!(sync["inputSchema"]["properties"].is_object());
         assert_eq!(sync["inputSchema"]["required"], json!([]));
     }
+}
+
+/// `dx_live` — every branch's merge state and gate verdicts in one read.
+fn live_tool() -> Value {
+    json!({
+        "name": "dx_live",
+        "description": "ONE READ of everything: every branch's merge state against base, \
+                        conflict hunks, and every gate verdict, precomputed by the dx live daemon",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "directory": {
+                    "type": "string",
+                    "description": "Any directory inside the repo. Default: the workspace root."
+                },
+                "refresh": {
+                    "type": "boolean",
+                    "description": "Recompute merge states now instead of reading the cached \
+                                    snapshot. Default: false."
+                }
+            },
+            "required": []
+        }
+    })
 }
