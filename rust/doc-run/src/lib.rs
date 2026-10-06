@@ -303,15 +303,6 @@ pub fn run_document(
                 continue;
             }
         };
-        let reads = match declared_reads(block, resolver, &writes) {
-            Ok(reads) => reads,
-            Err(sentence) => {
-                refuse(block, &sentence, options, &mut runs, &mut outputs);
-                continue;
-            }
-        };
-        let material = approval_material(block);
-        let fingerprint = fingerprint(runner, &material, &deps, &reads, &writes, block.timeout);
         // Approval names the *declared* paths, never a directory's current expansion —
         // a file appearing under a declared folder is new data, not a new power.
         let read_paths = match declared_read_paths(&block.reads) {
@@ -322,6 +313,37 @@ pub fn run_document(
             }
         };
         let approval = approval_fingerprint(runner, &material, &deps, &read_paths, &writes);
+        let reads = match declared_reads(block, resolver, &writes, Some(&options.document_dir)) {
+            Ok(reads) => reads,
+            Err(sentence) if options.review_only => {
+                // A grant that cannot be satisfied must not hide the code: review still
+                // shows what would run, with the problem named above it.
+                runs.push(BlockRun {
+                    id: block.id.clone(),
+                    language: block.language.clone(),
+                    status: "review".to_string(),
+                    exit: 0,
+                    output: format!(
+                        "{sentence}\n{}",
+                        review_text(
+                            &material,
+                            &approval,
+                            ledger.is_approved(&approval),
+                            &read_paths,
+                            &writes,
+                            &options.document_dir,
+                        )
+                    ),
+                    duration_ms: 0,
+                });
+                continue;
+            }
+            Err(sentence) => {
+                refuse(block, &sentence, options, &mut runs, &mut outputs);
+                continue;
+            }
+        };
+        let fingerprint = fingerprint(runner, &material, &deps, &reads, &writes, block.timeout);
         let existing = existing_output(&document, index, &block.id);
 
         // Review mode: show what would run without executing — and without recording
@@ -511,6 +533,7 @@ fn declared_reads(
     block: &Block,
     resolver: &dyn Resolver,
     writes: &[String],
+    document_dir: Option<&Path>,
 ) -> Result<Vec<(String, String)>, String> {
     let mut reads = Vec::new();
     for confined in declared_read_paths(&block.reads)? {
@@ -523,15 +546,77 @@ fn declared_reads(
                     .any(|w| path == w || path.starts_with(&format!("{w}/")))
             };
             reads.extend(tree.into_iter().filter(|(path, _)| !granted(path)));
+        } else if let Some(found) =
+            document_dir.and_then(|dir| read_from_root(&confined, resolver, dir))
+        {
+            reads.extend(found);
         } else {
             return Err(format!(
                 "{confined} could not be read here — the block declares it with `reads=`, \
                  and its content is part of what decides whether the recorded output is \
-                 still current. Check the path against the document's folder."
+                 still current. Check the path against the document's folder and the \
+                 repository root."
             ));
         }
     }
     Ok(reads)
+}
+
+/// Marks a fingerprint input that was resolved against the workspace root.
+const ROOT_BASE: &str = "root:";
+
+/// The `../` path that climbs from `document_dir` to the workspace root, or `None` when
+/// the document already lives at the root (nothing to fall back to).
+fn climb_to_root(document_dir: &Path) -> Option<String> {
+    let doc = document_dir
+        .canonicalize()
+        .unwrap_or_else(|_| document_dir.to_path_buf());
+    let root = confine::repo_root(document_dir);
+    let depth = doc.strip_prefix(&root).ok()?.components().count();
+    (depth > 0).then(|| "../".repeat(depth))
+}
+
+/// A `reads=` path the document's folder does not hold, found under the workspace root
+/// instead. Each input is keyed `root:<path>` so the fingerprint records which base was
+/// used: the same text under another base is a different input. A path that itself climbs
+/// (`..`) never falls back — it already chose its own base.
+fn read_from_root(
+    confined: &str,
+    resolver: &dyn Resolver,
+    document_dir: &Path,
+) -> Option<Vec<(String, String)>> {
+    if confined == ".." || confined.starts_with("../") {
+        return None;
+    }
+    let up = climb_to_root(document_dir)?;
+    let via = format!("{up}{confined}");
+    if let Some(text) = resolver.file(&via) {
+        return Some(vec![(format!("{ROOT_BASE}{confined}"), text)]);
+    }
+    let tree = resolver.files_under(&via)?;
+    Some(
+        tree.into_iter()
+            .map(|(path, text)| {
+                let rest = path.strip_prefix(&up).unwrap_or(&path);
+                (format!("{ROOT_BASE}{rest}"), text)
+            })
+            .collect(),
+    )
+}
+
+/// The directory a declared read path is joined onto: the document's folder, or the
+/// workspace root when the folder does not hold the path but the root does.
+fn read_anchor(path: &str, document_dir: &Path) -> PathBuf {
+    let doc = document_dir
+        .canonicalize()
+        .unwrap_or_else(|_| document_dir.to_path_buf());
+    if !doc.join(path).exists() && !(path == ".." || path.starts_with("../")) {
+        let root = confine::repo_root(document_dir);
+        if root != doc && root.join(path).exists() {
+            return root;
+        }
+    }
+    doc
 }
 
 /// The lawful paths of a `reads=` declaration, confined and in declaration order.
@@ -747,20 +832,16 @@ fn granted_writes(writes: &[String], document_dir: &Path) -> Result<Vec<PathBuf>
 /// paths under sensitive directories (.ssh, .gnupg, .aws, Library/Keychains) and .env* files.
 /// Existence validation happens in [`declared_reads`] which uses the resolver.
 fn granted_reads(reads: &[String], document_dir: &Path) -> Result<Vec<PathBuf>, String> {
-    // Canonicalize the document_dir once for consistent path comparisons
-    let canonical_doc_dir = document_dir.canonicalize().unwrap_or_else(|_| {
-        // If document_dir can't be canonicalized (rare), use it as-is
-        document_dir.to_path_buf()
-    });
-
     // Determine the home directory for secret path validation
     let home = std::env::var_os("HOME").map(PathBuf::from);
 
     let mut granted = Vec::new();
 
     for path in reads {
-        // Join the path with the canonical document directory to get a resolved path
-        let resolved = canonical_doc_dir.join(path);
+        // Join the path with its base: the document's folder, or the workspace root when
+        // only the root holds it (see [`read_anchor`])
+        let base = read_anchor(path, document_dir);
+        let resolved = base.join(path);
 
         // Normalize the path by removing any `.` or `..` components using the path APIs
         // For paths that exist, canonicalize; for those that don't, normalize manually
@@ -770,7 +851,7 @@ fn granted_reads(reads: &[String], document_dir: &Path) -> Result<Vec<PathBuf>, 
                 .map_err(|error| format!("reads={path} could not be resolved: {error}"))?
         } else {
             // Normalize non-existent paths by collecting components
-            let mut normalized_path = canonical_doc_dir.clone();
+            let mut normalized_path = base.clone();
             for component in path.split('/').filter(|s| !s.is_empty()) {
                 if component == ".." {
                     normalized_path.pop();
@@ -839,9 +920,7 @@ fn is_read_outside_repo(path: &str, document_dir: &Path) -> bool {
 
 /// Resolve a read path to its absolute form for display.
 fn resolve_read_path_for_display(path: &str, document_dir: &Path) -> String {
-    let canonical_doc_dir = document_dir
-        .canonicalize()
-        .unwrap_or_else(|_| document_dir.to_path_buf());
+    let canonical_doc_dir = read_anchor(path, document_dir);
     let resolved = canonical_doc_dir.join(path);
     let normalized = if resolved.exists() {
         resolved.canonicalize().unwrap_or(resolved)
@@ -1912,12 +1991,12 @@ mod tests {
             text: "print(1)".into(),
             ..Block::default()
         };
-        let before = declared_reads(&block, &provided, &[]).expect("resolves");
+        let before = declared_reads(&block, &provided, &[], None).expect("resolves");
         let recorded = fingerprint("python", &block.text, &[], &before, &[], 0);
 
         let mut edited = resolve::Provided::new();
         edited.add_file("site.css", "body{color:red}");
-        let after = declared_reads(&block, &edited, &[]).expect("resolves");
+        let after = declared_reads(&block, &edited, &[], None).expect("resolves");
         assert_ne!(
             recorded,
             fingerprint("python", &block.text, &[], &after, &[], 0)
@@ -1950,7 +2029,7 @@ mod tests {
             ..Block::default()
         };
         let before = Walked(vec![("data/a.txt".into(), "one".into())]);
-        let reads = declared_reads(&block, &before, &[]).expect("resolves");
+        let reads = declared_reads(&block, &before, &[], None).expect("resolves");
         assert_eq!(reads, vec![("data/a.txt".to_string(), "one".to_string())]);
         let recorded = fingerprint("bash", &block.text, &[], &reads, &[], 0);
 
@@ -1959,7 +2038,7 @@ mod tests {
             ("data/a.txt".into(), "one".into()),
             ("data/b.txt".into(), "two".into()),
         ]);
-        let after = declared_reads(&block, &grown, &[]).expect("resolves");
+        let after = declared_reads(&block, &grown, &[], None).expect("resolves");
         assert_ne!(
             recorded,
             fingerprint("bash", &block.text, &[], &after, &[], 0)
@@ -1988,7 +2067,8 @@ mod tests {
             ("data/a.txt".into(), "input".into()),
             ("data/out/result.txt".into(), "changes every run".into()),
         ]);
-        let reads = declared_reads(&block, &walked, &["data/out".to_string()]).expect("resolves");
+        let reads =
+            declared_reads(&block, &walked, &["data/out".to_string()], None).expect("resolves");
         assert_eq!(reads, vec![("data/a.txt".to_string(), "input".to_string())]);
     }
 
@@ -2302,6 +2382,96 @@ mod tests {
             report.runs[0].output
         );
         assert!(report.source.contains(FORCED_NOTICE));
+    }
+
+    /// A folder resolver that also walks folders, standing in for the CLI's.
+    struct Tree(PathBuf);
+
+    impl Resolver for Tree {
+        fn file(&self, path: &str) -> Option<String> {
+            std::fs::read_to_string(self.0.join(path)).ok()
+        }
+        fn document(&self, path: &str) -> Option<String> {
+            self.file(path)
+        }
+        fn files_under(&self, path: &str) -> Option<Vec<(String, String)>> {
+            let dir = self.0.join(path);
+            let mut files: Vec<(String, String)> = std::fs::read_dir(&dir)
+                .ok()?
+                .flatten()
+                .filter_map(|entry| {
+                    let name = entry.file_name().to_string_lossy().into_owned();
+                    let text = std::fs::read_to_string(entry.path()).ok()?;
+                    Some((format!("{path}/{name}"), text))
+                })
+                .collect();
+            files.sort();
+            Some(files)
+        }
+    }
+
+    fn nested_repo(label: &str) -> (PathBuf, PathBuf) {
+        let root = std::env::temp_dir().join(format!("dx-reads-root-{label}"));
+        let _ = std::fs::remove_dir_all(&root);
+        let doc_dir = root.join("sub/dir");
+        std::fs::create_dir_all(&doc_dir).expect("doc folder");
+        std::fs::create_dir_all(root.join(".git")).expect("repo marker");
+        std::fs::create_dir_all(root.join("crates")).expect("crates");
+        std::fs::write(root.join("crates/a.rs"), "fn a() {}").expect("fixture");
+        (root, doc_dir)
+    }
+
+    #[test]
+    fn a_reads_path_the_folder_lacks_resolves_against_the_workspace_root() {
+        let (root, doc_dir) = nested_repo("resolves");
+        let block = Block {
+            id: "check".into(),
+            language: "bash".into(),
+            run: true,
+            reads: "crates".into(),
+            text: "echo hi".into(),
+            ..Block::default()
+        };
+        let resolver = Tree(doc_dir.clone());
+        let reads = declared_reads(&block, &resolver, &[], Some(&doc_dir)).expect("resolves");
+        // The fingerprint input records the base it came from.
+        assert_eq!(
+            reads,
+            vec![("root:crates/a.rs".to_string(), "fn a() {}".to_string())]
+        );
+        // Without the root fallback the same declaration is refused.
+        assert!(declared_reads(&block, &resolver, &[], None).is_err());
+        // The sandbox grant follows the same base.
+        let granted = granted_reads(&["crates".to_string()], &doc_dir).expect("grant");
+        assert_eq!(
+            granted,
+            vec![root.join("crates").canonicalize().expect("canon")]
+        );
+        // A folder that holds the path itself wins over the root.
+        std::fs::create_dir_all(doc_dir.join("crates")).expect("local crates");
+        std::fs::write(doc_dir.join("crates/b.rs"), "fn b() {}").expect("local");
+        let local = declared_reads(&block, &resolver, &[], Some(&doc_dir)).expect("local");
+        assert_eq!(local[0].0, "crates/b.rs");
+    }
+
+    #[test]
+    fn review_shows_the_code_even_when_a_read_cannot_be_satisfied() {
+        let (_root, doc_dir) = nested_repo("review");
+        let mut options = gate_options("reads-root-review");
+        options.document_dir = doc_dir.clone();
+        options.review_only = true;
+        let source = "::code id=needy lang=bash run reads=nowhere\necho secret-code\n::end\n";
+        let report = run_document(source, &options, &Tree(doc_dir.clone())).expect("acyclic run");
+        assert_eq!(report.runs[0].status, "review");
+        assert!(report.runs[0].output.contains("nowhere"));
+        assert!(report.runs[0].output.contains("echo secret-code"));
+        assert!(report.runs[0].output.contains("fingerprint "));
+        assert!(!report.changed);
+        // And a root-held path reviews cleanly, with no refusal sentence.
+        let ok = "::code id=fine lang=bash run reads=crates\necho hi\n::end\n";
+        let report = run_document(ok, &options, &Tree(doc_dir)).expect("acyclic run");
+        assert!(!report.runs[0].output.contains("could not be read"));
+        assert!(report.runs[0].output.contains("echo hi"));
     }
 
     #[test]
