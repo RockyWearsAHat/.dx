@@ -433,6 +433,42 @@ mod tests {
     }
 
     #[test]
+    fn a_fenced_dx_example_in_markdown_stays_raw_until_its_closing_fence() {
+        // dx report-56c3c5b8: a ```bash fence showing `::code … run` and `::end` opened a
+        // real runnable block and desynced every later fence.
+        use crate::model::{Block, Document};
+        let markdown = "# Sandbox\n\nCode runs confined:\n\n```bash\n\
+            ::code id=build lang=rust run \\\n  deps=\"cargo\"\n  # a comment\n::end\n```\n\n\
+            After it.\n\n```bash\ndx run notes.dx\n```\n";
+        let check = |document: &Document| {
+            let code: Vec<&Block> = document
+                .blocks
+                .iter()
+                .filter(|block| block.kind == "code")
+                .collect();
+            assert_eq!(code.len(), 2, "{:?}", document.blocks);
+            assert!(code
+                .iter()
+                .all(|block| block.language == "bash" && !block.run));
+            assert!(code[0].text.starts_with("::code id=build lang=rust run \\"));
+            assert!(code[0].text.ends_with("::end"), "{}", code[0].text);
+            assert_eq!(code[1].text, "dx run notes.dx");
+            assert!(document
+                .blocks
+                .iter()
+                .any(|block| block.kind == "paragraph" && block.text == "After it."));
+        };
+        let document = parse(markdown);
+        check(&document);
+        // And what fmt writes reads back as the same two blocks.
+        check(&parse(&stringify(&document)));
+
+        // An unclosed fence never swallows the real blocks after it.
+        let unclosed = parse("```bash\necho\n\n::paragraph id=p\nreal\n::end\n");
+        assert!(unclosed.blocks.iter().any(|block| block.id == "p"));
+    }
+
+    #[test]
     fn legacy_quote_and_code_fence() {
         assert_eq!(
             round_trip("> quoted line\n> second\n"),

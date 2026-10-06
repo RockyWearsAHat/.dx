@@ -130,6 +130,10 @@ pub struct RunOptions {
     pub cache_root: PathBuf,
     /// Timeout for blocks that do not set their own.
     pub default_timeout: Duration,
+    /// A timeout that overrides every block's own `timeout=` — `dx run --timeout S`. `None`
+    /// (the default) leaves each block to its own header, and the blocks without one to
+    /// [`RunOptions::default_timeout`]: the header governs unless the caller says otherwise.
+    pub timeout_override: Option<Duration>,
     /// Re-run every block even when its fingerprint is unchanged, and run past the
     /// approval gate — a block forced past it carries [`FORCED_NOTICE`] in its output.
     pub force: bool,
@@ -167,6 +171,7 @@ impl Default for RunOptions {
             document_dir: PathBuf::from("."),
             cache_root: workdir::default_cache_root(),
             default_timeout: Duration::from_secs(DEFAULT_TIMEOUT_SECONDS),
+            timeout_override: None,
             force: false,
             only: None,
             review_only: false,
@@ -1584,11 +1589,7 @@ fn execute(
         return blocked("execution is disabled (DX_NO_EXEC is set); no code was run");
     }
 
-    let timeout = if block.timeout > 0 {
-        Duration::from_secs(u64::from(block.timeout))
-    } else {
-        options.default_timeout
-    };
+    let timeout = block_timeout(block, options);
 
     // `capture` reaches a live `target=`, on purpose — see [`live`]'s module doc for why
     // that is not the `plan`/`confine` pipeline every other runner goes through below.
@@ -1647,11 +1648,11 @@ fn execute(
     // and the reader's own environment — `HOME`, `TMPDIR`, `USER` unchanged — with only the
     // `DX_*` variables every block gets. The sandbox's redirections exist for the sandbox.
     let command = if host {
-        with_dx_variables(prepared.run.clone(), block, &dirs)
+        with_dx_variables(prepared.run.clone(), block, &dirs, timeout)
             .on_host()
             .without_env(&options.unset_env)
     } else {
-        let run = home_in_block(&prepared.run, block, &dirs);
+        let run = home_in_block(&prepared.run, block, &dirs, timeout);
         match confine::confine(&run, &Grant::offline(writable).reading(readable)) {
             Ok(command) => command,
             Err(message) => return blocked(&message),
@@ -1672,6 +1673,19 @@ fn execute(
         }
     }
     capture
+}
+
+/// How long `block` may run: the caller's explicit override when there is one, else the
+/// block's own `timeout=`, else the run's default. A slow host gate (`timeout=900`) gets its
+/// 900 s from its header alone — no command-line flag is needed (dx report-3d99fcfc).
+fn block_timeout(block: &Block, options: &RunOptions) -> Duration {
+    if let Some(timeout) = options.timeout_override {
+        timeout
+    } else if block.timeout > 0 {
+        Duration::from_secs(u64::from(block.timeout))
+    } else {
+        options.default_timeout
+    }
 }
 
 /// The sentence appended to a failed block whose output looks like the sandbox, not the
@@ -1773,6 +1787,7 @@ fn home_in_block(
     run: &process::CommandSpec,
     block: &Block,
     dirs: &plan::Dirs,
+    timeout: Duration,
 ) -> process::CommandSpec {
     let block_dir = dirs.block.to_string_lossy().into_owned();
     let redirected = run
@@ -1784,7 +1799,7 @@ fn home_in_block(
             "XDG_CACHE_HOME",
             dirs.toolchains.to_string_lossy().into_owned(),
         );
-    let mut cmd = with_dx_variables(redirected, block, dirs);
+    let mut cmd = with_dx_variables(redirected, block, dirs, timeout);
 
     // Pass Rust toolchain environment variables into the sandbox.
     for (key, value) in rust_toolchain_env() {
@@ -1794,15 +1809,21 @@ fn home_in_block(
     cmd
 }
 
-/// The `DX_*` variables every block gets, sandboxed or on the host: its id, and its own
-/// scratch directory (`$DX_SANDBOX`).
+/// The `DX_*` variables every block gets, sandboxed or on the host: its id, its own
+/// scratch directory (`$DX_SANDBOX`), and the whole seconds dx will let it run
+/// (`$DX_BLOCK_TIMEOUT`: the override, else its `timeout=`, else the default — rounded up),
+/// so a wrapper with a limit of its own (pcrun) can take dx's instead of silently
+/// cutting the run shorter.
 fn with_dx_variables(
     run: process::CommandSpec,
     block: &Block,
     dirs: &plan::Dirs,
+    timeout: Duration,
 ) -> process::CommandSpec {
+    let seconds = timeout.as_secs() + u64::from(timeout.subsec_nanos() > 0);
     run.with_env("DX_BLOCK_ID", block.id.clone())
         .with_env("DX_SANDBOX", dirs.block.to_string_lossy().into_owned())
+        .with_env("DX_BLOCK_TIMEOUT", seconds.to_string())
 }
 
 /// Whether the `DX_NO_EXEC` kill switch is set.
@@ -3575,6 +3596,146 @@ sleep 1; echo made > out/made.txt\n::end\n\n\
             report2.runs[0].output.contains("done"),
             "output should contain the expected result"
         );
+    }
+
+    /// One block run with a stated default and override, timed. dx report-3d99fcfc.
+    fn timed_run(
+        source: &str,
+        label: &str,
+        default: Duration,
+        timeout_override: Option<Duration>,
+    ) -> (String, Duration) {
+        let root = std::env::temp_dir().join(format!("dx-run-tests-{label}"));
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::create_dir_all(&root);
+        let started = std::time::Instant::now();
+        let report = run_document(
+            source,
+            &RunOptions {
+                document_dir: root.clone(),
+                cache_root: root.join("cache"),
+                default_timeout: default,
+                timeout_override,
+                approve: true,
+                ..RunOptions::default()
+            },
+            &resolve::Nowhere,
+        )
+        .expect("one block never cycles");
+        (report.runs[0].status.clone(), started.elapsed())
+    }
+
+    #[test]
+    fn the_blocks_own_timeout_header_governs_its_run_not_the_default() {
+        // dx report-3d99fcfc: a host gate's `timeout=900` must be what bounds it. Both
+        // shapes, sandboxed and `confine=host` (the reported block's), and both
+        // directions, each against a default that would give the opposite verdict.
+        for confine in ["", " confine=host"] {
+            // timeout=3, sleep 1: passes although the default (0.5 s) is shorter.
+            let (status, _) = timed_run(
+                &format!("::code id=t lang=bash run{confine} timeout=3\nsleep 1\n::end\n"),
+                "header-pass",
+                Duration::from_millis(500),
+                None,
+            );
+            assert_eq!(
+                status, "ok",
+                "timeout=3 did not carry sleep 1 ({confine:?})"
+            );
+
+            // timeout=1, sleep 3: interrupted at about 1 s although the default is 60 s.
+            let (status, elapsed) = timed_run(
+                &format!("::code id=t lang=bash run{confine} timeout=1\nsleep 3\n::end\n"),
+                "header-cut",
+                Duration::from_secs(60),
+                None,
+            );
+            assert_eq!(
+                status, "interrupted",
+                "timeout=1 did not cut sleep 3 ({confine:?})"
+            );
+            assert!(
+                elapsed >= Duration::from_secs(1) && elapsed < Duration::from_millis(2500),
+                "timeout=1 ended after {elapsed:?} ({confine:?})"
+            );
+        }
+    }
+
+    #[test]
+    fn an_explicit_timeout_override_replaces_the_blocks_own() {
+        // The caller's override (`dx run --timeout S`) wins only when given: it cuts a
+        // block whose header allows 60 s at 1 s, and lets a timeout=1 block run 2 s.
+        let (status, elapsed) = timed_run(
+            "::code id=t lang=bash run timeout=60\nsleep 3\n::end\n",
+            "override-cut",
+            Duration::from_secs(60),
+            Some(Duration::from_secs(1)),
+        );
+        assert_eq!(status, "interrupted");
+        assert!(
+            elapsed < Duration::from_millis(2500),
+            "override 1 s ended after {elapsed:?}"
+        );
+
+        let (status, _) = timed_run(
+            "::code id=t lang=bash run timeout=1\nsleep 2\n::end\n",
+            "override-pass",
+            Duration::from_secs(60),
+            Some(Duration::from_secs(5)),
+        );
+        assert_eq!(status, "ok");
+    }
+
+    /// The output a block run under a stated override leaves, with the default 60 s.
+    fn env_run(source: &str, label: &str, timeout_override: Option<Duration>) -> BlockRun {
+        let root = std::env::temp_dir().join(format!("dx-run-tests-{label}"));
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::create_dir_all(&root);
+        run_document(
+            source,
+            &RunOptions {
+                document_dir: root.clone(),
+                cache_root: root.join("cache"),
+                default_timeout: Duration::from_secs(60),
+                timeout_override,
+                approve: true,
+                ..RunOptions::default()
+            },
+            &resolve::Nowhere,
+        )
+        .expect("one block never cycles")
+        .runs
+        .remove(0)
+    }
+
+    #[test]
+    fn a_block_sees_its_effective_timeout_as_dx_block_timeout() {
+        // pcrun reads $DX_BLOCK_TIMEOUT so its own limit never silently undercuts dx's
+        // (a `--timeout 3600` host gate was cut at pcrun's 900 s). Sandboxed and host.
+        for confine in ["", " confine=host"] {
+            let header = format!("::code id=t lang=bash run{confine} timeout=900\necho \"T=$DX_BLOCK_TIMEOUT\"\n::end\n");
+            let run = env_run(&header, "env-header", None);
+            assert!(
+                run.output.contains("T=900"),
+                "header ({confine:?}): {}",
+                run.output
+            );
+            let run = env_run(&header, "env-override", Some(Duration::from_secs(3600)));
+            assert!(
+                run.output.contains("T=3600"),
+                "override ({confine:?}): {}",
+                run.output
+            );
+            let bare = format!(
+                "::code id=t lang=bash run{confine}\necho \"T=$DX_BLOCK_TIMEOUT\"\n::end\n"
+            );
+            let run = env_run(&bare, "env-default", None);
+            assert!(
+                run.output.contains("T=60"),
+                "default ({confine:?}): {}",
+                run.output
+            );
+        }
     }
 
     #[test]

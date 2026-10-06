@@ -85,8 +85,11 @@ enum Ask {
     Tree,
 }
 
-fn cache() -> &'static Mutex<HashMap<(PathBuf, Ask), (Key, Value)>> {
-    static CACHE: OnceLock<Mutex<HashMap<(PathBuf, Ask), (Key, Value)>>> = OnceLock::new();
+/// Every answer the resolver gave, by path and kind of question, with the stamp it was given at.
+type Cache = Mutex<HashMap<(PathBuf, Ask), (Key, Value)>>;
+
+fn cache() -> &'static Cache {
+    static CACHE: OnceLock<Cache> = OnceLock::new();
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 

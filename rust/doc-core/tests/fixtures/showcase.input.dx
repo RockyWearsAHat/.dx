@@ -29,7 +29,7 @@ print(f"p95        {np.percentile(latency_ms, 95):.1f} ms")
 print(f"worst      {latency_ms.max()} ms")
 ::end
 
-::output id=stats-output for=stats status=ok hash=8be1cd2717aef506
+::output id=stats-output for=stats status=ok hash=8be1cd2717aef506f46dafba3876b0577418e8ec150a16ac3db81e9cdc0273ef
 requests   10
 p50        16.0 ms
 p95        88.5 ms
@@ -69,7 +69,7 @@ print(f'''<svg viewBox="0 0 {width} {height}" xmlns="http://www.w3.org/2000/svg"
 </svg>''')
 ::end
 
-::output id=chart-output for=chart status=ok hash=529d92084dcb5d6d format=svg
+::output id=chart-output for=chart status=ok hash=529d92084dcb5d6d0002b3cf9d12e67c6158654bc9adb5136ef33b521633a794 format=svg
 <svg viewBox="0 0 720 240" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Request latency">
   <line x1="32" y1="208" x2="688" y2="208" stroke="#8894a4" stroke-width="1"/>
   <polyline points="32.0,160.0 104.9,136.0 177.8,172.0 250.7,32.0 323.6,148.0 396.4,124.0 469.3,156.0 542.2,88.0 615.1,140.0 688.0,164.0" fill="none" stroke="#6cb0ff" stroke-width="2.5"/>
