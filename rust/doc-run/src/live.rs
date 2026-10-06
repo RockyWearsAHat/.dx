@@ -112,11 +112,13 @@ pub(crate) fn execute(
             output: format!("captured {target} to {}\n{note}", path.display()),
             exit: 0,
             timed_out: false,
+            signaled: false,
         },
         Err(reason) => Capture {
             output: reason,
             exit: 1,
             timed_out: false,
+            signaled: false,
         },
     }
 }
@@ -317,6 +319,7 @@ fn blocked(message: &str) -> Capture {
         output: message.to_string(),
         exit: crate::BLOCKED_EXIT,
         timed_out: false,
+        signaled: false,
     }
 }
 

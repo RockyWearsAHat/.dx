@@ -87,6 +87,8 @@ pub struct Capture {
     pub exit: i32,
     /// Whether the process was killed for exceeding its deadline.
     pub timed_out: bool,
+    /// Whether the process ended by a signal (its exit is then 128 plus the signal).
+    pub signaled: bool,
 }
 
 impl Capture {
@@ -105,6 +107,7 @@ impl Capture {
             ),
             exit: LAUNCH_FAILED_EXIT,
             timed_out: false,
+            signaled: false,
         }
     }
 }
@@ -140,9 +143,18 @@ pub fn run(spec: &CommandSpec, working_dir: &Path, timeout: Duration) -> Capture
     let deadline = Instant::now() + timeout;
     let mut timed_out = false;
 
+    let mut signaled = false;
     let exit = loop {
         match child.try_wait() {
-            Ok(Some(status)) => break status.code().unwrap_or(1),
+            Ok(Some(status)) => {
+                break match status.code() {
+                    Some(code) => code,
+                    None => {
+                        signaled = true;
+                        signal_exit(&status)
+                    }
+                }
+            }
             Ok(None) => {}
             Err(_) => break 1,
         }
@@ -166,7 +178,20 @@ pub fn run(spec: &CommandSpec, working_dir: &Path, timeout: Duration) -> Capture
         output: merge_streams(&out_text, &err_text, timed_out, timeout),
         exit,
         timed_out,
+        signaled,
     }
+}
+
+/// The shell convention for a process killed by a signal: 128 plus its number.
+#[cfg(unix)]
+fn signal_exit(status: &std::process::ExitStatus) -> i32 {
+    use std::os::unix::process::ExitStatusExt;
+    status.signal().map_or(1, |signal| 128 + signal)
+}
+
+#[cfg(not(unix))]
+fn signal_exit(_status: &std::process::ExitStatus) -> i32 {
+    1
 }
 
 /// Variables forwarded from dx's own environment, and nothing else.

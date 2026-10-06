@@ -174,7 +174,7 @@ pub struct BlockRun {
     pub id: String,
     /// Language as the author wrote it.
     pub language: String,
-    /// `ok`, `error`, `skipped`, `blocked`, or `review`.
+    /// `ok`, `error`, `interrupted`, `skipped`, `blocked`, or `review`.
     pub status: String,
     /// Process exit code (`0` for skipped blocks).
     pub exit: i32,
@@ -219,7 +219,7 @@ impl RunReport {
     pub fn executed(&self) -> usize {
         self.runs
             .iter()
-            .filter(|run| run.status == "ok" || run.status == "error")
+            .filter(|run| run.status == "ok" || run.status == "error" || run.status == INTERRUPTED)
             .count()
     }
 }
@@ -429,7 +429,9 @@ pub fn run_document(
             continue;
         }
 
-        if !options.force && existing.is_some_and(|output| output.hash == fingerprint) {
+        if !options.force
+            && existing.is_some_and(|output| output.hash == fingerprint && recorded_pass(output))
+        {
             runs.push(BlockRun {
                 id: block.id.clone(),
                 language: block.language.clone(),
@@ -1360,7 +1362,24 @@ fn blocked(message: &str) -> Capture {
         output: message.to_string(),
         exit: BLOCKED_EXIT,
         timed_out: false,
+        signaled: false,
     }
+}
+
+/// Status of a block whose process was killed (signal or timeout): not a verdict.
+const INTERRUPTED: &str = "interrupted";
+
+/// Whether an exit code and output read as a kill: a shell's 128 + signal, with the
+/// shell's own "Terminated" / "Killed" marker.
+fn looks_killed(exit: i32, output: &str) -> bool {
+    (128..=159).contains(&exit) && (output.contains("Terminated") || output.contains("Killed"))
+}
+
+/// Whether a recorded `::output` is a pass: only passes are cache hits. A failure re-runs
+/// every time, and an interrupted run (signal or timeout, including an older document's
+/// `error` with exit 128..=159 and a kill marker) was never a verdict.
+fn recorded_pass(output: &Block) -> bool {
+    output.status == "ok" && output.exit == 0
 }
 
 /// Classify a capture into the status recorded on the `::output` block.
@@ -1369,6 +1388,8 @@ fn status_of(capture: &Capture) -> String {
         "blocked".to_string()
     } else if capture.succeeded() {
         "ok".to_string()
+    } else if capture.timed_out || capture.signaled || looks_killed(capture.exit, &capture.output) {
+        INTERRUPTED.to_string()
     } else {
         "error".to_string()
     }
@@ -1858,7 +1879,7 @@ mod tests {
     fn a_block_that_overruns_its_timeout_is_killed() {
         let source = "::code id=slow lang=bash run timeout=1\nsleep 30\n::end\n";
         let report = run_isolated(source, "timeout");
-        assert_eq!(report.runs[0].status, "error");
+        assert_eq!(report.runs[0].status, "interrupted");
         assert!(report.runs[0].output.contains("timed out"));
     }
 
@@ -2609,6 +2630,64 @@ mod tests {
         assert!(!report.source.contains("::output"));
     }
 
+    fn count_runs(report: &RunReport, dir: &std::path::Path) -> usize {
+        let _ = report;
+        std::fs::read_to_string(dir.join("out/count"))
+            .map(|text| text.lines().count())
+            .unwrap_or(0)
+    }
+
+    fn run_counting(body: &str, label: &str, runs: usize) -> (usize, Vec<String>) {
+        let root = std::env::temp_dir().join(format!("dx-run-tests-{label}"));
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::create_dir_all(&root);
+        let mut source = format!("::code id=b lang=bash run writes=out\n{body}\n::end\n");
+        let mut statuses = Vec::new();
+        let mut last = None;
+        for _ in 0..runs {
+            let report = run_document(
+                &source,
+                &RunOptions {
+                    document_dir: root.clone(),
+                    cache_root: root.join("cache"),
+                    default_timeout: Duration::from_secs(60),
+                    approve: true,
+                    ..RunOptions::default()
+                },
+                &resolve::Nowhere,
+            )
+            .expect("no cycle");
+            statuses.push(report.runs[0].status.clone());
+            source = report.source.clone();
+            last = Some(report);
+        }
+        (count_runs(&last.expect("ran"), &root), statuses)
+    }
+
+    #[test]
+    fn a_signal_killed_block_is_interrupted_and_reruns() {
+        let (count, statuses) = run_counting("echo x >> out/count\nkill -TERM $$", "sig", 2);
+        assert_eq!(count, 2, "{statuses:?}");
+        assert_eq!(statuses, ["interrupted", "interrupted"]);
+    }
+
+    #[test]
+    fn a_failing_block_reruns_and_a_passing_block_is_cached() {
+        let (count, statuses) = run_counting("echo x >> out/count\nexit 3", "fail", 2);
+        assert_eq!(count, 2, "{statuses:?}");
+        assert_eq!(statuses, ["error", "error"]);
+        let (count, statuses) = run_counting("echo x >> out/count", "pass", 2);
+        assert_eq!(count, 1, "{statuses:?}");
+        assert_eq!(statuses, ["ok", "skipped"]);
+    }
+
+    #[test]
+    fn an_older_recorded_143_with_a_kill_marker_counts_as_killed() {
+        assert!(looks_killed(143, "Terminated: 15"));
+        assert!(!looks_killed(3, "Terminated"));
+        assert!(!looks_killed(143, "plain"));
+    }
+
     #[test]
     fn timeout_attribute_causes_timeout_at_specified_seconds() {
         // A block that sleeps 2 seconds with timeout=1 should timeout
@@ -2617,8 +2696,8 @@ mod tests {
         let report = run_isolated(source_timeout_too_short, "timeout-fail");
         assert_eq!(report.runs.len(), 1);
         assert_eq!(
-            report.runs[0].status, "error",
-            "block should timeout and error"
+            report.runs[0].status, "interrupted",
+            "block should timeout and be interrupted"
         );
         assert!(
             report.runs[0].output.contains("timed out"),
