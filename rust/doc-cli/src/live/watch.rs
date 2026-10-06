@@ -273,8 +273,15 @@ mod tests {
         for _ in 0..5 {
             assert!(!tick(&mut state, &mut |_, _| refreshed += 1));
         }
-        assert_eq!(refreshed, 1, "nothing changed, so no refresh (no gate work)");
-        assert_eq!(GIT_SPAWNS.with(std::cell::Cell::get), spawned, "no git process while idle");
+        assert_eq!(
+            refreshed, 1,
+            "nothing changed, so no refresh (no gate work)"
+        );
+        assert_eq!(
+            GIT_SPAWNS.with(std::cell::Cell::get),
+            spawned,
+            "no git process while idle"
+        );
         sh(&d, &["commit", "--allow-empty", "-m", "two"]);
         tick(&mut state, &mut |_, _| refreshed += 1);
         assert_eq!(refreshed, 2, "a new commit is seen on the next poll");

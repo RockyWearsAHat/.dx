@@ -939,7 +939,11 @@ fn memoized_fingerprint(
             host,
             timeout: block.timeout,
         };
-        read_cache::memo_key(&identity, document_dir, climb_to_root(document_dir).as_deref())
+        read_cache::memo_key(
+            &identity,
+            document_dir,
+            climb_to_root(document_dir).as_deref(),
+        )
     });
     if let Some(found) = key.as_deref().and_then(read_cache::memo_get) {
         return Ok(found);
@@ -2838,16 +2842,32 @@ sleep 1; echo made > out/made.txt\n::end\n\n\
         };
         let memo = || {
             memoized_fingerprint(
-                "bash", &block, &block.text, &[], &paths, &[], false, &resolver, &root,
+                "bash",
+                &block,
+                &block.text,
+                &[],
+                &paths,
+                &[],
+                false,
+                &resolver,
+                &root,
             )
             .expect("resolves")
         };
 
         let before = hashed_bytes();
-        assert_eq!(memo(), truth(), "a cold memoized fingerprint is byte-identical");
+        assert_eq!(
+            memo(),
+            truth(),
+            "a cold memoized fingerprint is byte-identical"
+        );
         assert!(hashed_bytes() > before);
         let (hashed, read) = (hashed_bytes(), resolver.1.get());
-        assert_eq!(memo(), truth(), "a warm memoized fingerprint is byte-identical");
+        assert_eq!(
+            memo(),
+            truth(),
+            "a warm memoized fingerprint is byte-identical"
+        );
         let (hashed, read) = (hashed_bytes() - hashed, resolver.1.get() - read);
         // `truth()` itself reads and hashes once; the memo did neither.
         let one_truth = {
@@ -2855,7 +2875,11 @@ sleep 1; echo made > out/made.txt\n::end\n\n\
             let _ = truth();
             (hashed_bytes() - h, resolver.1.get() - r)
         };
-        assert_eq!((hashed, read), one_truth, "a warm memo hashes and reads nothing");
+        assert_eq!(
+            (hashed, read),
+            one_truth,
+            "a warm memo hashes and reads nothing"
+        );
 
         // The memo persists as digests a fresh process loads.
         let file = root.join("memo/fingerprints.v1");
@@ -2874,7 +2898,9 @@ sleep 1; echo made > out/made.txt\n::end\n\n\
             climb_to_root(&root).as_deref(),
         );
         let saved = std::fs::read_to_string(&file).expect("memo file");
-        assert!(saved.lines().any(|line| line == format!("{key} {}", truth())));
+        assert!(saved
+            .lines()
+            .any(|line| line == format!("{key} {}", truth())));
 
         // An edit, a deeper edit, and a new file each move it, to the uncached value.
         let mut seen = vec![truth()];

@@ -24,12 +24,12 @@
 //! Only a resolver that answers from disk ([`Resolver::on_disk`]) is cached at all; any
 //! other is asked every time.
 
+use std::cell::Cell;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
-use std::cell::Cell;
-use std::collections::HashSet;
 
 use doc_core::digest::sha256_hex;
 
@@ -270,7 +270,11 @@ fn describe(path: &Path, out: &mut String) -> bool {
         key.sort_by(|a, b| a.0.cmp(&b.0));
         out.push_str("\u{1f}d");
         for (name, s) in key {
-            let _ = write!(out, "\u{1e}{name}\u{1d}{} {} {}", s.inode, s.size, s.mtime_ns);
+            let _ = write!(
+                out,
+                "\u{1e}{name}\u{1d}{} {} {}",
+                s.inode, s.size, s.mtime_ns
+            );
         }
     } else {
         let s = stamp(&meta);
@@ -322,7 +326,11 @@ pub(crate) fn memo_key(
         }
         if needs_store {
             for (file, s) in store_stamps(&here) {
-                let _ = write!(text, "\u{1e}{file}\u{1d}{} {} {}", s.inode, s.size, s.mtime_ns);
+                let _ = write!(
+                    text,
+                    "\u{1e}{file}\u{1d}{} {} {}",
+                    s.inode, s.size, s.mtime_ns
+                );
             }
         }
     }
@@ -345,7 +353,9 @@ fn memo() -> &'static Mutex<Memo> {
 }
 
 fn memo_lock() -> std::sync::MutexGuard<'static, Memo> {
-    memo().lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    memo()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 pub(crate) fn memo_get(key: &str) -> Option<String> {
@@ -406,7 +416,11 @@ pub fn save_memo(path: &Path) -> std::io::Result<bool> {
         }
         memo.dirty = false;
         let mut keys: Vec<&String> = memo.touched.iter().collect();
-        keys.extend(memo.fingerprints.keys().filter(|k| !memo.touched.contains(*k)));
+        keys.extend(
+            memo.fingerprints
+                .keys()
+                .filter(|k| !memo.touched.contains(*k)),
+        );
         let mut body = String::new();
         for key in keys.into_iter().take(MEMO_CAP) {
             if let Some(value) = memo.fingerprints.get(key) {

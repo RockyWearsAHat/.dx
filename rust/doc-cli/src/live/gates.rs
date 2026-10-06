@@ -40,6 +40,21 @@ pub struct GateVerdict {
 
 const TAIL_CAP: usize = 300;
 
+/// The gates that are neither pass nor fail, counted apart — `(word, n)` for each state
+/// with any, in a fixed order. Unapproved never runs: it needs a human `--approve`.
+pub fn open_counts(gates: &[GateVerdict]) -> Vec<(&'static str, usize)> {
+    [
+        ("stale", GateState::Stale),
+        ("unrun", GateState::Unrun),
+        ("unapproved", GateState::Unapproved),
+        ("interrupted", GateState::Interrupted),
+    ]
+    .into_iter()
+    .map(|(word, state)| (word, gates.iter().filter(|g| g.state == state).count()))
+    .filter(|(_, n)| *n > 0)
+    .collect()
+}
+
 /// Verdicts for every runnable block under `checkout`, in document then block order.
 /// Nothing is executed or written. A document that will not resolve yields no verdicts.
 ///
@@ -73,7 +88,10 @@ fn common_dir(checkout: &Path) -> Option<PathBuf> {
         return Some(dot_git);
     }
     let text = std::fs::read_to_string(&dot_git).ok()?;
-    let gitdir = text.lines().find_map(|line| line.strip_prefix("gitdir:"))?.trim();
+    let gitdir = text
+        .lines()
+        .find_map(|line| line.strip_prefix("gitdir:"))?
+        .trim();
     let gitdir = checkout.join(gitdir);
     match std::fs::read_to_string(gitdir.join("commondir")) {
         Ok(common) => Some(gitdir.join(common.trim())),
@@ -267,7 +285,12 @@ mod tests {
             let hashed = doc_run::hashed_bytes();
             let started = Instant::now();
             let v = verdicts(&docs);
-            (format!("{v:?}"), v.len(), started.elapsed(), doc_run::hashed_bytes() - hashed)
+            (
+                format!("{v:?}"),
+                v.len(),
+                started.elapsed(),
+                doc_run::hashed_bytes() - hashed,
+            )
         };
         let (cold, n, cold_took, cold_bytes) = timed();
         // Warm: every unchanged input answers from the fingerprint memo — stat calls only.
@@ -279,15 +302,27 @@ mod tests {
             "{n} verdicts: cold {cold_took:?} ({cold_bytes} B hashed), warm {warm_took:?} \
              ({warm_bytes} B), fresh process {fresh_took:?} ({fresh_bytes} B)"
         );
-        assert_eq!(cold, warm, "a memoized fingerprint must not change a verdict");
-        assert_eq!(cold, fresh, "a persisted fingerprint must not change a verdict");
+        assert_eq!(
+            cold, warm,
+            "a memoized fingerprint must not change a verdict"
+        );
+        assert_eq!(
+            cold, fresh,
+            "a persisted fingerprint must not change a verdict"
+        );
         assert_eq!(warm_bytes, 0, "a warm read hashes no bytes");
-        assert_eq!(fresh_bytes, 0, "a fresh process after a warm run hashes no bytes");
+        assert_eq!(
+            fresh_bytes, 0,
+            "a fresh process after a warm run hashes no bytes"
+        );
         // Only an optimised build is held to the live bound; an unoptimised one need only
         // complete.
         if !cfg!(debug_assertions) {
             assert!(warm_took < Duration::from_millis(100), "warm {warm_took:?}");
-            assert!(fresh_took < Duration::from_millis(100), "fresh {fresh_took:?}");
+            assert!(
+                fresh_took < Duration::from_millis(100),
+                "fresh {fresh_took:?}"
+            );
         }
     }
 }

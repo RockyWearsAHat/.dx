@@ -163,6 +163,25 @@ pub fn refresh(repo: &Path, base: &str, run: bool) -> Result<Snapshot, String> {
     .to_string();
     let own = dir(repo);
 
+    // The base's gates run and are read in dx's own checkout of the base, never in the
+    // user's main worktree. Without `run`, an existing base checkout is read as it stands.
+    let base_gates = if run {
+        checkout::materialize_base(repo, base).map_or_else(
+            |_| Vec::new(),
+            |path| {
+                let _ = checkout::run_stale(&path);
+                gates::verdicts(&path)
+            },
+        )
+    } else {
+        let path = checkout::base_path(repo, base);
+        if path.join(".git").exists() {
+            gates::verdicts(&path)
+        } else {
+            Vec::new()
+        }
+    };
+
     let refs = git(
         repo,
         &[
@@ -216,15 +235,16 @@ pub fn refresh(repo: &Path, base: &str, run: bool) -> Result<Snapshot, String> {
         });
     }
 
-    let names: Vec<String> = branches.iter().map(|b| b.branch.clone()).collect();
-    let _ = checkout::prune(repo, &names);
+    let mut keep: Vec<String> = branches.iter().map(|b| b.branch.clone()).collect();
+    keep.push(base.to_string());
+    let _ = checkout::prune(repo, &keep);
     Ok(Snapshot {
         v: 1,
         repo: main_wt.display().to_string(),
         base: base.to_string(),
         base_sha,
         updated_ms: now_ms(),
-        base_gates: gates::verdicts(&main_wt),
+        base_gates,
         branches,
     })
 }
@@ -324,19 +344,22 @@ pub fn render_text(s: &Snapshot) -> String {
     if !fails.is_empty() {
         let _ = write!(o, " fail: {}", fails.join(" "));
     }
+    for (word, n) in gates::open_counts(&s.base_gates) {
+        let _ = write!(o, " {word}: {n}");
+    }
     o.push('\n');
     for b in &s.branches {
         let state = format!("{:?}", b.merge.state).to_lowercase();
         let _ = write!(o, "{} {state}", b.branch);
         match b.merge.state {
             merge::MergeState::Clean => {
-                let (ratio, fails, stale) = gate_summary(&b.gates);
+                let (ratio, fails, _) = gate_summary(&b.gates);
                 let _ = write!(o, " gates {ratio}");
                 if !fails.is_empty() {
                     let _ = write!(o, " fail: {}", fails.join(" "));
                 }
-                if stale > 0 {
-                    let _ = write!(o, " stale: {stale}");
+                for (word, n) in gates::open_counts(&b.gates) {
+                    let _ = write!(o, " {word}: {n}");
                 }
                 if b.checkout.is_none() {
                     o.push_str(" (not run)");
@@ -493,5 +516,93 @@ mod tests {
             .unwrap()
             .starts_with("dx live /r base main@abc"));
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Every file of a checkout outside `.git`, with its bytes, in path order.
+    fn files_of(root: &Path) -> Vec<(PathBuf, Vec<u8>)> {
+        let mut out = Vec::new();
+        let mut todo = vec![root.to_path_buf()];
+        while let Some(dir) = todo.pop() {
+            for entry in std::fs::read_dir(&dir).unwrap().flatten() {
+                let path = entry.path();
+                if path.file_name().is_some_and(|n| n == ".git") {
+                    continue;
+                }
+                if path.is_dir() {
+                    todo.push(path);
+                } else {
+                    out.push((path.clone(), std::fs::read(&path).unwrap()));
+                }
+            }
+        }
+        out.sort();
+        out
+    }
+
+    #[test]
+    fn base_gates_run_in_dx_own_base_checkout_and_never_touch_the_main_worktree() {
+        let repo = std::env::temp_dir().join(format!("dxlive-base-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&repo);
+        std::fs::create_dir_all(&repo).unwrap();
+        for args in [
+            &["init", "-q", "-b", "main"][..],
+            &["config", "user.email", "t@t"],
+            &["config", "user.name", "t"],
+        ] {
+            git(&repo, args).unwrap();
+        }
+        // The gate dx-live-check.sh approves: an approval stands for its code machine-wide.
+        std::fs::write(repo.join("a.txt"), "ok\n").unwrap();
+        let doc = repo.join("tests.dx");
+        std::fs::write(
+            &doc,
+            "# t\n\n::code lang=bash run reads=a.txt id=gate-a\ngrep -q ok a.txt && echo gate-a-pass\n::end\n",
+        )
+        .unwrap();
+        let source = std::fs::read_to_string(&doc).unwrap();
+        let report = doc_run::run_document(
+            &source,
+            &doc_run::RunOptions {
+                document_dir: repo.clone(),
+                approve: true,
+                ..doc_run::RunOptions::default()
+            },
+            &crate::workspace::resolver_for(&doc),
+        )
+        .expect("approve and run");
+        std::fs::write(&doc, report.source).unwrap();
+        git(&repo, &["add", "-A"]).unwrap();
+        git(&repo, &["commit", "-q", "-m", "approved run"]).unwrap();
+        // The base moves an input on without re-running: its recorded gate is stale.
+        std::fs::write(repo.join("a.txt"), "ok\nmore\n").unwrap();
+        git(&repo, &["commit", "-q", "-am", "a moves"]).unwrap();
+        let in_main = gates::verdicts(&repo);
+        assert_eq!(in_main[0].state, GateState::Stale, "{in_main:?}");
+
+        let before = files_of(&repo);
+        let s = refresh(&repo, "main", true).expect("refresh");
+        let base: Vec<_> = s.base_gates.iter().map(|g| (&*g.block, g.state)).collect();
+        assert_eq!(base, [("gate-a", GateState::Pass)], "{:?}", s.base_gates);
+        assert!(render_text(&s)
+            .lines()
+            .nth(1)
+            .unwrap()
+            .starts_with("base: gates 1/1 pass"));
+        assert_eq!(
+            files_of(&repo),
+            before,
+            "the main worktree must be byte-unchanged"
+        );
+        let base_wt = checkout::base_path(&repo, "main");
+        assert!(std::fs::read_to_string(base_wt.join("tests.dx"))
+            .unwrap()
+            .contains("gate-a-pass"));
+
+        // Without `run`, the base checkout is read as it stands; nothing runs.
+        let read = refresh(&repo, "main", false).expect("read");
+        assert_eq!(read.base_gates[0].state, GateState::Pass);
+        assert_eq!(files_of(&repo), before);
+        let _ = checkout::prune(&repo, &[]);
+        let _ = std::fs::remove_dir_all(&repo);
     }
 }

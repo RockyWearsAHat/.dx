@@ -216,7 +216,11 @@ fn item(text: String, nested: Vec<Item>) -> Item {
 
 fn summary(gates: &[GateVerdict]) -> String {
     let pass = gates.iter().filter(|g| g.state == GateState::Pass).count();
-    format!("gates {pass}/{} pass", gates.len())
+    let mut text = format!("gates {pass}/{} pass", gates.len());
+    for (word, n) in crate::live::gates::open_counts(gates) {
+        text.push_str(&format!(", {n} {word}"));
+    }
+    text
 }
 
 /// The board as a document. `place` turns a screen's absolute path into the `src` the board

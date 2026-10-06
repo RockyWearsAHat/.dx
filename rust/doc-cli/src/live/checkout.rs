@@ -98,6 +98,48 @@ fn warm_targets(repo: &Path, checkout: &Path) {
     }
 }
 
+/// Create the detached dx-owned worktree at `path` (on `start`) unless git already has it.
+fn ensure_worktree(repo: &Path, path: &Path, start: &str) -> Result<(), String> {
+    if path.join(".git").exists() {
+        return Ok(());
+    }
+    if path.exists() {
+        // A leftover folder git does not know: ours to clear, it lives under wt/.
+        std::fs::remove_dir_all(path)
+            .map_err(|e| format!("could not clear {}: {e}", path.display()))?;
+    }
+    std::fs::create_dir_all(wt_root(repo))
+        .map_err(|e| format!("could not create {}: {e}", wt_root(repo).display()))?;
+    let _ = git(repo, &["worktree", "prune"]);
+    let target = path.to_string_lossy().to_string();
+    git(repo, &["worktree", "add", "--detach", &target, start])?;
+    Ok(())
+}
+
+/// The dx-owned checkout of the base branch itself: `dir(repo)/wt/<base>`.
+pub fn base_path(repo: &Path, base: &str) -> PathBuf {
+    wt_root(repo).join(folder_name(base))
+}
+
+/// Make the dx-owned checkout of `base` at its tip and return its path — where the base's
+/// gates run, so dx never runs a gate in, or writes into, the user's main worktree.
+///
+/// Moved only when the tip moved: a checkout already on the tip keeps the results its last
+/// run recorded. Warmed like a branch checkout, and [`prune`] keeps it.
+///
+/// # Errors
+/// A sentence when git cannot resolve the base, create the worktree or move it.
+pub fn materialize_base(repo: &Path, base: &str) -> Result<PathBuf, String> {
+    let base_sha = commit_of(repo, base)?;
+    let path = base_path(repo, base);
+    ensure_worktree(repo, &path, &base_sha)?;
+    if git(&path, &["rev-parse", "HEAD"]).ok().as_deref() != Some(base_sha.as_str()) {
+        git(&path, &["checkout", "--detach", "-f", &base_sha])?;
+    }
+    warm_targets(repo, &path);
+    Ok(path)
+}
+
 /// Make the dx-owned checkout of the virtual merge `tree` of `base` and `branch`, and
 /// return its path.
 ///
@@ -111,19 +153,7 @@ pub fn materialize(repo: &Path, base: &str, branch: &str, tree: &str) -> Result<
     let base_sha = commit_of(repo, base)?;
     let branch_sha = commit_of(repo, branch)?;
     let path = wt_root(repo).join(folder_name(branch));
-
-    if !path.join(".git").exists() {
-        if path.exists() {
-            // A leftover folder git does not know: ours to clear, it lives under wt/.
-            std::fs::remove_dir_all(&path)
-                .map_err(|e| format!("could not clear {}: {e}", path.display()))?;
-        }
-        std::fs::create_dir_all(wt_root(repo))
-            .map_err(|e| format!("could not create {}: {e}", wt_root(repo).display()))?;
-        let _ = git(repo, &["worktree", "prune"]);
-        let target = path.to_string_lossy().to_string();
-        git(repo, &["worktree", "add", "--detach", &target, &base_sha])?;
-    }
+    ensure_worktree(repo, &path, &base_sha)?;
 
     let commit = git(
         repo,
@@ -180,7 +210,9 @@ fn run_lock_path() -> PathBuf {
         // Tests never queue behind a real watcher's run.
         return std::env::temp_dir().join(format!("dx-live-run-{}.lock", std::process::id()));
     }
-    let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_default();
     home.join(".dx/live/run.lock")
 }
 
@@ -338,7 +370,11 @@ mod tests {
         for pair in spans.windows(2) {
             assert!(pair[1].0 >= pair[0].1, "overlapping runs: {spans:?}");
         }
-        assert!(started.elapsed() >= Duration::from_millis(600), "{:?}", started.elapsed());
+        assert!(
+            started.elapsed() >= Duration::from_millis(600),
+            "{:?}",
+            started.elapsed()
+        );
         let _ = std::fs::remove_dir_all(&empty);
     }
 

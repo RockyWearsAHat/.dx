@@ -384,7 +384,11 @@ mod tests {
         let _env = crate::env_lock();
         std::env::set_var("DX_TEST_DROPPED", "inherited");
         let script = ["-c", "echo ${DX_TEST_DROPPED-dropped}"];
-        let kept = run(&CommandSpec::new("sh", &script).on_host(), &temp_dir(), Duration::from_secs(10));
+        let kept = run(
+            &CommandSpec::new("sh", &script).on_host(),
+            &temp_dir(),
+            Duration::from_secs(10),
+        );
         let dropped = run(
             &CommandSpec::new("sh", &script)
                 .on_host()
