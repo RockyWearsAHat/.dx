@@ -227,6 +227,20 @@ fn build_and_write_source_index(root: &Path) -> Result<(), String> {
         ));
     }
 
+    // A sparse git worktree has only some tracked files on disk; index the rest from git so
+    // a search here sees the whole repository. Outside git this adds nothing.
+    for (relative, content) in workspace::off_disk_sources(root) {
+        let content_hash = digest::sha256_hex(content.as_bytes());
+        index_files.push((
+            FileMetadata {
+                path: relative,
+                mtime: 0,
+                content_hash,
+            },
+            content,
+        ));
+    }
+
     let index = SourceIndex::build_from(index_files)
         .map_err(|e| format!("failed to build source index: {e}"))?;
 

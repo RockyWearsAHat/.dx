@@ -288,12 +288,18 @@ impl Sources {
             )),
             // The plain "no such file" case, and the one a person hits most: say what is
             // missing and what makes it exist, rather than restating the path back.
-            None if !path.exists() => Err(format!(
-                "no file at {}; `dx ls` lists the documents in this project, and \
-                 `dx new {}` creates one",
-                path.display(),
-                path.display()
-            )),
+            None if !path.exists() => {
+                // A tracked file this sparse worktree has not checked out: git has its text.
+                if let Some(text) = not_checked_out_text(&self.root, &relative) {
+                    return Ok(text);
+                }
+                Err(format!(
+                    "no file at {}; `dx ls` lists the documents in this project, and \
+                     `dx new {}` creates one",
+                    path.display(),
+                    path.display()
+                ))
+            }
             None => Err(format!(
                 "could not read {} — it exists but is not text this dx can read",
                 path.display()
@@ -962,7 +968,7 @@ fn source_corpus(directory: &Path) -> Vec<Loaded> {
     let mut files = Vec::new();
     collect_source_files(directory, &mut files);
     files.sort();
-    in_parallel(&files, |path| {
+    let mut corpus: Vec<Loaded> = in_parallel(&files, |path| {
         let relative = path
             .strip_prefix(directory)
             .unwrap_or(path)
@@ -978,7 +984,19 @@ fn source_corpus(directory: &Path) -> Vec<Loaded> {
     })
     .into_iter()
     .flatten()
-    .collect()
+    .collect();
+    // A sparse worktree's tracked files that are not on disk: their text is in git.
+    for (relative, text) in off_disk_sources(directory) {
+        let document = doc_core::search::source_document(&relative, &text);
+        if !document.blocks.is_empty() {
+            corpus.push(Loaded {
+                path: directory.join(&relative),
+                relative,
+                document,
+            });
+        }
+    }
+    corpus
 }
 
 /// Apply `work` to every item across the machine's cores, keeping the input's order.
@@ -1046,6 +1064,174 @@ fn collect_source_files(directory: &Path, found: &mut Vec<PathBuf>) {
             found.push(path);
         }
     }
+}
+
+/// Tracked files this worktree does not have on disk because it is sparse (git's
+/// skip-worktree bit), as workspace-relative paths.
+///
+/// A sparse worktree checks out only the files its owner changes, so a walk of the disk sees a
+/// fraction of the repository and `dx_search` there cannot answer a question about the rest.
+/// Git still holds every one of those files, in the index, so they are read from there. Empty
+/// outside a git worktree, or when git cannot answer.
+fn skip_worktree_paths(root: &Path) -> Vec<String> {
+    let Ok(output) = std::process::Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["ls-files", "-v", "-z"])
+        .output()
+    else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+    output
+        .stdout
+        .split(|byte| *byte == 0)
+        .filter_map(|entry| {
+            let entry = std::str::from_utf8(entry).ok()?;
+            let relative = entry.strip_prefix("S ")?;
+            (!relative.contains('\n')).then(|| relative.to_string())
+        })
+        .collect()
+}
+
+/// Whether the source walker would offer `relative` — the same rules as
+/// [`collect_source_files`], applied to a path instead of a directory entry.
+fn searchable_path(relative: &str) -> bool {
+    let mut parts = relative.split('/').peekable();
+    while let Some(part) = parts.next() {
+        if part.starts_with('.') {
+            return false;
+        }
+        if parts.peek().is_some() {
+            if matches!(
+                part,
+                "node_modules" | "target" | "build" | "dist" | "__pycache__"
+            ) {
+                return false;
+            }
+            continue;
+        }
+        return SEARCHABLE_NAMES.contains(&part)
+            || Path::new(part)
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| SEARCHABLE_SOURCE.contains(&extension));
+    }
+    false
+}
+
+/// The text of each of `relatives` as the git index holds it, in one `git cat-file --batch`.
+///
+/// A path git cannot produce, a blob over [`MAX_SOURCE_BYTES`], and one that is not UTF-8 are
+/// left out, as the disk walk leaves out the same files.
+fn index_blobs(root: &Path, relatives: &[String]) -> Vec<(String, String)> {
+    use std::io::{BufRead, BufReader, Write};
+    use std::process::{Command, Stdio};
+
+    if relatives.is_empty() {
+        return Vec::new();
+    }
+    let Ok(mut child) = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["cat-file", "--batch"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+    else {
+        return Vec::new();
+    };
+    let (Some(mut stdin), Some(stdout)) = (child.stdin.take(), child.stdout.take()) else {
+        return Vec::new();
+    };
+    // Feed the requests from another thread: git answers as it reads, and a full pipe in
+    // either direction would otherwise stall both sides.
+    let requests: String = relatives
+        .iter()
+        .filter(|relative| !relative.contains('\n'))
+        .map(|relative| format!(":./{relative}\n"))
+        .collect();
+    let asked: Vec<&String> = relatives
+        .iter()
+        .filter(|relative| !relative.contains('\n'))
+        .collect();
+    let mut found = Vec::new();
+    std::thread::scope(|scope| {
+        scope.spawn(move || {
+            let _ = stdin.write_all(requests.as_bytes());
+        });
+        let mut reader = BufReader::new(stdout);
+        for relative in asked {
+            let mut header = String::new();
+            if reader.read_line(&mut header).unwrap_or(0) == 0 {
+                break;
+            }
+            // `<oid> blob <size>` — or `<spec> missing`, which carries no body.
+            let mut fields = header.split_whitespace();
+            let size = match (fields.next(), fields.next(), fields.next()) {
+                (Some(_), Some("blob"), Some(size)) => size.parse::<usize>().ok(),
+                _ => None,
+            };
+            let Some(size) = size else {
+                continue;
+            };
+            let mut body = vec![0u8; size + 1];
+            if reader.read_exact(&mut body).is_err() {
+                break;
+            }
+            body.truncate(size);
+            if (size as u64) <= MAX_SOURCE_BYTES {
+                if let Ok(text) = String::from_utf8(body) {
+                    found.push((relative.clone(), text));
+                }
+            }
+        }
+    });
+    let _ = child.wait();
+    found
+}
+
+/// Tracked source files absent from disk in a sparse worktree, with their text from the git
+/// index. What `dx sync` adds to the source index so a sparse worktree searches the whole repo.
+#[must_use]
+pub fn off_disk_sources(root: &Path) -> Vec<(String, String)> {
+    let wanted: Vec<String> = skip_worktree_paths(root)
+        .into_iter()
+        .filter(|relative| searchable_path(relative) && !root.join(relative).exists())
+        .collect();
+    index_blobs(root, &wanted)
+}
+
+/// The text of the tracked file `relative` when this sparse worktree has not checked it out
+/// (read-only: the file is not on disk), else `None`.
+#[must_use]
+pub fn not_checked_out_text(root: &Path, relative: &str) -> Option<String> {
+    if relative.is_empty() || relative.ends_with(".dx") || root.join(relative).exists() {
+        return None;
+    }
+    if !skip_worktree_paths(root)
+        .iter()
+        .any(|path| path == relative)
+    {
+        return None;
+    }
+    index_blobs(root, &[relative.to_string()])
+        .into_iter()
+        .next()
+        .map(|(_, text)| text)
+}
+
+/// Whether the tracked source file `relative` is one this sparse worktree has not checked out.
+#[must_use]
+pub fn is_not_checked_out(root: &Path, relative: &str) -> bool {
+    !relative.ends_with(".dx")
+        && !root.join(relative).exists()
+        && skip_worktree_paths(root)
+            .iter()
+            .any(|path| path == relative)
 }
 
 /// One search hit: a document, why it matched, and where the answer is.
@@ -1227,12 +1413,16 @@ fn load_source_index(root: &Path) -> Option<SourceIndex> {
 ///
 /// Assumes all files in the index still exist and have not been modified.
 fn build_source_corpus_from_index(root: &Path, index: &SourceIndex) -> Vec<Loaded> {
-    let paths: Vec<PathBuf> = index
+    let relatives: Vec<String> = index
         .metadata_iter()
-        .map(|(relative, _)| root.join(relative))
+        .map(|(relative, _)| relative.clone())
+        .collect();
+    let paths: Vec<PathBuf> = relatives
+        .iter()
+        .map(|relative| root.join(relative))
         .collect();
 
-    in_parallel(&paths, |path| {
+    let mut loaded: Vec<Loaded> = in_parallel(&paths, |path| {
         let relative = relative_of(root, path);
         let text = fs::read_to_string(path).ok()?;
         let document = doc_core::search::source_document(&relative, &text);
@@ -1244,7 +1434,26 @@ fn build_source_corpus_from_index(root: &Path, index: &SourceIndex) -> Vec<Loade
     })
     .into_iter()
     .flatten()
-    .collect()
+    .collect();
+
+    // Indexed but not on disk: a sparse worktree's tracked files. Their text is in git.
+    let missing: Vec<String> = relatives
+        .into_iter()
+        .zip(&paths)
+        .filter(|(_, path)| !path.exists())
+        .map(|(relative, _)| relative)
+        .collect();
+    for (relative, text) in index_blobs(root, &missing) {
+        let document = doc_core::search::source_document(&relative, &text);
+        if !document.blocks.is_empty() {
+            loaded.push(Loaded {
+                path: root.join(&relative),
+                relative,
+                document,
+            });
+        }
+    }
+    loaded
 }
 
 #[cfg(test)]
@@ -2205,5 +2414,51 @@ mod tests {
         fs::write(&path, prose).expect("plain text");
         assert_eq!(read(&path).expect("prose is not a conflict"), prose);
         assert!(half_merged_text(&path).is_none());
+    }
+
+    #[test]
+    fn search_in_a_sparse_worktree_finds_a_tracked_file_that_is_not_checked_out() {
+        // A sparse worktree has only the files its agent changes on disk; the rest of the
+        // repository must still answer a search, read from git and marked not checked out.
+        let root = scratch("sparse-search");
+        let git = |arguments: &[&str]| {
+            let status = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&root)
+                .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+                .args(arguments)
+                .output()
+                .expect("git runs");
+            assert!(status.status.success(), "git {arguments:?}: {status:?}");
+        };
+        git(&["init", "-q"]);
+        fs::write(root.join("kept.rs"), "fn kept() {}\n").expect("kept");
+        fs::write(root.join("excluded.rs"), "fn zanzibarquux() {}\n").expect("excluded");
+        git(&["add", "kept.rs", "excluded.rs"]);
+        git(&["commit", "-q", "-m", "seed"]);
+        git(&["sparse-checkout", "init", "--no-cone"]);
+        git(&["sparse-checkout", "set", "/kept.rs"]);
+        assert!(
+            !root.join("excluded.rs").exists(),
+            "sparse checkout dropped it"
+        );
+
+        let hits = search(&root, "zanzibarquux", 5).expect("search");
+        assert!(
+            hits.iter()
+                .any(|hit| hit.document.relative == "excluded.rs"),
+            "a tracked file that is not on disk must be searchable: {:?}",
+            hits.iter()
+                .map(|hit| &hit.document.relative)
+                .collect::<Vec<_>>()
+        );
+        assert!(is_not_checked_out(&root, "excluded.rs"));
+        assert!(!is_not_checked_out(&root, "kept.rs"));
+        let text = not_checked_out_text(&root, "excluded.rs").expect("blob");
+        assert!(text.contains("zanzibarquux"), "{text}");
+        // And a pointer-free read of the path answers with that text, not "no file".
+        assert!(read(&root.join("excluded.rs"))
+            .expect("read")
+            .contains("zanzibarquux"));
     }
 }

@@ -69,7 +69,12 @@ pub fn run_search(args: &Args) -> Result<String, String> {
         } else {
             format!("{}  {title}", hit.document.relative)
         };
-        out.push_str(&format!("{:.3}  {named}\n", hit.score));
+        let note = if workspace::is_not_checked_out(&root, &hit.document.relative) {
+            "  (not checked out, read-only)"
+        } else {
+            ""
+        };
+        out.push_str(&format!("{:.3}  {named}{note}\n", hit.score));
         // The hit carries its answer: the line that matched, and the id to read the rest
         // with `dx text <path> --section <id>` — or, for a source file, its line range.
         if let Some(id) = &hit.block {
