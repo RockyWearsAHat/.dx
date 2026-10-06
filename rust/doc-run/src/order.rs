@@ -1,4 +1,5 @@
-//! Execution order for `--follow-edges`: the document's boards as a dependency graph.
+//! Execution order: the waves of independent blocks a default run overlaps, and, for
+//! `--follow-edges`, the document's boards as a dependency graph.
 //!
 //! A board's edge says *this, then that*, and [`RunOptions::follow_board_edges`] takes it
 //! at its word: a runnable block waits for every runnable block with an edge path into it.
@@ -26,9 +27,92 @@ use doc_core::render::board_edges;
 /// The order `--follow-edges` runs the blocks at `runnable` (indices into
 /// `document.blocks`, in document order), or the cycle sentence when the boards state no
 /// order at all.
+#[cfg(test)]
 pub(crate) fn edge_order(document: &Document, runnable: &[usize]) -> Result<Vec<usize>, String> {
+    edge_schedule(document, runnable).map(|(order, _)| order)
+}
+
+/// The run order and the direct `(before, after)` constraints between runnable blocks.
+pub(crate) type EdgeSchedule = (Vec<usize>, HashSet<(usize, usize)>);
+
+/// The `--follow-edges` order plus the direct `(before, after)` constraints behind it, so a
+/// parallel run can start a block the moment its own edge predecessors finish.
+pub(crate) fn edge_schedule(
+    document: &Document,
+    runnable: &[usize],
+) -> Result<EdgeSchedule, String> {
     let constraints = constraints(document, runnable);
-    topological(document, runnable, &constraints)
+    let order = topological(document, runnable, &constraints)?;
+    Ok((order, constraints))
+}
+
+/// What a block declares it touches, for deciding what may run beside it: its `reads=`
+/// paths and its `writes=` folders, as validated by the header parsers.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Footprint {
+    /// Declared `reads=` paths.
+    pub reads: Vec<String>,
+    /// Declared `writes=` folders.
+    pub writes: Vec<String>,
+}
+
+/// Group blocks, already in run order, into waves that may run concurrently.
+///
+/// **The rule:** consecutive blocks share a wave unless a later block reads a path an
+/// earlier block in the wave writes, or either block declares no `reads=` at all (`None`
+/// here). A block with no declared reads could depend on anything, so it keeps document
+/// order semantics: it runs alone, after everything before it and before everything after.
+/// Each wave holds the indices it was given, in the order given.
+pub(crate) fn waves(blocks: &[(usize, Option<Footprint>)]) -> Vec<Vec<usize>> {
+    let mut waves: Vec<Vec<usize>> = Vec::new();
+    let mut current: Vec<usize> = Vec::new();
+    let mut current_writes: Vec<&str> = Vec::new();
+    for (index, footprint) in blocks {
+        let Some(footprint) = footprint.as_ref().filter(|f| !f.reads.is_empty()) else {
+            if !current.is_empty() {
+                waves.push(std::mem::take(&mut current));
+            }
+            waves.push(vec![*index]);
+            current_writes.clear();
+            continue;
+        };
+        let conflicts = footprint
+            .reads
+            .iter()
+            .any(|read| current_writes.iter().any(|write| overlaps(read, write)));
+        if conflicts {
+            waves.push(std::mem::take(&mut current));
+            current_writes.clear();
+        }
+        current.push(*index);
+        current_writes.extend(footprint.writes.iter().map(String::as_str));
+    }
+    if !current.is_empty() {
+        waves.push(current);
+    }
+    waves
+}
+
+/// Whether reading `read` could observe what writing `write` changes: the same path, or
+/// one inside the other. A read that climbs with `..` cannot be compared by spelling, so
+/// it is taken to overlap every write.
+fn overlaps(read: &str, write: &str) -> bool {
+    let read = normalized(read);
+    let write = normalized(write);
+    if read.split('/').any(|part| part == "..") || read.is_empty() || write.is_empty() {
+        return true;
+    }
+    read == write
+        || read.starts_with(&format!("{write}/"))
+        || write.starts_with(&format!("{read}/"))
+}
+
+/// A declared path without `./` prefixes, `.` segments, or trailing slashes.
+fn normalized(path: &str) -> String {
+    path.split('/')
+        .filter(|part| !part.is_empty() && *part != ".")
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 /// The direct order constraints between runnable blocks: `(before, after)` index pairs.
@@ -187,6 +271,52 @@ mod tests {
 
     fn code(id: &str) -> String {
         format!("::code id={id} lang=bash run hidden\necho {id}\n::end\n\n")
+    }
+
+    fn footprint(reads: &[&str], writes: &[&str]) -> Option<Footprint> {
+        Some(Footprint {
+            reads: reads.iter().map(|path| path.to_string()).collect(),
+            writes: writes.iter().map(|path| path.to_string()).collect(),
+        })
+    }
+
+    #[test]
+    fn disjoint_declared_blocks_share_one_wave() {
+        let blocks = vec![
+            (0, footprint(&["a"], &["target"])),
+            (2, footprint(&["b"], &["target"])),
+            (4, footprint(&["c"], &[])),
+        ];
+        assert_eq!(waves(&blocks), vec![vec![0, 2, 4]]);
+    }
+
+    #[test]
+    fn a_reader_of_an_earlier_write_starts_the_next_wave() {
+        let blocks = vec![
+            (0, footprint(&["src"], &["out"])),
+            (1, footprint(&["other"], &[])),
+            (2, footprint(&["out/made.txt"], &[])),
+            (3, footprint(&["./out/"], &[])),
+        ];
+        assert_eq!(waves(&blocks), vec![vec![0, 1], vec![2, 3]]);
+        // A folder read containing the written folder conflicts too.
+        let blocks = vec![
+            (0, footprint(&["a"], &["rust/target"])),
+            (1, footprint(&["rust"], &[])),
+        ];
+        assert_eq!(waves(&blocks), vec![vec![0], vec![1]]);
+    }
+
+    #[test]
+    fn a_block_without_reads_runs_alone_in_order() {
+        let blocks = vec![
+            (0, footprint(&["a"], &[])),
+            (1, None),
+            (2, footprint(&[], &["x"])),
+            (3, footprint(&["b"], &[])),
+            (4, footprint(&["c"], &[])),
+        ];
+        assert_eq!(waves(&blocks), vec![vec![0], vec![1], vec![2], vec![3, 4]]);
     }
 
     #[test]
