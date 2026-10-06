@@ -543,18 +543,20 @@ pub fn standing(
         }
         let deps = parse_deps(&block.deps);
         let planned = declared_writes(block).and_then(|writes| {
+            let host = declared_host(block)?;
             let read_paths = declared_read_paths(&block.reads)?;
             let reads =
                 declared_reads(block, resolver, &writes, Some(&options.document_dir))?;
-            Ok((writes, read_paths, reads))
+            Ok((writes, host, read_paths, reads))
         });
         match planned {
-            Ok((writes, read_paths, reads)) => {
+            Ok((writes, host, read_paths, reads)) => {
                 let material = approval_material(block);
-                let approval = approval_fingerprint(runner, &material, &deps, &read_paths, &writes);
+                let approval =
+                    approval_fingerprint(runner, &material, &deps, &read_paths, &writes, host);
                 entry.approved = ledger.is_approved(&approval);
                 entry.fingerprint = Some(fingerprint(
-                    runner, &material, &deps, &reads, &writes, block.timeout,
+                    runner, &material, &deps, &reads, &writes, host, block.timeout,
                 ));
             }
             Err(sentence) => entry.problem = Some(sentence),
