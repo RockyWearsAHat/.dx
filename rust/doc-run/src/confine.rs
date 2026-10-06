@@ -326,6 +326,14 @@ fn seatbelt_profile(grant: &Grant) -> String {
         .map(|path| resolved(path))
         .chain(toolchain_homes())
         .collect();
+    // The per-user temp and cache trees sit under the denied /var/folders; the toolchain
+    // must read back what it writes there.
+    #[cfg(target_os = "macos")]
+    let roots: Vec<String> = roots
+        .into_iter()
+        .chain(macos_temp_dir())
+        .chain(macos_cache_dir())
+        .collect();
     if !roots.is_empty() {
         let scoped = roots
             .iter()
@@ -525,6 +533,8 @@ fn bubblewrap(spec: &CommandSpec, grant: &Grant) -> Result<CommandSpec, String> 
 ///
 /// Apple's toolchain (xcrun, cc) resolves the temp directory via confstr(_CS_DARWIN_USER_TEMP_DIR)
 /// instead of $TMPDIR. This function retrieves that path so the sandbox can grant write access to it.
+/// The path is resolved: confstr names `/var/folders/..` (with a trailing slash), a symlink into
+/// `/private/var/folders`, and a Seatbelt rule naming the link matches nothing.
 #[cfg(target_os = "macos")]
 #[allow(unsafe_code)]
 fn macos_temp_dir() -> Option<String> {
@@ -541,7 +551,7 @@ fn macos_temp_dir() -> Option<String> {
             CStr::from_bytes_until_nul(&buf[..len])
                 .ok()
                 .and_then(|s| s.to_str().ok())
-                .map(|s| s.to_string())
+                .map(|s| resolved(Path::new(s)))
         } else {
             None
         }
@@ -567,7 +577,7 @@ fn macos_cache_dir() -> Option<String> {
             CStr::from_bytes_until_nul(&buf[..len])
                 .ok()
                 .and_then(|s| s.to_str().ok())
-                .map(|s| s.to_string())
+                .map(|s| resolved(Path::new(s)))
         } else {
             None
         }
@@ -866,7 +876,16 @@ mod tests {
         let temp_dir = macos_temp_dir();
         let cache_dir = macos_cache_dir();
 
+        assert!(temp_dir.is_some() && cache_dir.is_some(), "confstr must answer");
         if let Some(temp) = temp_dir {
+            assert!(
+                temp.starts_with("/private/var/folders") && !temp.ends_with('/'),
+                "temp dir must be resolved: {temp}"
+            );
+            assert!(
+                profile.contains(&format!("(allow file-write* ")) && profile.contains(&quote(&temp)),
+                "{profile}"
+            );
             assert!(
                 profile.contains(&format!("(subpath {})", quote(&temp))),
                 "profile must allow write to macOS temp dir {}: {}",
