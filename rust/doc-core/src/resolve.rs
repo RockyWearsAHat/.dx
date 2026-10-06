@@ -78,6 +78,15 @@ pub trait Resolver {
     fn files_under(&self, _path: &str) -> Option<Vec<(String, String)>> {
         None
     }
+    /// Whether every answer comes from the files under the document's folder (and the
+    /// workspace store beside them), so that unchanged file stamps mean unchanged answers.
+    ///
+    /// Only such a resolver lets a runner keep what it read between calls, keyed by each
+    /// file's inode, size and mtime. Defaulted to `false`: an in-memory or remote resolver
+    /// is asked every time.
+    fn on_disk(&self) -> bool {
+        false
+    }
 }
 
 /// A resolver that holds nothing, for surfaces that render without a workspace.

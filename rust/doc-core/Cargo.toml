@@ -7,8 +7,13 @@ license.workspace = true
 repository.workspace = true
 
 [lib]
-# rlib for native linking (CLI / MCP server), cdylib for the wasm32 editor build.
-crate-type = ["rlib", "cdylib"]
+# rlib only. The wasm32 editor engine is its own cdylib crate (`doc-wasm`, built by
+# editor/build.sh), so a cdylib here built nothing anyone loads — and it cost the release
+# test build: a cdylib's outputs carry no hash suffix, so `cargo test --release` (panic=abort
+# for the `dx` binary, unwind for the test harness) wrote both variants to the same
+# `libdoc_core.rlib` and failed at random with E0463, panic-strategy mismatch, or undefined
+# symbols at link (cargo's "output filename collision" warning).
+crate-type = ["rlib"]
 
 [dependencies]
 # Pure-Rust DEFLATE: no unsafe, no C, and it compiles to wasm32 with the rest of the crate.

@@ -133,7 +133,79 @@ pub fn materialize(repo: &Path, base: &str, branch: &str, tree: &str) -> Result<
 ///
 /// # Errors
 /// A sentence when no document could be run at all.
+///
+/// One machine-wide exclusive lock ([`run_lock_path`]) is held for the whole run, so the
+/// watcher never runs two gate runs at once across every watched repo, and gates run one
+/// at a time (`jobs = 1`). An approved `confine=host` gate does not inherit
+/// `CARGO_TARGET_DIR` unless `DX_KEEP_TARGET_DIR=1`: an agent shell's target directory
+/// would silently replace the checkout's own warm one.
 pub fn run_stale(checkout: &Path) -> Result<usize, String> {
+    let _held = run_lock()?;
+    #[cfg(test)]
+    tests::while_held();
+    let memo = super::gates::memo_file(checkout);
+    if let Some(memo) = &memo {
+        doc_run::load_memo(memo);
+    }
+    let result = run_stale_held(checkout);
+    if let Some(memo) = &memo {
+        let _ = doc_run::save_memo(memo);
+    }
+    result
+}
+
+/// The machine-wide live-run lock: `DX_LIVE_RUN_LOCK`, else `~/.dx/live/run.lock`.
+fn run_lock_path() -> PathBuf {
+    if let Some(path) = std::env::var_os("DX_LIVE_RUN_LOCK") {
+        return PathBuf::from(path);
+    }
+    if cfg!(test) {
+        // Tests never queue behind a real watcher's run.
+        return std::env::temp_dir().join(format!("dx-live-run-{}.lock", std::process::id()));
+    }
+    let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
+    home.join(".dx/live/run.lock")
+}
+
+/// Take the live-run lock, waiting for whoever holds it; released when the file drops.
+fn run_lock() -> Result<std::fs::File, String> {
+    let path = run_lock_path();
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)
+            .map_err(|e| format!("could not create {}: {e}", dir.display()))?;
+    }
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&path)
+        .map_err(|e| format!("could not open {}: {e}", path.display()))?;
+    file.lock()
+        .map_err(|e| format!("could not lock {}: {e}", path.display()))?;
+    Ok(file)
+}
+
+/// The variables a live gate run keeps out of a host gate's environment.
+fn unset_for(keep_target_dir: Option<&str>) -> Vec<String> {
+    if keep_target_dir == Some("1") {
+        Vec::new()
+    } else {
+        vec!["CARGO_TARGET_DIR".to_string()]
+    }
+}
+
+/// How the live runner runs one document: serially, without `CARGO_TARGET_DIR`.
+fn live_options(path: &Path) -> RunOptions {
+    RunOptions {
+        document_dir: workspace::document_dir(path),
+        default_timeout: Duration::from_secs(DEFAULT_TIMEOUT_SECONDS),
+        jobs: Some(1),
+        unset_env: unset_for(std::env::var("DX_KEEP_TARGET_DIR").ok().as_deref()),
+        ..RunOptions::default()
+    }
+}
+
+fn run_stale_held(checkout: &Path) -> Result<usize, String> {
     let mut executed = 0;
     let mut problems = Vec::new();
     for path in workspace::discover(checkout) {
@@ -146,11 +218,7 @@ pub fn run_stale(checkout: &Path) -> Result<usize, String> {
         };
         let report = match run_document(
             &source,
-            &RunOptions {
-                document_dir: workspace::document_dir(&path),
-                default_timeout: Duration::from_secs(DEFAULT_TIMEOUT_SECONDS),
-                ..RunOptions::default()
-            },
+            &live_options(&path),
             &workspace::resolver_for(&path),
         ) {
             Ok(r) => r,
@@ -212,6 +280,59 @@ pub fn prune(repo: &Path, live_branches: &[String]) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::Mutex;
+    use std::time::Instant;
+
+    /// Milliseconds a test makes [`run_stale`] hold its lock, and the spans it held it.
+    static HOLD_MS: AtomicU64 = AtomicU64::new(0);
+    static HELD: Mutex<Vec<(Instant, Instant)>> = Mutex::new(Vec::new());
+
+    pub(super) fn while_held() {
+        let ms = HOLD_MS.load(Ordering::SeqCst);
+        if ms > 0 {
+            let start = Instant::now();
+            std::thread::sleep(Duration::from_millis(ms));
+            HELD.lock().unwrap().push((start, Instant::now()));
+        }
+    }
+
+    #[test]
+    fn two_concurrent_live_runs_serialize_on_the_machine_lock() {
+        let empty = std::env::temp_dir().join(format!("dx-live-serial-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&empty);
+        HOLD_MS.store(300, Ordering::SeqCst);
+        let started = Instant::now();
+        let runs: Vec<_> = (0..2)
+            .map(|_| {
+                let dir = empty.clone();
+                std::thread::spawn(move || run_stale(&dir))
+            })
+            .collect();
+        for run in runs {
+            let _ = run.join().unwrap();
+        }
+        HOLD_MS.store(0, Ordering::SeqCst);
+        let mut spans = HELD.lock().unwrap().clone();
+        spans.sort();
+        assert!(spans.len() >= 2, "{spans:?}");
+        // The second waited for the first: the spans do not overlap, and two 300 ms
+        // holds took at least 600 ms end to end.
+        for pair in spans.windows(2) {
+            assert!(pair[1].0 >= pair[0].1, "overlapping runs: {spans:?}");
+        }
+        assert!(started.elapsed() >= Duration::from_millis(600), "{:?}", started.elapsed());
+        let _ = std::fs::remove_dir_all(&empty);
+    }
+
+    #[test]
+    fn live_runs_are_serial_and_drop_cargo_target_dir_unless_kept() {
+        assert_eq!(unset_for(None), vec!["CARGO_TARGET_DIR".to_string()]);
+        assert_eq!(unset_for(Some("0")), vec!["CARGO_TARGET_DIR".to_string()]);
+        assert!(unset_for(Some("1")).is_empty());
+        let options = live_options(Path::new("/x/doc.dx"));
+        assert_eq!(options.jobs, Some(1));
+    }
 
     fn sh(cwd: &Path, args: &[&str]) -> String {
         git(cwd, args).unwrap_or_else(|e| panic!("{e}"))

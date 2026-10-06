@@ -30,7 +30,13 @@ pub fn repos() -> Vec<PathBuf> {
         .collect()
 }
 
+thread_local! {
+    /// git processes this thread started — the idle test's proof that nothing spawned.
+    static GIT_SPAWNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 fn git(repo: &Path, args: &[&str]) -> Option<String> {
+    GIT_SPAWNS.with(|n| n.set(n.get() + 1));
     let out = Command::new("git")
         .arg("-C")
         .arg(repo)
@@ -169,21 +175,29 @@ fn refresh_one(repo: &Path, common: &Path) {
 /// taken before the refresh, so changes arriving during it trigger one follow-up.
 pub fn spawn(repos: Vec<PathBuf>) -> JoinHandle<()> {
     std::thread::spawn(move || {
-        let mut state: Vec<(PathBuf, Option<PathBuf>, Option<Fingerprint>)> =
-            repos.into_iter().map(|r| (r, None, None)).collect();
+        let mut state: Vec<Watched> = repos.into_iter().map(|r| (r, None, None)).collect();
         loop {
-            for (repo, common, last) in state.iter_mut() {
-                if common.is_none() {
-                    *common = common_dir(repo);
-                }
-                let Some(c) = common.clone() else { continue };
-                if changed(&c, last) {
-                    refresh_one(repo, &c);
-                }
-            }
+            tick(&mut state, &mut |repo, common| refresh_one(repo, common));
             std::thread::sleep(Duration::from_secs(1));
         }
     })
+}
+
+/// One watched repo: its path, its git common dir once known, and its last fingerprint.
+type Watched = (PathBuf, Option<PathBuf>, Option<Fingerprint>);
+
+/// One poll of every watched repo: `refresh` runs for each whose refs changed. git runs
+/// once per repo, to find its common dir; after that an idle poll is stat calls only.
+fn tick(state: &mut [Watched], refresh: &mut dyn FnMut(&Path, &Path)) {
+    for (repo, common, last) in state.iter_mut() {
+        if common.is_none() {
+            *common = common_dir(repo);
+        }
+        let Some(c) = common.clone() else { continue };
+        if changed(&c, last) {
+            refresh(repo, &c);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -228,6 +242,26 @@ mod tests {
         .unwrap();
         assert_eq!(repos(), vec![added]);
         std::env::remove_var("DX_LIVE_REPOS");
+    }
+
+    #[test]
+    fn an_idle_poll_is_stat_calls_only_no_git_and_no_gate_work() {
+        let d = temp("idle");
+        sh(&d, &["init", "-b", "main"]);
+        sh(&d, &["commit", "--allow-empty", "-m", "one"]);
+        let mut state: Vec<Watched> = vec![(d.clone(), None, None)];
+        let mut refreshed = 0;
+        tick(&mut state, &mut |_, _| refreshed += 1);
+        assert_eq!(refreshed, 1, "the first poll sees the repo");
+        let spawned = GIT_SPAWNS.with(std::cell::Cell::get);
+        for _ in 0..5 {
+            tick(&mut state, &mut |_, _| refreshed += 1);
+        }
+        assert_eq!(refreshed, 1, "nothing changed, so no refresh (no gate work)");
+        assert_eq!(GIT_SPAWNS.with(std::cell::Cell::get), spawned, "no git process while idle");
+        sh(&d, &["commit", "--allow-empty", "-m", "two"]);
+        tick(&mut state, &mut |_, _| refreshed += 1);
+        assert_eq!(refreshed, 2, "a new commit is seen on the next poll");
     }
 
     #[test]

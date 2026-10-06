@@ -40,6 +40,9 @@ pub struct CommandSpec {
     /// Whether the child gets dx's whole environment rather than the [`FORWARDED`]
     /// allow-list. Only an approved `confine=host` block sets it ([`Self::on_host`]).
     pub host_environment: bool,
+    /// Inherited variables a host run must not see, removed from dx's environment before
+    /// `env` is layered on (a sandboxed run inherits only [`FORWARDED`] anyway).
+    pub unset: Vec<String>,
 }
 
 impl CommandSpec {
@@ -50,7 +53,15 @@ impl CommandSpec {
             args: args.iter().map(|arg| (*arg).to_string()).collect(),
             env: Vec::new(),
             host_environment: false,
+            unset: Vec::new(),
         }
+    }
+
+    /// Remove `names` from what a host run inherits, returning the modified spec.
+    #[must_use]
+    pub fn without_env(mut self, names: &[String]) -> Self {
+        self.unset.extend(names.iter().cloned());
+        self
     }
 
     /// The spec for a reviewed `confine=host` block: the child inherits dx's own environment
@@ -128,6 +139,9 @@ pub fn run(spec: &CommandSpec, working_dir: &Path, timeout: Duration) -> Capture
         .env_clear();
     if spec.host_environment {
         command.envs(std::env::vars_os());
+        for name in &spec.unset {
+            command.env_remove(name);
+        }
     }
     for (key, value) in child_environment(spec) {
         command.env(key, value);
@@ -364,6 +378,24 @@ fn merge_streams(stdout: &str, stderr: &str, timed_out: bool, timeout: Duration)
 mod tests {
     use super::*;
     use std::env::temp_dir;
+
+    #[test]
+    fn a_host_run_drops_the_variables_it_is_told_to() {
+        let _env = crate::env_lock();
+        std::env::set_var("DX_TEST_DROPPED", "inherited");
+        let script = ["-c", "echo ${DX_TEST_DROPPED-dropped}"];
+        let kept = run(&CommandSpec::new("sh", &script).on_host(), &temp_dir(), Duration::from_secs(10));
+        let dropped = run(
+            &CommandSpec::new("sh", &script)
+                .on_host()
+                .without_env(&["DX_TEST_DROPPED".to_string()]),
+            &temp_dir(),
+            Duration::from_secs(10),
+        );
+        std::env::remove_var("DX_TEST_DROPPED");
+        assert_eq!(kept.output, "inherited");
+        assert_eq!(dropped.output, "dropped");
+    }
 
     #[test]
     fn captures_stdout_from_a_successful_command() {

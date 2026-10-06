@@ -454,6 +454,11 @@ impl Resolver for FolderResolver {
         fs::read(self.folder.join(path)).ok()
     }
 
+    /// Every answer is a file under the folder, or the workspace store beside it.
+    fn on_disk(&self) -> bool {
+        true
+    }
+
     fn files_under(&self, path: &str) -> Option<Vec<(String, String)>> {
         let root = self.folder.join(path);
         if !root.is_dir() {

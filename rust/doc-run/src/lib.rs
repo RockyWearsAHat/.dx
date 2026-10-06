@@ -61,6 +61,9 @@ mod live;
 mod live_actions;
 mod live_proxy;
 mod order;
+mod read_cache;
+
+pub use read_cache::{forget_all, hashed_bytes, load_memo, save_memo};
 mod workdir;
 
 /// Serializes tests that touch process environment variables (`HOME`, `DX_UNCONFINED`,
@@ -150,6 +153,12 @@ pub struct RunOptions {
     /// error naming its blocks. Default `false`: document order, exactly as before the
     /// flag existed.
     pub follow_board_edges: bool,
+    /// How many blocks may execute at once; `None` is [`run_jobs`]'s default
+    /// (`DX_RUN_JOBS`, else half the cores capped at four). `Some(1)` is the serial run.
+    pub jobs: Option<usize>,
+    /// Variables an approved `confine=host` block must not inherit from dx's environment —
+    /// how a live runner keeps an agent shell's `CARGO_TARGET_DIR` out of the gates it runs.
+    pub unset_env: Vec<String>,
 }
 
 impl Default for RunOptions {
@@ -163,6 +172,8 @@ impl Default for RunOptions {
             review_only: false,
             approve: false,
             follow_board_edges: false,
+            jobs: None,
+            unset_env: Vec::new(),
         }
     }
 }
@@ -306,7 +317,7 @@ pub fn run_document(
     schedule(
         &ordered,
         &predecessors,
-        run_jobs(),
+        options.jobs.map_or_else(run_jobs, |jobs| jobs.max(1)),
         |position, slot: &mut Slot| {
             prepare(
                 ordered[position],
@@ -391,22 +402,29 @@ pub fn standing(
             continue;
         }
         let deps = parse_deps(&block.deps);
+        let material = approval_material(block);
         let planned = declared_writes(block).and_then(|writes| {
             let host = declared_host(block)?;
             let read_paths = declared_read_paths(&block.reads)?;
-            let reads =
-                declared_reads(block, resolver, &writes, Some(&options.document_dir))?;
-            Ok((writes, host, read_paths, reads))
+            let fingerprint = memoized_fingerprint(
+                runner,
+                block,
+                &material,
+                &deps,
+                &read_paths,
+                &writes,
+                host,
+                resolver,
+                &options.document_dir,
+            )?;
+            Ok((writes, host, read_paths, fingerprint))
         });
         match planned {
-            Ok((writes, host, read_paths, reads)) => {
-                let material = approval_material(block);
+            Ok((writes, host, read_paths, fingerprint)) => {
                 let approval =
                     approval_fingerprint(runner, &material, &deps, &read_paths, &writes, host);
                 entry.approved = ledger.is_approved(&approval);
-                entry.fingerprint = Some(fingerprint(
-                    runner, &material, &deps, &reads, &writes, host, block.timeout,
-                ));
+                entry.fingerprint = Some(fingerprint);
             }
             Err(sentence) => entry.problem = Some(sentence),
         }
@@ -641,8 +659,18 @@ fn prepare<'a>(
     };
     let material = approval_material(block);
     let approval = approval_fingerprint(runner, &material, &deps, &read_paths, &writes, host);
-    let reads = match declared_reads(block, resolver, &writes, Some(&options.document_dir)) {
-        Ok(reads) => reads,
+    let fingerprint = match memoized_fingerprint(
+        runner,
+        block,
+        &material,
+        &deps,
+        &read_paths,
+        &writes,
+        host,
+        resolver,
+        &options.document_dir,
+    ) {
+        Ok(fingerprint) => fingerprint,
         Err(sentence) if options.review_only => {
             // A grant that cannot be satisfied must not hide the code: review still
             // shows what would run, with the problem named above it.
@@ -672,15 +700,6 @@ fn prepare<'a>(
             return None;
         }
     };
-    let fingerprint = fingerprint(
-        runner,
-        &material,
-        &deps,
-        &reads,
-        &writes,
-        host,
-        block.timeout,
-    );
     let existing = existing_output(document, index, &block.id);
 
     // Review mode: show what would run without executing — and without recording
@@ -888,6 +907,48 @@ fn existing_output<'a>(document: &'a Document, index: usize, id: &str) -> Option
         .filter(|block| block.kind == "output" && block.for_block == id)
 }
 
+/// The run [`fingerprint`] of `block`, from the memo when every path its `reads=`
+/// resolution could consult carries the stamp it had when the memo entry was made.
+///
+/// On a miss the inputs are resolved ([`declared_reads`]) and hashed exactly as without a
+/// memo, and the result is remembered. The stamps are taken *before* the read, so an input
+/// edited mid-read can only leave an entry no later stamp matches — never a stale value
+/// under a current stamp. A resolver that does not answer from disk is never memoized.
+#[allow(clippy::too_many_arguments)]
+fn memoized_fingerprint(
+    runner: &str,
+    block: &Block,
+    material: &str,
+    deps: &[String],
+    read_paths: &[String],
+    writes: &[String],
+    host: bool,
+    resolver: &dyn Resolver,
+    document_dir: &Path,
+) -> Result<String, String> {
+    let key = resolver.on_disk().then(|| {
+        let identity = read_cache::Identity {
+            runner,
+            code: material,
+            deps,
+            read_paths,
+            writes,
+            host,
+            timeout: block.timeout,
+        };
+        read_cache::memo_key(&identity, document_dir, climb_to_root(document_dir).as_deref())
+    });
+    if let Some(found) = key.as_deref().and_then(read_cache::memo_get) {
+        return Ok(found);
+    }
+    let reads = declared_reads(block, resolver, writes, Some(document_dir))?;
+    let fingerprint = fingerprint(runner, material, deps, &reads, writes, host, block.timeout);
+    if let Some(key) = key {
+        read_cache::memo_put(key, fingerprint.clone());
+    }
+    Ok(fingerprint)
+}
+
 /// The files a block declares it reads (`reads=`), each resolved to its current text.
 ///
 /// Paths are comma-separated and obey the reference path law; a path may name a file or
@@ -898,6 +959,10 @@ fn existing_output<'a>(document: &'a Document, index: usize, id: &str) -> Option
 /// one the resolver can produce neither as file nor folder, is an error sentence — a
 /// fingerprint that silently omitted a missing input would let the record claim
 /// "no changes" about content it never saw, which is the lie `reads=` exists to prevent.
+///
+/// With a `document_dir`, each answer is kept in [`read_cache`], keyed by the files'
+/// inode, size and mtime, so an unchanged input is not read again; the text returned is
+/// exactly what the resolver returned, so the fingerprint does not move.
 fn declared_reads(
     block: &Block,
     resolver: &dyn Resolver,
@@ -905,10 +970,14 @@ fn declared_reads(
     document_dir: Option<&Path>,
 ) -> Result<Vec<(String, String)>, String> {
     let mut reads = Vec::new();
+    // Only answers that come from disk may be kept between calls.
+    let cached = document_dir.filter(|_| resolver.on_disk());
     for confined in declared_read_paths(&block.reads)? {
-        if let Some(text) = resolver.file(&confined) {
+        if let Some(text) = read_cache::file(cached, &confined, || resolver.file(&confined)) {
             reads.push((confined, text));
-        } else if let Some(tree) = resolver.files_under(&confined) {
+        } else if let Some(tree) =
+            read_cache::tree(cached, &confined, || resolver.files_under(&confined))
+        {
             let granted = |path: &str| {
                 writes
                     .iter()
@@ -959,10 +1028,11 @@ fn read_from_root(
     }
     let up = climb_to_root(document_dir)?;
     let via = format!("{up}{confined}");
-    if let Some(text) = resolver.file(&via) {
+    let cached = resolver.on_disk().then_some(document_dir);
+    if let Some(text) = read_cache::file(cached, &via, || resolver.file(&via)) {
         return Some(vec![(format!("{ROOT_BASE}{confined}"), text)]);
     }
-    let tree = resolver.files_under(&via)?;
+    let tree = read_cache::tree(cached, &via, || resolver.files_under(&via))?;
     Some(
         tree.into_iter()
             .map(|(path, text)| {
@@ -1079,6 +1149,7 @@ fn fingerprint(
     if timeout > 0 {
         material = format!("timeout={}\u{1e}{material}", timeout);
     }
+    read_cache::count_hashed(material.len());
     sha256_hex(material.as_bytes())
 }
 
@@ -1531,7 +1602,9 @@ fn execute(
     // and the reader's own environment — `HOME`, `TMPDIR`, `USER` unchanged — with only the
     // `DX_*` variables every block gets. The sandbox's redirections exist for the sandbox.
     let command = if host {
-        with_dx_variables(prepared.run.clone(), block, &dirs).on_host()
+        with_dx_variables(prepared.run.clone(), block, &dirs)
+            .on_host()
+            .without_env(&options.unset_env)
     } else {
         let run = home_in_block(&prepared.run, block, &dirs);
         match confine::confine(&run, &Grant::offline(writable).reading(readable)) {
@@ -2654,6 +2727,168 @@ sleep 1; echo made > out/made.txt\n::end\n\n\
             approval_fingerprint("bash", &block.text, &[], &paths, &[], false)
         );
         assert_eq!(paths, vec!["data".to_string()]);
+    }
+
+    /// A disk resolver that counts the files it reads, standing in for the CLI's.
+    struct Counted(PathBuf, std::cell::Cell<usize>);
+
+    impl Resolver for Counted {
+        fn file(&self, path: &str) -> Option<String> {
+            let text = std::fs::read_to_string(self.0.join(path)).ok()?;
+            self.1.set(self.1.get() + 1);
+            Some(text)
+        }
+        fn document(&self, path: &str) -> Option<String> {
+            self.file(path)
+        }
+        fn on_disk(&self) -> bool {
+            true
+        }
+        fn files_under(&self, path: &str) -> Option<Vec<(String, String)>> {
+            let dir = self.0.join(path);
+            let mut files = Vec::new();
+            for entry in std::fs::read_dir(&dir).ok()?.flatten() {
+                self.1.set(self.1.get() + 1);
+                let name = entry.file_name().to_string_lossy().into_owned();
+                let text = std::fs::read_to_string(entry.path()).ok()?;
+                files.push((format!("{path}/{name}"), text));
+            }
+            files.sort();
+            Some(files)
+        }
+    }
+
+    #[test]
+    fn cached_reads_keep_the_fingerprint_byte_identical_and_an_edit_moves_it() {
+        let root = std::env::temp_dir().join(format!("dx-run-read-cache-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("data")).expect("scene");
+        std::fs::write(root.join("a.txt"), "alpha\n").expect("fixture");
+        std::fs::write(root.join("data/b.txt"), "beta\n").expect("fixture");
+        let block = Block {
+            id: "check".into(),
+            language: "bash".into(),
+            run: true,
+            reads: "a.txt,data".into(),
+            text: "cat a.txt data/b.txt".into(),
+            ..Block::default()
+        };
+        let print = |reads: &[(String, String)]| {
+            fingerprint("bash", &block.text, &[], reads, &[], false, 0)
+        };
+        let resolver = Counted(root.clone(), std::cell::Cell::new(0));
+        // The uncached truth: no document folder, so nothing is cached or looked up.
+        let truth = print(&declared_reads(&block, &resolver, &[], None).expect("resolves"));
+        let cold = print(&declared_reads(&block, &resolver, &[], Some(&root)).expect("resolves"));
+        let reads_cold = resolver.1.get();
+        let warm = print(&declared_reads(&block, &resolver, &[], Some(&root)).expect("resolves"));
+        assert_eq!(cold, truth, "a cold cached fingerprint is byte-identical");
+        assert_eq!(warm, truth, "a warm cached fingerprint is byte-identical");
+        assert_eq!(resolver.1.get(), reads_cold, "a warm call reads nothing");
+
+        // An edit to the file and to a file under the folder each move the fingerprint.
+        std::fs::write(root.join("a.txt"), "alpha, edited\n").expect("edit");
+        let edited = print(&declared_reads(&block, &resolver, &[], Some(&root)).expect("resolves"));
+        assert_ne!(edited, truth);
+        assert_eq!(
+            edited,
+            print(&declared_reads(&block, &resolver, &[], None).expect("resolves"))
+        );
+        std::fs::write(root.join("data/b.txt"), "beta, edited\n").expect("edit");
+        let deeper = print(&declared_reads(&block, &resolver, &[], Some(&root)).expect("resolves"));
+        assert_ne!(deeper, edited);
+        assert_eq!(
+            deeper,
+            print(&declared_reads(&block, &resolver, &[], None).expect("resolves"))
+        );
+        // A file appearing under the folder moves it too.
+        std::fs::write(root.join("data/c.txt"), "gamma\n").expect("grow");
+        let grown = print(&declared_reads(&block, &resolver, &[], Some(&root)).expect("resolves"));
+        assert_ne!(grown, deeper);
+        assert_eq!(
+            grown,
+            print(&declared_reads(&block, &resolver, &[], None).expect("resolves"))
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn memoized_fingerprints_are_byte_identical_hash_nothing_warm_and_persist() {
+        let root = std::env::temp_dir().join(format!("dx-run-memo-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("data")).expect("scene");
+        std::fs::write(root.join("a.txt"), "alpha\n").expect("fixture");
+        std::fs::write(root.join("data/b.txt"), "beta\n").expect("fixture");
+        let block = Block {
+            id: "check".into(),
+            language: "bash".into(),
+            run: true,
+            reads: "a.txt,data".into(),
+            text: "cat a.txt data/b.txt".into(),
+            ..Block::default()
+        };
+        let paths = declared_read_paths(&block.reads).expect("lawful");
+        let resolver = Counted(root.clone(), std::cell::Cell::new(0));
+        let truth = || {
+            let reads = declared_reads(&block, &resolver, &[], None).expect("resolves");
+            fingerprint("bash", &block.text, &[], &reads, &[], false, 0)
+        };
+        let memo = || {
+            memoized_fingerprint(
+                "bash", &block, &block.text, &[], &paths, &[], false, &resolver, &root,
+            )
+            .expect("resolves")
+        };
+
+        let before = hashed_bytes();
+        assert_eq!(memo(), truth(), "a cold memoized fingerprint is byte-identical");
+        assert!(hashed_bytes() > before);
+        let (hashed, read) = (hashed_bytes(), resolver.1.get());
+        assert_eq!(memo(), truth(), "a warm memoized fingerprint is byte-identical");
+        let (hashed, read) = (hashed_bytes() - hashed, resolver.1.get() - read);
+        // `truth()` itself reads and hashes once; the memo did neither.
+        let one_truth = {
+            let (h, r) = (hashed_bytes(), resolver.1.get());
+            let _ = truth();
+            (hashed_bytes() - h, resolver.1.get() - r)
+        };
+        assert_eq!((hashed, read), one_truth, "a warm memo hashes and reads nothing");
+
+        // The memo persists as digests a fresh process loads.
+        let file = root.join("memo/fingerprints.v1");
+        let _ = save_memo(&file).expect("saved");
+        let key = read_cache::memo_key(
+            &read_cache::Identity {
+                runner: "bash",
+                code: &block.text,
+                deps: &[],
+                read_paths: &paths,
+                writes: &[],
+                host: false,
+                timeout: 0,
+            },
+            &root,
+            climb_to_root(&root).as_deref(),
+        );
+        let saved = std::fs::read_to_string(&file).expect("memo file");
+        assert!(saved.lines().any(|line| line == format!("{key} {}", truth())));
+
+        // An edit, a deeper edit, and a new file each move it, to the uncached value.
+        let mut seen = vec![truth()];
+        std::fs::write(root.join("a.txt"), "alpha, edited\n").expect("edit");
+        std::fs::write(root.join("data/b.txt"), "beta\n").expect("same text, new stamp");
+        for step in 0..3 {
+            match step {
+                1 => std::fs::write(root.join("data/b.txt"), "beta, edited\n").expect("edit"),
+                2 => std::fs::write(root.join("data/c.txt"), "gamma\n").expect("grow"),
+                _ => {}
+            }
+            let now = memo();
+            assert_eq!(now, truth(), "step {step}: memo agrees with a fresh read");
+            assert!(!seen.contains(&now), "step {step}: the fingerprint moved");
+            seen.push(now);
+        }
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

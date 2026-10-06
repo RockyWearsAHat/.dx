@@ -281,6 +281,7 @@ fn seatbelt(spec: &CommandSpec, grant: &Grant) -> CommandSpec {
         args,
         env: spec.env.clone(),
         host_environment: false,
+        unset: spec.unset.clone(),
     }
 }
 
@@ -535,6 +536,7 @@ fn bubblewrap(spec: &CommandSpec, grant: &Grant) -> Result<CommandSpec, String> 
         args,
         env: spec.env.clone(),
         host_environment: false,
+        unset: spec.unset.clone(),
     })
 }
 

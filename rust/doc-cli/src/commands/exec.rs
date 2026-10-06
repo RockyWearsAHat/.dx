@@ -63,6 +63,7 @@ fn run_in(args: &Args, cache_root: PathBuf) -> Result<String, String> {
             review_only: args.present("review"),
             approve: args.present("approve"),
             follow_board_edges: args.present("follow-edges"),
+            ..RunOptions::default()
         },
         &workspace::resolver_for(&path),
     )?;
