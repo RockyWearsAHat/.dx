@@ -611,7 +611,7 @@ fn read_anchor(path: &str, document_dir: &Path) -> PathBuf {
     let doc = document_dir
         .canonicalize()
         .unwrap_or_else(|_| document_dir.to_path_buf());
-    if !doc.join(path).exists() && !(path == ".." || path.starts_with("../")) {
+    if !(doc.join(path).exists() || path == ".." || path.starts_with("../")) {
         let root = confine::repo_root(document_dir);
         if root != doc && root.join(path).exists() {
             return root;
