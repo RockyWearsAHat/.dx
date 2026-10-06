@@ -533,10 +533,15 @@ pub fn save(path: &Path, document: &Document) -> Result<(), String> {
     let _ = crate::commands::store::ensure_git_ready(&root);
     ensure_store_ready(&root)?;
     let mut store = open_store(&root)?;
-    store
+    let saved = store
         .save(&relative, document)
         .map(|_| ())
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string());
+    // A stale pointer elsewhere never blocks this write; it is kept and named instead.
+    for warning in store.take_warnings() {
+        eprintln!("{warning}");
+    }
+    saved
 }
 
 /// Save a document whose new content arrived as source text — a run's report, a format
