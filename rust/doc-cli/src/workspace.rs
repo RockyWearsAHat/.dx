@@ -65,10 +65,17 @@ pub fn workspace_root(start: &Path) -> PathBuf {
     };
 
     loop {
-        if ROOT_MARKERS
-            .iter()
-            .any(|marker| cursor.join(marker).is_dir())
-        {
+        // `.git` is a *file* in a linked worktree (`gitdir: …`), so existence, not `is_dir`,
+        // is what marks a worktree's top level; otherwise a worktree without a checked-out
+        // `.doc` resolves to the main checkout that contains it.
+        if ROOT_MARKERS.iter().any(|marker| {
+            let found = cursor.join(marker);
+            if *marker == ".git" {
+                found.exists()
+            } else {
+                found.is_dir()
+            }
+        }) {
             return cursor.to_path_buf();
         }
         match cursor.parent() {

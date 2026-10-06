@@ -63,7 +63,7 @@ pub fn call(name: &str, args: &Value, root: &Path) -> ToolResult {
 ///
 /// Returns the note to show the reader, or `None` when there was nothing to say.
 fn refresh_outputs(args: &Value, root: &Path, cache_root: &Path) -> Option<String> {
-    let path = resolve(string(args, "path")?, root);
+    let path = path_arg(args, root).ok()?;
     let source = workspace::read(&path).ok()?;
 
     let report = match run_document(
@@ -413,7 +413,7 @@ fn source_in(args: &Value, root: &Path, cache_root: &Path) -> ToolResult {
     // (`workspace::half_merged` says why). This one answers, because an agent asked to resolve
     // a conflict has no other window onto the file — and what it needs is the marker lines
     // exactly as git wrote them, not a parse that would invent blocks around them.
-    let path = resolve(required(args, "path")?, root);
+    let path = path_arg(args, root)?;
 
     // If a line range was requested, handle it specially for both source files and documents
     if let Some(lines_arg) = string(args, "lines") {
@@ -684,7 +684,7 @@ fn render(args: &Value, root: &Path) -> ToolResult {
 
 /// `dx_write` — create or replace a document.
 fn write(args: &Value, root: &Path) -> ToolResult {
-    let path = resolve(required(args, "path")?, root);
+    let path = path_arg(args, root)?;
     let content = required(args, "content")?;
     let document = parse(content);
     workspace::save(&path, &document)?;
@@ -720,7 +720,7 @@ fn edit(args: &Value, root: &Path) -> ToolResult {
 /// through [`doc_core::edit::replace_in_block`], so a one-word change is priced at the
 /// change, not the block.
 fn edit_in(args: &Value, root: &Path, cache_root: PathBuf) -> ToolResult {
-    let path = resolve(required(args, "path")?, root);
+    let path = path_arg(args, root)?;
     let wanted = required(args, "block")?.trim().trim_start_matches('#');
 
     // SAFETY: Each call to workspace::read() reads the file fresh from disk, ensuring that
@@ -800,7 +800,7 @@ fn edit_in(args: &Value, root: &Path, cache_root: PathBuf) -> ToolResult {
 
     if runnable && boolean_or(args, "run", true) {
         let run_args = json!({
-            "path": required(args, "path")?,
+            "path": path.to_string_lossy(),
             "block": focus,
             "approve": true,
         });
@@ -832,7 +832,7 @@ fn edit_in(args: &Value, root: &Path, cache_root: PathBuf) -> ToolResult {
 /// board's raw body text verbatim and stops at `create_missing_nodes` — right for a caller
 /// stating exact coordinates by hand, wrong for "put this node here": this is that tool.
 fn board(args: &Value, root: &Path) -> ToolResult {
-    let path = resolve(required(args, "path")?, root);
+    let path = path_arg(args, root)?;
     let board_id = required(args, "board")?;
     let action = required(args, "action")?;
     let source = workspace::read(&path)?;
@@ -936,7 +936,7 @@ fn append(args: &Value, root: &Path) -> ToolResult {
         );
     }
     let text = required(args, "text")?;
-    let path = resolve(required(args, "path")?, root);
+    let path = path_arg(args, root)?;
 
     if let Some(wanted) = string(args, "block") {
         let wanted = wanted.trim().trim_start_matches('#');
@@ -950,7 +950,7 @@ fn append(args: &Value, root: &Path) -> ToolResult {
         };
         return edit(
             &json!({
-                "path": required(args, "path")?,
+                "path": path.to_string_lossy(),
                 "block": document.blocks[index].id.clone(),
                 "text": grown,
                 "run": boolean_or(args, "run", true),
@@ -995,7 +995,7 @@ fn append(args: &Value, root: &Path) -> ToolResult {
 /// so every surface spells the checked state the same way. Every other item and every
 /// other block comes back byte-identical.
 fn check(args: &Value, root: &Path) -> ToolResult {
-    let path = resolve(required(args, "path")?, root);
+    let path = path_arg(args, root)?;
     let wanted = required(args, "block")?.trim().trim_start_matches('#');
     let item = args
         .get("item")
@@ -1117,7 +1117,7 @@ fn run(args: &Value, root: &Path) -> ToolResult {
 /// than defaulted, so the suite never records an approval in the developer's real cache.
 fn run_in(args: &Value, root: &Path, cache_root: PathBuf) -> ToolResult {
     let review_only = boolean(args, "review");
-    let path = resolve(required(args, "path")?, root);
+    let path = path_arg(args, root)?;
     let source = workspace::read(&path)?;
 
     let report = run_document(
@@ -1168,10 +1168,14 @@ fn run_in(args: &Value, root: &Path, cache_root: PathBuf) -> ToolResult {
 }
 
 /// `dx_sync` — reconcile workspace pointers.
-fn sync(args: &Value, _root: &Path) -> ToolResult {
-    let target_path = string(args, "path").unwrap_or(".");
-    // Construct Args by parsing the target path as a positional argument.
-    let sync_args = crate::args::Args::parse(&[target_path.to_string()]);
+fn sync(args: &Value, root: &Path) -> ToolResult {
+    // The path is resolved here, against `directory` or the server root, so the sync runs on
+    // the checkout the caller named — never on whatever directory the server process is in.
+    let target_path = match string(args, "path").filter(|value| !value.trim().is_empty()) {
+        Some(_) => path_arg(args, root)?,
+        None => directory_arg(args, root),
+    };
+    let sync_args = crate::args::Args::parse(&[target_path.to_string_lossy().into_owned()]);
     let report = crate::commands::store::run_sync(&sync_args)?;
     Ok(vec![json_content(&json!({
         "report": report,
@@ -1201,7 +1205,7 @@ fn selected(args: &Value, root: &Path) -> Result<Document, String> {
 /// hydration fills it with the file's bytes, and `render::text` states what they are
 /// instead of printing megabytes of base64 at a reader who asked for words.
 fn document_at(args: &Value, root: &Path) -> Result<Document, String> {
-    let path = resolve(required(args, "path")?, root);
+    let path = path_arg(args, root)?;
     let mut document = parse(&workspace::read(&path)?);
     doc_core::resolve::hydrate(&mut document, &workspace::resolver_for(&path));
     Ok(document)
@@ -1225,6 +1229,35 @@ fn resolve(path: &str, root: &Path) -> PathBuf {
     } else {
         root.join(candidate)
     }
+}
+
+/// The document path a tool call names, as an absolute path.
+///
+/// An absolute path is taken as given. A relative one is joined under the call's `directory`
+/// (a worktree, say) when one is named, otherwise under the server root. When `directory` is
+/// named, the document is not there, but a document of that name exists under the server
+/// root, the call is refused with both candidates named: the server root is a different
+/// checkout, and writing it by guess is exactly the mistake worktrees invite.
+fn path_arg(args: &Value, root: &Path) -> Result<PathBuf, String> {
+    let raw = required(args, "path")?;
+    if PathBuf::from(raw).is_absolute() {
+        return Ok(PathBuf::from(raw));
+    }
+    let Some(directory) = string(args, "directory").filter(|value| !value.trim().is_empty())
+    else {
+        return Ok(root.join(raw));
+    };
+    let there = resolve(directory, root).join(raw);
+    let under_root = root.join(raw);
+    if there != under_root && !there.exists() && under_root.exists() {
+        return Err(format!(
+            "`{raw}` is ambiguous: it does not exist under directory {} but does under the \
+             server root {}. Pass an absolute path to the one you mean.",
+            there.display(),
+            under_root.display()
+        ));
+    }
+    Ok(there)
 }
 
 /// The `directory` argument, defaulting to the workspace root.
@@ -2821,5 +2854,106 @@ mod tests {
             "sync report should mention reconciliation: {}",
             report
         );
+    }
+
+    /// Two checkouts of one repository: a call naming a path inside the second must read and
+    /// write the second's own store, and leave the first (the server's root) byte-identical.
+    #[test]
+    fn a_worktree_path_is_served_from_the_worktrees_own_store_never_the_server_root() {
+        let base = std::env::temp_dir().join("dx-mcp-tests-worktree-store");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).expect("base");
+        let base = std::fs::canonicalize(&base).expect("canonical base");
+        let main = base.join("main");
+        let second = base.join("b");
+        std::fs::create_dir_all(main.join(".doc")).expect("marker");
+        let git = |args: &[&str]| {
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(&main)
+                .args(["-c", "user.email=t@example.com", "-c", "user.name=t"])
+                .args(args)
+                .output()
+                .is_ok_and(|out| out.status.success())
+        };
+        if !git(&["init", "-q", "-b", "main"]) {
+            return; // No git on this machine; nothing to assert.
+        }
+        call(
+            "dx_write",
+            &json!({ "path": "index.dx", "content": "::heading level=1 id=top\nIndex\n::end\n" }),
+            &main,
+        )
+        .expect("seed the main checkout");
+        assert!(git(&["add", "-A"]) && git(&["commit", "-qm", "seed"]));
+        assert!(git(&["worktree", "add", "-q", "-b", "job", second.to_str().expect("utf8")]));
+
+        let pack = |root: &Path| std::fs::read(root.join(".doc/repo.dxcp")).expect("pack");
+        let pointer = |root: &Path| std::fs::read(root.join("index.dx")).expect("pointer");
+        let (pack_before, pointer_before) = (pack(&main), pointer(&main));
+
+        let absolute = second.join("index.dx");
+        call(
+            "dx_append",
+            &json!({ "path": absolute.to_str().expect("utf8"), "text": "Found in worktree B." }),
+            &main,
+        )
+        .expect("append in the worktree");
+
+        assert_eq!(pack(&main), pack_before, "the main checkout's pack was written");
+        assert_eq!(pointer(&main), pointer_before, "the main checkout's index.dx changed");
+        let seen = text_of(
+            &call("dx_source", &json!({ "path": absolute.to_str().expect("utf8") }), &main)
+                .expect("read B"),
+        );
+        assert!(seen.contains("Found in worktree B."), "{seen}");
+        let in_main =
+            text_of(&call("dx_source", &json!({ "path": "index.dx" }), &main).expect("read main"));
+        assert!(!in_main.contains("Found in worktree B."), "{in_main}");
+
+        // A relative path with `directory` resolves in the worktree.
+        call(
+            "dx_append",
+            &json!({ "path": "index.dx", "directory": second.to_str().expect("utf8"),
+                     "text": "Second line in B." }),
+            &main,
+        )
+        .expect("append via directory");
+        assert_eq!(pack(&main), pack_before);
+        assert_eq!(pointer(&main), pointer_before);
+        let seen = text_of(
+            &call("dx_source", &json!({ "path": absolute.to_str().expect("utf8") }), &main)
+                .expect("read B again"),
+        );
+        assert!(seen.contains("Second line in B."), "{seen}");
+
+        // A relative path missing in the named directory but present under the root is refused,
+        // naming both candidates, and writes nothing.
+        let empty = base.join("elsewhere");
+        std::fs::create_dir_all(&empty).expect("elsewhere");
+        let refused = call(
+            "dx_append",
+            &json!({ "path": "index.dx", "directory": empty.to_str().expect("utf8"), "text": "x" }),
+            &main,
+        )
+        .expect_err("ambiguous path must fail");
+        assert!(
+            refused.contains(&empty.display().to_string())
+                && refused.contains(&main.display().to_string()),
+            "{refused}"
+        );
+        assert_eq!(pointer(&main), pointer_before);
+    }
+
+    #[test]
+    fn a_linked_worktree_is_its_own_workspace_root_even_without_a_doc_folder() {
+        let base = std::env::temp_dir().join("dx-mcp-tests-worktree-root");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("main/.doc")).expect("main");
+        let linked = base.join("main/.claude/worktrees/job");
+        std::fs::create_dir_all(&linked).expect("linked");
+        std::fs::write(linked.join(".git"), "gitdir: /elsewhere\n").expect("git file");
+        let linked = std::fs::canonicalize(&linked).expect("canonical");
+        assert_eq!(workspace::workspace_root(&linked.join("index.dx")), linked);
     }
 }
