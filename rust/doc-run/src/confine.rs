@@ -326,14 +326,11 @@ fn seatbelt_profile(grant: &Grant) -> String {
         .map(|path| resolved(path))
         .chain(toolchain_homes())
         .collect();
-    // The per-user temp and cache trees sit under the denied /var/folders; the toolchain
-    // must read back what it writes there.
+    // The per-user cache tree sits under the denied /var/folders; the toolchain must read
+    // back what it writes there. The per-user temp tree is *not* a root: other projects and
+    // documents live in it, so only Apple's xcrun cache files inside it come back (below).
     #[cfg(target_os = "macos")]
-    let roots: Vec<String> = roots
-        .into_iter()
-        .chain(macos_temp_dir())
-        .chain(macos_cache_dir())
-        .collect();
+    let roots: Vec<String> = roots.into_iter().chain(macos_cache_dir()).collect();
     if !roots.is_empty() {
         let scoped = roots
             .iter()
@@ -354,6 +351,15 @@ fn seatbelt_profile(grant: &Grant) -> String {
         }
     }
 
+    // xcrun keeps its lookup cache as `xcrun_db*` files directly in the per-user temp dir;
+    // those files, and nothing else in that directory, are readable.
+    #[cfg(target_os = "macos")]
+    let xcrun_db = macos_temp_dir().map(|temp| xcrun_db_regex(&temp));
+    #[cfg(target_os = "macos")]
+    if let Some(xcrun_db) = &xcrun_db {
+        rules.push(format!("(allow file-read* {xcrun_db})"));
+    }
+
     if let Some(denied) = secret_subpaths() {
         rules.push(format!("(deny file-read* {denied})"));
     }
@@ -364,12 +370,13 @@ fn seatbelt_profile(grant: &Grant) -> String {
         .map(|path| format!("(subpath {})", quote(&resolved(path))))
         .collect();
 
-    // On macOS, allow writes to per-user temp and cache directories so Apple's toolchain
-    // (xcrun, cc, etc.) can create and write to cache files without spamming warnings.
+    // On macOS, Apple's toolchain (xcrun, cc, etc.) writes its caches to the per-user cache
+    // directory and xcrun's `xcrun_db*` files to the per-user temp directory; without them it
+    // spams warnings. Only those files in the temp directory are writable, never all of it.
     #[cfg(target_os = "macos")]
     {
-        if let Some(temp) = macos_temp_dir() {
-            writable_paths.push(format!("(subpath {})", quote(&temp)));
+        if let Some(xcrun_db) = &xcrun_db {
+            writable_paths.push(xcrun_db.clone());
         }
         if let Some(cache) = macos_cache_dir() {
             writable_paths.push(format!("(subpath {})", quote(&cache)));
@@ -556,6 +563,27 @@ fn macos_temp_dir() -> Option<String> {
             None
         }
     }
+}
+
+/// The SBPL `(regex …)` filter matching xcrun's cache files (`xcrun_db*`) directly in `temp`.
+#[cfg(target_os = "macos")]
+fn xcrun_db_regex(temp: &str) -> String {
+    format!("(regex #\"^{}/xcrun_db\")", regex_escape(temp))
+}
+
+/// Escape every POSIX regex metacharacter in `text` so it matches literally.
+///
+/// The `"` is escaped too, since the result sits inside an SBPL `#"…"` literal.
+#[cfg(target_os = "macos")]
+fn regex_escape(text: &str) -> String {
+    let mut escaped = String::with_capacity(text.len());
+    for ch in text.chars() {
+        if ".+*?()[]{}|^$\\\"".contains(ch) {
+            escaped.push('\\');
+        }
+        escaped.push(ch);
+    }
+    escaped
 }
 
 /// Get the macOS per-user cache directory via confstr, if available.
@@ -876,21 +904,36 @@ mod tests {
         let temp_dir = macos_temp_dir();
         let cache_dir = macos_cache_dir();
 
-        assert!(temp_dir.is_some() && cache_dir.is_some(), "confstr must answer");
+        assert!(
+            temp_dir.is_some() && cache_dir.is_some(),
+            "confstr must answer"
+        );
         if let Some(temp) = temp_dir {
             assert!(
                 temp.starts_with("/private/var/folders") && !temp.ends_with('/'),
                 "temp dir must be resolved: {temp}"
             );
+            let xcrun_db = xcrun_db_regex(&temp);
             assert!(
-                profile.contains(&format!("(allow file-write* ")) && profile.contains(&quote(&temp)),
-                "{profile}"
+                xcrun_db.starts_with("(regex #\"^/private/var/folders/")
+                    && xcrun_db.ends_with("/T/xcrun_db\")"),
+                "{xcrun_db}"
             );
             assert!(
-                profile.contains(&format!("(subpath {})", quote(&temp))),
-                "profile must allow write to macOS temp dir {}: {}",
-                temp,
-                profile
+                profile.contains(&format!("(allow file-read* {xcrun_db})")),
+                "profile must allow reading xcrun_db in the temp dir {temp}: {profile}"
+            );
+            let write_rule = profile
+                .split(" (allow file-write* ")
+                .nth(1)
+                .expect("a file-write rule");
+            assert!(
+                write_rule.contains(&xcrun_db),
+                "profile must allow writing xcrun_db in the temp dir {temp}: {profile}"
+            );
+            assert!(
+                !profile.contains(&format!("(subpath {})", quote(&temp))),
+                "profile must not grant the whole temp dir {temp}: {profile}"
             );
         }
 

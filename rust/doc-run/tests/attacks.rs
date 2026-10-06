@@ -667,3 +667,31 @@ fn a_machine_with_no_boundary_blocks_the_run_instead_of_widening_it() {
         assert!(output.contains("no sandbox"), "{output}");
     }
 }
+
+/// The per-user temp directory (`getconf DARWIN_USER_TEMP_DIR`) holds other projects and
+/// other documents, so it is not a write grant: only xcrun's own cache files inside it are.
+#[test]
+#[cfg(target_os = "macos")]
+fn a_block_cannot_write_into_the_per_user_temp_dir() {
+    if !confined() {
+        return;
+    }
+    let (_root, options) = scene("temp-dir");
+    let temp = std::process::Command::new("getconf")
+        .arg("DARWIN_USER_TEMP_DIR")
+        .output()
+        .expect("getconf");
+    let temp = PathBuf::from(String::from_utf8_lossy(&temp.stdout).trim());
+    assert!(temp.is_dir(), "no per-user temp dir: {}", temp.display());
+    let target = temp.join("dx-attack-temp-planted.txt");
+    let _ = fs::remove_file(&target);
+    let output = attack(
+        "echo pwned > \"$(getconf DARWIN_USER_TEMP_DIR)/dx-attack-temp-planted.txt\" && echo ESCAPED",
+        &options,
+    );
+    assert!(
+        !output.contains("ESCAPED"),
+        "a write into the temp dir succeeded: {output}"
+    );
+    assert_absent(&target, "a write into the per-user temp dir");
+}
