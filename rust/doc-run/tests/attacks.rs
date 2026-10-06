@@ -504,7 +504,7 @@ fn a_backgrounded_process_does_not_outlive_the_block_that_started_it() {
         .unwrap_or_else(|poison| poison.into_inner());
     let report = run_document(source, &options, &Nowhere).expect("acyclic run");
     drop(guard);
-    assert_eq!(report.runs[0].status, "error");
+    assert_eq!(report.runs[0].status, "interrupted");
     assert!(report.runs[0].output.contains("timed out"));
 
     // If the child survived the kill, it writes the marker 20 seconds in. The sandbox
