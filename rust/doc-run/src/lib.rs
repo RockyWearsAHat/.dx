@@ -1189,12 +1189,13 @@ fn execute(
     };
     let mut writable = writable;
     writable.extend(granted);
-    // An approved `confine=host` block takes the same branch `DX_UNCONFINED` does, for this
-    // block alone: the command runs as built, with the reader's own permissions.
-    let run = home_in_block(&prepared.run, block, &dirs);
+    // An approved `confine=host` block runs as the reader would have run it: no sandbox,
+    // and the reader's own environment — `HOME`, `TMPDIR`, `USER` unchanged — with only the
+    // `DX_*` variables every block gets. The sandbox's redirections exist for the sandbox.
     let command = if host {
-        run
+        with_dx_variables(prepared.run.clone(), block, &dirs).on_host()
     } else {
+        let run = home_in_block(&prepared.run, block, &dirs);
         match confine::confine(&run, &Grant::offline(writable).reading(readable)) {
             Ok(command) => command,
             Err(message) => return blocked(&message),
@@ -1318,17 +1319,16 @@ fn home_in_block(
     dirs: &plan::Dirs,
 ) -> process::CommandSpec {
     let block_dir = dirs.block.to_string_lossy().into_owned();
-    let mut cmd = run
+    let redirected = run
         .clone()
         .with_env("HOME", block_dir.clone())
         .with_env("TMPDIR", block_dir.clone())
-        .with_env("TEMP", block_dir.clone())
+        .with_env("TEMP", block_dir)
         .with_env(
             "XDG_CACHE_HOME",
             dirs.toolchains.to_string_lossy().into_owned(),
-        )
-        .with_env("DX_BLOCK_ID", block.id.clone())
-        .with_env("DX_SANDBOX", block_dir);
+        );
+    let mut cmd = with_dx_variables(redirected, block, dirs);
 
     // Pass Rust toolchain environment variables into the sandbox.
     for (key, value) in rust_toolchain_env() {
@@ -1336,6 +1336,17 @@ fn home_in_block(
     }
 
     cmd
+}
+
+/// The `DX_*` variables every block gets, sandboxed or on the host: its id, and its own
+/// scratch directory (`$DX_SANDBOX`).
+fn with_dx_variables(
+    run: process::CommandSpec,
+    block: &Block,
+    dirs: &plan::Dirs,
+) -> process::CommandSpec {
+    run.with_env("DX_BLOCK_ID", block.id.clone())
+        .with_env("DX_SANDBOX", dirs.block.to_string_lossy().into_owned())
 }
 
 /// Whether the `DX_NO_EXEC` kill switch is set.
@@ -2707,6 +2718,27 @@ mod tests {
         assert_eq!(report.runs[0].status, "blocked");
         assert!(report.runs[0].output.contains("blocked pending review"));
         assert!(!marker.exists(), "an unapproved host block ran");
+    }
+
+    /// "It had your own permissions" includes your own environment: an approved host block
+    /// sees dx's `HOME` and `TMPDIR`, not the sandbox's redirection, and still gets the
+    /// `DX_*` variables every block gets.
+    #[test]
+    fn an_approved_confine_host_block_runs_with_dx_s_own_environment() {
+        // Other tests point HOME elsewhere for a moment; read it while none of them can.
+        let _env = crate::env_lock();
+        let home = std::env::var("HOME").expect("HOME is set for the test process");
+        let source = "::code id=h lang=bash run confine=host\n\
+                      echo \"$HOME\"\necho \"${TMPDIR:-unset}\"\necho \"$DX_BLOCK_ID\"\n\
+                      test -d \"$DX_SANDBOX\" && echo sandbox-dir\n::end\n";
+        let report = run_isolated(source, "confine-host-environment");
+        let run = &report.runs[0];
+        assert_eq!(run.status, "ok", "{}", run.output);
+        let tmpdir = std::env::var("TMPDIR").unwrap_or_else(|_| "unset".into());
+        assert_eq!(
+            run.output,
+            format!("{HOST_NOTICE}\n{home}\n{tmpdir}\nh\nsandbox-dir")
+        );
     }
 
     #[test]

@@ -9,7 +9,8 @@
 //!    captured, with stderr under a marker, so an error is never silently dropped.
 //! 3. **The child inherits an environment, not the reader's.** See [`child_environment`]: a
 //!    shell full of API tokens is the most valuable thing on a developer's machine, and a
-//!    block has no business being handed it.
+//!    block has no business being handed it. The one exception is a reviewed
+//!    `confine=host` block ([`CommandSpec::on_host`]), which runs as the reader would have.
 
 use std::io::Read;
 use std::path::Path;
@@ -36,6 +37,9 @@ pub struct CommandSpec {
     pub args: Vec<String>,
     /// Extra environment variables layered over the inherited environment.
     pub env: Vec<(String, String)>,
+    /// Whether the child gets dx's whole environment rather than the [`FORWARDED`]
+    /// allow-list. Only an approved `confine=host` block sets it ([`Self::on_host`]).
+    pub host_environment: bool,
 }
 
 impl CommandSpec {
@@ -45,7 +49,17 @@ impl CommandSpec {
             program: program.into(),
             args: args.iter().map(|arg| (*arg).to_string()).collect(),
             env: Vec::new(),
+            host_environment: false,
         }
+    }
+
+    /// The spec for a reviewed `confine=host` block: the child inherits dx's own environment
+    /// unchanged — `HOME`, `TMPDIR`, `USER`, every variable — with `env` layered on top.
+    /// "It had your own permissions" is only true if it also had your own environment.
+    #[must_use]
+    pub fn on_host(mut self) -> Self {
+        self.host_environment = true;
+        self
     }
 
     /// Add one environment variable, returning the modified spec.
@@ -109,6 +123,9 @@ pub fn run(spec: &CommandSpec, working_dir: &Path, timeout: Duration) -> Capture
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .env_clear();
+    if spec.host_environment {
+        command.envs(std::env::vars_os());
+    }
     for (key, value) in child_environment(spec) {
         command.env(key, value);
     }
@@ -179,9 +196,15 @@ const FORWARDED: &[&str] = &[
 /// The environment a block's process actually gets: [`FORWARDED`], then `spec`'s own.
 ///
 /// `spec`'s variables are applied last, so a caller that redirects `HOME` or `TMPDIR` into
-/// the block's directory always wins over whatever was inherited.
+/// the block's directory always wins over whatever was inherited. A host spec has dx's whole
+/// environment already (see [`run`]), so only its own variables are layered here.
 fn child_environment(spec: &CommandSpec) -> Vec<(String, String)> {
-    let mut environment: Vec<(String, String)> = FORWARDED
+    let forwarded: &[&str] = if spec.host_environment {
+        &[]
+    } else {
+        FORWARDED
+    };
+    let mut environment: Vec<(String, String)> = forwarded
         .iter()
         .filter_map(|name| {
             std::env::var(name)
@@ -357,5 +380,26 @@ mod tests {
             .with_env("DX_TEST_VALUE", "visible");
         let capture = run(&spec, &temp_dir(), Duration::from_secs(10));
         assert_eq!(capture.output, "visible");
+    }
+
+    /// A sandboxed child never sees `USER`; a host child sees dx's own, unchanged.
+    #[test]
+    fn only_a_host_spec_inherits_the_whole_environment() {
+        let Some(user) = std::env::var_os("USER") else {
+            return;
+        };
+        let script = ["-c", "printf %s \"$USER\""];
+        let sandboxed = run(
+            &CommandSpec::new("sh", &script),
+            &temp_dir(),
+            Duration::from_secs(10),
+        );
+        assert_eq!(sandboxed.output, "");
+        let host = run(
+            &CommandSpec::new("sh", &script).on_host(),
+            &temp_dir(),
+            Duration::from_secs(10),
+        );
+        assert_eq!(host.output, user.to_string_lossy());
     }
 }
