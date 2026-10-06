@@ -5,6 +5,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -152,59 +153,165 @@ pub fn changed(common: &Path, last: &mut Option<Fingerprint>) -> bool {
     differs
 }
 
-fn refresh_one(repo: &Path, common: &Path) {
+fn refresh_cached_only(repo: &Path, common: &Path, all_repos: &Arc<Vec<PathBuf>>) {
     let start = Instant::now();
     let base = base_of(common);
 
-    // First, read cached verdicts and write the snapshot at once (fast).
+    // Read cached verdicts and write the snapshot (fast, no gates run).
     match super::refresh(repo, base, false) {
         Ok(snap) => {
             if let Err(e) = super::write(repo, &snap) {
                 eprintln!("dx live: {} snapshot not written: {e}", repo.display());
             }
-        }
-        Err(e) => eprintln!("dx live: {} refresh (cached) failed: {e}", repo.display()),
-    }
-
-    // Then run all stale gates and write again.
-    match super::refresh(repo, base, true) {
-        Ok(snap) => {
-            let ran = snap
-                .base_gates
-                .iter()
-                .chain(snap.branches.iter().flat_map(|b| b.gates.iter()))
-                .filter(|g| g.ms.is_some())
-                .count();
-            if let Err(e) = super::write(repo, &snap) {
-                eprintln!("dx live: {} snapshot not written: {e}", repo.display());
+            if let Err(e) = super::board::write_combined(all_repos.as_ref()) {
+                eprintln!("dx live: board not written: {e}");
             }
             eprintln!(
-                "dx live: {} refreshed in {} ms ({ran} gates ran)",
+                "dx live: {} snapshot in {} ms (cached)",
                 repo.display(),
                 start.elapsed().as_millis()
             );
         }
-        Err(e) => eprintln!("dx live: {} refresh failed: {e}", repo.display()),
+        Err(e) => eprintln!("dx live: {} refresh (cached) failed: {e}", repo.display()),
     }
+}
+
+fn refresh_with_gates(repo: &Path, common: &Path, all_repos: &Arc<Vec<PathBuf>>) {
+    let start = Instant::now();
+    let base = base_of(common);
+
+    // Run all stale gates.
+    match super::refresh(repo, base, true) {
+        Ok(_) => {
+            // Gates ran; now get a fresh snapshot (with potentially stale verdicts updated).
+            match super::refresh(repo, base, false) {
+                Ok(snap) => {
+                    let ran = snap
+                        .base_gates
+                        .iter()
+                        .chain(snap.branches.iter().flat_map(|b| b.gates.iter()))
+                        .filter(|g| g.ms.is_some())
+                        .count();
+                    if let Err(e) = super::write(repo, &snap) {
+                        eprintln!("dx live: {} snapshot not written: {e}", repo.display());
+                    }
+                    if let Err(e) = super::board::write_combined(all_repos.as_ref()) {
+                        eprintln!("dx live: board not written: {e}");
+                    }
+                    eprintln!(
+                        "dx live: {} refreshed in {} ms ({ran} gates ran)",
+                        repo.display(),
+                        start.elapsed().as_millis()
+                    );
+                }
+                Err(e) => eprintln!(
+                    "dx live: {} refresh (after gates) failed: {e}",
+                    repo.display()
+                ),
+            }
+        }
+        Err(e) => eprintln!("dx live: {} refresh (gates) failed: {e}", repo.display()),
+    }
+}
+
+struct GateQueue {
+    queue: std::collections::VecDeque<(PathBuf, PathBuf)>,
+    waiting: std::collections::HashSet<PathBuf>,
+}
+
+impl GateQueue {
+    fn new() -> Self {
+        GateQueue {
+            queue: std::collections::VecDeque::new(),
+            waiting: std::collections::HashSet::new(),
+        }
+    }
+}
+
+/// Poll every `poll_interval`; refresh a repo (one at a time) when its refs changed.
+/// `cached_fn` is called for cached passes; `gates_fn` for gate passes.
+pub fn spawn_with<C, G>(
+    repos: Vec<PathBuf>,
+    cached_fn: C,
+    gates_fn: G,
+    poll_interval: Duration,
+) -> JoinHandle<()>
+where
+    C: Fn(&Path, &Path) + Send + Sync + 'static,
+    G: Fn(&Path, &Path) + Send + Sync + 'static,
+{
+    let cached_fn = Arc::new(cached_fn);
+    let gates_fn = Arc::new(gates_fn);
+
+    let gate_queue = Arc::new(Mutex::new(GateQueue::new()));
+    let gate_cond = Arc::new(Condvar::new());
+    let gate_queue_worker = gate_queue.clone();
+    let gate_cond_worker = gate_cond.clone();
+    let gates_fn_worker = gates_fn.clone();
+
+    // Start the gate worker thread.
+    std::thread::spawn(move || {
+        loop {
+            let next = {
+                let mut g = gate_queue_worker.lock().unwrap();
+                // Standard wait pattern: check condition and wait atomically.
+                while g.queue.is_empty() {
+                    g = gate_cond_worker.wait(g).unwrap();
+                }
+                // Pop from queue and remove from waiting set.
+                let item = g.queue.pop_front();
+                if let Some(ref repo) = item {
+                    g.waiting.remove(&repo.0);
+                }
+                item
+            };
+
+            if let Some((repo, common)) = next {
+                gates_fn_worker(&repo, &common);
+            }
+        }
+    });
+
+    // Watcher thread.
+    std::thread::spawn(move || {
+        let mut state: Vec<Watched> = repos.into_iter().map(|r| (r, None, None)).collect();
+
+        loop {
+            let _refreshed = tick(&mut state, &mut |repo, common| {
+                cached_fn(repo, common);
+
+                // Queue this repo for gate work (only if not already waiting).
+                let mut g = gate_queue.lock().unwrap();
+                if !g.waiting.contains(repo) {
+                    g.queue
+                        .push_back((repo.to_path_buf(), common.to_path_buf()));
+                    g.waiting.insert(repo.to_path_buf());
+                    drop(g); // Release lock before notify.
+                    gate_cond.notify_one();
+                }
+            });
+
+            std::thread::sleep(poll_interval);
+        }
+    })
 }
 
 /// Poll every second; refresh a repo (one at a time) when its refs changed. The fingerprint is
 /// taken before the refresh, so changes arriving during it trigger one follow-up.
 pub fn spawn(repos: Vec<PathBuf>) -> JoinHandle<()> {
-    std::thread::spawn(move || {
-        let all = repos.clone();
-        let mut state: Vec<Watched> = repos.into_iter().map(|r| (r, None, None)).collect();
-        loop {
-            let refreshed = tick(&mut state, &mut |repo, common| refresh_one(repo, common));
-            // The board of every watched repo, from their snapshot files (pure reads).
-            if refreshed {
-                if let Err(e) = super::board::write_combined(&all) {
-                    eprintln!("dx live: board not written: {e}");
-                }
-            }
-            std::thread::sleep(Duration::from_secs(1));
-        }
-    })
+    let all_repos = Arc::new(repos.clone());
+
+    let all_repos_cached = all_repos.clone();
+    let cached_fn = move |repo: &Path, common: &Path| {
+        refresh_cached_only(repo, common, &all_repos_cached);
+    };
+
+    let all_repos_gates = all_repos.clone();
+    let gates_fn = move |repo: &Path, common: &Path| {
+        refresh_with_gates(repo, common, &all_repos_gates);
+    };
+
+    spawn_with(repos, cached_fn, gates_fn, Duration::from_secs(1))
 }
 
 /// One watched repo: its path, its git common dir once known, and its last fingerprint.
@@ -345,5 +452,125 @@ mod tests {
         }
 
         let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn a_deleted_branch_loses_its_dx_checkout() {
+        let repo = temp("deleted-branch");
+        sh(&repo, &["init", "-b", "main"]);
+        sh(&repo, &["commit", "--allow-empty", "-m", "base"]);
+        sh(&repo, &["checkout", "-b", "feature"]);
+        sh(&repo, &["commit", "--allow-empty", "-m", "feature work"]);
+        sh(&repo, &["checkout", "main"]);
+
+        // First refresh with gates to materialize checkouts.
+        let snap1 =
+            super::super::refresh(&repo, "main", true).expect("first refresh should succeed");
+        assert!(
+            snap1.branches.iter().any(|b| b.branch == "feature"),
+            "snapshot should list feature branch"
+        );
+        let feature_checkout = snap1
+            .branches
+            .iter()
+            .find(|b| b.branch == "feature")
+            .and_then(|b| b.checkout.as_ref())
+            .cloned();
+        assert!(feature_checkout.is_some(), "feature checkout should exist");
+
+        // Verify the checkout directory exists.
+        if let Some(checkout_path) = &feature_checkout {
+            assert!(
+                std::path::Path::new(checkout_path).exists(),
+                "checkout directory should exist"
+            );
+        }
+
+        // Delete the feature branch.
+        sh(&repo, &["branch", "-D", "feature"]);
+
+        // Second refresh with gates should prune the deleted branch's checkout.
+        let snap2 = super::super::refresh(&repo, "main", true)
+            .expect("second refresh after deleting branch should succeed");
+        assert!(
+            !snap2.branches.iter().any(|b| b.branch == "feature"),
+            "snapshot should not list deleted feature branch"
+        );
+
+        // Verify the checkout directory no longer exists.
+        if let Some(checkout_path) = &feature_checkout {
+            assert!(
+                !std::path::Path::new(checkout_path).exists(),
+                "deleted branch's checkout directory should be removed"
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn a_slow_gate_in_one_repo_does_not_delay_another_repos_snapshot() {
+        use std::sync::Arc;
+        let a = temp("iso-a");
+        sh(&a, &["init", "-q", "-b", "main"]);
+        sh(&a, &["commit", "-q", "--allow-empty", "-m", "a0"]);
+        let b = temp("iso-b");
+        sh(&b, &["init", "-q", "-b", "main"]);
+        sh(&b, &["commit", "-q", "--allow-empty", "-m", "b0"]);
+        let log: Arc<Mutex<Vec<(String, PathBuf, Instant)>>> = Arc::new(Mutex::new(Vec::new()));
+        let (lc, lg) = (log.clone(), log.clone());
+        let slow = a.clone();
+        let cached = move |r: &Path, _c: &Path| {
+            lc.lock()
+                .unwrap()
+                .push(("cached".into(), r.to_path_buf(), Instant::now()));
+        };
+        let gates = move |r: &Path, _c: &Path| {
+            lg.lock()
+                .unwrap()
+                .push(("gates".into(), r.to_path_buf(), Instant::now()));
+            if r == slow.as_path() {
+                std::thread::sleep(Duration::from_secs(4));
+            }
+        };
+        let _h = spawn_with(
+            vec![a.clone(), b.clone()],
+            cached,
+            gates,
+            Duration::from_millis(100),
+        );
+        let count = |k: &str, r: &Path| {
+            log.lock()
+                .unwrap()
+                .iter()
+                .filter(|(x, p, _)| x == k && p == r)
+                .count()
+        };
+        let wait = |f: &dyn Fn() -> bool, secs: u64| {
+            let t = Instant::now();
+            while !f() {
+                assert!(
+                    t.elapsed() < Duration::from_secs(secs),
+                    "timeout waiting for condition after {secs}s"
+                );
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        };
+        // Startup: both repos are seen once; wait until A's (slow) gate pass has begun.
+        wait(&|| count("gates", &a) >= 1, 3);
+        let b_before = count("cached", &b);
+        sh(&b, &["commit", "-q", "--allow-empty", "-m", "b1"]);
+        let t = Instant::now();
+        wait(&|| count("cached", &b) > b_before, 3); // B's snapshot while A's gate still runs
+        assert!(
+            t.elapsed() < Duration::from_secs(2),
+            "B waited {:?} behind A's gate",
+            t.elapsed()
+        );
+        // A commit in A while A's gate pass runs must queue A again (dedupe clears on pop).
+        sh(&a, &["commit", "-q", "--allow-empty", "-m", "a1"]);
+        wait(&|| count("gates", &a) >= 2, 12);
+        let _ = std::fs::remove_dir_all(&a);
+        let _ = std::fs::remove_dir_all(&b);
     }
 }

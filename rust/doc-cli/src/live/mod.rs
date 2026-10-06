@@ -148,8 +148,18 @@ fn now_ms() -> u64 {
 }
 
 /// Take a fresh snapshot. With `run`, clean branches are materialized and their stale
-/// gates run; without it, only what is already known is read.
+/// gates run; without it, only what is already known is read. With `should_prune`, stale
+/// checkouts are removed after gates (only meaningful when run=true).
 pub fn refresh(repo: &Path, base: &str, run: bool) -> Result<Snapshot, String> {
+    refresh_internal(repo, base, run, run)
+}
+
+fn refresh_internal(
+    repo: &Path,
+    base: &str,
+    run: bool,
+    should_prune: bool,
+) -> Result<Snapshot, String> {
     let wts = worktrees(repo);
     let main_wt = wts
         .first()
@@ -237,7 +247,9 @@ pub fn refresh(repo: &Path, base: &str, run: bool) -> Result<Snapshot, String> {
 
     let mut keep: Vec<String> = branches.iter().map(|b| b.branch.clone()).collect();
     keep.push(base.to_string());
-    let _ = checkout::prune(repo, &keep);
+    if should_prune {
+        let _ = checkout::prune(repo, &keep);
+    }
     Ok(Snapshot {
         v: 1,
         repo: main_wt.display().to_string(),
