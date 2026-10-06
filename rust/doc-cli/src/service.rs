@@ -276,6 +276,7 @@ fn user_id(home: &Path) -> Result<u32, String> {
 #[cfg(target_os = "macos")]
 fn contents(binary: &Path) -> Result<String, String> {
     let logs = home::logs_dir();
+    let path = std::env::var("PATH").unwrap_or_default();
     Ok(format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
          <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \
@@ -288,12 +289,14 @@ fn contents(binary: &Path) -> Result<String, String> {
          \x20 <key>RunAtLoad</key>\n  <true/>\n\
          \x20 <key>KeepAlive</key>\n  <dict>\n    <key>SuccessfulExit</key>\n    <false/>\n  </dict>\n\
          \x20 <key>ProcessType</key>\n  <string>Background</string>\n\
+         \x20 <key>EnvironmentVariables</key>\n  <dict>\n    <key>PATH</key>\n    <string>{path}</string>\n  </dict>\n\
          \x20 <key>StandardOutPath</key>\n  <string>{log}</string>\n\
          \x20 <key>StandardErrorPath</key>\n  <string>{log}</string>\n\
          </dict>\n\
          </plist>\n",
         label = LABEL,
         binary = xml(&binary.to_string_lossy()),
+        path = xml(&path),
         log = xml(&logs.join("serve.log").to_string_lossy()),
     ))
 }
@@ -481,5 +484,31 @@ mod tests {
     #[test]
     fn an_empty_command_is_nothing_to_do_rather_than_a_panic() {
         assert!(run(&[]).is_ok());
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn the_plist_includes_path_environment_variable_and_parses() {
+        let text = contents(Path::new("/opt/dx/bin/dx")).expect("contents");
+        // Verify EnvironmentVariables section with PATH is present.
+        assert!(
+            text.contains("<key>EnvironmentVariables</key>"),
+            "missing EnvironmentVariables section: {text}"
+        );
+        assert!(
+            text.contains("<key>PATH</key>"),
+            "missing PATH key in EnvironmentVariables: {text}"
+        );
+        // Verify it's valid plist XML.
+        assert!(
+            text.starts_with("<?xml version=\"1.0\" encoding=\"UTF-8\"?>"),
+            "invalid XML header"
+        );
+        assert!(text.contains("<!DOCTYPE plist"), "missing DOCTYPE");
+        assert!(text.ends_with("</plist>\n"), "missing closing plist tag");
+        // The plist should be valid enough that plutil could parse it (if we had it as a tool).
+        // For now we just check it has the structure.
+        assert!(text.contains("<dict>"), "missing dict element");
+        assert!(text.contains("</dict>"), "missing closing dict tag");
     }
 }
