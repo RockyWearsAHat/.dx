@@ -1365,6 +1365,11 @@ mod tests {
         std::fs::write(root.join(".gitattributes"), "data/** -text\n").expect("attrs");
         std::fs::write(root.join(".gitignore"), "target/\n").expect("ignore");
         git(&["add", ".gitattributes", ".gitignore"]);
+        // Committed first: a merely staged file would show as added whatever the sparse state.
+        git(&[
+            "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false",
+            "commit", "-q", "-m", "seed",
+        ]);
         git(&["update-index", "--skip-worktree", ".gitattributes", ".gitignore"]);
         std::fs::remove_file(root.join(".gitattributes")).expect("rm");
         std::fs::remove_file(root.join(".gitignore")).expect("rm");
