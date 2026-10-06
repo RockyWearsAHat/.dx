@@ -480,6 +480,16 @@ mod tests {
     }
 
     #[test]
+    fn a_host_run_round_trips_and_unset_writes_nothing() {
+        let input = "::code id=test lang=bash run writes=out confine=host\nmake\n::end\n";
+        assert_eq!(round_trip(input), input);
+        assert_eq!(parse(input).blocks[0].confine, "host");
+        let bare = "::code id=test lang=bash run writes=out\nmake\n::end\n";
+        assert_eq!(round_trip(bare), bare);
+        assert_eq!(parse(bare).blocks[0].confine, "");
+    }
+
+    #[test]
     fn a_capture_blocks_target_setup_and_viewport_round_trip() {
         let input = "::code id=shot lang=capture run writes=out target=http://127.0.0.1:5173/ \
                      setup=\"npm run dev\" width=1280 height=800\n\
