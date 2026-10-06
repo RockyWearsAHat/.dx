@@ -312,6 +312,7 @@ pub fn run_document(
                 continue;
             }
         };
+        let material = approval_material(block);
         let approval = approval_fingerprint(runner, &material, &deps, &read_paths, &writes);
         let reads = match declared_reads(block, resolver, &writes, Some(&options.document_dir)) {
             Ok(reads) => reads,

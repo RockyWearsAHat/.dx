@@ -66,7 +66,19 @@ fn path_property() -> Value {
         "type": "string",
         "description": "Path to the .dx file, absolute or relative to the workspace root — \
                         the directory this server was started in, which dx_list names, and \
-                        not your working directory. In a git worktree, pass an absolute path."
+                        not your working directory. In a git worktree, pass an absolute path (or `directory`); \
+                        the worktree's own .doc store is used, never the server's."
+    })
+}
+
+/// The optional `directory` property of every document tool: the checkout a relative path is
+/// joined under. The store, packs and index used are those of the git top level containing
+/// the resolved path, so a worktree's calls never touch the server's checkout.
+fn worktree_directory_property() -> Value {
+    json!({
+        "type": "string",
+        "description": "Optional checkout (e.g. a git worktree) a relative `path` is resolved \
+                        under instead of the server root. Absolute paths need no directory."
     })
 }
 
@@ -100,6 +112,7 @@ fn read_tool() -> Value {
             "type": "object",
             "properties": {
                 "path": path_property(),
+                "directory": worktree_directory_property(),
                 "section": section_property(),
                 "block": {
                     "type": "string",
@@ -154,6 +167,7 @@ fn play_tool() -> Value {
             "type": "object",
             "properties": {
                 "path": path_property(),
+                "directory": worktree_directory_property(),
                 "script": {
                     "type": "string",
                     "description": "The input sequence, e.g. \"wait 500ms; key Space; scroll 200\"."
@@ -215,6 +229,7 @@ fn source_tool() -> Value {
             "type": "object",
             "properties": {
                 "path": path_property(),
+                "directory": worktree_directory_property(),
                 "section": section_property(),
                 "lines": {
                     "type": "string",
@@ -245,7 +260,7 @@ fn outline_tool() -> Value {
                         or dx_read.",
         "inputSchema": {
             "type": "object",
-            "properties": { "path": path_property() },
+            "properties": { "path": path_property(), "directory": worktree_directory_property() },
             "required": ["path"]
         }
     })
@@ -346,6 +361,7 @@ fn render_tool() -> Value {
             "type": "object",
             "properties": {
                 "path": path_property(),
+                "directory": worktree_directory_property(),
                 "section": section_property(),
                 "theme": { "type": "string", "enum": ["auto", "light", "dark"] }
             },
@@ -379,6 +395,7 @@ fn write_tool() -> Value {
             "type": "object",
             "properties": {
                 "path": path_property(),
+                "directory": worktree_directory_property(),
                 "content": {
                     "type": "string",
                     "description": "Full DOCSRC source for the document."
@@ -448,6 +465,7 @@ fn edit_tool() -> Value {
             "type": "object",
             "properties": {
                 "path": path_property(),
+                "directory": worktree_directory_property(),
                 "block": { "type": "string", "description": "Id of the block to change." },
                 "text": {
                     "type": "string",
@@ -510,6 +528,7 @@ fn board_tool() -> Value {
             "type": "object",
             "properties": {
                 "path": path_property(),
+                "directory": worktree_directory_property(),
                 "board": { "type": "string", "description": "Id of the `::board` block." },
                 "action": {
                     "type": "string",
@@ -593,6 +612,7 @@ fn append_tool() -> Value {
             "type": "object",
             "properties": {
                 "path": path_property(),
+                "directory": worktree_directory_property(),
                 "text": {
                     "type": "string",
                     "description": "The lines to add: appended to `block`'s body, or the \
@@ -647,6 +667,7 @@ fn check_tool() -> Value {
             "type": "object",
             "properties": {
                 "path": path_property(),
+                "directory": worktree_directory_property(),
                 "block": { "type": "string", "description": "Id of the checklist block." },
                 "item": {
                     "type": "number",
@@ -791,6 +812,7 @@ fn run_tool() -> Value {
             "type": "object",
             "properties": {
                 "path": path_property(),
+                "directory": worktree_directory_property(),
                 "block": {
                     "type": "string",
                     "description": "Run only this block id. Default: every runnable block."
@@ -861,7 +883,8 @@ fn sync_tool() -> Value {
                     "description": "Path to the workspace root, absolute or relative to the \
                                     server's root — the directory this server was started in. \
                                     Optional; defaults to the server root."
-                }
+                },
+                "directory": worktree_directory_property()
             },
             "required": []
         }
