@@ -97,14 +97,32 @@ pub fn status(repo: &Path, base: &str, branch: &str) -> MergeStatus {
         error: None,
     };
 
-    match git(repo, &["merge-base", "--is-ancestor", &branch_sha, &base_sha]) {
+    match git(
+        repo,
+        &["merge-base", "--is-ancestor", &branch_sha, &base_sha],
+    ) {
         Ok(o) if o.code == Some(0) => return mk(MergeState::Merged, None, vec![]),
         Ok(o) if o.code == Some(1) => {}
-        Ok(o) => return err(base_sha.clone(), branch_sha.clone(), format!("git merge-base: {}", o.stderr)),
+        Ok(o) => {
+            return err(
+                base_sha.clone(),
+                branch_sha.clone(),
+                format!("git merge-base: {}", o.stderr),
+            )
+        }
         Err(e) => return err(base_sha.clone(), branch_sha.clone(), e),
     }
 
-    let o = match git(repo, &["merge-tree", "--write-tree", "--messages", &base_sha, &branch_sha]) {
+    let o = match git(
+        repo,
+        &[
+            "merge-tree",
+            "--write-tree",
+            "--messages",
+            &base_sha,
+            &branch_sha,
+        ],
+    ) {
         Ok(o) => o,
         Err(e) => return err(base_sha.clone(), branch_sha.clone(), e),
     };
@@ -191,12 +209,23 @@ mod tests {
         let o = Command::new("git")
             .arg("-C")
             .arg(dir)
-            .args(["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"])
+            .args([
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "-c",
+                "commit.gpgsign=false",
+            ])
             .args(args)
             .stdin(Stdio::null())
             .output()
             .unwrap();
-        assert!(o.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&o.stderr));
+        assert!(
+            o.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
     }
 
     fn repo(tag: &str) -> PathBuf {
@@ -240,7 +269,11 @@ mod tests {
         assert_eq!(s.state, MergeState::Conflict, "{s:?}");
         assert_eq!(s.conflicts.len(), 1);
         assert_eq!(s.conflicts[0].path, "a.txt");
-        assert!(s.conflicts[0].hunks.contains("<<<<<<<"), "{}", s.conflicts[0].hunks);
+        assert!(
+            s.conflicts[0].hunks.contains("<<<<<<<"),
+            "{}",
+            s.conflicts[0].hunks
+        );
         assert!(s.conflicts[0].hunks.contains(">>>>>>>"));
         let _ = std::fs::remove_dir_all(&d);
     }

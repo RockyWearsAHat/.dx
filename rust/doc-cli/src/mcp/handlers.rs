@@ -1430,9 +1430,14 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let git = |a: &[&str]| {
             let ok = std::process::Command::new("git")
-                .arg("-C").arg(&dir)
+                .arg("-C")
+                .arg(&dir)
                 .args(["-c", "user.name=t", "-c", "user.email=t@t"])
-                .args(a).output().unwrap().status.success();
+                .args(a)
+                .output()
+                .unwrap()
+                .status
+                .success();
             assert!(ok, "git {a:?}");
         };
         git(&["init", "-q", "-b", "main"]);
@@ -1442,7 +1447,12 @@ mod tests {
         git(&["add", "."]);
         git(&["commit", "-q", "-m", "work"]);
         git(&["checkout", "-q", "main"]);
-        let out = call("dx_live", &json!({ "directory": dir.display().to_string(), "refresh": true }), &dir).unwrap();
+        let out = call(
+            "dx_live",
+            &json!({ "directory": dir.display().to_string(), "refresh": true }),
+            &dir,
+        )
+        .unwrap();
         let text = out[0]["text"].as_str().unwrap().to_string();
         assert!(text.contains("feature-x"), "{text}");
         let _ = std::fs::remove_dir_all(&dir);

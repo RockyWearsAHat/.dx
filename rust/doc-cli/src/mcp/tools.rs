@@ -898,6 +898,30 @@ fn sync_tool() -> Value {
     })
 }
 
+/// `dx_live` — every branch's merge state and gate verdicts in one read.
+fn live_tool() -> Value {
+    json!({
+        "name": "dx_live",
+        "description": "ONE READ of everything: every branch's merge state against base, \
+                        conflict hunks, and every gate verdict, precomputed by the dx live daemon",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "directory": {
+                    "type": "string",
+                    "description": "Any directory inside the repo. Default: the workspace root."
+                },
+                "refresh": {
+                    "type": "boolean",
+                    "description": "Recompute merge states now instead of reading the cached \
+                                    snapshot. Default: false."
+                }
+            },
+            "required": []
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1122,28 +1146,4 @@ mod tests {
         assert!(sync["inputSchema"]["properties"].is_object());
         assert_eq!(sync["inputSchema"]["required"], json!([]));
     }
-}
-
-/// `dx_live` — every branch's merge state and gate verdicts in one read.
-fn live_tool() -> Value {
-    json!({
-        "name": "dx_live",
-        "description": "ONE READ of everything: every branch's merge state against base, \
-                        conflict hunks, and every gate verdict, precomputed by the dx live daemon",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "directory": {
-                    "type": "string",
-                    "description": "Any directory inside the repo. Default: the workspace root."
-                },
-                "refresh": {
-                    "type": "boolean",
-                    "description": "Recompute merge states now instead of reading the cached \
-                                    snapshot. Default: false."
-                }
-            },
-            "required": []
-        }
-    })
 }

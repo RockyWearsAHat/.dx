@@ -52,8 +52,16 @@ fn git(cwd: &Path, args: &[&str]) -> Result<String, String> {
 
 /// The commit a revision names.
 fn commit_of(repo: &Path, rev: &str) -> Result<String, String> {
-    git(repo, &["rev-parse", "--verify", "--quiet", &format!("{rev}^{{commit}}")])
-        .map_err(|_| format!("`{rev}` is not a commit in {}", repo.display()))
+    git(
+        repo,
+        &[
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            &format!("{rev}^{{commit}}"),
+        ],
+    )
+    .map_err(|_| format!("`{rev}` is not a commit in {}", repo.display()))
 }
 
 /// Clone the ignored build folders of the main working tree into a checkout that lacks them.
@@ -119,7 +127,16 @@ pub fn materialize(repo: &Path, base: &str, branch: &str, tree: &str) -> Result<
 
     let commit = git(
         repo,
-        &["commit-tree", tree, "-p", &base_sha, "-p", &branch_sha, "-m", "dx-live virtual merge"],
+        &[
+            "commit-tree",
+            tree,
+            "-p",
+            &base_sha,
+            "-p",
+            &branch_sha,
+            "-m",
+            "dx-live virtual merge",
+        ],
     )?;
     git(&path, &["checkout", "--detach", "-f", &commit])?;
     warm_targets(repo, &path);
@@ -219,7 +236,8 @@ mod tests {
 
     /// A temp repo on `main` with a, b, and a branch `feat/x` adding c.
     fn seed(label: &str) -> PathBuf {
-        let root = std::env::temp_dir().join(format!("dx-live-checkout-{label}-{}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("dx-live-checkout-{label}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         sh(&root, &["init", "-q", "-b", "main"]);
@@ -256,7 +274,10 @@ mod tests {
         for f in ["a.txt", "b.txt", "c.txt"] {
             assert!(wt.join(f).is_file(), "{f} missing");
         }
-        let before = std::fs::metadata(wt.join("a.txt")).unwrap().modified().unwrap();
+        let before = std::fs::metadata(wt.join("a.txt"))
+            .unwrap()
+            .modified()
+            .unwrap();
 
         // The branch moves on: c changes, a and b do not.
         sh(&repo, &["checkout", "-q", "feat/x"]);
@@ -268,7 +289,10 @@ mod tests {
         let wt2 = materialize(&repo, "main", "feat/x", &tree2).expect("again");
         assert_eq!(wt, wt2);
         assert_eq!(std::fs::read_to_string(wt.join("c.txt")).unwrap(), "c2\n");
-        let after = std::fs::metadata(wt.join("a.txt")).unwrap().modified().unwrap();
+        let after = std::fs::metadata(wt.join("a.txt"))
+            .unwrap()
+            .modified()
+            .unwrap();
         assert_eq!(before, after, "an unchanged file must keep its mtime");
         // The agent's own checkout was never touched.
         assert!(!repo.join("c.txt").exists());
@@ -297,7 +321,10 @@ mod tests {
         prune(&repo, &[]).expect("prune");
         assert!(!wt.exists());
         assert!(!sh(&repo, &["worktree", "list"]).contains("feat__x"));
-        assert!(repo.join("a.txt").is_file(), "the main checkout is untouched");
+        assert!(
+            repo.join("a.txt").is_file(),
+            "the main checkout is untouched"
+        );
         let _ = std::fs::remove_dir_all(&repo);
     }
 }
