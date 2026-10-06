@@ -682,12 +682,53 @@ fn render(args: &Value, root: &Path) -> ToolResult {
     ))])
 }
 
+/// A write tool must never report success for a write that is not in the stored document.
+///
+/// `dx_append` on `docs/VPN.md` once answered "Added" while nothing was persisted, because the
+/// resolver hands a non-`.dx` file back as it is. So the `.dx` tools refuse any other path up
+/// front, saying why, and [`confirm_saved`] re-resolves the document after every save.
+fn require_dx(path: &Path) -> Result<(), String> {
+    let is_dx = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("dx"));
+    if is_dx {
+        return Ok(());
+    }
+    Err(format!(
+        "{} is not a .dx document: the dx write tools only write .dx files, so nothing was \
+         changed. Write the document to a .dx path (dx_write), or edit the file directly.",
+        path.display()
+    ))
+}
+
+/// Re-resolve `path` after a save and confirm the stored document holds exactly the blocks
+/// that were written (and `expect`, the block the caller is about to report). Otherwise an
+/// error says the write did not land.
+fn confirm_saved(path: &Path, saved: &Document, expect: Option<&str>) -> Result<(), String> {
+    let stored = parse(&workspace::read(path)?);
+    let ids = |document: &Document| -> Vec<String> {
+        document.blocks.iter().map(|block| block.id.clone()).collect()
+    };
+    let missing = expect.is_some_and(|id| !stored.blocks.iter().any(|block| block.id == id));
+    if missing || ids(&stored) != ids(saved) {
+        return Err(format!(
+            "the write to {} was not persisted: re-reading the document does not show the \
+             new content",
+            path.display()
+        ));
+    }
+    Ok(())
+}
+
 /// `dx_write` — create or replace a document.
 fn write(args: &Value, root: &Path) -> ToolResult {
     let path = resolve(required(args, "path")?, root);
+    require_dx(&path)?;
     let content = required(args, "content")?;
     let document = parse(content);
     workspace::save(&path, &document)?;
+    confirm_saved(&path, &document, None)?;
     let mut content = vec![text_content(&format!(
         "Wrote {} ({} blocks). Block ids: {}",
         path.display(),
@@ -721,6 +762,7 @@ fn edit(args: &Value, root: &Path) -> ToolResult {
 /// change, not the block.
 fn edit_in(args: &Value, root: &Path, cache_root: PathBuf) -> ToolResult {
     let path = resolve(required(args, "path")?, root);
+    require_dx(&path)?;
     let wanted = required(args, "block")?.trim().trim_start_matches('#');
 
     // SAFETY: Each call to workspace::read() reads the file fresh from disk, ensuring that
@@ -778,6 +820,7 @@ fn edit_in(args: &Value, root: &Path, cache_root: PathBuf) -> ToolResult {
     let runnable =
         index.is_some_and(|at| document.blocks[at].kind == "code" && document.blocks[at].run);
     workspace::save(&path, &document)?;
+    confirm_saved(&path, &document, Some(&focus))?;
 
     let mut content = vec![text_content(&if let Some(count) = replaced {
         let occurrences = if count == 1 {
@@ -937,6 +980,7 @@ fn append(args: &Value, root: &Path) -> ToolResult {
     }
     let text = required(args, "text")?;
     let path = resolve(required(args, "path")?, root);
+    require_dx(&path)?;
 
     if let Some(wanted) = string(args, "block") {
         let wanted = wanted.trim().trim_start_matches('#');
@@ -982,7 +1026,9 @@ fn append(args: &Value, root: &Path) -> ToolResult {
         deps: "",
     };
     let (updated, id) = doc_core::edit::insert_after(&source, after.as_deref(), &insertion)?;
-    workspace::save(&path, &parse(&updated))?;
+    let saved = parse(&updated);
+    workspace::save(&path, &saved)?;
+    confirm_saved(&path, &saved, Some(&id))?;
     Ok(vec![text_content(&format!(
         "Added `{id}` to {}.",
         path.display()
@@ -1002,9 +1048,12 @@ fn check(args: &Value, root: &Path) -> ToolResult {
         .and_then(Value::as_u64)
         .ok_or("`item` is required: the box's position in the checklist, counting from 0")?
         as usize;
+    require_dx(&path)?;
     let (updated, now_checked) =
         doc_core::edit::toggle_check(&workspace::read(&path)?, wanted, item)?;
-    workspace::save(&path, &parse(&updated))?;
+    let saved = parse(&updated);
+    workspace::save(&path, &saved)?;
+    confirm_saved(&path, &saved, Some(wanted))?;
     Ok(vec![text_content(&format!(
         "Item {item} of `{wanted}` is now {}.",
         if now_checked { "checked" } else { "unchecked" }
@@ -1511,6 +1560,35 @@ mod tests {
         // Everything already there survives, marks included, and the new line is last.
         assert!(text.contains("shipped"), "{text}");
         assert!(text.contains("a fresh thought"), "{text}");
+    }
+
+    #[test]
+    fn appending_to_a_non_dx_path_is_refused_and_a_dx_path_persists() {
+        let root = project("append-verify");
+        let md = root.join("VPN.md");
+        workspace::write_text(&md, "# VPN\n\nSetup notes.\n").expect("seed md");
+        let refusal = call(
+            "dx_append",
+            &json!({ "path": "VPN.md", "text": "A finding." }),
+            &root,
+        )
+        .expect_err("a Markdown file is not a dx document");
+        assert!(refusal.contains("not a .dx document"), "{refusal}");
+        assert_eq!(
+            std::fs::read_to_string(&md).expect("read md"),
+            "# VPN\n\nSetup notes.\n",
+            "the file is untouched"
+        );
+
+        let added = call(
+            "dx_append",
+            &json!({ "path": "guide.dx", "text": "A persisted finding." }),
+            &root,
+        )
+        .expect("append to a dx document");
+        assert!(text_of(&added).contains("Added"), "{added:?}");
+        let stored = workspace::read(&root.join("guide.dx")).expect("read dx");
+        assert!(stored.contains("A persisted finding."), "{stored}");
     }
 
     #[test]
