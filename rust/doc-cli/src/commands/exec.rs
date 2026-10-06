@@ -17,6 +17,9 @@ use crate::workspace;
 /// `--dry` runs everything but prints the result instead of saving, which is how you
 /// check what a document would do before letting it change the file.
 ///
+/// Each block runs for its own `timeout=` (blocks without one get
+/// [`DEFAULT_TIMEOUT_SECONDS`]); `--timeout S`, only when given, overrides every block's.
+///
 /// New or edited code is gated on review: `--review` prints each runnable block's exact
 /// code, fingerprint, and approval standing without executing anything; `--approve`
 /// records the current fingerprints as approved and runs; `--force` runs unapproved code
@@ -36,6 +39,14 @@ pub fn run(args: &Args) -> Result<String, String> {
     run_in(args, RunOptions::default().cache_root)
 }
 
+/// `--timeout S` as an override of every block's own `timeout=`, or `None` when it was not
+/// given (or is not a positive number): then each block's header governs its run.
+fn timeout_override(args: &Args) -> Option<Duration> {
+    args.number("timeout")
+        .filter(|seconds| *seconds > 0)
+        .map(|seconds| Duration::from_secs(u64::from(seconds)))
+}
+
 /// The body of [`run`], with the run cache — the approval ledger included — stated rather
 /// than defaulted.
 ///
@@ -47,17 +58,15 @@ fn run_in(args: &Args, cache_root: PathBuf) -> Result<String, String> {
     let path = document_path(args)?;
     let source = workspace::read(&path)?;
 
-    let timeout_seconds = args
-        .number("timeout")
-        .filter(|seconds| *seconds > 0)
-        .map_or(DEFAULT_TIMEOUT_SECONDS, u64::from);
+    let timeout_override = timeout_override(args);
 
     let report = run_document(
         &source,
         &RunOptions {
             document_dir: workspace::document_dir(&path),
             cache_root,
-            default_timeout: Duration::from_secs(timeout_seconds),
+            default_timeout: Duration::from_secs(DEFAULT_TIMEOUT_SECONDS),
+            timeout_override,
             force: args.present("force"),
             only: args.value("only").map(str::to_string),
             review_only: args.present("review"),
@@ -247,6 +256,76 @@ mod tests {
             resolved.contains("::output id=hello-output for=hello status=ok"),
             "the store did not receive the fresh output: {resolved}"
         );
+    }
+
+    #[test]
+    fn timeout_overrides_only_when_given() {
+        // dx report-3d99fcfc: without `--timeout` the CLI sets no cap of its own, so each
+        // block's `timeout=` governs; with it, the flag wins.
+        assert_eq!(timeout_override(&args(&["doc.dx"])), None);
+        assert_eq!(timeout_override(&args(&["doc.dx", "--timeout", "0"])), None);
+        assert_eq!(
+            timeout_override(&args(&["doc.dx", "--timeout", "900"])),
+            Some(Duration::from_secs(900))
+        );
+    }
+
+    #[test]
+    fn dx_run_honours_the_blocks_timeout_header_and_an_explicit_flag() {
+        // The header alone: timeout=3 carries sleep 1; timeout=1 cuts sleep 3 at ~1 s.
+        let path = seed(
+            "timeout-header",
+            "::code id=pass lang=bash run timeout=3\nsleep 1\n::end\n\n\
+             ::code id=cut lang=bash run timeout=1\nsleep 3\n::end\n",
+        );
+        let started = std::time::Instant::now();
+        // An interrupted block makes the run an error; the saved document is the record.
+        let _ = run_in(
+            &args(&[&path.to_string_lossy(), "--approve"]),
+            cache("timeout-header"),
+        );
+        let elapsed = started.elapsed();
+        let saved = workspace::read(&path).expect("read");
+        assert!(saved.contains("for=pass status=ok"), "{saved}");
+        assert!(saved.contains("for=cut status=interrupted"), "{saved}");
+        assert!(elapsed < Duration::from_millis(3500), "ran {elapsed:?}");
+
+        // The flag, given, overrides the header: timeout=60 cut at 1 s.
+        let path = seed(
+            "timeout-flag",
+            "::code id=long lang=bash run timeout=60\nsleep 3\n::end\n",
+        );
+        let started = std::time::Instant::now();
+        let _ = run_in(
+            &args(&[&path.to_string_lossy(), "--approve", "--timeout", "1"]),
+            cache("timeout-flag"),
+        );
+        assert!(started.elapsed() < Duration::from_millis(2500));
+        let saved = workspace::read(&path).expect("read");
+        assert!(saved.contains("for=long status=interrupted"), "{saved}");
+    }
+
+    #[test]
+    fn dx_run_exports_the_effective_timeout_as_dx_block_timeout() {
+        let source =
+            "::code id=t lang=bash run confine=host timeout=900\necho \"T=$DX_BLOCK_TIMEOUT\"\n::end\n";
+        let path = seed("timeout-env-header", source);
+        run_in(
+            &args(&[&path.to_string_lossy(), "--approve"]),
+            cache("timeout-env-header"),
+        )
+        .expect("run");
+        let saved = workspace::read(&path).expect("read");
+        assert!(saved.contains("T=900"), "{saved}");
+
+        let path = seed("timeout-env-flag", source);
+        run_in(
+            &args(&[&path.to_string_lossy(), "--approve", "--timeout", "3600"]),
+            cache("timeout-env-flag"),
+        )
+        .expect("run");
+        let saved = workspace::read(&path).expect("read");
+        assert!(saved.contains("T=3600"), "{saved}");
     }
 
     #[test]

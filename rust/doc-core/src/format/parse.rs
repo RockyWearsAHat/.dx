@@ -223,11 +223,25 @@ pub(super) fn parse_docsrc_blocks(body: &str) -> Result<Vec<Block>, String> {
     // header (or the end of input) arrives. A mixed document is something people actually
     // write, and a parser that skipped these lines destroyed them on the next save.
     let mut loose: Vec<String> = Vec::new();
+    // Inside a Markdown code fence in that prose, every line is raw until the closing
+    // fence: a fenced example of dx syntax (`::code id=build lang=rust run`, `::end`) is
+    // the example, never a real block (dx report-56c3c5b8).
+    let mut in_fence = false;
 
     let mut cursor = 0;
     while cursor < lines.len() {
         let raw_line = lines[cursor].clone();
         let line = js_trim(&raw_line);
+
+        let is_fence = line.starts_with(MARKDOWN_FENCE);
+        if in_fence || (is_fence && closes_later(&lines[cursor + 1..])) {
+            if is_fence {
+                in_fence = !in_fence;
+            }
+            loose.push(raw_line);
+            cursor += 1;
+            continue;
+        }
 
         if line.is_empty() {
             // A blank inside a loose run separates its paragraphs; outside one it is
@@ -339,6 +353,16 @@ pub(super) fn parse_docsrc_blocks(body: &str) -> Result<Vec<Block>, String> {
 
     adopt_loose(&mut loose, &mut blocks);
     Ok(blocks)
+}
+
+/// The Markdown code fence the loose-prose parser ([`parse_legacy_blocks`]) opens and closes on.
+const MARKDOWN_FENCE: &str = "```";
+
+/// Whether a fence opened just before `rest` is closed in it. An unclosed fence is left to
+/// the Markdown parser as before and never swallows the `::` blocks after it.
+fn closes_later(rest: &[String]) -> bool {
+    rest.iter()
+        .any(|line| js_trim(line).starts_with(MARKDOWN_FENCE))
 }
 
 /// Adopt a buffered run of loose prose lines as blocks, through the Markdown parser —

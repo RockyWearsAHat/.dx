@@ -908,6 +908,8 @@ RUN
     dx run notes.dx --only block1   run one block
     dx run notes.dx --dry           show what would run, without executing
     dx run notes.dx --follow-edges  run in board edge order, not document order
+    dx run notes.dx --timeout 900   override every block's own timeout= (without
+                                    it each block's timeout= governs, else 600 s)
 
   Approval workflow (new code must be reviewed):
     dx run notes.dx --review        print code fingerprints without executing
