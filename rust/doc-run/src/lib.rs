@@ -490,6 +490,80 @@ pub fn run_document(
     })
 }
 
+/// Where one runnable block stands, computed without executing anything.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlockStanding {
+    /// Id of the code block.
+    pub id: String,
+    /// Whether this machine's ledger has approved the block's current code.
+    pub approved: bool,
+    /// The block's current run fingerprint; `None` when its inputs cannot be resolved.
+    pub fingerprint: Option<String>,
+    /// The sentence naming why the inputs cannot be resolved (missing `src=`/`reads=`).
+    pub problem: Option<String>,
+    /// The recorded `::output` that follows the block, if any: (hash, exit, text).
+    pub recorded: Option<(String, i32, String)>,
+}
+
+/// The standing of every runnable block of `document`: the same approval and fingerprint
+/// computation [`run_document`] makes before it would execute, with nothing executed,
+/// recorded, or written. Callers compare `recorded.0` with `fingerprint` for staleness.
+#[must_use]
+pub fn standing(
+    document: &Document,
+    options: &RunOptions,
+    resolver: &dyn Resolver,
+) -> Vec<BlockStanding> {
+    let mut out = Vec::new();
+    // Hydrating reads every `src=` listing, so a document with nothing runnable skips it.
+    if !document.blocks.iter().any(|b| runnable_runner(b).is_some()) {
+        return out;
+    }
+    let mut hydrated = document.clone();
+    let unresolved = resolve::hydrate(&mut hydrated, resolver);
+    let ledger = approvals::Ledger::at(&options.cache_root);
+    for (index, original) in document.blocks.iter().enumerate() {
+        let Some(runner) = runnable_runner(original) else {
+            continue;
+        };
+        let block = &hydrated.blocks[index];
+        let recorded = existing_output(document, index, &block.id)
+            .map(|o| (o.hash.clone(), o.exit, o.text.clone()));
+        let mut entry = BlockStanding {
+            id: block.id.clone(),
+            approved: false,
+            fingerprint: None,
+            problem: None,
+            recorded,
+        };
+        if let Some(problem) = unresolved.iter().find(|e| e.block == block.id) {
+            entry.problem = Some(problem.sentence.clone());
+            out.push(entry);
+            continue;
+        }
+        let deps = parse_deps(&block.deps);
+        let planned = declared_writes(block).and_then(|writes| {
+            let read_paths = declared_read_paths(&block.reads)?;
+            let reads =
+                declared_reads(block, resolver, &writes, Some(&options.document_dir))?;
+            Ok((writes, read_paths, reads))
+        });
+        match planned {
+            Ok((writes, read_paths, reads)) => {
+                let material = approval_material(block);
+                let approval = approval_fingerprint(runner, &material, &deps, &read_paths, &writes);
+                entry.approved = ledger.is_approved(&approval);
+                entry.fingerprint = Some(fingerprint(
+                    runner, &material, &deps, &reads, &writes, block.timeout,
+                ));
+            }
+            Err(sentence) => entry.problem = Some(sentence),
+        }
+        out.push(entry);
+    }
+    out
+}
+
 /// The runner for a block, when the block is executable code in a supported language.
 fn runnable_runner(block: &Block) -> Option<&'static str> {
     if block.kind != "code" || !block.run {
