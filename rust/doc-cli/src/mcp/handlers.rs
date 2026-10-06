@@ -735,7 +735,7 @@ fn confirm_saved(path: &Path, saved: &Document, expect: Option<&str>) -> Result<
     let ids = |document: &Document| -> Vec<String> {
         document.blocks.iter().map(|block| block.id.clone()).collect()
     };
-    let missing = expect.is_some_and(|id| !stored.blocks.iter().any(|block| block.id == id));
+    let missing = expect.is_some_and(|id| !stored.blocks.iter().any(|block| block.id.eq_ignore_ascii_case(id)));
     if missing || ids(&stored) != ids(saved) {
         return Err(format!(
             "the write to {} was not persisted: re-reading the document does not show the \
@@ -812,7 +812,11 @@ fn edit_in(args: &Value, root: &Path, cache_root: PathBuf) -> ToolResult {
         let all = boolean_or(args, "all", false);
         let (updated, count) =
             doc_core::edit::replace_in_block(&workspace::read(&path)?, wanted, old, new, all)?;
-        (parse(&updated), wanted.to_string(), Some(count))
+        // The block's stored id, which may differ in case from what the caller typed.
+        let document = parse(&updated);
+        let focus = doc_core::edit::find(&document, wanted)
+            .map_or_else(|_| wanted.to_string(), |at| document.blocks[at].id.clone());
+        (document, focus, Some(count))
     } else if let Some(header) = string(args, "header") {
         let source = workspace::read(&path)?;
         let document = parse(&source);
@@ -2907,6 +2911,25 @@ mod tests {
             "C content should not exist: {}",
             final_doc
         );
+    }
+
+    #[test]
+    fn edit_by_replace_accepts_a_block_id_typed_in_another_case() {
+        let root = project("edit-id-case");
+        workspace::write_text(
+            &root.join("doc.dx"),
+            "::paragraph id=para\nThe original body.\n::end\n",
+        )
+        .expect("seed");
+        let items = call(
+            "dx_edit",
+            &json!({ "path": "doc.dx", "block": "PARA", "replace": "original", "with": "new" }),
+            &root,
+        )
+        .expect("edit with an upper-case id must be confirmed, not called unpersisted");
+        assert!(text_of(&items).contains("Replaced 1 occurrence"));
+        let saved = workspace::read(&root.join("doc.dx")).expect("resolve");
+        assert!(saved.contains("The new body."), "{saved}");
     }
 
     #[test]
