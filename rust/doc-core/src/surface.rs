@@ -89,7 +89,7 @@ pub const ATTRS: &[(&str, &[&str])] = &[
     (
         "code",
         &[
-            "lang", "src", "run", "open", "deps", "reads", "writes", "timeout", "format",
+            "lang", "src", "run", "open", "deps", "reads", "writes", "confine", "timeout", "format",
         ],
     ),
     ("image", &["src"]),

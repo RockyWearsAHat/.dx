@@ -311,6 +311,7 @@ Control what each code block can read and write:
 ::code lang=bash run=true reads=config.json writes=build
 # reads= specifies paths this block can open
 # writes= specifies directories it can write to
+# confine=host (the only value) runs the block, once approved, on the host with your own permissions; it joins the fingerprint like writes=
 # Network is never permitted during run
 cat config.json
 mkdir -p build

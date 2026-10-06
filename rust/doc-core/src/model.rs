@@ -70,6 +70,11 @@ pub struct Block {
     /// what a block may touch re-opens review exactly like changing its code would.
     /// Unset means the block writes only its own sandbox directory.
     pub writes: String,
+    /// Where an executable `code` block runs (`confine=host`). Empty means the sandbox;
+    /// `host`, the one accepted value, runs the reviewed block with the reader's own
+    /// permissions, for a suite that cannot nest inside a sandbox. It is part of the
+    /// block's fingerprint, so approving the code approves the host run.
+    pub confine: String,
     /// Seconds an executable `code` block may run before it is killed; `0` means default.
     pub timeout: u32,
     /// Id of the `code` block an `output` block reports on (`for=` attribute). On an

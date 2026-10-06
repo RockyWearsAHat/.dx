@@ -73,6 +73,7 @@ fn push_block(blocks: &mut Vec<Block>, block_type: &str, attrs: &[Attr], content
             block.deps = js_trim(attr(attrs, "deps")).to_string();
             block.reads = js_trim(attr(attrs, "reads")).to_string();
             block.writes = js_trim(attr(attrs, "writes")).to_string();
+            block.confine = js_trim(attr(attrs, "confine")).to_string();
             block.target = js_trim(attr(attrs, "target")).to_string();
             block.setup = js_trim(attr(attrs, "setup")).to_string();
             block.width = attr(attrs, "width").trim().parse().unwrap_or(0);
