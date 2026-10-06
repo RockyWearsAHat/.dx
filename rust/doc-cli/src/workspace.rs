@@ -575,6 +575,27 @@ pub fn save_source(path: &Path, source: &str) -> Result<(), String> {
     }
 }
 
+/// Save what a run produced, but only onto the document the run read.
+///
+/// A run reads the source, executes (possibly for a long while, or not at all when the
+/// platform has no sandbox), then saves a copy built from what it read. If the document
+/// was edited in between, that copy is stale and saving it would silently revert the edit.
+/// So the source is read again first: when it is no longer the text the run started from,
+/// nothing is written and the sentence says so.
+///
+/// # Errors
+/// Returns a sentence when the document changed during the run, or cannot be read or saved.
+pub fn save_run_result(path: &Path, ran_against: &str, result: &str) -> Result<(), String> {
+    if read(path)? != ran_against {
+        return Err(format!(
+            "{} changed while the run was in progress, so its result was not saved (saving it \
+             would revert that edit); run again",
+            path.display()
+        ));
+    }
+    save_source(path, result)
+}
+
 /// Write raw text to `path`, creating parent directories as needed.
 ///
 /// This is the escape hatch for output that is *not* a document — a rendered HTML page, a
@@ -1668,6 +1689,25 @@ mod tests {
             &fs::read_to_string(&path).expect("stub still there")
         ));
         assert_eq!(read(&path).expect("resolve from pack"), NOTES);
+    }
+
+    #[test]
+    fn a_run_result_never_overwrites_an_edit_made_after_the_run_read_the_document() {
+        let root = scratch("stale-run-save");
+        let path = root.join("notes.dx");
+        save(&path, &parse(NOTES)).expect("save");
+        let ran_against = read(&path).expect("run reads");
+
+        // The block is edited after the run loaded its copy.
+        let edited = "::paragraph id=p\nedited text\n::end\n";
+        save(&path, &parse(edited)).expect("edit");
+
+        let stale = format!("{ran_against}\n");
+        assert!(save_run_result(&path, &ran_against, &stale).is_err());
+        assert_eq!(read(&path).expect("read"), edited, "the edit must survive");
+
+        // Against the current text, the save goes through.
+        save_run_result(&path, edited, edited).expect("fresh save");
     }
 
     #[test]

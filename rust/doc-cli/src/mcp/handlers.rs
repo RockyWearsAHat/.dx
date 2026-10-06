@@ -80,7 +80,7 @@ fn refresh_outputs(args: &Value, root: &Path, cache_root: &Path) -> Option<Strin
     };
 
     if report.changed {
-        if let Err(reason) = workspace::save_source(&path, &report.source) {
+        if let Err(reason) = workspace::save_run_result(&path, &source, &report.source) {
             return Some(format!("Refreshed output could not be saved: {reason}"));
         }
     }
@@ -1214,7 +1214,7 @@ fn run_in(args: &Value, root: &Path, cache_root: PathBuf) -> ToolResult {
     // nothing must not be able to touch the file either.
     let saved = report.changed && !review_only;
     if saved {
-        workspace::save_source(&path, &report.source)?;
+        workspace::save_run_result(&path, &source, &report.source)?;
     }
 
     let results: Vec<Value> = report

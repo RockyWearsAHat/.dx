@@ -75,7 +75,7 @@ fn run_in(args: &Args, cache_root: PathBuf) -> Result<String, String> {
     if args.present("dry") {
         output.push_str("\n--- not saved (--dry) ---\n");
     } else if report.changed {
-        workspace::save_source(&path, &report.source)?;
+        workspace::save_run_result(&path, &source, &report.source)?;
         output.push_str(&format!("saved {}\n", path.display()));
     } else {
         output.push_str("no changes\n");
