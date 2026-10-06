@@ -155,6 +155,18 @@ pub fn changed(common: &Path, last: &mut Option<Fingerprint>) -> bool {
 fn refresh_one(repo: &Path, common: &Path) {
     let start = Instant::now();
     let base = base_of(common);
+
+    // First, read cached verdicts and write the snapshot at once (fast).
+    match super::refresh(repo, base, false) {
+        Ok(snap) => {
+            if let Err(e) = super::write(repo, &snap) {
+                eprintln!("dx live: {} snapshot not written: {e}", repo.display());
+            }
+        }
+        Err(e) => eprintln!("dx live: {} refresh (cached) failed: {e}", repo.display()),
+    }
+
+    // Then run all stale gates and write again.
     match super::refresh(repo, base, true) {
         Ok(snap) => {
             let ran = snap
@@ -302,5 +314,36 @@ mod tests {
         assert!(!changed(&common, &mut last));
         sh(&d, &["commit", "--allow-empty", "-m", "two"]);
         assert!(changed(&common, &mut last));
+    }
+
+    #[test]
+    fn refresh_cached_writes_snapshot_before_running_gates() {
+        let repo = temp("refresh-cached");
+        sh(&repo, &["init", "-b", "main"]);
+        sh(&repo, &["commit", "--allow-empty", "-m", "base"]);
+        sh(&repo, &["checkout", "-b", "feature"]);
+        sh(&repo, &["commit", "--allow-empty", "-m", "feature work"]);
+
+        // Cached refresh should list the new branch without running any gates.
+        let snap_cached =
+            super::super::refresh(&repo, "main", false).expect("cached refresh should succeed");
+        assert!(
+            snap_cached.branches.iter().any(|b| b.branch == "feature"),
+            "snapshot should name the new branch: {snap_cached:#?}"
+        );
+
+        // No gates should have run yet (all verdicts empty or stale).
+        let all_gates = snap_cached
+            .base_gates
+            .iter()
+            .chain(snap_cached.branches.iter().flat_map(|b| b.gates.iter()));
+        for gate in all_gates {
+            assert!(
+                gate.ms.is_none(),
+                "cached refresh should not run gates: {gate:?}"
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&repo);
     }
 }
