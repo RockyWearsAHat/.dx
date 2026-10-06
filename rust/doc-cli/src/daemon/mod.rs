@@ -88,6 +88,9 @@ pub fn serve(port: Option<u16>, log: &mut impl Write) -> Result<(), String> {
         env!("CARGO_PKG_VERSION")
     );
 
+    // Live merge/gate snapshots for registered repos; idle cost is a few stats per second.
+    let _ = crate::live::watch::spawn(crate::live::watch::repos());
+
     let held = Arc::new(Mutex::new(Packs::new()));
     let live = Arc::new(AtomicUsize::new(0));
     for incoming in listener.incoming() {
