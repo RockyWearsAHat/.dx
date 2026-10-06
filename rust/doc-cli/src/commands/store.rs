@@ -624,14 +624,25 @@ pub fn ensure_git_ready(root: &Path) -> Vec<String> {
 /// Write everything [`ensure_git_ready`] promises, without consulting its mark.
 fn prepare_git(root: &Path) -> Vec<String> {
     let mut wrote = Vec::new();
+    // A tracked file that is absent on disk was excluded by a sparse checkout (skip-worktree).
+    // Writing it would materialise a default-only copy that git shows as modified and that
+    // drops the repository's own lines, so such a file is left alone entirely.
+    let sparse_excluded =
+        |name: &str| !root.join(name).exists() && in_the_index(root, name);
+    let skip_attributes = sparse_excluded(".gitattributes");
+    let skip_ignore = sparse_excluded(".gitignore");
     let attributes = root.join(".gitattributes");
     // `*.dx diff=dx` is what earlier versions wrote, so the line is *upgraded* in place
     // rather than appended beside — two lines matching the same pattern would leave which
     // driver wins up to git's ordering rules.
-    if ensure_attribute(&attributes, "*.dx", ATTRIBUTES_LINE).unwrap_or(false) {
+    if !skip_attributes
+        && ensure_attribute(&attributes, "*.dx", ATTRIBUTES_LINE).unwrap_or(false)
+    {
         wrote.push(format!("wrote     {ATTRIBUTES_LINE}  (.gitattributes)"));
     }
-    if ensure_attribute(&attributes, pack::REPO_PACK, PACK_ATTRIBUTES_LINE).unwrap_or(false) {
+    if !skip_attributes
+        && ensure_attribute(&attributes, pack::REPO_PACK, PACK_ATTRIBUTES_LINE).unwrap_or(false)
+    {
         wrote.push(format!(
             "wrote     {PACK_ATTRIBUTES_LINE}  (.gitattributes)"
         ));
@@ -640,7 +651,7 @@ fn prepare_git(root: &Path) -> Vec<String> {
     let ignore = root.join(".gitignore");
     let mut ignored = 0;
     for line in pack::gitignore_lines().lines() {
-        if ensure_line(&ignore, line).unwrap_or(false) {
+        if !skip_ignore && ensure_line(&ignore, line).unwrap_or(false) {
             ignored += 1;
         }
     }
@@ -1322,6 +1333,33 @@ mod tests {
         assert!(report.contains("untracked .doc/index.db"), "{report}");
         assert!(!in_the_index(&root, ".doc/index.db"));
         assert!(root.join(".doc").join("index.db").exists(), "still on disk");
+    }
+
+    #[test]
+    fn a_sparse_checkout_never_gets_the_files_it_excluded_rewritten() {
+        let root = scratch_repo("git-setup-sparse");
+        let git = |a: &[&str]| {
+            let done = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&root)
+                .args(a)
+                .output()
+                .expect("git");
+            assert!(done.status.success(), "git {a:?}: {done:?}");
+            String::from_utf8_lossy(&done.stdout).to_string()
+        };
+        std::fs::write(root.join(".gitattributes"), "data/** -text\n").expect("attrs");
+        std::fs::write(root.join(".gitignore"), "target/\n").expect("ignore");
+        git(&["add", ".gitattributes", ".gitignore"]);
+        git(&["update-index", "--skip-worktree", ".gitattributes", ".gitignore"]);
+        std::fs::remove_file(root.join(".gitattributes")).expect("rm");
+        std::fs::remove_file(root.join(".gitignore")).expect("rm");
+
+        prepare_git(&root);
+
+        assert!(!root.join(".gitattributes").exists(), "attributes materialised");
+        assert!(!root.join(".gitignore").exists(), "ignore materialised");
+        assert!(git(&["status", "--porcelain", "--untracked-files=no"]).trim().is_empty());
     }
 
     #[test]
