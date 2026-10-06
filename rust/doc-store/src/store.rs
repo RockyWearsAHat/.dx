@@ -212,6 +212,10 @@ pub struct Store {
     /// export_packs to ensure durability: pointers are written only after their content
     /// is safely in the durable pack files.
     deferred_stubs: Vec<(String, String)>,
+    /// True while a write restores stale documents, so the restore never recurses.
+    restoring: bool,
+    /// Sentences about stale pointers a write worked around; see [`Store::take_warnings`].
+    warnings: Vec<String>,
 }
 
 impl Store {
@@ -226,6 +230,8 @@ impl Store {
             connection,
             repairing: false,
             deferred_stubs: Vec::new(),
+            restoring: false,
+            warnings: Vec::new(),
         }
     }
 
@@ -435,6 +441,7 @@ impl Store {
         let chunks = chunk::split(document);
         let route = git::route(&self.root, &relative);
 
+        self.restore_stale();
         let saved = self.write_document(&relative, document, &source, &chunks, route)?;
         // Export packs first to ensure content is durable before the pointer is written.
         // This prevents a crash between pointer write and pack write from leaving a
@@ -789,18 +796,54 @@ impl Store {
 
     /// Write the repo and local packs from what is stored.
     ///
-    /// Outside a repair this refuses to drop a document the tree still points at
-    /// ([`StoreError::WouldLose`]): an export trusts the index completely, so an index that
-    /// has lost documents would otherwise make the loss durable in the packs.
-    fn export_packs(&self) -> Result<(), StoreError> {
-        pack::export(
+    /// Outside a repair, a document the packs carry that the index no longer holds, while
+    /// its pointer still stands, is carried into the new packs unchanged — never dropped —
+    /// and a warning naming the path and `dx sync` is queued ([`Store::take_warnings`]).
+    /// One stale pointer therefore never blocks a write to an unrelated document.
+    fn export_packs(&mut self) -> Result<(), StoreError> {
+        let carried = pack::export(
             self,
             if self.repairing {
                 pack::Loss::Expected
             } else {
-                pack::Loss::Refuse
+                pack::Loss::Carry
             },
-        )
+        )?;
+        for path in carried {
+            let warning = format!(
+                "warning: the index no longer holds {path}, but its pointer still stands; \
+                 the packs keep its bytes. Run `dx sync` to restore it."
+            );
+            if !self.warnings.contains(&warning) {
+                self.warnings.push(warning);
+            }
+        }
+        Ok(())
+    }
+
+    /// Put back, from the packs, every document the index lost while its pointer still
+    /// names exactly the version the pack holds — what `dx sync` would do for it. Anything
+    /// that cannot be restored stays carried by the export and earns a warning there.
+    fn restore_stale(&mut self) {
+        if self.repairing || self.restoring {
+            return;
+        }
+        let Ok(stale) = pack::stale_documents(self) else {
+            return;
+        };
+        self.restoring = true;
+        for document in stale {
+            let pointer = fs::read_to_string(self.stub_path(&document.path)).unwrap_or_default();
+            if stub::digest_in(&pointer) == Some(stub::digest_of(&document.source)) {
+                let _ = self.ingest(&document.path, &document.source);
+            }
+        }
+        self.restoring = false;
+    }
+
+    /// The warnings queued by writes since the last call, oldest first.
+    pub fn take_warnings(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.warnings)
     }
 
     fn export_source_index(&self) -> Result<(), StoreError> {
@@ -1814,36 +1857,35 @@ mod tests {
     }
 
     #[test]
-    fn a_save_refuses_when_the_index_has_lost_a_document_the_tree_still_points_at() {
-        let root = scratch("save-guard");
+    fn a_save_restores_a_lost_document_from_the_pack_and_carries_what_it_cannot() {
+        let root = scratch("save-stale-scope");
         let mut store = Store::open(&root).expect("open");
         store.ingest("keep.dx", NOTES).expect("keep");
         store.ingest("lost.dx", NOTES).expect("lost");
-        store
-            .connection
-            .execute("DELETE FROM documents WHERE path = 'lost.dx'", [])
-            .expect("forget");
+        store.ingest("odd.dx", NOTES).expect("odd");
+        for path in ["lost.dx", "odd.dx"] {
+            store
+                .connection
+                .execute("DELETE FROM documents WHERE path = ?1", params![path])
+                .expect("forget");
+        }
+        // odd.dx's pointer names a version no pack holds, so it cannot be restored.
+        fs::write(root.join("odd.dx"), stub::render("# Other\n")).expect("odd pointer");
 
-        let error = store
+        // A write to an unrelated document succeeds.
+        store
             .ingest("keep.dx", "::heading level=1 id=n\nNotes again\n::end\n")
-            .expect_err("a save must not make the loss durable");
-        assert!(
-            matches!(&error, StoreError::WouldLose(path) if path == "lost.dx"),
-            "{error}"
-        );
-        // And the repair the message names actually works.
-        // Note: both "keep.dx" and "lost.dx" are restored from packs because their
-        // stubs are out of sync with the index. The packs are trusted as the authoritative
-        // source during sync, so any document whose stub names a version in the packs is
-        // restored from it.
-        let report = store.sync().expect("sync");
-        let mut restored = report.restored.clone();
-        restored.sort();
-        assert_eq!(
-            restored,
-            vec!["keep.dx".to_string(), "lost.dx".to_string()],
-            "{report:?}"
-        );
+            .expect("one stale pointer must not block an unrelated write");
+
+        // (1) the restorable one is back in the index, with no warning.
+        assert_eq!(store.source("lost.dx").expect("restored"), stringify(&parse(NOTES)));
+        // (2) the other is kept in the packs and named in a warning.
+        let packed = pack::load_all(&root).expect("load");
+        assert!(packed.contains_key("odd.dx"), "never dropped");
+        assert!(packed.contains_key("lost.dx"));
+        let warnings = store.take_warnings();
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains("odd.dx") && warnings[0].contains("dx sync"));
     }
 
     #[test]

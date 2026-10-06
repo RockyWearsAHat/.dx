@@ -48,10 +48,11 @@ pub fn paths(root: &Path) -> (PathBuf, PathBuf) {
 /// Whether an export may write packs that no longer carry a document the tree still points at.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Loss {
-    /// Normal operation. An export takes the index as the whole truth, so an index that has
-    /// lost documents writes a pack that has lost them too — which is exactly how a
-    /// half-built index turns into missing content. Refuse, and name the repair.
-    Refuse,
+    /// Normal operation. An export used to take the index as the whole truth, so an index
+    /// that had lost documents wrote a pack that had lost them too. Now the stale
+    /// document's bytes are carried into the pack unchanged — never dropped — and the write
+    /// proceeds; [`Store`] warns, naming the path and `dx sync`.
+    Carry,
     /// A repair in progress ([`Store::sync`]). There, a pointer with no index row is the
     /// thing being repaired and the packs are what it is repaired *from*, so an export that
     /// lands mid-restore is expected to be short.
@@ -76,7 +77,9 @@ fn storage_for(root: &Path, relative: &str) -> PackStorage {
 ///
 /// A pack with no documents is removed rather than written empty, so a workspace with nothing
 /// local does not carry a stray file. A pack whose bytes would be unchanged is left alone.
-pub(crate) fn export(store: &Store, loss: Loss) -> Result<(), StoreError> {
+/// Returns the paths carried over unchanged because the index no longer holds them while
+/// their `.dx` pointer still stands ([`Loss::Carry`] only).
+pub(crate) fn export(store: &Store, loss: Loss) -> Result<Vec<String>, StoreError> {
     let mut repo: Vec<(String, Document)> = Vec::new();
     let mut local: Vec<(String, Document)> = Vec::new();
 
@@ -90,38 +93,56 @@ pub(crate) fn export(store: &Store, loss: Loss) -> Result<(), StoreError> {
     }
 
     let root = store.root();
-    let (repo_path, local_path) = paths(root);
-    if loss == Loss::Refuse {
-        let keeping: BTreeSet<&str> = repo
-            .iter()
-            .chain(local.iter())
-            .map(|(relative, _)| relative.as_str())
-            .collect();
-        refuse_to_drop(store, &[&repo_path, &local_path], &keeping)?;
-    }
-
-    write_pack(&repo_path, &repo, storage_for(root, REPO_PACK))?;
-    write_pack(&local_path, &local, storage_for(root, LOCAL_PACK))?;
-    Ok(())
-}
-
-/// Fail if any pack carries a document `keeping` does not, while its `.dx` file is still there.
-///
-/// Both packs are checked against the *whole* store rather than pack by pack, because a
-/// document whose git status changed legitimately moves from one pack to the other.
-fn refuse_to_drop(
-    store: &Store,
-    packs: &[&PathBuf],
-    keeping: &BTreeSet<&str>,
-) -> Result<(), StoreError> {
-    for path in packs {
-        for (relative, _) in read_pack(path)? {
-            if !keeping.contains(relative.as_str()) && store.stub_path(&relative).exists() {
-                return Err(StoreError::WouldLose(relative));
+    let mut carried = Vec::new();
+    if loss == Loss::Carry {
+        for stale in stale_documents(store)? {
+            carried.push(stale.path.clone());
+            let document = doc_core::format::parse(&stale.source);
+            if stale.local {
+                local.push((stale.path, document));
+            } else {
+                repo.push((stale.path, document));
             }
         }
     }
-    Ok(())
+
+    let (repo_path, local_path) = paths(root);
+    write_pack(&repo_path, &repo, storage_for(root, REPO_PACK))?;
+    write_pack(&local_path, &local, storage_for(root, LOCAL_PACK))?;
+    Ok(carried)
+}
+
+/// A document a pack carries, the index no longer holds, and a `.dx` file still points at.
+pub(crate) struct Stale {
+    /// Workspace-relative path.
+    pub(crate) path: String,
+    /// Canonical source as the pack holds it.
+    pub(crate) source: String,
+    /// Whether it came from the local pack (the local copy wins over the repo copy).
+    pub(crate) local: bool,
+}
+
+/// Every [`Stale`] document, checked against the *whole* store rather than pack by pack,
+/// because a document whose git status changed legitimately moves between packs.
+pub(crate) fn stale_documents(store: &Store) -> Result<Vec<Stale>, StoreError> {
+    let held: BTreeSet<String> = store.list()?.into_iter().map(|s| s.path).collect();
+    let (repo_path, local_path) = paths(store.root());
+    let mut found: BTreeMap<String, Stale> = BTreeMap::new();
+    for (path, local) in [(&repo_path, false), (&local_path, true)] {
+        for (relative, source) in read_pack(path)? {
+            if !held.contains(&relative) && store.stub_path(&relative).exists() {
+                found.insert(
+                    relative.clone(),
+                    Stale {
+                        path: relative,
+                        source,
+                        local,
+                    },
+                );
+            }
+        }
+    }
+    Ok(found.into_values().collect())
 }
 
 /// Write one pack file, or remove it when there is nothing to store; `true` when the bytes on
@@ -484,35 +505,23 @@ mod tests {
     }
 
     #[test]
-    fn an_export_refuses_to_drop_a_document_the_tree_still_points_at() {
-        // Part 66's failure, made impossible: the index lost a document while its pointer
-        // stayed on disk, and the next export wrote a pack without it.
+    fn an_export_carries_a_document_the_tree_still_points_at_instead_of_dropping_it() {
+        // Part 66's failure stays impossible: the index lost a document while its pointer
+        // stayed on disk. The export no longer refuses; it keeps the pack's bytes.
         let root = scratch("wouldlose");
         let mut store = Store::open(&root).expect("open");
         store.ingest("keep.dx", NOTES).expect("keep");
         store.ingest("lost.dx", NOTES).expect("lost");
 
-        // Simulate an index that has lost a row while the pointer file survives — exactly
-        // what a half-applied migration left behind.
         rusqlite::Connection::open(root.join(".doc/index.db"))
             .expect("index")
             .execute("DELETE FROM documents WHERE path = 'lost.dx'", [])
             .expect("forget");
         assert!(store.stub_path("lost.dx").exists());
 
-        let error = export(&store, Loss::Refuse).expect_err("must refuse");
-        assert!(
-            matches!(&error, StoreError::WouldLose(path) if path == "lost.dx"),
-            "{error}"
-        );
-        assert!(
-            error.to_string().contains("dx sync"),
-            "the refusal must name the repair: {error}"
-        );
-
-        // The pack is untouched, so the document is still there to be restored.
+        let carried = export(&store, Loss::Carry).expect("carries");
+        assert_eq!(carried, vec!["lost.dx".to_string()]);
         assert!(load_all(&root).expect("load").contains_key("lost.dx"));
-        // And a repair may export freely — that is what puts the row back.
         export(&store, Loss::Expected).expect("a repair exports");
     }
 
@@ -538,7 +547,7 @@ mod tests {
         assert!(repo_path.exists());
 
         // Whichever pack it is in now, exporting again with the guard on must be fine.
-        export(&store, Loss::Refuse).expect("no loss");
+        assert!(export(&store, Loss::Carry).expect("no loss").is_empty());
         assert!(load_all(&root).expect("load").contains_key("notes.dx"));
     }
 
