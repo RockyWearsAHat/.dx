@@ -17,6 +17,7 @@ version_file="$build_dir/last-published-version.txt"
 # Source shared helpers
 source "$root/packaging/lib.sh"
 
+mkdir -p "$build_dir"
 # Initialize last-published-version.txt if it doesn't exist
 if [[ ! -f "$version_file" ]]; then
     echo "0.0.0" > "$version_file"
