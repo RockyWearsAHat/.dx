@@ -11,11 +11,14 @@ use std::time::{Duration, Instant, SystemTime};
 /// (path, mtime, size) of every watched file; equal fingerprints mean nothing changed.
 pub type Fingerprint = Vec<(PathBuf, Option<SystemTime>, u64)>;
 
-fn config_path() -> PathBuf {
+/// The watch list: `$DX_LIVE_REPOS`, else `~/.config/dx/live-repos`.
+pub(crate) fn config_path() -> PathBuf {
     if let Some(p) = std::env::var_os("DX_LIVE_REPOS") {
         return PathBuf::from(p);
     }
-    let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_default();
     home.join(".config/dx/live-repos")
 }
 
@@ -59,8 +62,7 @@ pub fn add_repo(path: &Path) -> Result<PathBuf, String> {
         return Ok(abs);
     }
     if let Some(dir) = cfg.parent() {
-        fs::create_dir_all(dir)
-            .map_err(|e| format!("{} cannot be created: {e}", dir.display()))?;
+        fs::create_dir_all(dir).map_err(|e| format!("{} cannot be created: {e}", dir.display()))?;
     }
     let mut next = text;
     if !next.is_empty() && !next.ends_with('\n') {
@@ -73,7 +75,10 @@ pub fn add_repo(path: &Path) -> Result<PathBuf, String> {
 }
 
 fn common_dir(repo: &Path) -> Option<PathBuf> {
-    let d = git(repo, &["rev-parse", "--path-format=absolute", "--git-common-dir"])?;
+    let d = git(
+        repo,
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    )?;
     Some(PathBuf::from(d))
 }
 
@@ -169,9 +174,11 @@ fn refresh_one(repo: &Path, common: &Path) {
 /// taken before the refresh, so changes arriving during it trigger one follow-up.
 pub fn spawn(repos: Vec<PathBuf>) -> JoinHandle<()> {
     std::thread::spawn(move || {
+        let all = repos.clone();
         let mut state: Vec<(PathBuf, Option<PathBuf>, Option<Fingerprint>)> =
             repos.into_iter().map(|r| (r, None, None)).collect();
         loop {
+            let mut refreshed = false;
             for (repo, common, last) in state.iter_mut() {
                 if common.is_none() {
                     *common = common_dir(repo);
@@ -179,6 +186,13 @@ pub fn spawn(repos: Vec<PathBuf>) -> JoinHandle<()> {
                 let Some(c) = common.clone() else { continue };
                 if changed(&c, last) {
                     refresh_one(repo, &c);
+                    refreshed = true;
+                }
+            }
+            // The board of every watched repo, from their snapshot files (pure reads).
+            if refreshed {
+                if let Err(e) = super::board::write_combined(&all) {
+                    eprintln!("dx live: board not written: {e}");
                 }
             }
             std::thread::sleep(Duration::from_secs(1));

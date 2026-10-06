@@ -5,11 +5,21 @@ use std::path::PathBuf;
 use crate::args::Args;
 use crate::live;
 
-/// `dx live [--repo DIR] [--base B] [--once] [--json] [--no-run] [--add DIR] [--prune]`.
+/// `dx live [--repo DIR] [--base B] [--once] [--json] [--no-run] [--add DIR] [--prune] [--board]`.
 pub fn run(args: &Args) -> Result<String, String> {
-    let start = args
-        .value("repo")
-        .map_or_else(|| std::env::current_dir().unwrap_or_default(), PathBuf::from);
+    // The board of every watched repo, from snapshot files alone: no git, no gates.
+    if args.present("board") {
+        let repos = live::watch::repos();
+        if repos.is_empty() {
+            return Err("no repo is watched yet: dx live --add DIR".to_string());
+        }
+        let board = live::board::write_combined(&repos)?;
+        return Ok(format!("{}\n", board.display()));
+    }
+    let start = args.value("repo").map_or_else(
+        || std::env::current_dir().unwrap_or_default(),
+        PathBuf::from,
+    );
     let repo = live::repo_of(&start);
 
     if let Some(dir) = args.value("add") {
@@ -26,6 +36,11 @@ pub fn run(args: &Args) -> Result<String, String> {
     if args.present("once") {
         let snapshot = live::refresh(&repo, &base, !args.present("no-run"))?;
         live::write(&repo, &snapshot)?;
+        let watched = live::watch::repos();
+        let canonical = std::fs::canonicalize(&repo).unwrap_or_else(|_| repo.clone());
+        if watched.iter().any(|w| w == &canonical || w == &repo) {
+            live::board::write_combined(&watched)?;
+        }
         return if args.present("json") {
             serde_json::to_string_pretty(&snapshot).map_err(|e| e.to_string())
         } else {

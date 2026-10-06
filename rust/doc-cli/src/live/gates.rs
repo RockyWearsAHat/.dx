@@ -28,6 +28,11 @@ pub struct GateVerdict {
     pub state: GateState,
     pub ms: Option<u64>,
     pub tail: String,
+    /// Absolute paths of the raster images an `::image for=<this block>` in the same document
+    /// claims this gate produced (the screens it proves), in document order. The board shows
+    /// them only while the state is `pass`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<String>,
 }
 
 const TAIL_CAP: usize = 300;
@@ -52,6 +57,7 @@ fn verdicts_in(checkout: &Path, cache_root: PathBuf) -> Vec<GateVerdict> {
         let resolver = workspace::resolver_for(&loaded.path);
         for block in doc_run::standing(&loaded.document, &options, &resolver) {
             let (state, tail) = classify(&block);
+            let images = images_for(&loaded.document, &options.document_dir, &block.id);
             out.push(GateVerdict {
                 doc: loaded.relative.clone(),
                 block: block.id,
@@ -59,10 +65,25 @@ fn verdicts_in(checkout: &Path, cache_root: PathBuf) -> Vec<GateVerdict> {
                 // An `::output` records no duration, so there is none to report.
                 ms: None,
                 tail,
+                images,
             });
         }
     }
     out
+}
+
+/// The image files `::image ... for=<producer>` blocks of `document` name, made absolute
+/// against the document's folder. Only a confined folder path to a raster file counts: a
+/// remote URL or a `data:` URI is not a file this gate wrote.
+fn images_for(document: &doc_core::model::Document, dir: &Path, producer: &str) -> Vec<String> {
+    document
+        .blocks
+        .iter()
+        .filter(|b| b.kind == "image" && b.for_block == producer)
+        .filter_map(|b| doc_core::resolve::confined(&b.src))
+        .filter(|src| super::board::raster_extension(src).is_some())
+        .map(|src| dir.join(src).display().to_string())
+        .collect()
 }
 
 fn classify(block: &doc_run::BlockStanding) -> (GateState, String) {
@@ -81,9 +102,14 @@ fn classify(block: &doc_run::BlockStanding) -> (GateState, String) {
     }
     match &block.recorded {
         None => (GateState::Unrun, tail),
-        Some((hash, exit, _)) if Some(hash) == block.fingerprint.as_ref() => {
-            (if *exit == 0 { GateState::Pass } else { GateState::Fail }, tail)
-        }
+        Some((hash, exit, _)) if Some(hash) == block.fingerprint.as_ref() => (
+            if *exit == 0 {
+                GateState::Pass
+            } else {
+                GateState::Fail
+            },
+            tail,
+        ),
         Some(_) => (GateState::Stale, tail),
     }
 }
@@ -182,7 +208,11 @@ mod tests {
         // Fingerprints hash every `reads=` file; an unoptimised build hashes ~15x slower
         // (about 2.3 s here), so the generous bound is 2 s optimised and 10 s unoptimised.
         let bound = if cfg!(debug_assertions) { 10 } else { 2 };
-        assert!(started.elapsed() < Duration::from_secs(bound), "{:?}", started.elapsed());
+        assert!(
+            started.elapsed() < Duration::from_secs(bound),
+            "{:?}",
+            started.elapsed()
+        );
         eprintln!("{} verdicts in {:?}", v.len(), started.elapsed());
     }
 }

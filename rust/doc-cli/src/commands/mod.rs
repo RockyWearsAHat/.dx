@@ -302,7 +302,9 @@ const COMMANDS: &[Command] = &[
     // Live branch state.
     Command {
         names: &["live"],
-        flags: &["repo", "base", "once", "json", "no-run", "add", "prune"],
+        flags: &[
+            "repo", "base", "once", "json", "no-run", "add", "prune", "board",
+        ],
         run: |args| live::run(args).map(Output::Report),
     },
     // The platform.
