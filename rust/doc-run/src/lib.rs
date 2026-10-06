@@ -982,6 +982,8 @@ fn declared_reads(
     for confined in declared_read_paths(&block.reads)? {
         if let Some(text) = read_cache::file(cached, &confined, || resolver.file(&confined)) {
             reads.push((confined, text));
+        } else if let Some(digest) = binary_read(resolver, &confined) {
+            reads.push((confined, digest));
         } else if let Some(tree) =
             read_cache::tree(cached, &confined, || resolver.files_under(&confined))
         {
@@ -995,6 +997,14 @@ fn declared_reads(
             document_dir.and_then(|dir| read_from_root(&confined, resolver, dir))
         {
             reads.extend(found);
+        } else if document_dir.is_some_and(|dir| on_disk(&confined, dir)) {
+            return Err(format!(
+                "{confined} is on disk but could not be read — the block declares it with \
+                 `reads=`, and its content is part of what decides whether the recorded \
+                 output is still current. A `.dx` pointer whose version this workspace's \
+                 store does not hold reads this way: `dx sync` (or restoring \
+                 .doc/repo.dxcp) brings it back."
+            ));
         } else {
             return Err(format!(
                 "{confined} could not be read here — the block declares it with `reads=`, \
@@ -1005,6 +1015,32 @@ fn declared_reads(
         }
     }
     Ok(reads)
+}
+
+/// A declared file that is not text — a built binary, an image — read as its bytes' digest.
+///
+/// A folder walk already contributes such a file this way ([`Resolver::files_under`]); a
+/// file named on its own was refused instead, because the text read is the only one tried
+/// first. Only bytes that are not UTF-8 answer here: a text file the resolver could not
+/// produce (a `.dx` pointer the store cannot resolve) must stay a refusal, never be
+/// fingerprinted as the pointer it stands behind.
+fn binary_read(resolver: &dyn Resolver, path: &str) -> Option<String> {
+    let bytes = resolver.binary(path)?;
+    std::str::from_utf8(&bytes)
+        .is_err()
+        .then(|| sha256_hex(&bytes))
+}
+
+/// Whether a declared read names something on disk, under the document's folder or the
+/// workspace root — what tells "the path is wrong" apart from "the path is there and its
+/// content could not be produced", which need different fixes.
+fn on_disk(confined: &str, document_dir: &Path) -> bool {
+    if document_dir.join(confined).exists() {
+        return true;
+    }
+    !confined.starts_with("..")
+        && climb_to_root(document_dir)
+            .is_some_and(|up| document_dir.join(up).join(confined).exists())
 }
 
 /// Marks a fingerprint input that was resolved against the workspace root.
@@ -1036,7 +1072,9 @@ fn read_from_root(
     let up = climb_to_root(document_dir)?;
     let via = format!("{up}{confined}");
     let cached = resolver.on_disk().then_some(document_dir);
-    if let Some(text) = read_cache::file(cached, &via, || resolver.file(&via)) {
+    if let Some(text) = read_cache::file(cached, &via, || resolver.file(&via))
+        .or_else(|| binary_read(resolver, &via))
+    {
         return Some(vec![(format!("{ROOT_BASE}{confined}"), text)]);
     }
     let tree = read_cache::tree(cached, &via, || resolver.files_under(&via))?;
@@ -3321,6 +3359,87 @@ sleep 1; echo made > out/made.txt\n::end\n\n\
         std::fs::write(doc_dir.join("crates/b.rs"), "fn b() {}").expect("local");
         let local = declared_reads(&block, &resolver, &[], Some(&doc_dir)).expect("local");
         assert_eq!(local[0].0, "crates/b.rs");
+    }
+
+    /// A folder resolver that reads text, reads bytes, and — like the CLI's store-aware one
+    /// meeting a pointer whose version the store lacks — cannot produce any `.dx` file.
+    struct Disk(PathBuf);
+
+    impl Resolver for Disk {
+        fn file(&self, path: &str) -> Option<String> {
+            if path.ends_with(".dx") {
+                return None;
+            }
+            std::fs::read_to_string(self.0.join(path)).ok()
+        }
+        fn document(&self, path: &str) -> Option<String> {
+            self.file(path)
+        }
+        fn binary(&self, path: &str) -> Option<Vec<u8>> {
+            std::fs::read(self.0.join(path)).ok()
+        }
+    }
+
+    #[test]
+    fn a_declared_binary_file_reads_as_its_digest_and_a_rebuild_stales_it() {
+        let (root, _doc_dir) = nested_repo("binary");
+        std::fs::create_dir_all(root.join("target/release")).expect("build folder");
+        let built = root.join("target/release/dx");
+        std::fs::write(&built, [0xff_u8, 0xfe, 0x00, 0x01]).expect("binary");
+        let block = Block {
+            id: "check".into(),
+            language: "bash".into(),
+            run: true,
+            reads: "target/release/dx".into(),
+            text: "target/release/dx --version".into(),
+            ..Block::default()
+        };
+        let resolver = Disk(root.clone());
+        let reads = declared_reads(&block, &resolver, &[], Some(&root)).expect("a binary resolves");
+        assert_eq!(
+            reads,
+            vec![(
+                "target/release/dx".to_string(),
+                sha256_hex(&[0xff, 0xfe, 0x00, 0x01])
+            )]
+        );
+        let recorded = fingerprint("bash", &block.text, &[], &reads, &[], false, 0);
+        std::fs::write(&built, [0xff_u8, 0xfe, 0x00, 0x02]).expect("rebuilt");
+        let after = declared_reads(&block, &resolver, &[], Some(&root)).expect("resolves");
+        assert_ne!(
+            recorded,
+            fingerprint("bash", &block.text, &[], &after, &[], false, 0)
+        );
+    }
+
+    #[test]
+    fn a_declared_file_on_disk_that_cannot_be_produced_says_so_not_check_the_path() {
+        let (root, doc_dir) = nested_repo("pointer");
+        std::fs::write(root.join("index.dx"), "~ dx1 0000\n").expect("pointer");
+        let block = Block {
+            id: "check".into(),
+            language: "bash".into(),
+            run: true,
+            reads: "index.dx".into(),
+            text: "true".into(),
+            ..Block::default()
+        };
+        // From a nested document too: the root holds it, and its text is never taken
+        // as the content it points at.
+        for dir in [&root, &doc_dir] {
+            let refused = declared_reads(&block, &Disk(dir.clone()), &[], Some(dir))
+                .expect_err("an unresolvable pointer is refused");
+            assert!(refused.contains("index.dx is on disk"), "{refused}");
+            assert!(refused.contains("dx sync"), "{refused}");
+        }
+        // A path that names nothing still gets the path sentence.
+        let missing = Block {
+            reads: "nowhere.txt".into(),
+            ..block
+        };
+        let refused =
+            declared_reads(&missing, &Disk(root.clone()), &[], Some(&root)).expect_err("missing");
+        assert!(refused.contains("Check the path"), "{refused}");
     }
 
     #[test]

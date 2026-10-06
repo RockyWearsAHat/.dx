@@ -228,9 +228,14 @@ pub fn apply(connection: &Connection) -> Result<(), StoreError> {
     connection
         .execute_batch(CURRENT)
         .map_err(StoreError::backend)?;
-    connection
-        .pragma_update(None, "user_version", VERSION)
-        .map_err(StoreError::backend)?;
+    // Writing the version is a write transaction even when the value is the same: on a
+    // current index it would make every open — every read — rewrite the database file, and
+    // a reader keyed on the store's stamps would never see it unchanged.
+    if found != VERSION {
+        connection
+            .pragma_update(None, "user_version", VERSION)
+            .map_err(StoreError::backend)?;
+    }
     Ok(())
 }
 
@@ -257,6 +262,30 @@ mod tests {
             )
             .expect("count");
         assert_eq!(tables, 8);
+    }
+
+    #[test]
+    fn opening_a_current_index_writes_nothing() {
+        use std::os::unix::fs::MetadataExt;
+        let dir = std::env::temp_dir().join(format!("dx-schema-quiet-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("dir");
+        let db = dir.join("index.db");
+        apply(&Connection::open(&db).expect("create")).expect("first");
+        let stamp = || {
+            let meta = std::fs::metadata(&db).expect("db");
+            (meta.ino(), meta.size(), meta.mtime(), meta.mtime_nsec())
+        };
+        let before = stamp();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        apply(&Connection::open(&db).expect("reopen")).expect("second");
+        assert_eq!(
+            stamp(),
+            before,
+            "an open of a current index must not rewrite it"
+        );
+        assert!(!dir.join("index.db-wal").exists());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
