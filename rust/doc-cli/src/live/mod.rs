@@ -4,6 +4,7 @@
 //! All work happens on branches: dx never writes a checkout an agent owns, only its own
 //! worktrees under [`dir`]. Git failures come back as data, never panics or prompts.
 
+pub mod board;
 pub mod checkout;
 pub mod gates;
 pub mod merge;
@@ -78,7 +79,10 @@ fn git(repo: &Path, args: &[&str]) -> Result<String, String> {
 
 /// The directory dx keeps snapshots and checkouts in: `<absolute git-common-dir>/dx-live`.
 pub fn dir(repo: &Path) -> PathBuf {
-    match git(repo, &["rev-parse", "--path-format=absolute", "--git-common-dir"]) {
+    match git(
+        repo,
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    ) {
         Ok(out) => PathBuf::from(out.trim()).join("dx-live"),
         Err(_) => repo.join(".git").join("dx-live"),
     }
@@ -87,7 +91,17 @@ pub fn dir(repo: &Path) -> PathBuf {
 /// The base branch to use when none was given: `main`, else `master`, else the current one.
 pub fn default_base(repo: &Path) -> String {
     for name in ["main", "master"] {
-        if git(repo, &["rev-parse", "--verify", "--quiet", &format!("refs/heads/{name}")]).is_ok() {
+        if git(
+            repo,
+            &[
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                &format!("refs/heads/{name}"),
+            ],
+        )
+        .is_ok()
+        {
             return name.to_string();
         }
     }
@@ -115,7 +129,12 @@ fn worktrees(repo: &Path) -> Vec<(String, Option<String>)> {
             list.push((path.to_string(), None));
         } else if let Some(branch) = line.strip_prefix("branch ") {
             if let Some(last) = list.last_mut() {
-                last.1 = Some(branch.strip_prefix("refs/heads/").unwrap_or(branch).to_string());
+                last.1 = Some(
+                    branch
+                        .strip_prefix("refs/heads/")
+                        .unwrap_or(branch)
+                        .to_string(),
+                );
             }
         }
     }
@@ -135,10 +154,13 @@ pub fn refresh(repo: &Path, base: &str, run: bool) -> Result<Snapshot, String> {
     let main_wt = wts
         .first()
         .map_or_else(|| repo.to_path_buf(), |(p, _)| PathBuf::from(p));
-    let base_sha = git(repo, &["rev-parse", "--verify", &format!("refs/heads/{base}")])
-        .map_err(|_| format!("base branch `{base}` does not exist in {}", repo.display()))?
-        .trim()
-        .to_string();
+    let base_sha = git(
+        repo,
+        &["rev-parse", "--verify", &format!("refs/heads/{base}")],
+    )
+    .map_err(|_| format!("base branch `{base}` does not exist in {}", repo.display()))?
+    .trim()
+    .to_string();
     let own = dir(repo);
 
     let refs = git(
@@ -163,7 +185,10 @@ pub fn refresh(repo: &Path, base: &str, run: bool) -> Result<Snapshot, String> {
             .find(|(_, b)| b.as_deref() == Some(name))
             .map(|(p, _)| p.clone());
         // dx-live's own checkouts are not branches an agent works on.
-        if worktree.as_ref().is_some_and(|p| Path::new(p).starts_with(&own)) {
+        if worktree
+            .as_ref()
+            .is_some_and(|p| Path::new(p).starts_with(&own))
+        {
             continue;
         }
         if branches.len() >= MAX_BRANCHES {
@@ -174,13 +199,10 @@ pub fn refresh(repo: &Path, base: &str, run: bool) -> Result<Snapshot, String> {
         let mut verdicts = Vec::new();
         if merge.state == merge::MergeState::Clean {
             if let Some(tree) = merge.tree.as_deref().filter(|_| run) {
-                match checkout::materialize(repo, base, name, tree) {
-                    Ok(path) => {
-                        let _ = checkout::run_stale(&path);
-                        verdicts = gates::verdicts(&path);
-                        checkout_path = Some(path.display().to_string());
-                    }
-                    Err(_) => {}
+                if let Ok(path) = checkout::materialize(repo, base, name, tree) {
+                    let _ = checkout::run_stale(&path);
+                    verdicts = gates::verdicts(&path);
+                    checkout_path = Some(path.display().to_string());
                 }
             }
         }
@@ -207,19 +229,28 @@ pub fn refresh(repo: &Path, base: &str, run: bool) -> Result<Snapshot, String> {
     })
 }
 
-fn atomic_write(path: &Path, body: &str) -> Result<(), String> {
+pub(crate) fn atomic_write(path: &Path, body: &str) -> Result<(), String> {
     let tmp = path.with_extension(format!("tmp{}", std::process::id()));
     std::fs::write(&tmp, body).map_err(|e| format!("cannot write {}: {e}", tmp.display()))?;
     std::fs::rename(&tmp, path).map_err(|e| format!("cannot move {}: {e}", path.display()))
 }
 
-/// Write `snapshot.json` and `snapshot.txt` under [`dir`], each via tmp file + rename.
+/// Write `snapshot.json`, `snapshot.txt` and this repo's `board.dx` under [`dir`], each via
+/// tmp file + rename.
 pub fn write(repo: &Path, s: &Snapshot) -> Result<(), String> {
     let d = dir(repo);
     std::fs::create_dir_all(&d).map_err(|e| format!("cannot create {}: {e}", d.display()))?;
     let json = serde_json::to_string_pretty(s).map_err(|e| e.to_string())?;
     atomic_write(&d.join("snapshot.json"), &json)?;
-    atomic_write(&d.join("snapshot.txt"), &render_text(s))
+    atomic_write(&d.join("snapshot.txt"), &render_text(s))?;
+    board::write(
+        &d,
+        &[board::Entry {
+            repo: PathBuf::from(&s.repo),
+            snapshot: Ok(s.clone()),
+        }],
+    )
+    .map(|_| ())
 }
 
 /// The cached text snapshot.
@@ -235,7 +266,7 @@ pub fn read_json(repo: &Path) -> Result<String, String> {
 }
 
 /// `YYYY-MM-DDTHH:MM:SSZ` for ms since the epoch.
-fn iso(ms: u64) -> String {
+pub(crate) fn iso(ms: u64) -> String {
     let secs = ms / 1000;
     let (days, rem) = ((secs / 86400) as i64, secs % 86400);
     let z = days + 719_468;
@@ -255,19 +286,25 @@ fn iso(ms: u64) -> String {
     )
 }
 
-fn sha7(sha: &str) -> &str {
+pub(crate) fn sha7(sha: &str) -> &str {
     &sha[..sha.len().min(7)]
 }
 
 /// `P/T pass` plus the failing names and stale count, as the summary lines show them.
 fn gate_summary(gs: &[gates::GateVerdict]) -> (String, Vec<String>, usize) {
-    let pass = gs.iter().filter(|g| g.state == gates::GateState::Pass).count();
+    let pass = gs
+        .iter()
+        .filter(|g| g.state == gates::GateState::Pass)
+        .count();
     let fails = gs
         .iter()
         .filter(|g| g.state == gates::GateState::Fail)
         .map(|g| format!("{}#{}", g.doc, g.block))
         .collect();
-    let stale = gs.iter().filter(|g| g.state == gates::GateState::Stale).count();
+    let stale = gs
+        .iter()
+        .filter(|g| g.state == gates::GateState::Stale)
+        .count();
     (format!("{pass}/{}", gs.len()), fails, stale)
 }
 
@@ -310,7 +347,11 @@ pub fn render_text(s: &Snapshot) -> String {
             }
             merge::MergeState::Merged => o.push_str(" (already in base)"),
             merge::MergeState::Error => {
-                let _ = write!(o, " ({})", b.merge.error.as_deref().unwrap_or("unknown error"));
+                let _ = write!(
+                    o,
+                    " ({})",
+                    b.merge.error.as_deref().unwrap_or("unknown error")
+                );
             }
         }
         o.push('\n');
@@ -351,7 +392,14 @@ mod tests {
     }
 
     fn gate(block: &str, state: GateState, tail: &str) -> GateVerdict {
-        GateVerdict { doc: "a.dx".into(), block: block.into(), state, ms: Some(5), tail: tail.into() }
+        GateVerdict {
+            doc: "a.dx".into(),
+            block: block.into(),
+            state,
+            ms: Some(5),
+            tail: tail.into(),
+            images: vec![],
+        }
     }
 
     fn branch(name: &str, merge: MergeStatus, gates: Vec<GateVerdict>) -> BranchState {
@@ -373,16 +421,28 @@ mod tests {
             base: "main".into(),
             base_sha: "aaaaaaaaaa".into(),
             updated_ms: 0,
-            base_gates: vec![gate("t", GateState::Pass, ""), gate("u", GateState::Fail, "x")],
+            base_gates: vec![
+                gate("t", GateState::Pass, ""),
+                gate("u", GateState::Fail, "x"),
+            ],
             branches: vec![
                 branch(
                     "ok",
                     ms(MergeState::Clean, vec![]),
-                    vec![gate("t", GateState::Pass, ""), gate("s", GateState::Stale, "")],
+                    vec![
+                        gate("t", GateState::Pass, ""),
+                        gate("s", GateState::Stale, ""),
+                    ],
                 ),
                 branch(
                     "clash",
-                    ms(MergeState::Conflict, vec![Conflict { path: "f.rs".into(), hunks: "<<<<<<< a\n=======\n>>>>>>> b".into() }]),
+                    ms(
+                        MergeState::Conflict,
+                        vec![Conflict {
+                            path: "f.rs".into(),
+                            hunks: "<<<<<<< a\n=======\n>>>>>>> b".into(),
+                        }],
+                    ),
                     vec![],
                 ),
                 branch(
@@ -394,7 +454,10 @@ mod tests {
         };
         let t = render_text(&s);
         let lines: Vec<&str> = t.lines().collect();
-        assert_eq!(lines[0], "dx live /r base main@aaaaaaa updated 1970-01-01T00:00:00Z");
+        assert_eq!(
+            lines[0],
+            "dx live /r base main@aaaaaaa updated 1970-01-01T00:00:00Z"
+        );
         assert_eq!(lines[1], "base: gates 1/2 pass fail: a.dx#u");
         assert_eq!(lines[2], "ok clean gates 1/2 stale: 1");
         assert!(lines[3].starts_with("clash conflict"));
@@ -413,14 +476,22 @@ mod tests {
         let root = std::env::temp_dir().join(format!("dxlive-mod-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
-        for a in [&["init", "-q", "-b", "main"][..]] {
-            git(&root, a).unwrap();
-        }
+        git(&root, &["init", "-q", "-b", "main"]).unwrap();
         let d = dir(&root);
         assert!(d.ends_with(".git/dx-live"), "{}", d.display());
-        let s = Snapshot { v: 1, repo: "/r".into(), base: "main".into(), base_sha: "abc".into(), updated_ms: 0, base_gates: vec![], branches: vec![] };
+        let s = Snapshot {
+            v: 1,
+            repo: "/r".into(),
+            base: "main".into(),
+            base_sha: "abc".into(),
+            updated_ms: 0,
+            base_gates: vec![],
+            branches: vec![],
+        };
         write(&root, &s).unwrap();
-        assert!(read_text(&root).unwrap().starts_with("dx live /r base main@abc"));
+        assert!(read_text(&root)
+            .unwrap()
+            .starts_with("dx live /r base main@abc"));
         let _ = std::fs::remove_dir_all(&root);
     }
 }

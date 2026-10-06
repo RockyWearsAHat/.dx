@@ -363,6 +363,8 @@ pub struct BlockStanding {
     pub problem: Option<String>,
     /// The recorded `::output` that follows the block, if any: (hash, exit, text).
     pub recorded: Option<(String, i32, String)>,
+    /// That output's recorded status (`ok`, `error`, `interrupted`, ...), if any.
+    pub recorded_status: Option<String>,
 }
 
 /// The standing of every runnable block of `document`: the same approval and fingerprint
@@ -387,14 +389,15 @@ pub fn standing(
             continue;
         };
         let block = &hydrated.blocks[index];
-        let recorded = existing_output(document, index, &block.id)
-            .map(|o| (o.hash.clone(), o.exit, o.text.clone()));
+        let output = existing_output(document, index, &block.id);
+        let recorded = output.map(|o| (o.hash.clone(), o.exit, o.text.clone()));
         let mut entry = BlockStanding {
             id: block.id.clone(),
             approved: false,
             fingerprint: None,
             problem: None,
             recorded,
+            recorded_status: output.map(|o| o.status.clone()),
         };
         if let Some(problem) = unresolved.iter().find(|e| e.block == block.id) {
             entry.problem = Some(problem.sentence.clone());

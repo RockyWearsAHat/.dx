@@ -19,6 +19,9 @@ pub enum GateState {
     Stale,
     Unrun,
     Unapproved,
+    /// Recorded for the current inputs, but the run was cut short (a timeout or a
+    /// signal): neither a pass nor a failure, and the runner runs it again.
+    Interrupted,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -28,6 +31,11 @@ pub struct GateVerdict {
     pub state: GateState,
     pub ms: Option<u64>,
     pub tail: String,
+    /// Absolute paths of the raster images an `::image for=<this block>` in the same document
+    /// claims this gate produced (the screens it proves), in document order. The board shows
+    /// them only while the state is `pass`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<String>,
 }
 
 const TAIL_CAP: usize = 300;
@@ -87,6 +95,7 @@ fn verdicts_in(checkout: &Path, cache_root: PathBuf) -> Vec<GateVerdict> {
         let resolver = workspace::resolver_for(&loaded.path);
         for block in doc_run::standing(&loaded.document, &options, &resolver) {
             let (state, tail) = classify(&block);
+            let images = images_for(&loaded.document, &options.document_dir, &block.id);
             out.push(GateVerdict {
                 doc: loaded.relative.clone(),
                 block: block.id,
@@ -94,10 +103,25 @@ fn verdicts_in(checkout: &Path, cache_root: PathBuf) -> Vec<GateVerdict> {
                 // An `::output` records no duration, so there is none to report.
                 ms: None,
                 tail,
+                images,
             });
         }
     }
     out
+}
+
+/// The image files `::image ... for=<producer>` blocks of `document` name, made absolute
+/// against the document's folder. Only a confined folder path to a raster file counts: a
+/// remote URL or a `data:` URI is not a file this gate wrote.
+fn images_for(document: &doc_core::model::Document, dir: &Path, producer: &str) -> Vec<String> {
+    document
+        .blocks
+        .iter()
+        .filter(|b| b.kind == "image" && b.for_block == producer)
+        .filter_map(|b| doc_core::resolve::confined(&b.src))
+        .filter(|src| super::board::raster_extension(src).is_some())
+        .map(|src| dir.join(src).display().to_string())
+        .collect()
 }
 
 fn classify(block: &doc_run::BlockStanding) -> (GateState, String) {
@@ -116,9 +140,20 @@ fn classify(block: &doc_run::BlockStanding) -> (GateState, String) {
     }
     match &block.recorded {
         None => (GateState::Unrun, tail),
-        Some((hash, exit, _)) if Some(hash) == block.fingerprint.as_ref() => {
-            (if *exit == 0 { GateState::Pass } else { GateState::Fail }, tail)
+        Some((hash, _, _))
+            if Some(hash) == block.fingerprint.as_ref()
+                && block.recorded_status.as_deref() == Some("interrupted") =>
+        {
+            (GateState::Interrupted, tail)
         }
+        Some((hash, exit, _)) if Some(hash) == block.fingerprint.as_ref() => (
+            if *exit == 0 {
+                GateState::Pass
+            } else {
+                GateState::Fail
+            },
+            tail,
+        ),
         Some(_) => (GateState::Stale, tail),
     }
 }
@@ -200,6 +235,22 @@ mod tests {
         // Same code as the approved document above: its approval stands on this machine.
         let v = verdicts_in(&fresh, cache);
         assert_eq!(state(&v, "good"), GateState::Unrun, "{v:?}");
+    }
+
+    #[test]
+    fn a_run_cut_short_reads_interrupted_not_pass_or_fail() {
+        let root = temp("interrupted");
+        let cache = root.join("cache");
+        std::fs::write(
+            root.join("g.dx"),
+            "::code id=cut lang=bash run\necho started\nkill -KILL $$\n::end\n",
+        )
+        .unwrap();
+        run(&root, &cache, true);
+        let recorded = std::fs::read_to_string(root.join("g.dx")).unwrap();
+        assert!(recorded.contains("status=interrupted"), "{recorded}");
+        let v = verdicts_in(&root, cache);
+        assert_eq!(state(&v, "cut"), GateState::Interrupted, "{v:?}");
     }
 
     #[test]

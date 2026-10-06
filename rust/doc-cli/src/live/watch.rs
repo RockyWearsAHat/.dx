@@ -11,11 +11,14 @@ use std::time::{Duration, Instant, SystemTime};
 /// (path, mtime, size) of every watched file; equal fingerprints mean nothing changed.
 pub type Fingerprint = Vec<(PathBuf, Option<SystemTime>, u64)>;
 
-fn config_path() -> PathBuf {
+/// The watch list: `$DX_LIVE_REPOS`, else `~/.config/dx/live-repos`.
+pub(crate) fn config_path() -> PathBuf {
     if let Some(p) = std::env::var_os("DX_LIVE_REPOS") {
         return PathBuf::from(p);
     }
-    let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_default();
     home.join(".config/dx/live-repos")
 }
 
@@ -65,8 +68,7 @@ pub fn add_repo(path: &Path) -> Result<PathBuf, String> {
         return Ok(abs);
     }
     if let Some(dir) = cfg.parent() {
-        fs::create_dir_all(dir)
-            .map_err(|e| format!("{} cannot be created: {e}", dir.display()))?;
+        fs::create_dir_all(dir).map_err(|e| format!("{} cannot be created: {e}", dir.display()))?;
     }
     let mut next = text;
     if !next.is_empty() && !next.ends_with('\n') {
@@ -79,7 +81,10 @@ pub fn add_repo(path: &Path) -> Result<PathBuf, String> {
 }
 
 fn common_dir(repo: &Path) -> Option<PathBuf> {
-    let d = git(repo, &["rev-parse", "--path-format=absolute", "--git-common-dir"])?;
+    let d = git(
+        repo,
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    )?;
     Some(PathBuf::from(d))
 }
 
@@ -175,9 +180,16 @@ fn refresh_one(repo: &Path, common: &Path) {
 /// taken before the refresh, so changes arriving during it trigger one follow-up.
 pub fn spawn(repos: Vec<PathBuf>) -> JoinHandle<()> {
     std::thread::spawn(move || {
+        let all = repos.clone();
         let mut state: Vec<Watched> = repos.into_iter().map(|r| (r, None, None)).collect();
         loop {
-            tick(&mut state, &mut |repo, common| refresh_one(repo, common));
+            let refreshed = tick(&mut state, &mut |repo, common| refresh_one(repo, common));
+            // The board of every watched repo, from their snapshot files (pure reads).
+            if refreshed {
+                if let Err(e) = super::board::write_combined(&all) {
+                    eprintln!("dx live: board not written: {e}");
+                }
+            }
             std::thread::sleep(Duration::from_secs(1));
         }
     })
@@ -188,7 +200,9 @@ type Watched = (PathBuf, Option<PathBuf>, Option<Fingerprint>);
 
 /// One poll of every watched repo: `refresh` runs for each whose refs changed. git runs
 /// once per repo, to find its common dir; after that an idle poll is stat calls only.
-fn tick(state: &mut [Watched], refresh: &mut dyn FnMut(&Path, &Path)) {
+/// Returns whether any repo was refreshed.
+fn tick(state: &mut [Watched], refresh: &mut dyn FnMut(&Path, &Path)) -> bool {
+    let mut refreshed = false;
     for (repo, common, last) in state.iter_mut() {
         if common.is_none() {
             *common = common_dir(repo);
@@ -196,8 +210,10 @@ fn tick(state: &mut [Watched], refresh: &mut dyn FnMut(&Path, &Path)) {
         let Some(c) = common.clone() else { continue };
         if changed(&c, last) {
             refresh(repo, &c);
+            refreshed = true;
         }
     }
+    refreshed
 }
 
 #[cfg(test)]
@@ -251,11 +267,11 @@ mod tests {
         sh(&d, &["commit", "--allow-empty", "-m", "one"]);
         let mut state: Vec<Watched> = vec![(d.clone(), None, None)];
         let mut refreshed = 0;
-        tick(&mut state, &mut |_, _| refreshed += 1);
+        assert!(tick(&mut state, &mut |_, _| refreshed += 1));
         assert_eq!(refreshed, 1, "the first poll sees the repo");
         let spawned = GIT_SPAWNS.with(std::cell::Cell::get);
         for _ in 0..5 {
-            tick(&mut state, &mut |_, _| refreshed += 1);
+            assert!(!tick(&mut state, &mut |_, _| refreshed += 1));
         }
         assert_eq!(refreshed, 1, "nothing changed, so no refresh (no gate work)");
         assert_eq!(GIT_SPAWNS.with(std::cell::Cell::get), spawned, "no git process while idle");
