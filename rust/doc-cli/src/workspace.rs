@@ -297,7 +297,13 @@ impl Sources {
             // missing and what makes it exist, rather than restating the path back.
             None if !path.exists() => {
                 // A tracked file this sparse worktree has not checked out: git has its text.
-                if let Some(text) = not_checked_out_text(&self.root, &relative) {
+                // `relative` is the store key (it gained `.dx`), so ask with the plain path.
+                let plain = fs::canonicalize(path)
+                    .unwrap_or_else(|_| path.to_path_buf())
+                    .strip_prefix(&self.root)
+                    .map(|rest| rest.to_string_lossy().replace('\\', "/"))
+                    .unwrap_or_default();
+                if let Some(text) = not_checked_out_text(&self.root, &plain) {
                     return Ok(text);
                 }
                 Err(format!(
