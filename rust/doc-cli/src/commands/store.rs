@@ -641,17 +641,14 @@ fn prepare_git(root: &Path) -> Vec<String> {
     // A tracked file that is absent on disk was excluded by a sparse checkout (skip-worktree).
     // Writing it would materialise a default-only copy that git shows as modified and that
     // drops the repository's own lines, so such a file is left alone entirely.
-    let sparse_excluded =
-        |name: &str| !root.join(name).exists() && in_the_index(root, name);
+    let sparse_excluded = |name: &str| !root.join(name).exists() && in_the_index(root, name);
     let skip_attributes = sparse_excluded(".gitattributes");
     let skip_ignore = sparse_excluded(".gitignore");
     let attributes = root.join(".gitattributes");
     // `*.dx diff=dx` is what earlier versions wrote, so the line is *upgraded* in place
     // rather than appended beside — two lines matching the same pattern would leave which
     // driver wins up to git's ordering rules.
-    if !skip_attributes
-        && ensure_attribute(&attributes, "*.dx", ATTRIBUTES_LINE).unwrap_or(false)
-    {
+    if !skip_attributes && ensure_attribute(&attributes, "*.dx", ATTRIBUTES_LINE).unwrap_or(false) {
         wrote.push(format!("wrote     {ATTRIBUTES_LINE}  (.gitattributes)"));
     }
     if !skip_attributes
@@ -1367,18 +1364,36 @@ mod tests {
         git(&["add", ".gitattributes", ".gitignore"]);
         // Committed first: a merely staged file would show as added whatever the sparse state.
         git(&[
-            "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false",
-            "commit", "-q", "-m", "seed",
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-q",
+            "-m",
+            "seed",
         ]);
-        git(&["update-index", "--skip-worktree", ".gitattributes", ".gitignore"]);
+        git(&[
+            "update-index",
+            "--skip-worktree",
+            ".gitattributes",
+            ".gitignore",
+        ]);
         std::fs::remove_file(root.join(".gitattributes")).expect("rm");
         std::fs::remove_file(root.join(".gitignore")).expect("rm");
 
         prepare_git(&root);
 
-        assert!(!root.join(".gitattributes").exists(), "attributes materialised");
+        assert!(
+            !root.join(".gitattributes").exists(),
+            "attributes materialised"
+        );
         assert!(!root.join(".gitignore").exists(), "ignore materialised");
-        assert!(git(&["status", "--porcelain", "--untracked-files=no"]).trim().is_empty());
+        assert!(git(&["status", "--porcelain", "--untracked-files=no"])
+            .trim()
+            .is_empty());
     }
 
     #[test]

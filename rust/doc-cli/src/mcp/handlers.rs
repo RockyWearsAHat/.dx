@@ -733,9 +733,18 @@ fn require_dx(path: &Path) -> Result<(), String> {
 fn confirm_saved(path: &Path, saved: &Document, expect: Option<&str>) -> Result<(), String> {
     let stored = parse(&workspace::read(path)?);
     let ids = |document: &Document| -> Vec<String> {
-        document.blocks.iter().map(|block| block.id.clone()).collect()
+        document
+            .blocks
+            .iter()
+            .map(|block| block.id.clone())
+            .collect()
     };
-    let missing = expect.is_some_and(|id| !stored.blocks.iter().any(|block| block.id.eq_ignore_ascii_case(id)));
+    let missing = expect.is_some_and(|id| {
+        !stored
+            .blocks
+            .iter()
+            .any(|block| block.id.eq_ignore_ascii_case(id))
+    });
     if missing || ids(&stored) != ids(saved) {
         return Err(format!(
             "the write to {} was not persisted: re-reading the document does not show the \
@@ -1321,8 +1330,7 @@ fn path_arg(args: &Value, root: &Path) -> Result<PathBuf, String> {
     if PathBuf::from(raw).is_absolute() {
         return Ok(PathBuf::from(raw));
     }
-    let Some(directory) = string(args, "directory").filter(|value| !value.trim().is_empty())
-    else {
+    let Some(directory) = string(args, "directory").filter(|value| !value.trim().is_empty()) else {
         return Ok(root.join(raw));
     };
     let there = resolve(directory, root).join(raw);
@@ -3012,7 +3020,14 @@ mod tests {
         )
         .expect("seed the main checkout");
         assert!(git(&["add", "-A"]) && git(&["commit", "-qm", "seed"]));
-        assert!(git(&["worktree", "add", "-q", "-b", "job", second.to_str().expect("utf8")]));
+        assert!(git(&[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "job",
+            second.to_str().expect("utf8")
+        ]));
 
         let pack = |root: &Path| std::fs::read(root.join(".doc/repo.dxcp")).expect("pack");
         let pointer = |root: &Path| std::fs::read(root.join("index.dx")).expect("pointer");
@@ -3026,11 +3041,23 @@ mod tests {
         )
         .expect("append in the worktree");
 
-        assert_eq!(pack(&main), pack_before, "the main checkout's pack was written");
-        assert_eq!(pointer(&main), pointer_before, "the main checkout's index.dx changed");
+        assert_eq!(
+            pack(&main),
+            pack_before,
+            "the main checkout's pack was written"
+        );
+        assert_eq!(
+            pointer(&main),
+            pointer_before,
+            "the main checkout's index.dx changed"
+        );
         let seen = text_of(
-            &call("dx_source", &json!({ "path": absolute.to_str().expect("utf8") }), &main)
-                .expect("read B"),
+            &call(
+                "dx_source",
+                &json!({ "path": absolute.to_str().expect("utf8") }),
+                &main,
+            )
+            .expect("read B"),
         );
         assert!(seen.contains("Found in worktree B."), "{seen}");
         let in_main =
@@ -3048,8 +3075,12 @@ mod tests {
         assert_eq!(pack(&main), pack_before);
         assert_eq!(pointer(&main), pointer_before);
         let seen = text_of(
-            &call("dx_source", &json!({ "path": absolute.to_str().expect("utf8") }), &main)
-                .expect("read B again"),
+            &call(
+                "dx_source",
+                &json!({ "path": absolute.to_str().expect("utf8") }),
+                &main,
+            )
+            .expect("read B again"),
         );
         assert!(seen.contains("Second line in B."), "{seen}");
 
